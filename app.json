@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "airchat",
+    "slug": "airchat",
+    "version": "4.32.527",
+    "scheme": "airchat",
+    "plugins": [
+      "./plugins/withFirebaseModularHeaders"
+    ],
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0b1020"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.airchat",
+      "buildNumber": "527",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "AirChat использует камеру для съёмки фото и видео в чатах.",
+        "NSMicrophoneUsageDescription": "AirChat использует микрофон для звонков и записи голосовых сообщений.",
+        "NSPhotoLibraryUsageDescription": "AirChat использует доступ к фото для отправки изображений в чатах.",
+        "NSPhotoLibraryAddUsageDescription": "AirChat сохраняет полученные медиа в вашу галерею.",
+        "NSLocationWhenInUseUsageDescription": "AirChat использует геолокацию для отправки вашего местоположения в чатах.",
+        "NSFaceIDUsageDescription": "AirChat использует Face ID для защиты ваших ключей и секретной фразы.",
+        "NSLocalNetworkUsageDescription": "AirChat ищет собеседников в локальной сети Wi-Fi для прямой доставки без интернета."
+      }
+    },
+    "android": {
+      "package": "com.anonymous.airchat",
+      "allowBackup": false,
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 519,
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

@@ -1,0 +1,83 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.airchatvpn'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.airchatvpn"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}
+
+// Скачивает Xray в jniLibs как libairchat_xray.so — exec из APK lib/ разрешён SELinux (в отличие от filesDir/code_cache на API 29+).
+def xrayReleaseVersion = 'v26.2.6'
+def xrayArm64Zip = "https://github.com/XTLS/Xray-core/releases/download/${xrayReleaseVersion}/Xray-android-arm64-v8a.zip"
+def xrayAmd64Zip = "https://github.com/XTLS/Xray-core/releases/download/${xrayReleaseVersion}/Xray-android-amd64.zip"
+
+tasks.register('downloadXrayForJni') {
+  group = 'airchat'
+  description = 'Fetches Xray binaries into jniLibs (arm64 + x86_64 for emulators)'
+  def armOut = file("${projectDir}/src/main/jniLibs/arm64-v8a/libairchat_xray.so")
+  def x86Out = file("${projectDir}/src/main/jniLibs/x86_64/libairchat_xray.so")
+  outputs.files(armOut, x86Out)
+  doLast {
+    extractXrayFromReleaseZip(xrayArm64Zip, armOut)
+    extractXrayFromReleaseZip(xrayAmd64Zip, x86Out)
+  }
+}
+
+void extractXrayFromReleaseZip(String zipUrl, File outFile) {
+  if (outFile.exists() && outFile.length() > 1_000_000L) {
+    return
+  }
+  outFile.parentFile.mkdirs()
+  def conn = new URL(zipUrl).openConnection()
+  conn.connectTimeout = 60_000
+  conn.readTimeout = 120_000
+  conn.instanceFollowRedirects = true
+  conn.setRequestProperty('User-Agent', 'AirChat-Gradle/1.0')
+  conn.connect()
+  def code = conn.responseCode
+  if (code < 200 || code >= 300) {
+    throw new GradleException("Xray download HTTP ${code}: ${zipUrl}")
+  }
+  def zis = new java.util.zip.ZipInputStream(conn.inputStream)
+  try {
+    def entry
+    def ok = false
+    while ((entry = zis.nextEntry) != null) {
+      def name = entry.name
+      if (name.endsWith('/')) {
+        continue
+      }
+      if (name == 'xray' || name.endsWith('/xray')) {
+        outFile.withOutputStream { os ->
+          byte[] buf = new byte[8192]
+          int n
+          while ((n = zis.read(buf)) != -1) {
+            os.write(buf, 0, n)
+          }
+        }
+        ok = true
+        break
+      }
+    }
+    if (!ok) {
+      throw new GradleException("No xray binary inside ${zipUrl}")
+    }
+  } finally {
+    zis.close()
+  }
+  outFile.setExecutable(true, false)
+}
+
+tasks.preBuild.dependsOn('downloadXrayForJni')

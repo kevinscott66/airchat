@@ -1,0 +1,9 @@
+{
+  "webrtc": {
+    "signalingUrl": "https://signaling.dobropalm.tech"
+  },
+  "cloudBackup": {
+    "enabled": true,
+    "baseUrl": "https://agents.example.com:8443/cloud-vault"
+  }
+}

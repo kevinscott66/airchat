@@ -1,0 +1,181 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const test = require('node:test');
+const { io: connect } = require('socket.io-client');
+const { createSignalingServer } = require('../index');
+
+function waitForEvent(socket, event, timeoutMs = 1000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      reject(new Error(`Timed out waiting for ${event}`));
+    }, timeoutMs);
+    const onEvent = (value) => {
+      clearTimeout(timer);
+      resolve(value);
+    };
+    socket.once(event, onEvent);
+  });
+}
+
+async function connectedClient(port) {
+  const socket = connect(`http://127.0.0.1:${port}`, { transports: ['websocket'] });
+  const challenge = waitForEvent(socket, 'registration_challenge');
+  await waitForEvent(socket, 'connect');
+  socket.registrationChallenge = (await challenge).challenge;
+  return socket;
+}
+
+function identity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const der = publicKey.export({ format: 'der', type: 'spki' });
+  return { privateKey, peerId: der.subarray(-32).toString('base64') };
+}
+
+async function registerClient(socket, who, roomId) {
+  const payload = { roomId, peerId: who.peerId };
+  const message = Buffer.from(`${socket.registrationChallenge}\n${roomId}\n${who.peerId}`);
+  payload.signature = crypto.sign(null, message, who.privateKey).toString('base64');
+  const registered = waitForEvent(socket, 'registered');
+  socket.emit('register', payload, () => {});
+  return registered;
+}
+
+test('routes registered offers, answers, ICE candidates, and hangups', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const bob = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    bob.close();
+    await server.close();
+  });
+
+  await Promise.all([
+    registerClient(alice, aliceId, 'room-a'),
+    registerClient(bob, bobId, 'room-b'),
+  ]);
+
+  const offer = waitForEvent(bob, 'offer');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0 offer' });
+  assert.deepEqual(await offer, { roomId: 'room-a', fromPeerId: aliceId.peerId, sdp: 'v=0 offer' });
+
+  const answer = waitForEvent(alice, 'answer');
+  bob.emit('answer', { targetPeerId: aliceId.peerId, sdp: 'v=0 answer' });
+  assert.deepEqual(await answer, { fromPeerId: bobId.peerId, sdp: 'v=0 answer' });
+
+  const candidate = waitForEvent(alice, 'ice-candidate');
+  bob.emit('ice-candidate', { targetPeerId: aliceId.peerId, candidate: { candidate: 'candidate:1' } });
+  assert.deepEqual(await candidate, { fromPeerId: bobId.peerId, candidate: { candidate: 'candidate:1' } });
+
+  const hangup = waitForEvent(bob, 'hangup');
+  alice.emit('hangup', { targetPeerId: bobId.peerId });
+  assert.deepEqual(await hangup, { fromPeerId: aliceId.peerId });
+});
+
+test('rejects malformed or unauthorized messages and reports unavailable peers', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const client = await connectedClient(port);
+  const clientId = identity();
+  t.after(async () => {
+    client.close();
+    await server.close();
+  });
+
+  const notRegistered = waitForEvent(client, 'signaling_error');
+  client.emit('answer', { targetPeerId: 'nobody', sdp: 'v=0' });
+  assert.deepEqual(await notRegistered, { event: 'answer', error: 'not_registered' });
+
+  await registerClient(client, clientId, 'room-a');
+
+  const invalid = waitForEvent(client, 'signaling_error');
+  client.emit('offer', { roomId: 'room-a', targetPeerId: 'bob', sdp: 'v=0', extra: true });
+  assert.deepEqual(await invalid, { event: 'offer', error: 'invalid_payload' });
+
+  const unavailable = waitForEvent(client, 'peer_unavailable');
+  const unavailablePeerId = identity().peerId;
+  client.emit('hangup', { targetPeerId: unavailablePeerId });
+  assert.deepEqual(await unavailable, { targetPeerId: unavailablePeerId, roomId: 'room-a' });
+
+  const oversized = waitForEvent(client, 'signaling_error');
+  client.emit('answer', { targetPeerId: 'bob', sdp: 'x'.repeat(64 * 1024 + 1) });
+  assert.deepEqual(await oversized, { event: 'answer', error: 'invalid_payload' });
+});
+
+test('disconnect removes peer and notifies peers in the same room', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const bob = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    bob.close();
+    await server.close();
+  });
+
+  await Promise.all([
+    registerClient(alice, aliceId, 'shared'),
+    registerClient(bob, bobId, 'shared'),
+  ]);
+
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  bob.close();
+  assert.deepEqual(await unavailable, { targetPeerId: bobId.peerId, roomId: 'shared' });
+  assert.equal(server.peers.has(bobId.peerId), false);
+});
+
+test('enforces per-socket signaling rate limit', async (t) => {
+  const server = createSignalingServer({ port: 0, rateLimit: 1, rateWindowMs: 10_000 });
+  const port = await server.listen();
+  const client = await connectedClient(port);
+  const clientId = identity();
+  t.after(async () => {
+    client.close();
+    await server.close();
+  });
+
+  await registerClient(client, clientId, 'room-a');
+  const limited = waitForEvent(client, 'signaling_error');
+  client.emit('hangup', { targetPeerId: 'bob' });
+  assert.deepEqual(await limited, { event: 'hangup', error: 'rate_limited' });
+});
+
+test('rejects excess connections before registration', async (t) => {
+  const server = createSignalingServer({ port: 0, maxConnections: 1 });
+  const port = await server.listen();
+  const first = await connectedClient(port);
+  t.after(async () => {
+    first.close();
+    await server.close();
+  });
+
+  const second = connect(`http://127.0.0.1:${port}`, { transports: ['websocket'] });
+  const connectionError = waitForEvent(second, 'connect_error');
+  const error = await connectionError;
+  assert.equal(error.message, 'connection_limit');
+  second.close();
+});
+
+test('disconnects clients that never finish registration', async (t) => {
+  const server = createSignalingServer({ port: 0, registrationTimeoutMs: 20 });
+  const port = await server.listen();
+  const client = connect(`http://127.0.0.1:${port}`, { transports: ['websocket'] });
+  t.after(async () => {
+    client.close();
+    await server.close();
+  });
+
+  await waitForEvent(client, 'connect');
+  const disconnected = waitForEvent(client, 'disconnect');
+  const error = waitForEvent(client, 'signaling_error');
+  assert.deepEqual(await error, { event: 'connection', error: 'registration_timeout' });
+  await disconnected;
+});

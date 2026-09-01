@@ -1,0 +1,14 @@
+base-url: "http://203.0.113.10:2586"
+listen-http: ":2586"
+cache-file: /var/cache/ntfy/cache.db
+cache-duration: 72h
+attachment-cache-dir: /var/lib/ntfy/attachments
+attachment-expiry-duration: 168h
+attachment-file-size-limit: 20M
+attachment-total-size-limit: 1500M
+visitor-request-limit-burst: 1000
+visitor-request-limit-replenish: 100ms
+visitor-message-daily-limit: 100000
+visitor-attachment-total-size-limit: 1G
+visitor-attachment-daily-bandwidth-limit: 5G
+keepalive-interval: 45s

@@ -1,0 +1,23 @@
+app = "airchat-cloud-vault-example"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3010
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[mounts]]
+  source = "airchat_cloud_vault_data"
+  destination = "/var/lib/airchat-cloud-vault-example"
+  initial_size = 1

@@ -1,0 +1,62 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# Переменные окружения. Игнорируется весь .env*, а не только .env*.local:
+# Expo читает и голый `.env`, и `.env.production`, а класть в них есть что —
+# EXPO_PUBLIC_SENTRY_DSN и APPLE_TEAM_ID (см. app.config.js, core/errorHandler).
+# Прежнее правило ловило только `.env*.local`, то есть самый вероятный файл
+# уехал бы в репозиторий. Образец без значений — исключение.
+.env
+.env.*
+!.env.example
+# Team ID для подписи iOS — у каждой машины свой, в репозиторий не едет.
+ios-signing.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+
+# Локальные модули (modules/) — исходники в репозитории, результаты сборки нет.
+# Сами модули подключены как file:./modules/... в package.json, поэтому без них
+# свежий клон не проходит npm install; а вот android/build — это 380 МБ вывода
+# Gradle, который пересобирается из тех же исходников.
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/
+modules/*/node_modules/
+modules/*/build/
+
+# Резервные копии файлов, оставленные редакторами и ручными правками.
+*.bak

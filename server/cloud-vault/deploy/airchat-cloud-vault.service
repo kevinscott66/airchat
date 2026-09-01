@@ -1,0 +1,28 @@
+[Unit]
+Description=AirChat encrypted cloud vault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=airchat-vault
+Group=airchat-vault
+WorkingDirectory=/opt/airchat-cloud-vault-example
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3010
+Environment=CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault-example
+ExecStart=/opt/node-v22.14.0-linux-x64/bin/node /opt/airchat-cloud-vault-example/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/airchat-cloud-vault-example
+MemoryMax=384M
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ic_notification — статус-бар икона всех уведомлений AirChat.
+
+  v4.32.517: до этого коммита ресурса с таким именем не существовало ни в
+  android/app/src/main/res, ни в зависимостях. notifee, не найдя имя, не ставит
+  small icon вовсе, а NotificationManager.notify без small icon бросает
+  IllegalArgumentException, который глушился общим catch — на Android не
+  показывалось НИ ОДНО уведомление, и в логах не было ничего, кроме debug-строки.
+
+  Каталог android/ целиком в .gitignore (его генерирует expo prebuild), поэтому
+  исходник ресурса лежит здесь, а в сборку его кладёт
+  scripts/post-prebuild-android-patches.sh. Ресурс, положенный прямо в android/,
+  исчезнет при первом же prebuild — и уведомления отвалятся снова, беззвучно.
+
+  Силуэт белый и одноцветный: Android сам маскирует small icon по альфе и
+  красит его в цвет системы, поэтому цвета и градиенты здесь бессмысленны.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M20,2H4C2.9,2 2,2.9 2,4v12c0,1.1 0.9,2 2,2h4v4l4,-4h8c1.1,0 2,-0.9 2,-2V4C22,2.9 21.1,2 20,2z" />
+</vector>
