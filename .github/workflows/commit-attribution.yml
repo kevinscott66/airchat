@@ -29,6 +29,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # The single identity allowed to appear anywhere in this repository.
+          OWNER_NAME='kevinscott66'
+          OWNER_EMAIL='156429557+kevinscott66@users.noreply.github.com'
+          # GitHub signs web-UI edits and merge commits with this committer.
+          # It is a platform signature, not a person, and never becomes a contributor.
+          WEB_NAME='GitHub'
+          WEB_EMAIL='noreply@github.com'
+
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             range="$BASE_SHA..$HEAD_SHA"
           elif [[ -n "${BEFORE_SHA:-}" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
@@ -46,20 +54,40 @@ jobs:
 
           failed=0
           while IFS= read -r commit; do
-            author="$(git show -s --format='%an' "$commit")"
             subject="$(git show -s --format='%s' "$commit")"
+            author_name="$(git show -s --format='%an' "$commit")"
+            author_email="$(git show -s --format='%ae' "$commit")"
+            committer_name="$(git show -s --format='%cn' "$commit")"
+            committer_email="$(git show -s --format='%ce' "$commit")"
 
-            if [[ "$author" != "kevinscott66" ]]; then
-              printf 'ERROR: %s has author %q; expected kevinscott66 (%s)\n' \
-                "$commit" "$author" "$subject" >&2
+            # The author is what GitHub counts as a contributor.
+            if [[ "$author_name" != "$OWNER_NAME" || "$author_email" != "$OWNER_EMAIL" ]]; then
+              printf 'ERROR: %s author is %q <%s>; expected %q <%s> (%s)\n' \
+                "$commit" "$author_name" "$author_email" \
+                "$OWNER_NAME" "$OWNER_EMAIL" "$subject" >&2
               failed=1
             fi
 
-            if git show -s --format='%B' "$commit" | grep -Eiq '^Co-authored-by:'; then
-              printf 'ERROR: %s contains a Co-authored-by trailer (%s)\n' \
-                "$commit" "$subject" >&2
+            # The committer is shown in the UI next to the author.
+            if [[ "$committer_name" != "$OWNER_NAME" || "$committer_email" != "$OWNER_EMAIL" ]] \
+               && [[ "$committer_name" != "$WEB_NAME" || "$committer_email" != "$WEB_EMAIL" ]]; then
+              printf 'ERROR: %s committer is %q <%s>; expected %q <%s> (%s)\n' \
+                "$commit" "$committer_name" "$committer_email" \
+                "$OWNER_NAME" "$OWNER_EMAIL" "$subject" >&2
               failed=1
             fi
+
+            # Trailers that mint additional credited people.
+            while IFS= read -r trailer; do
+              printf 'ERROR: %s carries an attribution trailer: %s (%s)\n' \
+                "$commit" "$trailer" "$subject" >&2
+              failed=1
+            done < <(git show -s --format='%B' "$commit" \
+                     | grep -Ei '^(Co-authored-by|Co-committed-by|Signed-off-by|Reviewed-by|Acked-by|Tested-by|Reported-by|Suggested-by|Helped-by|Assisted-by|Generated-with|Requested-by):' \
+                     || true)
           done < <(git rev-list "$range")
 
+          if [[ "$failed" -ne 0 ]]; then
+            echo "::error::This repository credits kevinscott66 only." >&2
+          fi
           exit "$failed"
