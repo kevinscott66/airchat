@@ -179,3 +179,24 @@ test('disconnects clients that never finish registration', async (t) => {
   assert.deepEqual(await error, { event: 'connection', error: 'registration_timeout' });
   await disconnected;
 });
+
+test('события push уходят в лог сервера, а не в пустоту', async () => {
+  const events = [];
+  const server = createSignalingServer({
+    port: 0,
+    env: {},
+    log: (event, fields) => events.push([event, fields]),
+  });
+  await server.listen();
+  try {
+    // Без PUSH_TOKEN_DB реестр остаётся в памяти — и об этом обязано быть
+    // видно в логе: иначе после деплоя нельзя отличить том от памяти иначе
+    // как заходом по ssh на машину.
+    assert.ok(
+      events.some(([event]) => event === 'push_tokens_in_memory'),
+      `ожидали push_tokens_in_memory, получили ${JSON.stringify(events)}`,
+    );
+  } finally {
+    await server.close();
+  }
+});
