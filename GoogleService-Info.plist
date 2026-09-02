@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Заглушка, парная google-services.json.
+
+  Настоящий файл выгружается из консоли Firebase (Project settings → iOS app)
+  и кладётся сюда под тем же именем. Без него сборка проходит, а APNs-токен
+  получить не удаётся, и уведомления на iOS не приходят вовсе.
+
+  Сюда же нужен ключ APNs (.p8), загруженный в Firebase → Cloud Messaging.
+  Он остаётся в консоли и в репозитории лежать не должен.
+-->
+<plist version="1.0">
+<dict>
+  <key>API_KEY</key>
+  <string>REPLACE_WITH_KEY_FROM_FIREBASE_CONSOLE</string>
+  <key>GCM_SENDER_ID</key>
+  <string>YOUR_PROJECT_NUMBER</string>
+  <key>PLIST_VERSION</key>
+  <string>1</string>
+  <key>BUNDLE_ID</key>
+  <string>com.anonymous.airchat</string>
+  <key>PROJECT_ID</key>
+  <string>your-firebase-project-id</string>
+  <key>STORAGE_BUCKET</key>
+  <string>your-firebase-project-id.appspot.com</string>
+  <key>GOOGLE_APP_ID</key>
+  <string>1:000000000000:ios:xxxxxxxxxxxxxxxx</string>
+  <key>IS_ADS_ENABLED</key>
+  <false/>
+  <key>IS_ANALYTICS_ENABLED</key>
+  <false/>
+  <key>IS_APPINVITE_ENABLED</key>
+  <false/>
+  <key>IS_GCM_ENABLED</key>
+  <true/>
+  <key>IS_SIGNIN_ENABLED</key>
+  <false/>
+</dict>
+</plist>

@@ -2,7 +2,7 @@
   "expo": {
     "name": "airchat",
     "slug": "airchat",
-    "version": "4.32.536",
+    "version": "4.32.538",
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders"
@@ -18,7 +18,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.anonymous.airchat",
-      "buildNumber": "530",
+      "buildNumber": "532",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "AirChat использует камеру для съёмки фото и видео в чатах.",
@@ -27,14 +27,18 @@
         "NSPhotoLibraryAddUsageDescription": "AirChat сохраняет полученные медиа в вашу галерею.",
         "NSLocationWhenInUseUsageDescription": "AirChat использует геолокацию для отправки вашего местоположения в чатах.",
         "NSFaceIDUsageDescription": "AirChat использует Face ID для защиты ваших ключей и секретной фразы.",
-        "NSLocalNetworkUsageDescription": "AirChat ищет собеседников в локальной сети Wi-Fi для прямой доставки без интернета."
-      }
+        "NSLocalNetworkUsageDescription": "AirChat ищет собеседников в локальной сети Wi-Fi для прямой доставки без интернета.",
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
+      },
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
       "package": "com.anonymous.airchat",
       "allowBackup": false,
       "googleServicesFile": "./google-services.json",
-      "versionCode": 519,
+      "versionCode": 521,
       "adaptiveIcon": {
         "backgroundColor": "#0B0B12",
         "foregroundImage": "./assets/android-icon-foreground.png",

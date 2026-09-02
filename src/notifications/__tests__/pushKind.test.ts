@@ -81,7 +81,10 @@ describe('бит доезжает от отправителя до фоново�
     const at = s.indexOf('private async sendPushNotification(');
     expect(at).toBeGreaterThan(-1);
     const body = s.slice(at, s.indexOf('\n  }\n', at));
-    expect(body).toContain('JSON.stringify({ targetPeerId, cid, senderDid, kind })');
+    // v4.32.537: тело уехало в подписанный конверт, но состав полей тот же.
+    expect(body).toContain('signPushPayload({');
+    expect(body).toContain('kind,');
+    expect(body).toContain('body: JSON.stringify(envelope),');
     expect(body).not.toContain('groupId');
     expect(body).not.toContain('senderName');
   });

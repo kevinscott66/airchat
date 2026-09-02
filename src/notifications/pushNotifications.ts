@@ -18,6 +18,7 @@ import { NOTIFICATION_SMALL_ICON } from './notificationIcon';
 import { shouldSuppressDmBanner, shouldSuppressGroupBanner } from './activeChatSuppress';
 import { deliverOpenIntent, parseChatOpenIntent, parseOpenIntent } from './openIntent';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
+import { peerIdFromDid, signPushPayload } from './pushEnvelope';
 import type { PushKind } from './pushKind';
 
 // v4.32.165: channel ID bumped to _v2 — Android кеширует importance per-channel,
@@ -496,15 +497,34 @@ export class PushNotificationService {
       log.warn('push_no_signaling_url');
       return;
     }
+    // Ретранслятор знает людей по сырому ключу в base64 — так же, как сокет
+    // сигналинга. Разбирать did:key на сервере нечем; см. pushEnvelope.
+    const signedPeerId = peerIdFromDid(peerId);
+    if (!signedPeerId || (Platform.OS !== 'android' && Platform.OS !== 'ios')) {
+      log.warn('push_register_unsupported', { platform: Platform.OS });
+      return;
+    }
     // v4.32.179 (Round-9): bounded timeout — signaling may be unreachable; without this
     // fetch can hang indefinitely, blocking init promise chain on cold start.
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 10_000);
     try {
+      // v4.32.537: подписанный конверт. Без подписи чужой мог бы записать на
+      // наш peerId свой токен и тем самым увести уведомления себе.
+      const envelope = await signPushPayload({
+        peerId: signedPeerId,
+        platform: Platform.OS,
+        token,
+        ts: Date.now(),
+      });
+      if (!envelope) {
+        log.warn('push_register_unsigned');
+        return;
+      }
       const res = await fetch(`${base}/register-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ peerId, token }),
+        body: JSON.stringify(envelope),
         signal: ctrl.signal,
       });
       if (!res.ok) {
@@ -518,7 +538,10 @@ export class PushNotificationService {
   }
 
   /**
-   * Ask signaling to FCM-notify the recipient (their device registers with `peerId` = did:key).
+   * Ask signaling to FCM-notify the recipient.
+   *
+   * v4.32.537: наружу уходит не did, а сырой ключ в base64 — тот же peerId,
+   * которым устройство представляется сокету сигналинга (см. pushEnvelope).
    * @param recipientDid — contact's did:key (receiver)
    * @param messageCid — IPFS CID of the encrypted message
    * @param senderDid — your did:key (receiver matches contact)
@@ -544,18 +567,38 @@ export class PushNotificationService {
     const cfg = await loadConfig();
     const base = cfg.webrtc?.signalingUrl;
     if (!base) return;
+    const targetKey = peerIdFromDid(targetPeerId);
+    const senderKey = peerIdFromDid(senderDid);
+    if (!targetKey || !senderKey) {
+      log.warn('push_send_unaddressable');
+      return;
+    }
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 10_000);
     try {
       // Передаём только идентификаторы — без имён и контента сообщений.
       // Контент уведомления формируется локально на устройстве получателя.
+      // v4.32.537: подпись отправителя. Без неё разбудить чужое устройство
+      // мог кто угодно, зная только did получателя.
+      const envelope = await signPushPayload({
+        cid,
+        kind,
+        senderDid,
+        senderPeerId: senderKey,
+        targetPeerId: targetKey,
+        ts: Date.now(),
+      });
+      if (!envelope) {
+        log.warn('push_send_unsigned');
+        return;
+      }
       await fetch(`${base}/send-push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // v4.32.572: `kind` — один бит, личное это сообщение или групповое.
         // Идентификатора группы здесь нет и быть не должно: он рассказал бы
         // чужому серверу, кто в какой группе состоит (см. notifications/pushKind).
-        body: JSON.stringify({ targetPeerId, cid, senderDid, kind }),
+        body: JSON.stringify(envelope),
         signal: ctrl.signal,
       });
     } catch (e) {

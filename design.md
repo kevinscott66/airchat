@@ -927,3 +927,167 @@ duplication: the environment has no `rsvg-convert`, `inkscape`, `cairosvg` or
 invocations against a shared profile. The two implementations were compared
 pixel for pixel before the script was committed. If a real SVG rasteriser
 becomes available, the script is the part to delete, not the SVG.
+
+## 21. Notifications and the wordmark - 4.32.537
+
+Request, verbatim: "в приложениях apk и ipa проработай системные уведомления,
+они должны приходить в фоне и с закрытым приложением, так же сделай стильный
+шрифт для 'AirChat'", and immediately after: "и учти, что мы полностью ушли от
+оффлайна на онлайн, но оффлайн оставь как резерв".
+
+### 21.1 Why a notification never arrived
+
+Not a settings problem and not a payload problem. `signaling-server/index.js`
+served `/health` and Socket.IO and nothing else, so `POST /register-token` and
+`POST /send-push` — both called by the client since 4.31 — answered `404` and
+the client logged a warning nobody read. There was no relay. The whole feature
+was a client half.
+
+`signaling-server/push.js` is the missing half: FCM HTTP v1 over a
+service-account JWT, no new dependency, credentials from the environment only.
+Without credentials the endpoints answer `204` and signaling is untouched —
+push degrades, the call does not.
+
+### 21.2 What the payload can and cannot say
+
+Android gets a **data-only** message at `priority: HIGH`. The temptation is a
+`notification` block, because then FCM draws the banner and no code runs. That
+is exactly the failure: FCM's own banner skips the background handler, and the
+background handler is where mute, "Do not disturb" and the per-group switches
+live. A notification that ignores the user's own switches is worse than none.
+
+iOS is the mirror image: a data-only push is never displayed with the
+application closed, so it carries an `alert` with `apns-push-type: alert` and
+`apns-priority: 10`, plus `UIBackgroundModes: ["remote-notification"]` in
+`app.json`.
+
+The consequence of the server composing the iOS text is that the text must be
+impersonal — "Новое сообщение — откройте приложение". The relay sees
+`{ cid, contactDid, kind }` and nothing else: no name, no text, no group id.
+The device looks the message up locally by `cid`. Section 21 does not soften
+this for a nicer banner.
+
+### 21.3 The envelope
+
+Both endpoints take `{ payload, signature }` — the canonical JSON string the
+client signed and its Ed25519 signature. The signing key is read out of the
+signed payload, so a captured signature cannot be re-presented under another
+name; `ts` must be within five minutes; a registration older than the one on
+file is refused, because the replay window alone would let an intercepted
+request roll a token back to a device that no longer holds it.
+
+Every non-malformed request answers `204`, including one for a recipient the
+relay has never seen. A distinguishable response would make the endpoint a
+directory of who has push enabled.
+
+The application speaks `did:key` internally and the wire speaks base64 raw
+Ed25519. The conversion is on the client (`src/notifications/pushEnvelope.ts`),
+not on the server: the relay has no `did:key` parser and should not grow one.
+
+Provisioning — Firebase project, `google-services.json`,
+`GoogleService-Info.plist`, the APNs `.p8`, the `FCM_SERVICE_ACCOUNT_JSON`
+secret — is in `docs/push-setup.md`. None of it can live in the repository.
+
+### 21.4 Online is the path, offline is the reserve
+
+This is what makes the notification necessary rather than nice. When the peer
+was expected to be in the same room, a message arrived while the application
+was open. Now it arrives while the application is closed, and without a push
+nobody sees it until the next launch. The offline transports stay exactly where
+they are and are not removed; they are the fallback, not the assumption.
+
+### 21.5 The wordmark
+
+`<Text>AirChat</Text>` rendered as San Francisco on iOS, Roboto on Android and
+whatever the browser had on web. Three faces for one name is not a name.
+
+`src/ui/components/AirChatWordmark.tsx` is the word as outlines: Space Grotesk
+weight 600, tracking +6/1000, SIL OFL 1.1 (licence copy at
+`assets/fonts/SpaceGrotesk-OFL.txt`). Outlines rather than a font file because
+seven letters would otherwise cost `expo-font`, a ~50 KB face in the bundle and
+a wait before the first frame; as paths they are about two kilobytes, draw
+immediately, and `react-native-svg` is already a dependency.
+
+The viewBox is the ink box, not the em box, so the `height` prop is the height
+of the letters. `ASPECT = 4.8749` fixes the proportion in one place, and
+`src/ui/components/__tests__/airChatWordmark.test.ts` re-measures the outlines
+against it — including the true extremum of each quadratic rather than its
+control point, which would inflate the box and pass on wrong geometry.
+
+The fill is `colors.accent → colors.primary`, taken from the palette rather
+than written as hex. Section 6.1 does not change; the wordmark follows the
+theme and the accent the user picked, which two literals would not.
+
+It stands on onboarding and on the lock screen. Both screens had a second
+`styles.title` — "Восстановление", "Доступ заблокирован" — and those are still
+text, because they are sentences, not the name.
+
+## 22. Where the databases live - 4.32.538
+
+Request, verbatim: "выполняем всё, в том числе и решаем с местом хранения бд".
+
+Two databases, two unresolved questions, and they are not the same question.
+
+### 22.1 The relay's token registry
+
+Section 21 shipped the registry in memory. That is the right default for
+signaling — a connection breaks on restart anyway and the client reconnects on
+its own — and the wrong one for push, for a reason that only shows up in
+production: a device sends its token **once**, at application start, and the
+token is needed **exactly when the application is closed** and cannot send it
+again. One deploy of the relay would silence everyone until they next opened
+the app, which is precisely the moment they no longer needed the notification.
+
+`signaling-server/tokenStore.js` puts it on disk. SQLite from `node:sqlite` in
+the standard library, so no new dependency; one table; the file on a fly volume
+at `/data/push-tokens.db`. Without `PUSH_TOKEN_DB` the store stays in memory —
+tests and a local run must not require a volume.
+
+Two consequences worth stating rather than discovering:
+
+- A volume is attached to a machine, so this service runs **one** machine.
+  Two would each hold a slice of the registry and drop the other slice's
+  pushes. Scaling out means moving the registry to shared storage first, and
+  `fly.toml` says so next to the mount.
+- The container drops to the `node` user and a fly volume mounts as root, so
+  `docker-entrypoint.sh` chowns the directory and drops privileges with
+  `su-exec`. The alternative — running the relay as root — is a worse trade
+  than three lines of shell.
+
+The row is `peerId → device token`. Not contacts, not conversations, not an
+address book. Section 21.2 holds.
+
+While opening this up: the `Dockerfile` copied `index.js` alone, so the image
+built from section 21 would have started without `push.js` or `wire.js` at all.
+It copies all four files now.
+
+### 22.2 The browser's database
+
+The other half of the same question, and the one the user actually saw: on
+air.dobropalm.tech the boot screen read `navigator.storage not available (not
+supported by your browser or context is not secure)` — the expo-sqlite
+exception printed verbatim. True, and useless: it does not say what happened,
+what to do, or even that the phone is not at fault.
+
+The storage location itself is not in question and there is nothing to move it
+to. OPFS (`navigator.storage.getDirectory`) is the only browser store where
+SQLite works as a file rather than an emulation over IndexedDB. Its price is a
+secure context: HTTPS with a valid certificate. Falling back to memory is not
+an option that was rejected on taste — it would lose the conversation on a tab
+reload, silently, which is worse than an honest refusal.
+
+So `src/core/storage/webStorageDiagnosis.ts` is a diagnosis, not a fallback. It
+separates the two causes, because sending someone to fix the wrong one costs
+them the whole evening:
+
+- `isSecureContext === false` → the page is not on HTTPS, or the certificate
+  is broken. The message names the origin and says the certificate of the site
+  is the thing to look at.
+- secure context, no `getDirectory` → the browser cannot do it. Safari 17+,
+  current Chrome/Edge/Firefox — and off in private windows.
+- everything present and it still failed → say that, and say what is usually
+  behind it. Inventing a third cause would be the same mistake in a new coat.
+
+`isSecureContext` absent (a device, an old runtime) reads as *unknown*, never
+as "you are on HTTP". Telling someone their connection is insecure when it is
+not is exactly the failure this section exists to prevent.

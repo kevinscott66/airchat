@@ -40,6 +40,7 @@ import { parseDidKey, publicKeyToDidKey } from './core/identity/did';
 import { ownerPidForPublicKey } from './core/identity/ownerPidLookup';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, ownFieldGet, stripOwnDisplayName } from './core/identity/ownProfile';
 import { ensureLocalStorageReadyForBoot, kvGet, subscribeChatWrites, purgeDisappearedMessages, createGroup, upsertGroupMember, groupIdState, liveAttachmentBlobIds } from './core/storage/local';
+import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webStorageDiagnosis';
 import { scheduleDialogBackupPersist } from './core/storage/dialogBackup';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
@@ -1931,7 +1932,10 @@ export default function App(): React.ReactElement {
           if (msg.includes('profileManager.init')) {
             profileManager.resetStalledInit();
           }
-          setBootError(msg);
+          // Отказ браузерного хранилища выглядит как строка из недр
+          // expo-sqlite: верная и нечитаемая. Заменяем на диагноз, из
+          // которого понятно, чинится это сертификатом или браузером.
+          setBootError(diagnoseStorageFailure(msg, currentStorageEnv()) ?? msg);
         }
       }
     })();
