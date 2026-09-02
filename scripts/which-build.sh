@@ -21,7 +21,7 @@
 #
 set -euo pipefail
 
-PKG="${AIRCHAT_PKG:-com.anonymous.airchat}"
+PKG="${AIRCHAT_PKG:-tech.dobropalm.airchat}"
 ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
