@@ -2,13 +2,13 @@ import React, { useState } from 'react';
 import { Image, Text, View, useWindowDimensions } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { VoicePlayer } from '../../components/VoiceMessage';
-import { isVoiceMessage, parseVoiceMeta } from '../ChatScreen';
+import { isVoiceMessage, parseVoiceMeta } from '../../../core/social/voiceEnvelope';
 import { isNbCid } from '../../../core/media/mediaBlob';
 import { parseMediaCidsColumn } from '../../../core/media/mediaCidPolicy';
 import { useResolvedMediaUrls } from './useResolvedMediaUrls';
 import { useAutoDownloadGate } from './useAutoDownloadGate';
 import { voicePlaybackUri } from '../../../core/social/voiceUriPolicy';
-import { mediaScrim } from '../../theme';
+import { mediaScrim, radius } from '../../theme';
 import { useBubbleSurface } from '../../BubbleKindContext';
 
 export function MediaStrip({
@@ -78,7 +78,7 @@ export function MediaStrip({
   if (holdBack) {
     return (
       <AppPressable onPress={() => setWanted(true)}>
-        <View style={{ width: 220, height: 80, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: bubble.plate.fill }}>
+        <View style={{ width: 220, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: bubble.plate.fill }}>
           <Text style={{ fontSize: 13, color: bubble.plate.ink.text }}>📷 Медиа ({entries.length}) — нажмите, чтобы загрузить</Text>
         </View>
       </AppPressable>
@@ -103,21 +103,21 @@ export function MediaStrip({
     );
   if (shown.length === 1) {
     return (
-      <View style={{ borderRadius: 12, overflow: 'hidden' }}>
+      <View style={{ borderRadius: radius.lg, overflow: 'hidden' }}>
         {tile(shown[0], TOTAL_W, 160, 0)}
       </View>
     );
   }
   if (shown.length === 2) {
     return (
-      <View style={{ flexDirection: 'row', gap: 2, borderRadius: 12, overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', gap: 2, borderRadius: radius.lg, overflow: 'hidden' }}>
         {shown.map((url, i) => tile(url, HALF_W, 160, i))}
       </View>
     );
   }
   if (shown.length === 3) {
     return (
-      <View style={{ flexDirection: 'row', gap: 2, borderRadius: 12, overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', gap: 2, borderRadius: radius.lg, overflow: 'hidden' }}>
         {tile(shown[0], Math.floor(TOTAL_W * 0.6), 160, 0)}
         <View style={{ gap: 2 }}>
           {[1, 2].map((i) => tile(shown[i], Math.floor(TOTAL_W * 0.4) - 2, 79, i))}
@@ -127,7 +127,7 @@ export function MediaStrip({
   }
   // 4+ images → 2×2 grid with "+N" overlay on last tile
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: 12, overflow: 'hidden' }}>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: radius.lg, overflow: 'hidden' }}>
       {shown.map((url, i) =>
         tile(
           url,

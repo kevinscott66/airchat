@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { KeyboardHost } from '../../KeyboardHost';
 import { useTheme } from '../../../ThemeContext';
-import { primaryInk, scrim } from '../../../theme';
+import { font, primaryInk, radius, scrim } from '../../../theme';
 
 // ─── Poll Creator Modal ───────────────────────────────────────────────────────
 export function DmPollCreatorModal({
@@ -46,7 +46,7 @@ export function DmPollCreatorModal({
             placeholderTextColor={colors.textMuted}
             value={question}
             onChangeText={setQuestion}
-            style={{ backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12, fontSize: 15 }}
+            style={{ backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12, fontSize: 15 }}
           />
           {options.map((opt, i) => (
             <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
@@ -60,7 +60,7 @@ export function DmPollCreatorModal({
                 placeholderTextColor={colors.textMuted}
                 value={opt}
                 onChangeText={(t) => setOptions((prev) => prev.map((o, j) => j === i ? t : o))}
-                style={{ flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, borderWidth: isQuiz && correctAnswer === i ? 1 : 0, borderColor: colors.success }}
+                style={{ flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, borderWidth: isQuiz && correctAnswer === i ? 1 : 0, borderColor: colors.success }}
               />
               {options.length > 2 ? (
                 <AppPressable onPress={() => setOptions((prev) => prev.filter((_, j) => j !== i))} style={{ marginLeft: 8 }}>
@@ -88,10 +88,10 @@ export function DmPollCreatorModal({
             прятать нечего, и слово «анонимное» здесь вводило в заблуждение
             сильнее, чем в группе.
           */}
-          <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 4, marginLeft: 28 }}>
+          <Text style={{ color: colors.textMuted, fontSize: font.xs, marginBottom: 4, marginLeft: 28 }}>
             В переписке на двоих собеседник всё равно видит, что голос ваш.
           </Text>
-          <AppPressable onPress={submit} style={{ backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8 }}>
+          <AppPressable onPress={submit} style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center', marginTop: 8 }}>
             <Text style={{ color: primaryInk(colors).text, fontWeight: '700', fontSize: 16 }}>Создать</Text>
           </AppPressable>
         </AppPressable>

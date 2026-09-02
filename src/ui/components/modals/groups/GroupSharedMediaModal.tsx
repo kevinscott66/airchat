@@ -12,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint } from '../../../theme';
+import { badgeTint, font, radius } from '../../../theme';
 import {
   listGroupConversationMedia,
   type SharedMediaRow,
@@ -137,7 +137,7 @@ export function GroupSharedMediaModal({
           {GRP_SM_TABS.map((tab) => (
             <AppPressable key={tab.id} style={{ flex: 1, alignItems: 'center', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: activeTab === tab.id ? colors.primary : 'transparent' }} onPress={() => setActiveTab(tab.id)}>
               <Ionicons name={tab.icon} size={18} color={activeTab === tab.id ? colors.accent : colors.textMuted} />
-              <Text style={{ fontSize: 11, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
+              <Text style={{ fontSize: font.xs, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
             </AppPressable>
           ))}
         </View>
@@ -200,7 +200,7 @@ export function GroupSharedMediaModal({
               </View>
             ) : sharedDocs.map((doc, i) => (
               <View key={i} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
                   <Ionicons name="document-outline" size={20} color={docTint.ink} />
                 </View>
                 <View style={{ flex: 1 }}>

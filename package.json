@@ -1,6 +1,6 @@
 {
   "name": "airchat",
-  "version": "4.32.527",
+  "version": "4.32.535",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --dev-client",
@@ -53,11 +53,14 @@
     "build:release": "bash scripts/build-release.sh",
     "android:release": "cd android && ./gradlew bundleRelease",
     "keystore:generate": "bash -c 'mkdir -p android && keytool -genkey -v -keystore android/airchat-release.keystore -alias airchat -keyalg RSA -keysize 2048 -validity 10000'",
-    "postinstall": "node scripts/ensure-expo-image-picker-swift.js"
+    "postinstall": "node scripts/ensure-expo-image-picker-swift.js",
+    "web": "expo start --web",
+    "web:export": "expo export --platform web"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "^17.0.0",
     "@chainsafe/libp2p-yamux": "^8.0.1",
+    "@expo/metro-runtime": "~55.0.12",
     "@expo/vector-icons": "^15.0.2",
     "@helia/unixfs": "^7.1.0",
     "@libp2p/bootstrap": "^12.0.14",

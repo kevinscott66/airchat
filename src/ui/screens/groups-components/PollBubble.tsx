@@ -5,7 +5,7 @@ import { AppPressable } from '../../components/AppPressable';
 import { AppModal as Modal } from '../../components/AppModal';
 import { showError, showSuccess } from '../../components/userFeedback';
 import { useTheme } from '../../ThemeContext';
-import { bubbleSurface, identityAvatar, pollInk, scrim } from '../../theme';
+import { avatarShape, bubbleSurface, font, identityAvatar, pollInk, radius, scrim } from '../../theme';
 import {
   parsePollText,
   getPollVotes,
@@ -136,7 +136,7 @@ export function PollBubble({
           <AppPressable key={idx} onPress={() => void castVote(idx)} style={{ marginBottom: 6 }} disabled={(isQuiz && hasVoted) || isClosed}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
               {allowMultiple ? (
-                <View style={{ width: 18, height: 18, borderRadius: 3, borderWidth: 1.5, borderColor: isMyChoice ? ink.accentFill : ink.muted, backgroundColor: isMyChoice ? ink.accentFill : 'transparent', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                <View style={{ width: 18, height: 18, borderRadius: radius.sm, borderWidth: 1.5, borderColor: isMyChoice ? ink.accentFill : ink.muted, backgroundColor: isMyChoice ? ink.accentFill : 'transparent', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
                   {isMyChoice ? <Ionicons name="checkmark" size={12} color={ink.onAccent} /> : null}
                 </View>
               ) : null}
@@ -146,10 +146,10 @@ export function PollBubble({
               {showResult ? (
                 !poll.anonymous && count > 0 ? (
                   <AppPressable hitSlop={6} onPress={(e) => { e.stopPropagation(); setVoterListOpt(idx); }}>
-                    <Text style={{ color: ink.muted, fontSize: 11, textDecorationLine: 'underline' }}>{count}</Text>
+                    <Text style={{ color: ink.muted, fontSize: font.xs, textDecorationLine: 'underline' }}>{count}</Text>
                   </AppPressable>
                 ) : (
-                  <Text style={{ color: ink.muted, fontSize: 11 }}>{count}</Text>
+                  <Text style={{ color: ink.muted, fontSize: font.xs }}>{count}</Text>
                 )
               ) : null}
             </View>
@@ -163,12 +163,12 @@ export function PollBubble({
       })}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
         {isClosed ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 4, borderRadius: 6, backgroundColor: ink.track }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 4, borderRadius: radius.md, backgroundColor: ink.track }}>
             <Ionicons name="lock-closed" size={11} color={ink.onTrack} style={{ marginRight: 3 }} />
-            <Text style={{ color: ink.onTrack, fontSize: 11, fontWeight: '600' }}>Завершён</Text>
+            <Text style={{ color: ink.onTrack, fontSize: font.xs, fontWeight: '600' }}>Завершён</Text>
           </View>
         ) : null}
-        <Text style={{ color: ink.muted, fontSize: 11, flex: 1 }}>
+        <Text style={{ color: ink.muted, fontSize: font.xs, flex: 1 }}>
           {isQuiz ? 'Викторина · ' : ''}
           {allowMultiple ? '☑️ Несколько · ' : ''}
           {poll.anonymous ? '🔒 Без имён · ' : ''}
@@ -208,7 +208,7 @@ export function PollBubble({
         >
           <AppPressable
             onPress={(e) => e.stopPropagation()}
-            style={{ backgroundColor: colors.surface, borderRadius: 16, maxHeight: '70%', overflow: 'hidden' }}
+            style={{ backgroundColor: colors.surface, borderRadius: radius.xl, maxHeight: '70%', overflow: 'hidden' }}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
               <Ionicons name="people-outline" size={18} color={colors.accent} style={{ marginRight: 8 }} />
@@ -245,7 +245,7 @@ export function PollBubble({
                       <View key={pub} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: i < uniqueVoters.length - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border }}>
                         {/* v4.32.409: кружок был одним акцентом у всех голосовавших —
                             столбец одинаковых точек. Тот же различитель, что везде. */}
-                        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: identityAvatar(pub).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                        <View style={{ ...avatarShape(32), backgroundColor: identityAvatar(pub).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
                           <Text style={{ color: identityAvatar(pub).ink, fontWeight: '700', fontSize: 13 }}>{nameInitial(name)}</Text>
                         </View>
                         <Text style={{ color: colors.text, fontSize: 14, flex: 1 }} numberOfLines={1}>{name}</Text>

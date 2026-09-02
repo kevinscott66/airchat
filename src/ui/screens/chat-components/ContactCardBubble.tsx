@@ -2,7 +2,7 @@ import React from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { showError, showSuccess } from '../../components/userFeedback';
-import { identityAvatar } from '../../theme';
+import { avatarShape, font, identityAvatar } from '../../theme';
 import { addContact } from '../../../core/social/contacts';
 import { publicKeyFromB64 } from '../../../core/crypto/pubKeyFormat';
 import type { KeyPairBytes } from '../../../core/crypto/keyManager';
@@ -39,12 +39,12 @@ export function ContactCardBubble({
   return (
     <View style={{ minWidth: 180 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ ...avatarShape(36), backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
           <Text style={{ color: circle.ink, fontSize: 16, fontWeight: '700' }}>{nameInitial(card.name)}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={{ color: textColor, fontWeight: '600', fontSize: 14 }}>{card.name || 'Контакт'}</Text>
-          <Text style={{ color: mutedColor, fontSize: 11 }} numberOfLines={1}>{shortIdentity(card.pub, 10)}</Text>
+          <Text style={{ color: mutedColor, fontSize: font.xs }} numberOfLines={1}>{shortIdentity(card.pub, 10)}</Text>
         </View>
       </View>
       <AppPressable

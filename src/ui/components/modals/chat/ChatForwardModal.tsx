@@ -12,7 +12,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { KeyboardHost } from '../../KeyboardHost';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { primaryInk } from '../../../theme';
+import { avatarShape, primaryInk, radius } from '../../../theme';
 import type { KeyPairBytes } from '../../../../core/crypto/keyManager';
 import { listContacts, type Contact } from '../../../../core/social/contacts';
 import { groupSendProblem, groupSendProblemShort } from '../../../../core/social/groupSendOutcome';
@@ -204,7 +204,7 @@ export function ForwardModal({
                 style={[fwdStyles.row, { borderBottomColor: colors.border }]}
                 onPress={() => toggleSelect(id)}
               >
-                <View style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: isSelected ? colors.primary : colors.surfaceHigh, borderWidth: isSelected ? 0 : 1, borderColor: colors.border }}>
+                <View style={{ ...avatarShape(28), alignItems: 'center', justifyContent: 'center', backgroundColor: isSelected ? colors.primary : colors.surfaceHigh, borderWidth: isSelected ? 0 : 1, borderColor: colors.border }}>
                   {isSelected ? <Ionicons name="checkmark" size={16} color={primaryInk(colors).text} /> : <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textMuted }}>{nameInitial(name)}</Text>}
                 </View>
                 <Text style={[fwdStyles.name, { color: colors.text, flex: 1, marginLeft: 10 }]}>{name}</Text>
@@ -217,7 +217,7 @@ export function ForwardModal({
         />
         {selected.size > 0 ? (
           <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, gap: 10 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 6, minHeight: 40 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 6, minHeight: 40 }}>
               <Ionicons name="chatbubble-outline" size={16} color={colors.textMuted} style={{ marginRight: 8 }} />
               <TextInput
                 value={fwdComment}
@@ -235,7 +235,7 @@ export function ForwardModal({
               ) : null}
             </View>
             <AppPressable
-              style={{ backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center' }}
               onPress={() => void sendToSelected()}
               disabled={sending}
             >
@@ -266,7 +266,7 @@ const fwdStyles = StyleSheet.create({
   },
   cancelBtn: { width: 60 },
   title: { fontSize: 17, fontWeight: '600' },
-  preview: { margin: 16, borderRadius: 10, padding: 12 },
+  preview: { margin: 16, borderRadius: radius.md, padding: 12 },
   previewText: { fontSize: 14, fontStyle: 'italic' },
   row: {
     flexDirection: 'row',
@@ -279,5 +279,5 @@ const fwdStyles = StyleSheet.create({
   name: { fontSize: 16 },
   section: { fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   empty: { textAlign: 'center', marginTop: 40, fontSize: 15 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 8 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 8 },
 });

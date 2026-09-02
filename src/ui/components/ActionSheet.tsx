@@ -19,7 +19,7 @@ import { AppPressable } from './AppPressable';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useTheme } from '../ThemeContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { scrim } from '../theme';
+import { radius, scrim } from '../theme';
 
 export interface ActionSheetOption {
   label: string;
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   scroll: { flexGrow: 0 },
   row: { paddingVertical: 15, paddingHorizontal: 20, borderTopWidth: StyleSheet.hairlineWidth },
   rowText: { fontSize: 16 },
-  cancel: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
+  cancel: { marginHorizontal: 12, marginTop: 8, borderRadius: radius.lg, paddingVertical: 15, alignItems: 'center' },
   cancelText: { fontSize: 16, fontWeight: '600' },
 });
 

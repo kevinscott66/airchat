@@ -176,7 +176,10 @@ function sources(): string[] {
 const REWIRED = [
   'ui/screens/ProfileScreen.tsx',
   'ui/screens/GroupsScreen.tsx',
-  'ui/screens/ChatScreen.tsx',
+  // v4.32.534: единственная ссылка наружу в диалоге была в карточке
+  // предпросмотра, а она уехала в свой модуль — сам экран наружу больше не
+  // ходит. Дерево целиком по-прежнему сторожит тест про Linking.openURL.
+  'ui/screens/chat-components/LinkPreview.tsx',
   'ui/screens/chat-components/LiveLocationBubble.tsx',
   'ui/screens/chat-components/LocationBubble.tsx',
   'ui/screens/chat-components/DocBubble.tsx',

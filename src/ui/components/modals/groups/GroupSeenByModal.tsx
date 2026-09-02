@@ -3,7 +3,7 @@ import { View, Text } from 'react-native';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { identityAvatar, scrim } from '../../../theme';
+import { avatarShape, identityAvatar, radius, scrim } from '../../../theme';
 import type { GroupMessageRow, GroupMemberRow } from '../../../../core/storage/local';
 import { contactLabel, nameInitial } from '../../../../core/social/contactLabel';
 import { shortIdentity } from '../../../identity/shortId';
@@ -21,7 +21,7 @@ function GroupSeenByModalImpl({ msg, allMembers, onClose }: GroupSeenByModalProp
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
       <AppPressable style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', alignItems: 'center', padding: 24 }} onPress={onClose}>
-        <AppPressable onPress={() => {}} style={{ borderRadius: 14, paddingVertical: 20, paddingHorizontal: 24, minWidth: 220, maxWidth: 340, backgroundColor: colors.surface, gap: 10 }}>
+        <AppPressable onPress={() => {}} style={{ borderRadius: radius.lg, paddingVertical: 20, paddingHorizontal: 24, minWidth: 220, maxWidth: 340, backgroundColor: colors.surface, gap: 10 }}>
           <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>Прочитали</Text>
           {(msg.seenBy ?? []).map((pub) => {
             const member = allMembers.find((m) => m.peerPubB64 === pub);
@@ -30,7 +30,7 @@ function GroupSeenByModalImpl({ msg, allMembers, onClose }: GroupSeenByModalProp
             const circle = identityAvatar(pub);
             return (
               <View key={pub} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ ...avatarShape(34), backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
                   <Text style={{ color: circle.ink, fontWeight: '700', fontSize: 14 }}>{nameInitial(name)}</Text>
                 </View>
                 <Text style={{ fontSize: 15, color: colors.text }}>{name}</Text>
@@ -47,7 +47,7 @@ function GroupSeenByModalImpl({ msg, allMembers, onClose }: GroupSeenByModalProp
           ) : null}
           <AppPressable
             onPress={onClose}
-            style={{ marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignSelf: 'center' }}
+            style={{ marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, alignSelf: 'center' }}
           >
             <Text style={{ color: colors.text, fontSize: 14 }}>Закрыть</Text>
           </AppPressable>

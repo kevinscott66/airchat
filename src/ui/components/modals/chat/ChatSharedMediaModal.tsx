@@ -13,14 +13,15 @@ import * as ExpoClipboardModule from 'expo-clipboard';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint } from '../../../theme';
+import { badgeTint, font, radius } from '../../../theme';
 import { listConversationMedia, type SharedMediaRow } from '../../../../core/storage/local';
 import { mediaRowReadable, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
 import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
 import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolvedMediaUrls';
 import { showSuccess } from '../../userFeedback';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
-import { isDocMessage, parseDocMeta } from '../../../screens/ChatScreen';
+import { isDocMessage } from '../../../../core/social/docEnvelope';
+import { parseDocMeta } from '../../../../core/social/docMeta';
 import { openExternal } from '../../../utils/openExternal';
 import { formatByteSize } from '../../../../core/media/byteSize';
 import { numericDate } from '../../../../core/time/ruDateTime';
@@ -161,7 +162,7 @@ export function SharedMediaModal({
               onPress={() => setActiveTab(tab.id)}
             >
               <Ionicons name={tab.icon} size={18} color={activeTab === tab.id ? colors.accent : colors.textMuted} />
-              <Text style={{ fontSize: 11, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
+              <Text style={{ fontSize: font.xs, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
             </AppPressable>
           ))}
         </View>
@@ -213,7 +214,7 @@ export function SharedMediaModal({
               </View>
             ) : sharedDocs.map((doc, i) => (
               <View key={i} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
                   <Ionicons name="document-outline" size={20} color={docTint.ink} />
                 </View>
                 <View style={{ flex: 1 }}>

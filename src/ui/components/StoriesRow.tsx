@@ -62,7 +62,7 @@ import { mayCountViewers, parseViewerList, storyRingUnread, viewerCount } from '
  * темы слушаются везде: normalizeAccent гарантирует читаемость белой надписи
  * поверх любой из них.
  */
-import { STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, darkColors, inkOn, mediaScrim, nestedFill, primaryInk } from '../theme';
+import { avatarShape, darkColors, font, inkOn, mediaScrim, nestedFill, primaryInk, radius, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG } from '../theme';
 import { useColors } from '../ThemeContext';
 import { showError } from './userFeedback';
 import { showPermissionDeniedAlert } from '../permissionAlert';
@@ -425,17 +425,17 @@ const sv = StyleSheet.create({
   textOverlay: { position: 'absolute', bottom: 100, left: 0, right: 0, padding: 16, backgroundColor: mediaScrim.bar },
   textOverlayText: { color: mediaScrim.ink, fontSize: 18, fontWeight: '500' },
   header: { position: 'absolute', top: 52, left: 8, right: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  authorInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: mediaScrim.bar, borderRadius: 22, paddingLeft: 4, paddingRight: 12, paddingVertical: 4 },
-  authorDot: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: mediaScrim.ink },
+  authorInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: mediaScrim.bar, borderRadius: radius.xl, paddingLeft: 4, paddingRight: 12, paddingVertical: 4 },
+  authorDot: { ...avatarShape(36), borderWidth: 2, borderColor: mediaScrim.ink },
   authorName: { color: mediaScrim.ink, fontWeight: '600', fontSize: 15 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: mediaScrim.bar, borderRadius: 22, paddingHorizontal: 10, paddingVertical: 6 },
-  viewCount: { position: 'absolute', bottom: 40, left: 16, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: mediaScrim.bar, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: mediaScrim.bar, borderRadius: radius.xl, paddingHorizontal: 10, paddingVertical: 6 },
+  viewCount: { position: 'absolute', bottom: 40, left: 16, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: mediaScrim.bar, borderRadius: radius.lg, paddingHorizontal: 10, paddingVertical: 5 },
   viewCountText: { color: mediaScrim.ink, fontSize: 14 },
   tapZone: { position: 'absolute', top: 0, bottom: 0 },
   replyBar: { position: 'absolute', bottom: 90, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 8, paddingHorizontal: 16 },
   reactionBtn: { padding: 8 },
   replyInputBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, paddingBottom: 28, backgroundColor: mediaScrim.bar },
-  replyInput: { flex: 1, color: mediaScrim.ink, fontSize: 15, borderWidth: 1, borderColor: mediaScrim.inkMuted, borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: mediaScrim.field },
+  replyInput: { flex: 1, color: mediaScrim.ink, fontSize: 15, borderWidth: 1, borderColor: mediaScrim.inkMuted, borderRadius: radius.xl, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: mediaScrim.field },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -481,10 +481,10 @@ function StoryBubble({
 
 const sb = StyleSheet.create({
   wrap: { alignItems: 'center', width: 68 },
-  ring: { width: 60, height: 60, borderRadius: 30, borderWidth: 2.5, padding: 2, marginBottom: 4 },
-  avatar: { flex: 1, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  ring: { ...avatarShape(60), borderWidth: 2.5, padding: 2, marginBottom: 4 },
+  avatar: { flex: 1, borderRadius: avatarShape(51).borderRadius, alignItems: 'center', justifyContent: 'center' },
   letter: { fontSize: 20, fontWeight: '700' },
-  name: { fontSize: 11, textAlign: 'center', maxWidth: 64 },
+  name: { fontSize: font.xs, textAlign: 'center', maxWidth: 64 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -581,9 +581,9 @@ const sc = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  headerTitle: { color: mediaScrim.ink, fontSize: 17, fontWeight: '600', backgroundColor: mediaScrim.bar, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5, overflow: 'hidden' },
-  headerPlate: { backgroundColor: mediaScrim.bar, borderRadius: 20, padding: 6 },
-  publishBtn: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 7 },
+  headerTitle: { color: mediaScrim.ink, fontSize: 17, fontWeight: '600', backgroundColor: mediaScrim.bar, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 5, overflow: 'hidden' },
+  headerPlate: { backgroundColor: mediaScrim.bar, borderRadius: radius.xl, padding: 6 },
+  publishBtn: { borderRadius: radius.xl, paddingHorizontal: 16, paddingVertical: 7 },
   publishText: { fontWeight: '700', fontSize: 14 },
   captionWrap: {
     position: 'absolute',
@@ -591,7 +591,7 @@ const sc = StyleSheet.create({
     left: 12,
     right: 12,
     backgroundColor: mediaScrim.bar,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     padding: 12,
   },
   captionInput: {
@@ -652,7 +652,7 @@ function TextStoryComposer({
             </AppPressable>
             <Text style={{ color: ink.text, fontSize: 17, fontWeight: '600' }}>Текстовая сторис</Text>
             <AppPressable
-              style={{ backgroundColor: plate, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 7 }}
+              style={{ backgroundColor: plate, borderRadius: radius.xl, paddingHorizontal: 16, paddingVertical: 7 }}
               onPress={() => text.trim() && onPublish(text.trim())}
             >
               <Text style={{ color: plateInk.text, fontWeight: '700', fontSize: 14 }}>Опубликовать</Text>

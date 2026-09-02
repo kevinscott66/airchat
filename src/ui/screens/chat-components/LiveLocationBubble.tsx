@@ -4,9 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { openMapAt } from '../../utils/openExternal';
 import { useTheme } from '../../ThemeContext';
-import { contrastingInk } from '../../theme';
 import { useBubbleSurface } from '../../BubbleKindContext';
 import { liveLocDetail, liveLocState, liveLocTitle } from '../../../core/social/liveLocFreshness';
+import { font } from '../../theme';
 
 /**
  * Пузырь живой геолокации. Один и тот же и в переписке, и в группе:
@@ -48,19 +48,36 @@ export function LiveLocationBubble({ text, isOutgoing }: { text: string; isOutgo
       style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 200, paddingVertical: 2 }}
       onPress={() => openMapAt(meta.lat, meta.lon)}
     >
-      {/* v4.32.388: значок — графика (порог 3:1), поэтому colors.success;
-          плашка LIVE несёт белую надпись, то есть заливка — successFill. */}
+      {/* v4.32.388: значок — графика (порог 3:1), поэтому colors.success.
+          Точка ниже — тоже графика, но заливкой: successFill, потому что она
+          сплошная и должна отделяться от значка под ней. */}
       <View style={{ position: 'relative' }}>
         <Ionicons name="location" size={28} color={live ? bubble.ink.success : mutedColor} />
+        {/* v4.32.528: была надпись LIVE восьмым кеглем — вдвое ниже порога
+            читаемости, и крупнее её сюда не поставить: при 12 «LIVE» шире
+            самого значка (28) и налезает на текст справа.
+
+            Надпись при этом ничего не добавляла: заголовок в двух пикселях
+            правее уже говорит «Живая геолокация» — то есть состояние названо
+            словами, и правило «не только цветом» соблюдено без плашки. Значит
+            это не потеря смысла, а снятие дубля: точка отмечает, к чему
+            относится заголовок, а сам смысл несёт заголовок. */}
         {live && (
-          <View style={{ position: 'absolute', top: -2, right: -4, backgroundColor: colors.successFill, borderRadius: 5, paddingHorizontal: 3, paddingVertical: 1 }}>
-            <Text style={{ color: contrastingInk(colors.successFill), fontSize: 8, fontWeight: '700' }}>LIVE</Text>
-          </View>
+          <View
+            style={{
+              position: 'absolute', top: -1, right: -1,
+              width: 10, height: 10, borderRadius: 5,
+              backgroundColor: colors.successFill,
+              // Обводка цветом пузыря: точка ложится на значок, и без разрыва
+              // между ними сливалась бы с ним в одно пятно.
+              borderWidth: 2, borderColor: bubble.fill,
+            }}
+          />
         )}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={{ color: textColor, fontWeight: '600', fontSize: 13 }}>{liveLocTitle(state)}</Text>
-        <Text style={{ color: mutedColor, fontSize: 11 }}>{detail ? `${coords} · ${detail}` : coords}</Text>
+        <Text style={{ color: mutedColor, fontSize: font.xs }}>{detail ? `${coords} · ${detail}` : coords}</Text>
       </View>
       {state !== 'ended' && <Ionicons name="open-outline" size={16} color={mutedColor} />}
     </AppPressable>

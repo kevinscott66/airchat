@@ -4,6 +4,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, View } from 'react-native';
 import { useColors, useThemedStyles } from '../ThemeContext';
+import { radius } from '../theme';
 
 type Props = {
   width?: number | `${number}%`;
@@ -49,7 +50,7 @@ export function FeedPostSkeleton(): React.ReactElement {
     card: {
       padding: 12,
       backgroundColor: c.surface,
-      borderRadius: 8,
+      borderRadius: radius.md,
       marginBottom: 8,
       borderWidth: 1,
       borderColor: c.border,
@@ -92,7 +93,7 @@ export function MessageSkeleton({ outgoing = false }: { outgoing?: boolean }): R
     bubbleIn: { justifyContent: 'flex-start' as const },
     bubble: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       padding: 10,
       gap: 4,
     },

@@ -20,7 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from './AppPressable';
 import { AppModal as Modal } from './AppModal';
 import { useColors } from '../ThemeContext';
-import { badgeTint, contrastingInk, scrim } from '../theme';
+import { badgeDigit, badgeTint, contrastingInk, font, radius, scrim } from '../theme';
 
 const THUMB = 88;
 
@@ -116,7 +116,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                 style={{
                   marginRight: 10,
                   padding: 6,
-                  borderRadius: 18,
+                  borderRadius: radius.xl,
                   backgroundColor: viewOnce ? tint.fill : 'transparent',
                 }}
                 hitSlop={8}
@@ -131,7 +131,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
             <AppPressable
               style={{
                 backgroundColor: colors.primary,
-                borderRadius: 20,
+                borderRadius: radius.xl,
                 paddingHorizontal: 16,
                 paddingVertical: 8,
               }}
@@ -189,7 +189,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                   alignItems: 'center',
                   paddingHorizontal: 8,
                   paddingVertical: 4,
-                  borderRadius: 10,
+                  borderRadius: radius.md,
                 }}
               >
                 <Ionicons name="trash-outline" size={14} color={colors.error} />
@@ -221,13 +221,13 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                   position: 'relative',
                   width: THUMB,
                   height: THUMB,
-                  borderRadius: 14,
+                  borderRadius: radius.lg,
                   backgroundColor: colors.primaryMuted,
                 }}
               >
                 <Image
                   source={{ uri }}
-                  style={{ width: THUMB, height: THUMB, borderRadius: 14, backgroundColor: colors.primaryMuted }}
+                  style={{ width: THUMB, height: THUMB, borderRadius: radius.lg, backgroundColor: colors.primaryMuted }}
                   resizeMode="cover"
                 />
                 {/* Синий нумерованный бейдж 1/2/3 — Telegram-style */}
@@ -247,7 +247,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                     borderColor: contrastingInk(colors.primary),
                   }}
                 >
-                  <Text style={{ color: contrastingInk(colors.primary), fontSize: 11, fontWeight: '700' }}>{i + 1}</Text>
+                  <Text style={{ color: contrastingInk(colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{i + 1}</Text>
                 </View>
                 {/* Кнопка удаления ×  */}
                 <AppPressable
@@ -256,7 +256,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                     top: -6,
                     left: -6,
                     backgroundColor: colors.background,
-                    borderRadius: 12,
+                    borderRadius: radius.lg,
                   }}
                   onPress={() => onRemoveAt(i)}
                   hitSlop={8}
@@ -271,7 +271,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                 style={{
                   width: THUMB,
                   height: THUMB,
-                  borderRadius: 14,
+                  borderRadius: radius.lg,
                   borderWidth: 2,
                   borderColor: colors.accent,
                   borderStyle: 'dashed',
@@ -283,7 +283,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                 hitSlop={4}
               >
                 <Ionicons name="add" size={32} color={tint.ink} />
-                <Text style={{ fontSize: 11, color: tint.ink, marginTop: 2, fontWeight: '600' }}>
+                <Text style={{ fontSize: font.xs, color: tint.ink, marginTop: 2, fontWeight: '600' }}>
                   Добавить
                 </Text>
               </AppPressable>
@@ -298,7 +298,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                 color: colors.text,
                 fontSize: 15,
                 backgroundColor: colors.surfaceHigh,
-                borderRadius: 20,
+                borderRadius: radius.xl,
                 paddingHorizontal: 14,
                 paddingVertical: 10,
                 maxHeight: 100,

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from './AppPressable';
 import { useTheme } from '../ThemeContext';
-import { fadedOn, type AppColors } from '../theme';
+import { fadedOn, font, radius, type AppColors } from '../theme';
 
 /**
  * StatusBanner — полоска состояния над содержимым.
@@ -124,9 +124,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginHorizontal: 12,
     marginTop: 4,
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
   },
   pressed: { opacity: 0.85 },
-  text: { fontSize: 11, flex: 1, marginLeft: 6, marginRight: 8 },
+  text: { fontSize: font.xs, flex: 1, marginLeft: 6, marginRight: 8 },
 });

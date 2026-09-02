@@ -24,6 +24,7 @@ import { runSyncIfOnline } from '../../core/storage/sync';
 import { ipfsId } from '../../core/transport/ipfs/node';
 import { deleteContact, listContacts, subscribeContactsChanged } from '../../core/social/contacts';
 import { ContactsScreen } from './ContactsScreen';
+import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { loadFeedPosts } from '../../core/social/feedService';
 import {
   exportEncryptedBackup,
@@ -48,7 +49,7 @@ import { authGuard } from '../../core/security/authGuard';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
-import { BRAND_X, QR_CODE, type AppColors, accentOnFill, inkOn, primaryInk, scrim } from '../theme';
+import { accentOnFill, avatarShape, BRAND_X, font, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, type AppColors } from '../theme';
 import { useTheme } from '../ThemeContext';
 import { safeExternalUrl } from '../../core/net/externalLink';
 import { openExternal, openTypedExternal } from '../utils/openExternal';
@@ -57,7 +58,6 @@ import { shortIdentity } from '../identity/shortId';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
-import { GlassSurface } from '../components/GlassSurface';
 
 /**
  * Разбивает биографию на куски так, чтобы кандидаты в ссылки шли отдельными
@@ -569,7 +569,7 @@ function ProfileScreenImpl({
         <LoadingOverlay visible={busy} message="Обработка…" />
 
         {multiProfileEnabled && onOpenProfiles ? (
-          <GlassSurface style={styles.profileSwitchGlass} intensity={38} variant="regular">
+          <View style={styles.profileSwitchGlass}>
           <AppPressable style={styles.profileSwitchCard} onPress={onOpenProfiles}>
             <Ionicons name="person-circle" size={44} color={colors.accent} />
             <View style={styles.profileSwitchBody}>
@@ -579,7 +579,7 @@ function ProfileScreenImpl({
             </View>
             <Ionicons name="chevron-down" size={22} color={colors.textMuted} />
           </AppPressable>
-          </GlassSurface>
+          </View>
         ) : null}
 
         <View style={styles.avatarSection}>
@@ -983,7 +983,15 @@ function ProfileScreenImpl({
           <Text style={styles.infoText}>
             Сообщения шифруются на устройстве. Прочитать их могут только участники чата.
           </Text>
-          <Text style={styles.infoText}>Собеседники в локальной сети обнаруживаются автоматически по Wi-Fi LAN.</Text>
+          {/* v4.32.528: в браузере эта строка была неправдой. Wi-Fi LAN держится
+              на слушающем сокете и mDNS — странице не дают ни того, ни другого,
+              то есть «обнаруживаются автоматически» обещало то, чего не будет
+              никогда. Обещание, которое платформа не может сдержать, хуже
+              молчания: пользователь ждёт собеседника и считает виноватым себя.
+              См. platformCapabilities. */}
+          {LOCAL_RADIO_TRANSPORTS_AVAILABLE ? (
+            <Text style={styles.infoText}>Собеседники в локальной сети обнаруживаются автоматически по Wi-Fi LAN.</Text>
+          ) : null}
         </View>
 
         <Modal visible={seedPwdModal} transparent animationType="fade" testID="seed_password_modal" onRequestClose={() => setSeedPwdModal(false)}>
@@ -1175,7 +1183,7 @@ function ProfileScreenImpl({
                       <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', flex: 1 }} numberOfLines={1}>
                         {entry.kind === 'group' ? '👥 ' : ''}{entry.contextName}
                       </Text>
-                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>
+                      <Text style={{ color: colors.textMuted, fontSize: font.xs }}>
                         {dayMonthShort(entry.message.createdAt)}
                       </Text>
                     </View>
@@ -1250,7 +1258,7 @@ function ProfileScreenImpl({
                   const dateStr = dayMonthShortTime(entry.startedAt);
                   return (
                     <View key={entry.id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
-                      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                      <View style={{ ...avatarShape(40), backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
                         <Ionicons name={entry.isVideo ? 'videocam' : 'call'} size={20} color={colors.text} />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -1395,19 +1403,23 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     backgroundColor: 'transparent',
     paddingHorizontal: 14,
   },
+  // v4.32.530: последняя из четырёх стеклянных поверхностей. Карточка
+  // активного профиля — строка настройки, а не всплывающий слой; §9 оставляет
+  // стекло одному таббару.
   profileSwitchGlass: {
-    borderRadius: 18,
-    marginBottom: 16,
+    borderRadius: radius.lg,
+    marginBottom: spacing.lg,
+    backgroundColor: c.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.border,
   },
   profileSwitchBody: { flex: 1, marginLeft: 10 },
-  profileSwitchLabel: { color: c.textMuted, fontSize: 11, fontWeight: '600' },
-  profileSwitchName: { color: c.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
-  profileSwitchHint: { color: c.textSecondary, fontSize: 11, marginTop: 4 },
+  profileSwitchLabel: { color: c.textMuted, fontSize: font.xs, fontWeight: '600' },
+  profileSwitchName: { color: c.text, fontSize: font.lg, fontWeight: '700', marginTop: 2 },
+  profileSwitchHint: { color: c.textSecondary, fontSize: font.xs, marginTop: 4 },
   avatarSection: { alignItems: 'center', marginBottom: 20 },
   avatarCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    ...avatarShape(88),
     backgroundColor: c.surface,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1415,11 +1427,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderColor: c.border,
     overflow: 'hidden',
   },
-  avatarImage: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-  },
+  avatarImage: avatarShape(88),
   avatarEditBadge: {
     position: 'absolute',
     bottom: 2,
@@ -1471,7 +1479,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     backgroundColor: c.surface,
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: c.primary,
   },
@@ -1490,13 +1498,13 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: c.surface,
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: c.border,
     maxWidth: '100%',
   },
   userIdText: { color: c.text, fontSize: 13, flex: 1, marginRight: 8 },
-  userIdHint: { color: c.textMuted, fontSize: 11, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 },
+  userIdHint: { color: c.textMuted, fontSize: font.xs, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 },
   bioSection: {
     marginBottom: 16,
     paddingHorizontal: 4,
@@ -1505,7 +1513,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: c.surface,
-    borderRadius: 10,
+    borderRadius: radius.md,
     padding: 12,
     borderWidth: 1,
     borderColor: c.border,
@@ -1514,7 +1522,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   bioPlaceholder: { flex: 1, color: c.textMuted, fontSize: 14 },
   bioInput: {
     backgroundColor: c.surface,
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: c.primary,
     padding: 12,
@@ -1539,7 +1547,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   actionCard: {
     width: '48%',
     backgroundColor: c.surface,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     padding: 14,
     borderWidth: 1,
     borderColor: c.border,
@@ -1554,16 +1562,16 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: c.primaryMuted,
     padding: 14,
-    borderRadius: 10,
+    borderRadius: radius.md,
     marginBottom: 8,
   },
   // v4.32.407: надпись лежит на приглушённой заливке — от неё и считается.
   exportBtnText: { color: inkOn(c, c.primaryMuted).text, fontWeight: '600' },
   warn: { color: c.warning, marginTop: 8, fontSize: 12 },
-  techBox: { marginTop: 12, padding: 10, backgroundColor: c.surface, borderRadius: 8 },
-  techLabel: { color: c.textMuted, fontSize: 11, marginBottom: 4 },
-  techHint: { color: c.textMuted, fontSize: 10, marginBottom: 4 },
-  techMono: { color: c.textSecondary, fontSize: 11 },
+  techBox: { marginTop: 12, padding: 10, backgroundColor: c.surface, borderRadius: radius.md },
+  techLabel: { color: c.textMuted, fontSize: font.xs, marginBottom: 4 },
+  techHint: { color: c.textMuted, fontSize: font.xs, marginBottom: 4 },
+  techMono: { color: c.textSecondary, fontSize: font.xs },
   sectionTitle: { color: c.text, fontWeight: '700', fontSize: 16, marginTop: 20, marginBottom: 8 },
   settingRow: {
     flexDirection: 'row',
@@ -1594,7 +1602,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   },
   modalBox: {
     backgroundColor: c.surface,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     padding: 16,
     maxHeight: '85%',
     borderWidth: 1,
@@ -1610,7 +1618,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'center',
     padding: QR_CODE.quietZone,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     backgroundColor: QR_CODE.fill,
     marginVertical: 12,
   },
@@ -1621,7 +1629,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: 8,
+    borderRadius: radius.md,
     padding: 10,
     color: c.text,
     marginBottom: 12,
@@ -1629,7 +1637,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   btn: {
     backgroundColor: c.primary,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: radius.md,
     alignItems: 'center',
   },
   // v4.32.418: белым было вписано в StyleSheet, то есть от заливки кнопки
@@ -1640,7 +1648,7 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   statsRow: {
     flexDirection: 'row',
     backgroundColor: c.surface,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: c.border,
     marginBottom: 12,

@@ -4,7 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint, scrim, type TintedIcon } from '../../../theme';
+import { badgeTint, font, radius, scrim, type TintedIcon } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { dayMonthShortTime, numericDate } from '../../../../core/time/ruDateTime';
 
@@ -122,9 +122,9 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   rowContent: { flex: 1 },
   rowText: { fontSize: 14 },
-  rowMeta: { fontSize: 11, marginTop: 4 },
-  rowMetaSmall: { fontSize: 10 },
-  restoreBtn: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  rowMeta: { fontSize: font.xs, marginTop: 4 },
+  rowMetaSmall: { fontSize: font.xs },
+  restoreBtn: { borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 6 },
   restoreText: { fontSize: 13, fontWeight: '600' },
 });
 

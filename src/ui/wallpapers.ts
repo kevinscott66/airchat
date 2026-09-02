@@ -21,10 +21,52 @@
  */
 import { badgeTint, contrastingInk, inkOn, mediaScrim, nestedFill, type AppColors, type FillInk } from './theme';
 
-/** Что выбрал пользователь: цвет из набора или снимок из галереи. */
+/**
+ * Что выбрал пользователь: цвет из набора, градиент из набора или снимок.
+ *
+ * v4.32.533: добавлен 'mesh'. `value` у него — не цвет, а идентификатор
+ * пресета: рисовать градиент из пяти чисел, записанных в хранилище, значит
+ * навсегда запретить себе его перерисовать. Неизвестный идентификатор
+ * (пресет убрали, а у кого-то он сохранён) сводится к фону темы, а не роняет
+ * экран.
+ */
 export interface Wallpaper {
-  type: 'color' | 'image';
+  type: 'color' | 'image' | 'mesh';
   value: string;
+}
+
+/** Пятно света в градиентных обоях. Доли — от ширины и высоты экрана. */
+export interface WallpaperBlob {
+  color: string;
+  /** Центр. */
+  x: number;
+  y: number;
+  /** Радиусы: rx — доля ширины, ry — доля высоты. */
+  rx: number;
+  ry: number;
+  /** Плотность в центре пятна; к краю сходит в ноль. */
+  opacity: number;
+}
+
+/**
+ * Градиентные обои: базовый цвет и несколько мягких пятен поверх.
+ *
+ * `ground` — не «средний» и не «основной» цвет, а ХУДШИЙ: композит того
+ * пятна, которое сильнее прочих уводит поверхность в сторону чернил. От него
+ * считается всё, что лежит на ленте (см. `feedGround`), поэтому плашка даты
+ * остаётся различимой и в самой светлой точке градиента, а не только на
+ * основном поле. Значение выведено арифметически, а не на глаз, и проверяется
+ * тестом: `themeContrast` пересчитывает композиты и требует, чтобы `ground`
+ * совпал с крайним.
+ */
+export interface WallpaperMesh {
+  id: string;
+  label: string;
+  /** Заливка под пятнами. */
+  base: string;
+  /** Худший для чернил композит — точка отсчёта для всего, что лежит поверх. */
+  ground: string;
+  blobs: readonly WallpaperBlob[];
 }
 
 /** Пункт набора; `value === null` — «без обоев», фон берётся из темы. */
@@ -60,6 +102,98 @@ export const WALLPAPER_PRESETS: readonly WallpaperPreset[] = [
   { label: 'Светло-зелёный', value: '#eef6ee' },
   { label: 'Песочный', value: '#fbf1e8' },
 ];
+
+/**
+ * Градиентные наборы.
+ *
+ * Причина, по которой их шесть, а не один: обои — единственный слой, который
+ * в каждом разговоре свой, и именно они, а не оттенок кнопок, отвечают за то,
+ * что два чата не выглядят одинаково. Плоский цвет этого не даёт: одиннадцать
+ * тёмных квадратов из набора 410-го различаются только подтоном, и на экране
+ * телефона разницы между «Почти чёрным» и «Грифельным» не видно.
+ *
+ * Первые два — ещё и значения по умолчанию (`defaultWallpaper`): до 533-го
+ * лента без выбранных обоев была плоской заливкой `colors.background`.
+ */
+export const WALLPAPER_MESHES: readonly WallpaperMesh[] = [
+  {
+    id: 'aurora',
+    label: 'Аврора',
+    base: '#0a0a14',
+    ground: '#3b4686',
+    blobs: [
+      { color: '#5b45e0', x: 0.14, y: 0.06, rx: 0.95, ry: 0.42, opacity: 0.34 },
+      { color: '#2bc4d8', x: 0.96, y: 0.86, rx: 0.9, ry: 0.4, opacity: 0.2 },
+      { color: '#b14be0', x: 0.82, y: 0.32, rx: 0.62, ry: 0.28, opacity: 0.18 },
+    ],
+  },
+  {
+    id: 'daylight',
+    label: 'Рассвет',
+    base: '#f7f5fc',
+    ground: '#e0d0ec',
+    blobs: [
+      { color: '#c9bdf5', x: 0.12, y: 0.08, rx: 0.9, ry: 0.4, opacity: 0.55 },
+      { color: '#ffd9c2', x: 0.92, y: 0.88, rx: 0.85, ry: 0.38, opacity: 0.45 },
+    ],
+  },
+  {
+    id: 'dusk',
+    label: 'Сумерки',
+    base: '#12101b',
+    ground: '#5c3756',
+    blobs: [
+      { color: '#5b45e0', x: 0.1, y: 0.9, rx: 0.9, ry: 0.4, opacity: 0.26 },
+      { color: '#e0498a', x: 0.88, y: 0.1, rx: 0.8, ry: 0.34, opacity: 0.18 },
+      { color: '#f5b544', x: 0.5, y: 0.5, rx: 0.5, ry: 0.22, opacity: 0.12 },
+    ],
+  },
+  {
+    id: 'tide',
+    label: 'Прилив',
+    base: '#081319',
+    ground: '#14535a',
+    blobs: [
+      { color: '#1e7a9e', x: 0.2, y: 0.14, rx: 1, ry: 0.44, opacity: 0.34 },
+      { color: '#2bd8b4', x: 0.9, y: 0.9, rx: 0.8, ry: 0.36, opacity: 0.18 },
+    ],
+  },
+  {
+    id: 'ember',
+    label: 'Уголь',
+    base: '#140f0c',
+    ground: '#5b281b',
+    blobs: [
+      { color: '#e06a2b', x: 0.86, y: 0.1, rx: 0.9, ry: 0.4, opacity: 0.22 },
+      { color: '#b0303a', x: 0.1, y: 0.82, rx: 0.85, ry: 0.38, opacity: 0.22 },
+    ],
+  },
+  {
+    id: 'frost',
+    label: 'Иней',
+    base: '#f2f6fb',
+    ground: '#d1d5f3',
+    blobs: [
+      { color: '#b9d4f2', x: 0.14, y: 0.86, rx: 0.95, ry: 0.42, opacity: 0.55 },
+      { color: '#cfc4f0', x: 0.9, y: 0.12, rx: 0.85, ry: 0.38, opacity: 0.45 },
+    ],
+  },
+];
+
+/** Пресет по идентификатору; `null` — такого больше нет. */
+export function meshById(id: string): WallpaperMesh | null {
+  return WALLPAPER_MESHES.find((m) => m.id === id) ?? null;
+}
+
+/**
+ * Обои разговора, у которого выбора нет.
+ *
+ * Раньше это была плоская `colors.background`. Плоская заливка — не нейтральный
+ * выбор, а тоже решение, и именно оно делало все экраны одинаковыми.
+ */
+export function defaultWallpaper(scheme: 'dark' | 'light'): Wallpaper {
+  return { type: 'mesh', value: scheme === 'light' ? 'daylight' : 'aurora' };
+}
 
 /** Плашка на ленте и чернила на ней. */
 export interface FeedPlate {
@@ -123,7 +257,11 @@ export function feedGround(colors: AppColors, wallpaper: Wallpaper | null): Feed
       loud: { fill: mediaScrim.bar, ink: mediaScrim.ink },
     };
   }
-  const ground = wallpaper?.type === 'color' ? wallpaper.value : colors.background;
+  const mesh = wallpaper?.type === 'mesh' ? meshById(wallpaper.value) : null;
+  const ground = wallpaper?.type === 'color'
+    ? wallpaper.value
+    // Градиент отвечает за себя худшей своей точкой, а не основным полем.
+    : mesh?.ground ?? colors.background;
   const fill = nestedFill(ground);
   const loud = badgeTint(colors, 'accent', ground);
   return {

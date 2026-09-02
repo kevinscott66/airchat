@@ -35,7 +35,7 @@ import { rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { badgeTint, contrastingInk, mediaScrim, scrim } from '../theme';
+import { badgeTint, contrastingInk, font, mediaScrim, mono, radius, scrim } from '../theme';
 import { log } from '../../core/logger';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
@@ -132,7 +132,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     iconBtn: {
       width: 38,
       height: 38,
-      borderRadius: 19,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
       backgroundColor: c.surface,
@@ -142,7 +142,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     iconBtnPrimary: {
       width: 38,
       height: 38,
-      borderRadius: 19,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
       backgroundColor: c.primary,
@@ -151,7 +151,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       backgroundColor: c.surface,
-      borderRadius: 10,
+      borderRadius: radius.md,
       padding: 12,
       marginBottom: 8,
       borderWidth: 1,
@@ -167,7 +167,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       marginTop: 18,
       paddingHorizontal: 22,
       paddingVertical: 12,
-      borderRadius: 22,
+      borderRadius: radius.xl,
       backgroundColor: c.primary,
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
@@ -196,7 +196,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       backgroundColor: c.surfaceHigh,
       borderColor: c.border,
       borderWidth: 1,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingHorizontal: 12,
       paddingVertical: 10,
       fontSize: 15,
@@ -211,7 +211,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     pasteBtn: {
       paddingHorizontal: 12,
       paddingVertical: 6,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
@@ -224,19 +224,19 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     preview: {
       marginTop: 16,
       padding: 12,
-      borderRadius: 10,
+      borderRadius: radius.md,
       backgroundColor: c.surfaceHigh,
       borderWidth: 1,
       borderColor: c.accent,
     },
-    previewLabel: { color: c.textSecondary, fontSize: 11, fontWeight: '600' as const, textTransform: 'uppercase' as const, letterSpacing: 0.5 },
-    previewVal: { color: c.text, fontSize: 13, marginTop: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+    previewLabel: { color: c.textSecondary, fontSize: font.xs, fontWeight: '600' as const, textTransform: 'uppercase' as const, letterSpacing: 0.5 },
+    previewVal: { color: c.text, fontSize: 13, marginTop: 4, fontFamily: mono },
     // v4.32.409: подложка ошибки подмешивалась на месте, а надпись бралась
     // из палитры — красное по красному, и посчитать это было нельзя.
     errorBox: {
       marginTop: 16,
       padding: 10,
-      borderRadius: 8,
+      borderRadius: radius.md,
       backgroundColor: badgeTint(c, 'error', c.background).fill,
       borderWidth: 1,
       borderColor: c.error,
@@ -280,7 +280,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       height: 240,
       borderWidth: 2,
       borderColor: mediaScrim.ink,
-      borderRadius: 16,
+      borderRadius: radius.xl,
     },
     scannerHint: {
       color: mediaScrim.inkMuted,
@@ -926,7 +926,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         onRequestClose={() => { setRenameTarget(null); setRenameDraft(''); }}
       >
         <View style={{ flex: 1, backgroundColor: scrim.modal, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <View style={{ width: '100%', maxWidth: 400, backgroundColor: colors.surface, borderRadius: 14, padding: 20 }}>
+          <View style={{ width: '100%', maxWidth: 400, backgroundColor: colors.surface, borderRadius: radius.lg, padding: 20 }}>
             <Text style={[styles.modalTitle, { marginBottom: 12 }]}>Переименовать контакт</Text>
             <TextInput
               style={styles.input}

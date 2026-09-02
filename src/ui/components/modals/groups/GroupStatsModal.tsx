@@ -4,7 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint, scrim } from '../../../theme';
+import { avatarShape, badgeTint, font, radius, scrim } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupStats } from '../../../../core/storage/local';
 import { dayMonthLongYear } from '../../../../core/time/ruDateTime';
@@ -121,18 +121,18 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontWeight: '700', flex: 1 },
   body: { padding: 20, gap: 14 },
   tilesRow: { flexDirection: 'row', gap: 12 },
-  tile: { flex: 1, alignItems: 'center', borderRadius: 12, padding: 12 },
+  tile: { flex: 1, alignItems: 'center', borderRadius: radius.lg, padding: 12 },
   tileValue: { fontSize: 20, fontWeight: '700', marginTop: 4 },
-  tileLabel: { fontSize: 11, marginTop: 2, textAlign: 'center' },
+  tileLabel: { fontSize: font.xs, marginTop: 2, textAlign: 'center' },
   firstMsgRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   firstMsgText: { fontSize: 13 },
   sectionTitle: { fontSize: 13, fontWeight: '600', marginTop: 4 },
   chartRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, height: 48, marginVertical: 4 },
   chartCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  bar: { width: '80%', borderRadius: 3 },
-  dayLabel: { fontSize: 8, marginTop: 2 },
+  bar: { width: '80%', borderRadius: radius.sm },
+  dayLabel: { fontSize: font.xs, marginTop: 2 },
   senderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  senderBadge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  senderBadge: { ...avatarShape(28), alignItems: 'center', justifyContent: 'center' },
   senderBadgeText: { fontSize: 12, fontWeight: '700' },
   senderName: { flex: 1, fontSize: 14 },
   senderCount: { fontSize: 13 },

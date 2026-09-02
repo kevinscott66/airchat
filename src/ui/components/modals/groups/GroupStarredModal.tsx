@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { scrim } from '../../../theme';
+import { font, scrim } from '../../../theme';
 import {
   type GroupMessageRow,
   type StarredMessageEntry,
@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
   row: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   rowHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   rowHeaderIcon: { marginRight: 6 },
-  rowMeta: { fontSize: 11 },
+  rowMeta: { fontSize: font.xs },
   rowText: { fontSize: 14 },
   rowTextUnreadable: { fontStyle: 'italic' },
   unstarBtn: { marginTop: 6 },

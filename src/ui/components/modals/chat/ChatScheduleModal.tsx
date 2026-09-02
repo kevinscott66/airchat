@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { KeyboardHost } from '../../KeyboardHost';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { primaryInk, scrim } from '../../../theme';
+import { primaryInk, radius, scrim } from '../../../theme';
 
 // ─── ScheduleModal ────────────────────────────────────────────────────────────
 export function ScheduleModal({
@@ -115,10 +115,10 @@ const schStyles = StyleSheet.create({
   preset: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   presetText: { fontSize: 15 },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 14 },
-  timeInput: { width: 48, textAlign: 'center', borderWidth: 1, borderRadius: 8, paddingVertical: 8, fontSize: 16 },
+  timeInput: { width: 48, textAlign: 'center', borderWidth: 1, borderRadius: radius.md, paddingVertical: 8, fontSize: 16 },
   colon: { fontSize: 18, fontWeight: '700' },
-  dayToggle: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 8 },
-  scheduleBtn: { flex: 1, borderRadius: 8, alignItems: 'center', paddingVertical: 8 },
+  dayToggle: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 8, paddingVertical: 8 },
+  scheduleBtn: { flex: 1, borderRadius: radius.md, alignItems: 'center', paddingVertical: 8 },
   // v4.32.419: цвет подписи переехал на место вызова — заливка кнопки
   // это `primary`, а лист считается один раз при загрузке модуля.
   scheduleBtnText: { fontWeight: '700', fontSize: 14 },

@@ -19,7 +19,7 @@ import { AppModal as Modal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
 import { SafeScreen } from './SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { badgeTint, contrastingInk, font, mediaScrim, spacing } from '../theme';
+import { badgeTint, contrastingInk, font, mediaScrim, radius, spacing } from '../theme';
 import { listQuickReplies, type QuickReply } from '../../core/storage/local';
 import { filterTemplates, mayPickTemplate, templateReadable } from '../../core/social/templateSearch';
 import { UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
@@ -184,7 +184,7 @@ export function AttachSheet(props: AttachSheetProps) {
       paddingHorizontal: 10,
       paddingVertical: 6,
       minWidth: 60,
-      borderRadius: 10,
+      borderRadius: radius.md,
       marginHorizontal: 2,
     },
     tabItemActive: {
@@ -372,7 +372,7 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
     permWrap: { flex: 1, alignItems: 'center' as const, justifyContent: 'center' as const, padding: spacing.lg },
     permTitle: { color: c.text, fontSize: font.md, fontWeight: '600' as const, marginBottom: spacing.sm, textAlign: 'center' as const },
     permText: { color: c.textSecondary, fontSize: font.sm, textAlign: 'center' as const, marginBottom: spacing.md },
-    permBtn: { backgroundColor: c.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: 20 },
+    permBtn: { backgroundColor: c.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius.xl },
     permBtnText: { color: contrastingInk(c.primary), fontSize: font.sm, fontWeight: '600' as const },
     grid: { padding: 2 },
     cell: {
@@ -383,7 +383,7 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
     cellInner: {
       flex: 1,
       backgroundColor: c.surfaceHigh,
-      borderRadius: 2,
+      borderRadius: radius.sm,
       overflow: 'hidden' as const,
       position: 'relative' as const,
     },
@@ -418,11 +418,11 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
       backgroundColor: mediaScrim.bar,
       paddingHorizontal: 4,
       paddingVertical: 2,
-      borderRadius: 4,
+      borderRadius: radius.md,
     },
     videoBadgeText: {
       color: mediaScrim.ink,
-      fontSize: 10,
+      fontSize: font.xs,
       marginLeft: 2,
     },
     sendBarWrap: {
@@ -433,7 +433,7 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
     },
     sendBtn: {
       backgroundColor: c.primary,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       paddingVertical: 12,
       alignItems: 'center' as const,
     },
@@ -603,7 +603,7 @@ function FileTab({
     wrap: { flex: 1, padding: spacing.md },
     card: {
       backgroundColor: c.surfaceHigh,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       overflow: 'hidden' as const,
       marginBottom: spacing.md,
     },
@@ -668,7 +668,7 @@ function LocationTab({
     wrap: { flex: 1, padding: spacing.md },
     card: {
       backgroundColor: c.surfaceHigh,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       overflow: 'hidden' as const,
       marginBottom: spacing.md,
     },
@@ -798,7 +798,7 @@ function ReplyTab({
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       backgroundColor: c.surfaceHigh,
-      borderRadius: 20,
+      borderRadius: radius.xl,
       paddingHorizontal: spacing.md,
       margin: spacing.md,
     },
@@ -901,7 +901,7 @@ function ContactTab({ onPick }: { onPick: (c: Contact) => void }) {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       backgroundColor: c.surfaceHigh,
-      borderRadius: 20,
+      borderRadius: radius.xl,
       paddingHorizontal: spacing.md,
       margin: spacing.md,
     },

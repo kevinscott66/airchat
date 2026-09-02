@@ -15,7 +15,7 @@ import { AUTH_MAX_ATTEMPTS, authGuard } from '../../core/security/authGuard';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError } from '../components/userFeedback';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 import {
   PIN_BACKSPACE,
   PIN_LENGTH,
@@ -160,7 +160,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     input: {
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 10,
+      borderRadius: radius.md,
       padding: 14,
       fontSize: 16,
       marginBottom: 16,
@@ -170,7 +170,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     button: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     buttonDisabled: { opacity: 0.7 },

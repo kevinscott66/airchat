@@ -115,9 +115,22 @@ import { announceGroupSend } from '../groupSendAnnounce';
 import { groupControlProblem } from '../../core/social/groupControlOutcome';
 import { announceCtl, announceInviteToken } from '../groupControlAnnounce';
 import { useTheme } from '../ThemeContext';
-import { badgeTint, contrastingInk, identityAvatar, identityInk, inkOn, nestedFill, primaryInk, rippleOn, rowMark, scrim, searchMark } from '../theme';
-import { feedGround, type Wallpaper } from '../wallpapers';
-import { isVoiceMessage, parseVoiceMeta, makeVoiceText, ForwardModal, isContactCard, parseContactCard, ScheduleModal, WallpaperPickerModal, makeContactCardText, extractFirstUrl, LinkPreview, isForwardedMessage, makeForwardText, makeForwardBundleText, parseForwardedMessage, isDocMessage, makeDocText, isLocationMessage, parseLocationMeta, makeLocationText, reverseGeocodeLabel, makeViewOnceText, SendEffectOverlay, detectSendEffect, EmojiPanel } from './ChatScreen';
+import { avatarShape, badgeDigit, badgeTint, contrastingInk, font, identityAvatar, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
+import { defaultWallpaper, feedGround, type Wallpaper } from '../wallpapers';
+import { WallpaperBackground } from '../components/WallpaperBackground';
+import { isVoiceMessage, parseVoiceMeta, makeVoiceText } from '../../core/social/voiceEnvelope';
+import { isContactCard, parseContactCard, makeContactCardText } from '../../core/social/contactCardEnvelope';
+import { isForwardedMessage, makeForwardText, makeForwardBundleText, parseForwardedMessage } from '../../core/social/forwardEnvelope';
+import { isDocMessage, makeDocText } from '../../core/social/docEnvelope';
+import { isLocationMessage, parseLocationMeta, makeLocationText } from '../../core/social/locationEnvelope';
+import { reverseGeocodeLabel } from '../../core/social/geocode';
+import { makeViewOnceText } from './chat-utils/viewOnce';
+import { ForwardModal } from '../components/modals/chat/ChatForwardModal';
+import { ScheduleModal } from '../components/modals/chat/ChatScheduleModal';
+import { WallpaperPickerModal } from '../components/modals/chat/ChatWallpaperPickerModal';
+import { EmojiPanel } from './chat-components/EmojiPanel';
+import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
+import { SendEffectOverlay, detectSendEffect } from './chat-components/SendEffectOverlay';
 import { GifPickerModal, isGifMessage, parseGifUrl, GifBubble, isGifSearchAvailable } from '../components/GifPicker';
 import {
   buildTranslateUrl,
@@ -371,7 +384,7 @@ function GroupListRow({
       delayLongPress={400}
     >
       {avatarUri ? (
-        <Image source={{ uri: avatarUri }} style={{ width: 48, height: 48, borderRadius: 24 }} />
+        <Image source={{ uri: avatarUri }} style={avatarShape(48)} />
       ) : (
         <GroupAvatar name={item.name} type={item.type} />
       )}
@@ -382,7 +395,7 @@ function GroupListRow({
             {item.type === 'channel' ? <Ionicons name="megaphone-outline" size={13} color={colors.textMuted} style={{ marginRight: 3 }} /> : null}
             <Text style={[glStyles.name, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
             {item.memberCount > 0 ? (
-              <Text style={{ fontSize: 11, color: colors.textMuted, marginLeft: 6, flexShrink: 0 }}>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted, marginLeft: 6, flexShrink: 0 }}>
                 {item.type === 'channel' ? `${item.memberCount} подп.` : `${item.memberCount} уч.`}
               </Text>
             ) : null}
@@ -405,7 +418,7 @@ function GroupListRow({
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
                 <Ionicons name="notifications-off-outline" size={13} color={colors.textMuted} />
                 {item.mutedUntil ? (
-                  <Text style={{ fontSize: 10, color: colors.textMuted }}>{muteRemainingLabel(item.mutedUntil)}</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>{muteRemainingLabel(item.mutedUntil)}</Text>
                 ) : null}
               </View>
             ) : null}
@@ -437,12 +450,12 @@ const glStyles = StyleSheet.create({
   bottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   preview: { fontSize: 14, flex: 1 },
   // v4.32.394: заливка приходит с места вызова — см. ChatListScreen.
-  badge: { borderRadius: 10, minWidth: 20, paddingHorizontal: 5, paddingVertical: 2, alignItems: 'center' },
-  mentionBadge: { borderRadius: 10, minWidth: 20, paddingHorizontal: 5, paddingVertical: 2, alignItems: 'center' },
+  badge: { borderRadius: radius.md, minWidth: 20, paddingHorizontal: 5, paddingVertical: 2, alignItems: 'center' },
+  mentionBadge: { borderRadius: radius.md, minWidth: 20, paddingHorizontal: 5, paddingVertical: 2, alignItems: 'center' },
   // Цвет надписи здесь не задан намеренно: заливок у плашки три
   // (errorFill / mutedFill / primary, последняя — выбор пользователя), и
   // чернила считаются на месте вызова из той, что выпала (v4.32.398).
-  badgeText: { fontSize: 11, fontWeight: '700' },
+  badgeText: { fontSize: badgeDigit, fontWeight: '700' },
 });
 
 
@@ -466,7 +479,7 @@ function GroupChatScreen({
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
   initialSearchQuery?: string;
 }): React.ReactElement {
-  const { colors, fontSize: themeFontSize } = useTheme();
+  const { colors, scheme, fontSize: themeFontSize } = useTheme();
   // v4.32.409: «непрочитанные», «выделено», «закреплено» и своя реакция —
   // одна и та же плашка акцента, и во всех пяти местах она подмешивалась
   // прозрачностью прямо на месте вызова. Подложка считается от поверхности,
@@ -576,8 +589,10 @@ function GroupChatScreen({
   const [grpRecentlyDeletedVisible, setGrpRecentlyDeletedVisible] = useState(false);
   const [grpRecentlyDeletedList, setGrpRecentlyDeletedList] = useState<Array<{ id: string; text: string; senderName: string; deletedAt: number }>>([]);
   const [grpWallpaper, setGrpWallpaper] = useState<Wallpaper | null>(null);
+  // v4.32.533: у группы без выбора обои тоже есть — см. ChatScreen.
+  const wallpaper = grpWallpaper ?? defaultWallpaper(scheme);
   // v4.32.410: плашки, лежащие на ленте, — от обоев, а не от палитры.
-  const feed = useMemo(() => feedGround(colors, grpWallpaper), [colors, grpWallpaper]);
+  const feed = useMemo(() => feedGround(colors, wallpaper), [colors, wallpaper]);
   const [wallpaperPickerVisible, setWallpaperPickerVisible] = useState(false);
   const [grpStatsVisible, setGrpStatsVisible] = useState(false);
   const [grpStats, setGrpStats] = useState<GroupStats | null>(null);
@@ -613,7 +628,7 @@ function GroupChatScreen({
           const parsed = JSON.parse(raw) as unknown;
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             const o = parsed as Record<string, unknown>;
-            if ((o.type === 'color' || o.type === 'image') && typeof o.value === 'string') {
+            if ((o.type === 'color' || o.type === 'image' || o.type === 'mesh') && typeof o.value === 'string') {
               setGrpWallpaper({ type: o.type, value: o.value });
             }
           }
@@ -2734,7 +2749,7 @@ function GroupChatScreen({
       return (
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 16, gap: 10 }}>
           <View style={{ flex: 1, height: 1, backgroundColor: colors.accent }} />
-          <View style={{ backgroundColor: activeTint.fill, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 4, borderWidth: 1, borderColor: colors.accent }}>
+          <View style={{ backgroundColor: activeTint.fill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4, borderWidth: 1, borderColor: colors.accent }}>
             <Text style={{ color: activeTint.ink, fontSize: 12, fontWeight: '600' }}>
               {grpOpenUnread} непрочитанных
             </Text>
@@ -2783,7 +2798,7 @@ function GroupChatScreen({
         >
           {/* v4.32.410: та же плашка, что у системного события ниже, — серый
               25% поверх обоев с надписью из палитры остался только здесь. */}
-          <View style={{ backgroundColor: feed.quiet.fill, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 4 }}>
+          <View style={{ backgroundColor: feed.quiet.fill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4 }}>
             <Text style={{ color: feed.quiet.ink.secondary, fontSize: 12, fontWeight: '500' }}>{sep.label}</Text>
           </View>
         </AppPressable>
@@ -2805,7 +2820,7 @@ function GroupChatScreen({
       // ленты, чернила от заливки.
       return (
         <View style={{ alignItems: 'center', paddingVertical: 4, paddingHorizontal: 16 }}>
-          <View style={{ backgroundColor: quoteFill, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 4 }}>
+          <View style={{ backgroundColor: quoteFill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4 }}>
             <Text style={{ color: quoteInk.secondary, fontSize: 12, textAlign: 'center' }}>{parseGroupSysText(item.text)}</Text>
           </View>
         </View>
@@ -2919,7 +2934,7 @@ function GroupChatScreen({
                 // текста.
                 const tone = roleTone(senderMember?.role);
                 return (
-                  <Text style={{ fontSize: 10, color: tone ? colors[tone] : colors.textMuted, fontWeight: '500' }}>
+                  <Text style={{ fontSize: font.xs, color: tone ? colors[tone] : colors.textMuted, fontWeight: '500' }}>
                     {label.toLowerCase()}
                   </Text>
                 );
@@ -2956,7 +2971,7 @@ function GroupChatScreen({
             </Text>
           </AppPressable>
         ) : null}
-        <View style={[gcStyles.bubble, { backgroundColor: (!item.mediaCids && !item.text.startsWith(POLL_PREFIX) && !isVoiceMessage(item.text) && !isDocMessage(item.text) && !isLocationMessage(item.text) && !item.replyToId && isGrpBigEmoji(item.text)) ? 'transparent' : (isMe ? colors.primary : colors.surface), padding: item.mediaCids ? 0 : undefined, overflow: 'hidden' }]}>
+        <View style={[gcStyles.bubble, isMe ? gcStyles.bubbleAnchorOut : gcStyles.bubbleAnchorIn, { backgroundColor: (!item.mediaCids && !item.text.startsWith(POLL_PREFIX) && !isVoiceMessage(item.text) && !isDocMessage(item.text) && !isLocationMessage(item.text) && !item.replyToId && isGrpBigEmoji(item.text)) ? 'transparent' : (isMe ? colors.primary : colors.surface), padding: item.mediaCids ? 0 : undefined, overflow: 'hidden' }]}>
           {/* v4.32.244: раньше здесь требовался ещё и адрес шлюза — без него
               пузырь с фотографией молча превращался в пустой текст. Снимок,
               приехавший зашифрованным вложением, шлюза не требует. */}
@@ -2970,7 +2985,7 @@ function GroupChatScreen({
           ) : item.mediaCids ? (
             item.text && item.text.startsWith('\x09vo:') ? (
               <AppPressable
-                style={{ alignItems: 'center', justifyContent: 'center', width: 220, height: 120, borderRadius: 12, backgroundColor: isMe ? meTile : colors.surfaceHigh, margin: 4 }}
+                style={{ alignItems: 'center', justifyContent: 'center', width: 220, height: 120, borderRadius: radius.lg, backgroundColor: isMe ? meTile : colors.surfaceHigh, margin: 4 }}
                 onPress={() => handleGrpViewOnceTap(item)}
               >
                 <Ionicons name="eye-outline" size={30} color={isMe ? meTileInk.muted : colors.textMuted} />
@@ -3052,7 +3067,7 @@ function GroupChatScreen({
                 <Ionicons name="location" size={28} color={isMe ? meInk.accent : colors.accent} />
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: isMe ? meInk.text : colors.text, fontWeight: '600', fontSize: 13 }}>Геолокация</Text>
-                  <Text style={{ color: isMe ? meInk.secondary : colors.textMuted, fontSize: 11 }}>{meta.label || `${meta.lat.toFixed(5)}, ${meta.lon.toFixed(5)}`}</Text>
+                  <Text style={{ color: isMe ? meInk.secondary : colors.textMuted, fontSize: font.xs }}>{meta.label || `${meta.lat.toFixed(5)}, ${meta.lon.toFixed(5)}`}</Text>
                 </View>
                 <Ionicons name="open-outline" size={16} color={isMe ? meInk.muted : colors.textMuted} />
               </AppPressable>
@@ -3077,13 +3092,13 @@ function GroupChatScreen({
                 {fwdLabel ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, paddingBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: isMe ? meTile : colors.border }}>
                     <Ionicons name="arrow-redo-outline" size={12} color={isMe ? meInk.accent : colors.accent} />
-                    <Text style={{ fontSize: 11, color: isMe ? meInk.accent : colors.primary, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
+                    <Text style={{ fontSize: font.xs, color: isMe ? meInk.accent : colors.primary, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
                   </View>
                 ) : null}
                 {searchVisible && searchQuery.trim() ? (
                   <Text style={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, fontSize: msgFontSize, flexWrap: 'wrap' }]}>
                     {highlightSegments(displayText, searchQuery).map((seg, si) => (
-                      <Text key={si} style={seg.match ? { backgroundColor: grpMark.fill, color: grpMark.ink, borderRadius: 2 } : undefined}>{seg.text}</Text>
+                      <Text key={si} style={seg.match ? { backgroundColor: grpMark.fill, color: grpMark.ink, borderRadius: radius.sm } : undefined}>{seg.text}</Text>
                     ))}
                   </Text>
                 ) : (
@@ -3092,7 +3107,7 @@ function GroupChatScreen({
                 {(autoTranslate || grpManualTranslatedIds.has(item.id)) && !isMe && translationCache[item.id] ? (
                   <>
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: 5 }} />
-                    <Text style={{ fontSize: 11, color: colors.textMuted, marginBottom: 2 }}>🌐 переведено</Text>
+                    <Text style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 2 }}>🌐 переведено</Text>
                     {/* v4.32.352: перевод в СВОЁМ пузыре лежит на заливке, а
                         colors.textSecondary подобран под фон страницы — на
                         синем он читался как грязное пятно. Приведено к тому же
@@ -3120,7 +3135,7 @@ function GroupChatScreen({
                 style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}
               >
                 <Ionicons name="eye-off-outline" size={11} color={colors.warning} style={{ marginRight: 2 }} />
-                <Text style={{ fontSize: 11, color: colors.warning }}>?</Text>
+                <Text style={{ fontSize: font.xs, color: colors.warning }}>?</Text>
               </AppPressable>
             ) : isMe && (item.seenBy?.length ?? 0) > 0 ? (
               <AppPressable
@@ -3129,7 +3144,7 @@ function GroupChatScreen({
                 style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}
               >
                 <Ionicons name="checkmark-done" size={13} color={meInk.muted} style={{ marginRight: 2 }} />
-                <Text style={{ fontSize: 11, color: meInk.secondary }}>{item.seenBy!.length}</Text>
+                <Text style={{ fontSize: font.xs, color: meInk.secondary }}>{item.seenBy!.length}</Text>
               </AppPressable>
             ) : (item.seenBy?.length ?? 0) > 0 && (isMe || group.type === 'channel') ? (
               // v4.32.226: REAL views — distinct readers from seen_by (read-receipt
@@ -3137,7 +3152,7 @@ function GroupChatScreen({
               // to thousands on a 1-subscriber channel from the owner's own re-opens).
               <>
                 <Ionicons name="eye-outline" size={11} color={isMe ? meInk.muted : colors.textMuted} style={{ marginRight: 2 }} />
-                <Text style={{ fontSize: 11, color: isMe ? meInk.secondary : colors.textMuted, marginRight: 4 }}>
+                <Text style={{ fontSize: font.xs, color: isMe ? meInk.secondary : colors.textMuted, marginRight: 4 }}>
                   {(item.seenBy?.length ?? 0) >= 1000 ? `${((item.seenBy!.length) / 1000).toFixed(1)}K` : item.seenBy!.length}
                 </Text>
               </>
@@ -3191,7 +3206,7 @@ function GroupChatScreen({
           </View>
         ) : null}
         {isHighlighted && highlightBgColor ? (
-          <RNAnimated.View style={[StyleSheet.absoluteFill, { backgroundColor: highlightBgColor, borderRadius: 12 }]} pointerEvents="none" />
+          <RNAnimated.View style={[StyleSheet.absoluteFill, { backgroundColor: highlightBgColor, borderRadius: radius.lg }]} pointerEvents="none" />
         ) : null}
       </AppPressable>
       </GrpSwipeRow>
@@ -3212,18 +3227,12 @@ function GroupChatScreen({
   const REACTION_EMOJIS = ['❤️', '👍', '👎', '😂', '😮', '😢', '🔥', '👏'];
 
   return (
-    <View style={{ flex: 1, backgroundColor: feed.ground }}>
+    <View style={{ flex: 1 }}>
       {/* v4.32.410: обои-снимок раньше подставлялись в backgroundColor путём к
           файлу и просто не работали. Шапка и поле ввода залиты непрозрачно,
-          поэтому картинка видна ровно под лентой. */}
-      {grpWallpaper?.type === 'image' ? (
-        <Image
-          source={{ uri: grpWallpaper.value }}
-          style={StyleSheet.absoluteFill}
-          resizeMode="cover"
-          accessibilityIgnoresInvertColors
-        />
-      ) : null}
+          поэтому фон виден ровно под лентой.
+          v4.32.533: цвет, градиент и снимок — один слой. */}
+      <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
       {/* Header */}
       {searchVisible ? (
         <View style={[gcStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
@@ -3287,7 +3296,7 @@ function GroupChatScreen({
           </AppPressable>
           <AppPressable style={[gcStyles.headerInfo, { flexDirection: 'row', alignItems: 'center', gap: 10 }]} onPress={onOpenMembers}>
             {headerAvatarUri ? (
-              <Image source={{ uri: headerAvatarUri }} style={{ width: 36, height: 36, borderRadius: 18 }} />
+              <Image source={{ uri: headerAvatarUri }} style={avatarShape(36)} />
             ) : (
               <GroupAvatar name={group.name} size={36} type={group.type} />
             )}
@@ -3326,7 +3335,7 @@ function GroupChatScreen({
             <Ionicons name="people-outline" size={22} color={colors.text} />
             {amAdmin && pendingJoinCount > 0 ? (
               <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: 9, fontWeight: '700' }}>{pendingJoinCount > 9 ? '9+' : String(pendingJoinCount)}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{pendingJoinCount > 9 ? '9+' : String(pendingJoinCount)}</Text>
               </View>
             ) : null}
           </AppPressable>
@@ -3780,7 +3789,7 @@ function GroupChatScreen({
                   numberOfLines={1}
                 >{currentPinText}</Text>
                 {total > 1 ? (
-                  <Text style={{ fontSize: 11, color: colors.textMuted, flexShrink: 0 }}>{grpPinnedIdx + 1}/{total}</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted, flexShrink: 0 }}>{grpPinnedIdx + 1}/{total}</Text>
                 ) : null}
               </View>
             </View>
@@ -3890,14 +3899,14 @@ function GroupChatScreen({
                 «описания нет». Показываем пометку курсивом, иначе потеря
                 выглядит как пустое поле, которое никто не заполнял. */}
             {!searchVisible && !group.description && group.descriptionUnreadable ? (
-              <View style={{ marginTop: 16, paddingHorizontal: 24, maxWidth: 320, backgroundColor: colors.surfaceHigh, borderRadius: 12, padding: 14 }}>
-                <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '600', marginBottom: 4, letterSpacing: 0.5 }}>ОПИСАНИЕ</Text>
+              <View style={{ marginTop: 16, paddingHorizontal: 24, maxWidth: 320, backgroundColor: colors.surfaceHigh, borderRadius: radius.lg, padding: 14 }}>
+                <Text style={{ color: colors.textMuted, fontSize: font.xs, fontWeight: '600', marginBottom: 4, letterSpacing: 0.5 }}>ОПИСАНИЕ</Text>
                 <Text style={{ color: colors.textMuted, fontSize: 13, lineHeight: 18, textAlign: 'center', fontStyle: 'italic' }}>{UNREADABLE_DESCRIPTION_TEXT}</Text>
               </View>
             ) : null}
             {!searchVisible && group.description ? (
-              <View style={{ marginTop: 16, paddingHorizontal: 24, maxWidth: 320, backgroundColor: colors.surfaceHigh, borderRadius: 12, padding: 14 }}>
-                <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '600', marginBottom: 4, letterSpacing: 0.5 }}>ОПИСАНИЕ</Text>
+              <View style={{ marginTop: 16, paddingHorizontal: 24, maxWidth: 320, backgroundColor: colors.surfaceHigh, borderRadius: radius.lg, padding: 14 }}>
+                <Text style={{ color: colors.textMuted, fontSize: font.xs, fontWeight: '600', marginBottom: 4, letterSpacing: 0.5 }}>ОПИСАНИЕ</Text>
                 {/* v4.32.374: предел по строкам. Пустые строки подряд схлопывает
                     sanitizeParagraphText, а чередование «а\nб\nв» — нет: 512
                     символов дают 256 строк и карточку во весь экран. */}
@@ -3938,7 +3947,7 @@ function GroupChatScreen({
                 <Text style={{ color: contrastingInk(colors.mutedFill), fontSize: 14, fontWeight: '800' }}>@</Text>
                 {count > 1 ? (
                   <View style={{ position: 'absolute', top: -5, right: -5, backgroundColor: colors.errorFill, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 }}>
-                    <Text style={{ color: contrastingInk(colors.errorFill), fontSize: 9, fontWeight: '700' }}>{count > 9 ? '9+' : count}</Text>
+                    <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{count > 9 ? '9+' : count}</Text>
                   </View>
                 ) : null}
               </AppPressable>
@@ -3950,7 +3959,7 @@ function GroupChatScreen({
           >
             {group.unreadCount > 0 ? (
               <View style={{ position: 'absolute', top: -6, right: -6, backgroundColor: colors.errorFill, borderRadius: 9, minWidth: 18, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: 10, fontWeight: '700' }}>{group.unreadCount > 99 ? '99+' : group.unreadCount}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{group.unreadCount > 99 ? '99+' : group.unreadCount}</Text>
               </View>
             ) : null}
             <Ionicons name="chevron-down" size={22} color={contrastingInk(colors.primary)} />
@@ -4047,7 +4056,7 @@ function GroupChatScreen({
                 <AppPressable key={m.peerPubB64} style={gcStyles.mentionItem} onPress={() => insertMention(m)}>
                   <Text style={[gcStyles.mentionName, { color: m.peerPubB64 === '__everyone__' ? colors.error : colors.text }]}>
                     @{m.displayName ?? shortIdentity(m.peerPubB64)}
-                    {m.peerPubB64 === '__everyone__' ? <Text style={{ fontSize: 11, fontWeight: '400', color: colors.textMuted }}> — уведомить всех</Text> : null}
+                    {m.peerPubB64 === '__everyone__' ? <Text style={{ fontSize: font.xs, fontWeight: '400', color: colors.textMuted }}> — уведомить всех</Text> : null}
                   </Text>
                 </AppPressable>
               ))}
@@ -4060,7 +4069,7 @@ function GroupChatScreen({
             >
               {grpHashtagSuggestions.map((tag) => (
                 <AppPressable key={tag} onPress={() => insertHashtag(tag)}
-                  style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, backgroundColor: inputTint.fill }}
+                  style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.lg, backgroundColor: inputTint.fill }}
                 >
                   <Text style={{ fontSize: 13, color: inputTint.ink }}>{tag}</Text>
                 </AppPressable>
@@ -4085,7 +4094,7 @@ function GroupChatScreen({
             </View>
           ) : replyTo ? (
             <View style={[gcStyles.replyBar, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
-              <View style={{ width: 2.5, alignSelf: 'stretch', backgroundColor: colors.primary, borderRadius: 2, marginRight: 8 }} />
+              <View style={{ width: 2.5, alignSelf: 'stretch', backgroundColor: colors.primary, borderRadius: radius.sm, marginRight: 8 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 12, fontWeight: '600', color: colors.accent, marginBottom: 1 }} numberOfLines={1}>
                   {replyTo.senderPubB64 === myPubB64 ? 'Вы' : (replyTo.senderName ?? shortIdentity(replyTo.senderPubB64))}
@@ -4228,14 +4237,14 @@ function GroupChatScreen({
               {grpEmojiSuggestions.map(({ key, emoji }) => (
                 <AppPressable
                   key={key}
-                  style={{ alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginHorizontal: 2 }}
+                  style={{ alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginHorizontal: 2 }}
                   onPress={() => {
                     const replaced = text.replace(/:([a-z0-9_]{2,})$/, emoji);
                     setText(replaced);
                   }}
                 >
                   <Text style={{ fontSize: 20 }}>{emoji}</Text>
-                  <Text style={{ fontSize: 9, color: colors.textMuted, marginTop: 1 }}>{key}</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted, marginTop: 1 }}>{key}</Text>
                 </AppPressable>
               ))}
             </ScrollView>
@@ -4245,13 +4254,13 @@ function GroupChatScreen({
               {([
                 { marker: '**', label: 'B', style: { fontWeight: '700' as const } },
                 { marker: '_', label: 'I', style: { fontStyle: 'italic' as const } },
-                { marker: '`', label: '<>', style: { fontFamily: 'monospace' as const } },
+                { marker: '`', label: '<>', style: { fontFamily: mono } },
                 { marker: '~~', label: 'S', style: { textDecorationLine: 'line-through' as const } },
                 { marker: '||', label: '||', style: {} },
               ] as const).map(({ marker, label, style: btnStyle }) => (
                 <AppPressable
                   key={label}
-                  style={{ width: 36, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: colors.border }}
+                  style={{ width: 36, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: colors.border }}
                   onPress={() => {
                     const sel = grpSelRef.current;
                     if (sel.start !== sel.end) {
@@ -4315,7 +4324,7 @@ function GroupChatScreen({
                 maxLength={MAX_MESSAGE_TEXT}
               />
               {text.length > 3500 ? (
-                <Text style={{ alignSelf: 'flex-end', marginBottom: 14, marginRight: 4, fontSize: 10, color: text.length > 4000 ? colors.error : colors.textMuted }}>
+                <Text style={{ alignSelf: 'flex-end', marginBottom: 14, marginRight: 4, fontSize: font.xs, color: text.length > 4000 ? colors.error : colors.textMuted }}>
                   {MAX_MESSAGE_TEXT - text.length}
                 </Text>
               ) : null}
@@ -4327,7 +4336,8 @@ function GroupChatScreen({
                 android_ripple={{ color: colors.ripple, borderless: true, radius: 20 }}
                 onPress={() => { setGrpEmojiPanelVisible((v) => !v); }}
               >
-                <Text style={{ fontSize: 20 }}>{grpEmojiPanelVisible ? '⌨️' : '😊'}</Text>
+                {/* v4.32.533: см. ChatScreen — значок из набора, а не эмодзи. */}
+                <Ionicons name={grpEmojiPanelVisible ? 'keypad-outline' : 'happy-outline'} size={20} color={colors.accent} />
               </AppPressable>
               <AppPressable
                 style={gcStyles.pillInlineBtn}
@@ -4478,7 +4488,7 @@ function GroupChatScreen({
       <WallpaperPickerModal
         visible={wallpaperPickerVisible}
         peerB64={`grp_${group.id}`}
-        current={grpWallpaper}
+        current={wallpaper}
         onClose={() => setWallpaperPickerVisible(false)}
         onApply={(wp) => setGrpWallpaper(wp)}
       />
@@ -4676,29 +4686,34 @@ const gcStyles = StyleSheet.create({
   msgIn: { alignItems: 'flex-start' },
   msgOut: { alignItems: 'flex-end' },
   senderName: { fontSize: 12, fontWeight: '600', marginBottom: 2, marginLeft: 4 },
-  bubble: { maxWidth: '80%', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8 },
+  bubble: { maxWidth: '80%', borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  // v4.32.532: якорный угол был 4 — при скруглении 22 это уже не «хвостик»,
+  // а скол. Пузырь должен читаться округлым целиком, поэтому угол у автора
+  // только приглушён до sm, а не срезан.
+  bubbleAnchorOut: { borderBottomRightRadius: radius.sm },
+  bubbleAnchorIn: { borderBottomLeftRadius: radius.sm },
   bubbleText: { fontSize: 15 },
-  timeText: { fontSize: 10, marginTop: 3, textAlign: 'right' },
+  timeText: { fontSize: font.xs, marginTop: 3, textAlign: 'right' },
   empty: { alignItems: 'center', paddingTop: 60, gap: 12 },
   emptyText: { fontSize: 15 },
   composer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 6, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 4 },
   // v4.32.58: Telegram-style pill-shaped composer
-  inputPill: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 22, paddingLeft: 14, paddingRight: 2, minHeight: 42 },
+  inputPill: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: radius.xl, paddingLeft: 14, paddingRight: 2, minHeight: 42 },
   pillText: { flex: 1, paddingVertical: 10, paddingRight: 6, maxHeight: 120, fontSize: 15 },
   pillInlineBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
-  roundIconBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  roundIconBtn: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   // legacy (на случай если где-то ещё используется)
-  input: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 15, maxHeight: 120 },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  input: { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: font.md, maxHeight: 120 },
+  sendBtn: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   channelReadOnly: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
-  quotedBlock: { flexDirection: 'row', alignItems: 'stretch', borderRadius: 6, marginBottom: 4, overflow: 'hidden', maxWidth: '80%' },
+  quotedBlock: { flexDirection: 'row', alignItems: 'stretch', borderRadius: radius.md, marginBottom: 4, overflow: 'hidden', maxWidth: '80%' },
   quotedBar: { width: 3 },
   quotedText: { flex: 1, fontSize: 12, paddingHorizontal: 8, paddingVertical: 4, fontStyle: 'italic' },
   reactionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4, marginHorizontal: 12 },
-  reactionChip: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, gap: 3 },
+  reactionChip: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.lg, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, gap: 3 },
   reactionCount: { fontSize: 12, fontWeight: '600' },
   reactionOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: scrim.modal },
-  reactionPicker: { borderRadius: 16, paddingTop: 12, paddingHorizontal: 8, minWidth: 300 },
+  reactionPicker: { borderRadius: radius.xl, paddingTop: 12, paddingHorizontal: 8, minWidth: 300 },
   reactionPickerRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 4, paddingBottom: 8 },
   reactionPickerBtn: { padding: 10 },
   replyBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
@@ -4708,7 +4723,7 @@ const gcStyles = StyleSheet.create({
   mentionItem: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   mentionName: { fontSize: 14, fontWeight: '600' },
   mentionSkipped: { fontSize: 12, fontStyle: 'italic', paddingHorizontal: 16, paddingVertical: 8 },
-  searchInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, fontSize: 15 },
+  searchInput: { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 7, fontSize: font.md },
   scrollBottomBtn: {
     position: 'absolute',
     bottom: 70,
@@ -4730,7 +4745,7 @@ const gcStyles = StyleSheet.create({
   selCircle: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   selToolbar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth },
   selToolbarBtn: { alignItems: 'center', gap: 3, paddingHorizontal: 8 },
-  selToolbarLabel: { fontSize: 11, fontWeight: '600' },
+  selToolbarLabel: { fontSize: font.xs, fontWeight: '600' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5112,7 +5127,7 @@ function GroupMembersScreen({
           <AppPressable style={[gcStyles.iconBtn, { position: 'relative' }]} onPress={() => setJoinReqVisible(true)} accessibilityRole="button" accessibilityLabel={`Заявки на вступление: ${pendingCount}`}>
             <Ionicons name="person-circle-outline" size={22} color={colors.accent} />
             <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: 9, fontWeight: '700' }}>{pendingCount > 9 ? '9+' : String(pendingCount)}</Text>
+              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{pendingCount > 9 ? '9+' : String(pendingCount)}</Text>
             </View>
           </AppPressable>
         ) : null}
@@ -5186,7 +5201,7 @@ function GroupMembersScreen({
       </View>
 
       <View style={{ paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, gap: 6 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6, gap: 6 }}>
           <Ionicons name="search" size={15} color={colors.textMuted} />
           <TextInput
             style={{ flex: 1, color: colors.text, fontSize: 14 }}
@@ -5388,18 +5403,18 @@ function GroupMembersScreen({
 
 const gmStyles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
-  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  avatar: { ...avatarShape(44), alignItems: 'center', justifyContent: 'center' },
   avatarLetter: { fontSize: 18, fontWeight: '600' },
   name: { fontSize: 15, fontWeight: '500' },
   role: { fontSize: 12, marginTop: 1 },
   infoHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 16, borderBottomWidth: StyleSheet.hairlineWidth },
-  avatarLarge: { width: 80, height: 80, borderRadius: 40 },
+  avatarLarge: avatarShape(80),
   avatarEditBadge: { position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   nameInput: { fontSize: 17, fontWeight: '600', borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0 },
   descInput: { fontSize: 13, borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0, minHeight: 40 },
   memberSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 12, paddingHorizontal: 16 },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  sheetBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 12, paddingVertical: 12 },
+  sheetBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg, paddingVertical: 12 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5791,7 +5806,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
         </View>
 
         <View style={[gsStyles.grpSearchWrap, { backgroundColor: gsStyles.grpSearchInput ? undefined : undefined }]}>
-          <View style={[{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: 10, marginHorizontal: 16, marginBottom: 8, paddingHorizontal: 10, paddingVertical: 8 }]}>
+          <View style={[{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, marginHorizontal: 16, marginBottom: 8, paddingHorizontal: 10, paddingVertical: 8 }]}>
             <Ionicons name="search" size={16} color={colors.textMuted} style={{ marginRight: 6 }} />
             <TextInput
               value={grpSearch}
@@ -5830,8 +5845,8 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
                     {tab.label}
                   </Text>
                   {showBadge ? (
-                    <View style={{ backgroundColor: colors.primary, borderRadius: 8, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
-                      <Text style={{ color: contrastingInk(colors.primary), fontSize: 10, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
+                    <View style={{ backgroundColor: colors.primary, borderRadius: radius.md, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
+                      <Text style={{ color: contrastingInk(colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
                     </View>
                   ) : null}
                 </View>
@@ -5877,14 +5892,14 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
                       <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text, flex: 1 }} numberOfLines={1}>{r.groupName}</Text>
-                      {reactChip.kind === 'emoji' ? <Text style={{ fontSize: 11 }}>{reactChip.text}</Text> : null}
+                      {reactChip.kind === 'emoji' ? <Text style={{ fontSize: font.xs }}>{reactChip.text}</Text> : null}
                       {reactChip.kind === 'unreadable' ? (
                         <Text
-                          style={{ fontSize: 11, color: colors.warning }}
+                          style={{ fontSize: font.xs, color: colors.warning }}
                           accessibilityLabel={UNREADABLE_REACTIONS_TEXT}
                         >{UNREADABLE_REACTION_MARK}</Text>
                       ) : null}
-                      <Text style={{ fontSize: 11, color: colors.textMuted }}>{timeStr}</Text>
+                      <Text style={{ fontSize: font.xs, color: colors.textMuted }}>{timeStr}</Text>
                     </View>
                     <Text style={{ fontSize: 13, color: colors.textSecondary }} numberOfLines={1}>
                       {r.message.senderName && !isOut ? <Text style={{ color: colors.textMuted }}>{r.message.senderName}{': '}</Text> : null}
