@@ -82,6 +82,33 @@ push is the part that degrades, not the call.
 fly secrets set FCM_SERVICE_ACCOUNT_JSON="$(base64 -i service-account.json)"
 ```
 
-Tokens are held in memory with a 60-day TTL and a 200 000 cap; a sender is
-limited to 60 pushes a minute. A token FCM reports as unregistered is deleted
-on the spot.
+A sender is limited to 60 pushes a minute, and a token FCM reports as
+unregistered is deleted on the spot.
+
+### Where the tokens live — 4.32.538
+
+`PUSH_TOKEN_DB` — path to the SQLite file, `/data/push-tokens.db` on the fly
+volume declared in `fly.toml`. Unset, the registry stays in memory, which is
+what tests and a local run use.
+
+Memory was the original behaviour and it was wrong for this data. A device
+sends its token once, at application start, and the token is needed exactly
+when the application is closed and cannot send it again — so one deploy of the
+relay silenced everyone until they next opened the app, which is precisely when
+they no longer needed the notification. A 60-day TTL and a 200 000 cap still
+apply; expiry now makes room before the cap refuses a new device.
+
+SQLite comes from `node:sqlite` in the standard library — no new dependency.
+The volume is attached to a machine, so **this service runs exactly one
+machine** (`min_machines_running = 1`, `auto_stop_machines = false`). Two
+machines would each hold a slice of the registry and drop the pushes for the
+other slice; scaling out means moving the registry to shared storage first.
+
+The container drops to the `node` user, and a fly volume mounts as root, so
+`docker-entrypoint.sh` chowns the database directory and immediately drops
+privileges with `su-exec`. If the file cannot be opened for any reason the
+relay logs `push_tokens_disk_failed` and falls back to memory: signaling must
+come up even when push cannot.
+
+The row is `peerId → device token`. No contacts, no conversations, no address
+book.

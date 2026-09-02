@@ -1021,3 +1021,73 @@ theme and the accent the user picked, which two literals would not.
 It stands on onboarding and on the lock screen. Both screens had a second
 `styles.title` — "Восстановление", "Доступ заблокирован" — and those are still
 text, because they are sentences, not the name.
+
+## 22. Where the databases live - 4.32.538
+
+Request, verbatim: "выполняем всё, в том числе и решаем с местом хранения бд".
+
+Two databases, two unresolved questions, and they are not the same question.
+
+### 22.1 The relay's token registry
+
+Section 21 shipped the registry in memory. That is the right default for
+signaling — a connection breaks on restart anyway and the client reconnects on
+its own — and the wrong one for push, for a reason that only shows up in
+production: a device sends its token **once**, at application start, and the
+token is needed **exactly when the application is closed** and cannot send it
+again. One deploy of the relay would silence everyone until they next opened
+the app, which is precisely the moment they no longer needed the notification.
+
+`signaling-server/tokenStore.js` puts it on disk. SQLite from `node:sqlite` in
+the standard library, so no new dependency; one table; the file on a fly volume
+at `/data/push-tokens.db`. Without `PUSH_TOKEN_DB` the store stays in memory —
+tests and a local run must not require a volume.
+
+Two consequences worth stating rather than discovering:
+
+- A volume is attached to a machine, so this service runs **one** machine.
+  Two would each hold a slice of the registry and drop the other slice's
+  pushes. Scaling out means moving the registry to shared storage first, and
+  `fly.toml` says so next to the mount.
+- The container drops to the `node` user and a fly volume mounts as root, so
+  `docker-entrypoint.sh` chowns the directory and drops privileges with
+  `su-exec`. The alternative — running the relay as root — is a worse trade
+  than three lines of shell.
+
+The row is `peerId → device token`. Not contacts, not conversations, not an
+address book. Section 21.2 holds.
+
+While opening this up: the `Dockerfile` copied `index.js` alone, so the image
+built from section 21 would have started without `push.js` or `wire.js` at all.
+It copies all four files now.
+
+### 22.2 The browser's database
+
+The other half of the same question, and the one the user actually saw: on
+air.dobropalm.tech the boot screen read `navigator.storage not available (not
+supported by your browser or context is not secure)` — the expo-sqlite
+exception printed verbatim. True, and useless: it does not say what happened,
+what to do, or even that the phone is not at fault.
+
+The storage location itself is not in question and there is nothing to move it
+to. OPFS (`navigator.storage.getDirectory`) is the only browser store where
+SQLite works as a file rather than an emulation over IndexedDB. Its price is a
+secure context: HTTPS with a valid certificate. Falling back to memory is not
+an option that was rejected on taste — it would lose the conversation on a tab
+reload, silently, which is worse than an honest refusal.
+
+So `src/core/storage/webStorageDiagnosis.ts` is a diagnosis, not a fallback. It
+separates the two causes, because sending someone to fix the wrong one costs
+them the whole evening:
+
+- `isSecureContext === false` → the page is not on HTTPS, or the certificate
+  is broken. The message names the origin and says the certificate of the site
+  is the thing to look at.
+- secure context, no `getDirectory` → the browser cannot do it. Safari 17+,
+  current Chrome/Edge/Firefox — and off in private windows.
+- everything present and it still failed → say that, and say what is usually
+  behind it. Inventing a third cause would be the same mistake in a new coat.
+
+`isSecureContext` absent (a device, an old runtime) reads as *unknown*, never
+as "you are on HTTP". Telling someone their connection is insecure when it is
+not is exactly the failure this section exists to prevent.

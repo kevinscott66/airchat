@@ -23,6 +23,18 @@
 const crypto = require('crypto');
 
 const { hasExactKeys, isBoundedString, isPeerId, isSignature, verifyEd25519 } = require('./wire');
+const {
+  MAX_TOKENS,
+  TOKEN_TTL_MS,
+  createMemoryTokenRegistry,
+  createTokenStore,
+} = require('./tokenStore');
+
+/**
+ * Имя оставлено прежним: хранилище в памяти — это и есть реестр, который тут
+ * был до 4.32.538, только теперь у него есть дисковый близнец (tokenStore.js).
+ */
+const createTokenRegistry = createMemoryTokenRegistry;
 
 const MAX_BODY_BYTES = 8 * 1024;
 const MAX_DEVICE_TOKEN_LENGTH = 4096;
@@ -30,9 +42,6 @@ const MAX_CID_LENGTH = 128;
 const MAX_DID_LENGTH = 256;
 /** Насколько метка времени в подписанной нагрузке может расходиться с часами сервера. */
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
-/** Токен, о котором устройство не напоминало столько времени, считается протухшим. */
-const TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
-const MAX_TOKENS = 200000;
 const SEND_RATE_WINDOW_MS = 60 * 1000;
 const SEND_RATE_LIMIT = 60;
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
@@ -91,54 +100,6 @@ function openEnvelope(body, keys, signerField, nowMs) {
   return claim;
 }
 
-/**
- * Хранилище токенов устройств. Живёт в памяти: токен восстанавливается
- * устройством при первом же запуске, поэтому переживать перезапуск сервера
- * ему незачем, а лишняя копия идентификаторов на диске — лишний риск.
- */
-function createTokenRegistry(options = {}) {
-  const ttlMs = options.ttlMs ?? TOKEN_TTL_MS;
-  const maxTokens = options.maxTokens ?? MAX_TOKENS;
-  const now = options.now ?? (() => Date.now());
-  const entries = new Map();
-
-  function sweep() {
-    const cutoff = now() - ttlMs;
-    for (const [peerId, entry] of entries) {
-      if (entry.updatedAt < cutoff) entries.delete(peerId);
-    }
-  }
-
-  return {
-    set(peerId, token, platform, ts = 0) {
-      const previous = entries.get(peerId);
-      // Перехваченный старый запрос не должен откатывать токен на предыдущий:
-      // окно повтора в пять минут само по себе от этого не защищает.
-      if (previous && ts <= previous.ts) return false;
-      if (!previous && entries.size >= maxTokens) {
-        sweep();
-        if (entries.size >= maxTokens) return false;
-      }
-      entries.set(peerId, { token, platform, updatedAt: now(), ts });
-      return true;
-    },
-    get(peerId) {
-      const entry = entries.get(peerId);
-      if (!entry) return null;
-      if (entry.updatedAt < now() - ttlMs) {
-        entries.delete(peerId);
-        return null;
-      }
-      return entry;
-    },
-    delete(peerId) {
-      return entries.delete(peerId);
-    },
-    get size() {
-      return entries.size;
-    },
-  };
-}
 
 /** Счётчик отправок на отправителя в скользящем окне. */
 function createSendLimiter(options = {}) {
@@ -347,9 +308,9 @@ function respond(response, status, body) {
  */
 function createPushRoutes(options = {}) {
   const now = options.now ?? (() => Date.now());
-  const registry = options.registry ?? createTokenRegistry({ now });
-  const allowSend = options.limiter ?? createSendLimiter({ now });
   const log = options.log ?? (() => {});
+  const registry = options.registry ?? createTokenStore({ env: options.env, now, log });
+  const allowSend = options.limiter ?? createSendLimiter({ now });
   let fcm = options.fcm ?? null;
   if (!fcm) {
     const account = options.serviceAccount ?? loadServiceAccount(options.env);
