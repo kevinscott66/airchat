@@ -4,9 +4,19 @@ const http = require('http');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
 
+const {
+  MAX_PEER_ID_LENGTH,
+  isPlainObject,
+  hasExactKeys,
+  isBoundedString,
+  isPeerId,
+  isSignature,
+  verifyEd25519,
+} = require('./wire');
+const { createPushRoutes } = require('./push');
+
 const MAX_PAYLOAD_BYTES = 128 * 1024;
 const MAX_ROOM_ID_LENGTH = 256;
-const MAX_PEER_ID_LENGTH = 256;
 const MAX_SDP_LENGTH = 64 * 1024;
 const MAX_CANDIDATE_BYTES = 16 * 1024;
 const RATE_WINDOW_MS = 10 * 1000;
@@ -15,40 +25,6 @@ const MAX_CONNECTIONS = 256;
 const MAX_CONNECTIONS_PER_IP = 16;
 const REGISTRATION_TIMEOUT_MS = 15 * 1000;
 const REGISTRATION_CHALLENGE_BYTES = 32;
-const ED25519_PUBLIC_KEY_BYTES = 32;
-const ED25519_SIGNATURE_BYTES = 64;
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasExactKeys(value, keys) {
-  if (!isPlainObject(value)) return false;
-  const actual = Object.keys(value).sort();
-  return actual.length === keys.length && keys.every((key, index) => actual[index] === key);
-}
-
-function isBoundedString(value, maxLength) {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
-}
-
-function isCanonicalBase64(value) {
-  return typeof value === 'string'
-    && /^[A-Za-z0-9+/]+={0,2}$/.test(value)
-    && value.length % 4 === 0
-    && Buffer.from(value, 'base64').toString('base64') === value;
-}
-
-function isPeerId(value) {
-  if (!isBoundedString(value, MAX_PEER_ID_LENGTH) || !isCanonicalBase64(value)) return false;
-  return Buffer.from(value, 'base64').length === ED25519_PUBLIC_KEY_BYTES;
-}
-
-function isSignature(value) {
-  if (!isCanonicalBase64(value)) return false;
-  return Buffer.from(value, 'base64').length === ED25519_SIGNATURE_BYTES;
-}
 
 function validRegister(payload) {
   return hasExactKeys(payload, ['peerId', 'roomId', 'signature'])
@@ -91,17 +67,8 @@ function validHangup(payload) {
 }
 
 function verifyRegistration(peerId, roomId, signature, challenge) {
-  try {
-    const publicKey = crypto.createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(peerId, 'base64')]),
-      format: 'der',
-      type: 'spki',
-    });
-    const message = Buffer.from(`${challenge}\n${roomId}\n${peerId}`, 'utf8');
-    return crypto.verify(null, message, publicKey, Buffer.from(signature, 'base64'));
-  } catch {
-    return false;
-  }
+  const message = Buffer.from(`${challenge}\n${roomId}\n${peerId}`, 'utf8');
+  return verifyEd25519(peerId, message, signature);
 }
 
 function createSignalingServer(options = {}) {
@@ -112,7 +79,9 @@ function createSignalingServer(options = {}) {
   const maxConnections = options.maxConnections ?? MAX_CONNECTIONS;
   const maxConnectionsPerIp = options.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP;
   const registrationTimeoutMs = options.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS;
+  const push = options.push ?? createPushRoutes({ env: options.env });
   const httpServer = http.createServer((request, response) => {
+    if (push.handle(request, response)) return;
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ ok: true, service: 'airchat-signaling-example' }));
@@ -301,6 +270,7 @@ function createSignalingServer(options = {}) {
     httpServer,
     io,
     peers,
+    push,
     listen() {
       return new Promise((resolve, reject) => {
         const onError = (error) => {

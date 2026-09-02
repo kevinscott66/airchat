@@ -63,3 +63,10 @@ modules/*/build/
 # Локальные выгрузки веб-сборки (dist-533, dist-web530, dist-map …): тот же
 # вывод, что и dist/, только под именем версии — в репозиторий не едет.
 dist-*/
+
+# FCM service account: доступ на отправку пушей от имени проекта.
+# Скачивается из консоли Firebase и уезжает в секрет окружения, не сюда
+# (см. docs/push-setup.md). google-services.json и GoogleService-Info.plist
+# в репозитории лежат заглушками — в них нет ничего секретного.
+service-account*.json
+*-firebase-adminsdk-*.json
