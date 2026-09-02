@@ -4,13 +4,19 @@
 
 # AirChat
 
-A decentralised mobile messenger that keeps working when the network does not.
+A decentralised mobile messenger with no account, no phone number and no server
+that holds your messages.
 
-AirChat is a React Native application built around a multi-transport mesh: when
-the internet is unavailable, censored or untrusted, messages route over LAN,
-direct peer connections, long-range radio or a store-and-forward mesh instead.
-Identity is a self-owned `did:key` derived from a BIP39 seed phrase — there is
-no account, no phone number and no server that holds your messages.
+AirChat is a React Native application. Messages travel over the internet by
+default — direct peer connections over WebRTC, with a signaling relay that sees
+who is connecting and nothing else. Identity is a self-owned `did:key` derived
+from a BIP39 seed phrase.
+
+The offline transports are the reserve, not the default: when the internet is
+unavailable, censored or untrusted, the same message routes over LAN discovery,
+Wi-Fi Direct, long-range radio or a store-and-forward mesh instead. They are
+kept, tested and shipped — they are simply not what the ordinary day looks
+like.
 
 ## Web build
 
