@@ -866,3 +866,64 @@ inset is needed anywhere. Migrated so far: the chat/group wallpaper picker.
   six animated SVG layers exist while that sheet is open. Acceptable because it
   is a sheet the user opens deliberately and closes; it would not be acceptable
   in a list.
+
+## 20. The mark - 4.32.536
+
+Request, verbatim: "так же через mcp и скиллы сделай нормальный логотип для
+приложения".
+
+### 20.1 What was there before
+
+`assets/icon.png` was the untouched expo template: a blue chevron on `#E6F4FE`,
+with the construction guide lines of the template still baked into the raster.
+`android.adaptiveIcon.backgroundColor` carried the same `#E6F4FE` — a colour
+that appears nowhere in section 6.1 and reads as a different product next to a
+`#0B0B12` interface. The Android status-bar resource was a generic speech
+bubble.
+
+### 20.2 The mark
+
+Three nodes — apex, two feet — joined by two edges and a crossbar, with a ring
+on the crossbar. It reads as the letter A and as a graph of three peers at the
+same time, which is a literal statement of what the application is rather than
+a decoration applied to it. The ring is the relay: the crossbar is cut on both
+sides of it so the hole survives, instead of a bump on a continuous line.
+
+Geometry lives in a 512 viewBox: apex `(256,128)`, feet `(128,384)` and
+`(384,384)`, crossbar at `y=320`, stroke `32` with round caps, node radius
+`38`, ring `r=24` stroked at `20`. Bounding box is 332 units square and
+centred, so every derived size is one scale factor away.
+
+Colour is the section 6.1 pair and nothing else: a linear gradient
+`#A594FF → #6A56EE` on `#0B0B12`. No third hue, no shadow, no bevel — the
+same restraint the interface follows.
+
+### 20.3 Why each size is what it is
+
+- `icon.png` — 0.58 of the canvas. App Store artwork is rendered with the
+  system's own corner mask; a mark that fills more than about 60 % starts
+  clipping at the corners of that mask.
+- `android-icon-foreground.png` — 0.44. The adaptive mask can crop to a circle,
+  and a square bounding box loses its corners to it: at 0.44 the *diagonal*
+  (0.62) still fits the safe circle.
+- `splash-icon.png` — 0.55 on transparent, with the ground supplied by
+  `splash.backgroundColor`.
+- `favicon.png` — 0.66. A tab icon has no mask to fear and needs every pixel.
+  The ring hole closes below roughly 24 px; the node then reads as solid, which
+  is a graceful failure rather than mud.
+- `ic_notification.xml` — recomputed into 24 dp at scale 22/332, 1 dp of margin.
+  The ring is dropped there: at that size its hole is under 2 dp and turns into
+  noise, so the centre node is solid.
+
+### 20.4 Reproducibility
+
+`assets/logo/airchat-mark.svg` is the source. `assets/logo/raster.py`
+regenerates the whole PNG set with one command.
+
+The script does not parse the SVG — it re-states the same geometry against
+Pillow. This is deliberate and worth recording, because it looks like
+duplication: the environment has no `rsvg-convert`, `inkscape`, `cairosvg` or
+`sharp`, and headless Chrome, the only remaining rasteriser, hangs on repeated
+invocations against a shared profile. The two implementations were compared
+pixel for pixel before the script was committed. If a real SVG rasteriser
+becomes available, the script is the part to delete, not the SVG.
