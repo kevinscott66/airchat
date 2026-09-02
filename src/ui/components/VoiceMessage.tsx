@@ -375,7 +375,22 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
   const bubble = useBubbleSurface(!!isOutgoing);
   const [sound, setSound] = useState<AudioPlayer | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [loading, setLoading] = useState(false);
+  /**
+   * v4.32.545: вместо одного `loading` — названная фаза.
+   *
+   * Раньше и скачивание вложения, и создание плеера были одним флагом, а
+   * неудача скачивания заканчивалась молчаливым `return`: получатель жал
+   * «играть», крутилка висела до тайм-аута в тридцать секунд, потом сама
+   * пропадала — и не происходило ничего. Ни звука, ни ошибки. Со стороны это
+   * ровно «бесконечная загрузка»: жмёшь ещё раз, и снова тридцать секунд.
+   *
+   * Фазы разведены потому, что это разные ожидания: `downloading` — сеть,
+   * секунды и возможный отказ; `opening` — локальный файл, доли секунды.
+   * Показывать их одинаково значит обещать быстрый ответ там, где его нет.
+   * `error` — состояние, а не исчезновение: у него есть свой значок, подпись
+   * и повтор по нажатию.
+   */
+  const [phase, setPhase] = useState<'idle' | 'downloading' | 'opening' | 'error'>('idle');
   const [positionMs, setPositionMs] = useState(0);
   const [totalMs, setTotalMs] = useState(durationMs ?? 0);
   const [speed, setSpeed] = useState<Speed>(1);
@@ -429,7 +444,7 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         return;
       }
 
-      setLoading(true);
+      setPhase('opening');
       // v4.32.226: resolve the playable URI. The sender's own recording is a
       // local file:// that exists; a received voice carries the sender's local
       // path (which does NOT exist here) plus an E2E-encrypted blob descriptor —
@@ -444,10 +459,17 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         playUri = uri; // legacy http(s)/gateway uri
       }
       if (!playUri && blob) {
+        // Единственный шаг, который ходит в сеть, — только он и объявляется
+        // скачиванием. Свой же файл и legacy-ссылка сюда не попадают.
+        setPhase('downloading');
         playUri = await resolveBlobToLocalFile(blob, 'm4a');
+        setPhase('opening');
       }
       if (!playUri) {
-        setLoading(false);
+        // Вложения на relay живут часами, а не вечно, и сеть бывает без ответа.
+        // Оба случая одинаковы для человека: файла нет сейчас. Значит и сказать
+        // надо ровно это, а не убрать крутилку и промолчать.
+        setPhase('error');
         setPlaying(false);
         return;
       }
@@ -477,9 +499,10 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         createdPlayer.remove();
       }
       setPlaying(false);
-    } finally {
-      setLoading(false);
+      setPhase('error');
+      return;
     }
+    setPhase('idle');
   }, [playing, sound, uri, attachStatusListener, speed, blob]);
 
   const seekTo = useCallback(async (e: GestureResponderEvent) => {
@@ -503,17 +526,32 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
 
   const accentColor = bubble.ink.accent;
   const progress = totalMs > 0 ? positionMs / totalMs : 0;
+  const busy = phase === 'downloading' || phase === 'opening';
+  const failed = phase === 'error';
 
   return (
     <View style={vpStyles.container}>
-      <AppPressable onPress={() => void togglePlayback()} style={vpStyles.playBtn} disabled={loading}>
-        {loading ? (
+      <AppPressable
+        onPress={() => void togglePlayback()}
+        style={vpStyles.playBtn}
+        disabled={busy}
+        accessibilityRole="button"
+        accessibilityLabel={
+          busy
+            ? phase === 'downloading' ? 'Голосовое загружается' : 'Голосовое открывается'
+            : failed ? 'Повторить загрузку голосового'
+            : playing ? 'Пауза' : 'Воспроизвести голосовое'
+        }
+      >
+        {busy ? (
           <ActivityIndicator size="small" color={accentColor} />
         ) : (
           <Ionicons
-            name={playing ? 'pause' : 'play'}
+            // После отказа кнопка — это «повторить», а не «играть»: значок
+            // называет то, что произойдёт по нажатию.
+            name={failed ? 'refresh' : playing ? 'pause' : 'play'}
             size={22}
-            color={accentColor}
+            color={failed ? bubble.ink.error : accentColor}
           />
         )}
       </AppPressable>
@@ -533,8 +571,21 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
             ]}
           />
         </AppPressable>
-        <Text style={[vpStyles.duration, { color: bubble.ink.secondary }]}>
-          {playing || positionMs > 0 ? formatClockDuration(positionMs) : formatClockDuration(totalMs)}
+        {/* Одна строка под дорожкой: пока всё обычно — время, во время
+            скачивания и после отказа — состояние. Отдельной строки под статус
+            не заводится: пузырь и так узкий, а лишняя строка меняет высоту
+            сообщения задним числом и дёргает ленту. */}
+        <Text
+          style={[vpStyles.duration, { color: failed ? bubble.ink.error : bubble.ink.secondary }]}
+          numberOfLines={1}
+        >
+          {phase === 'downloading'
+            ? 'Загрузка…'
+            : failed
+              ? 'Не загрузилось — нажмите'
+              : playing || positionMs > 0
+                ? formatClockDuration(positionMs)
+                : formatClockDuration(totalMs)}
         </Text>
       </View>
       <AppPressable onPress={() => void cycleSpeed()} style={vpStyles.speedBtn} hitSlop={8}>

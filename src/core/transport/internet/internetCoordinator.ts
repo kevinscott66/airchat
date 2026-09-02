@@ -12,8 +12,23 @@ import { getGroupMessagingService } from '../../social/groupMessaging';
 import { isFeedFrame } from '../../social/feedTransport';
 import { receiveFeedEnvelope } from '../../social/feedService';
 import { getInternetTransportSingleton } from './internetTransport';
+import {
+  WATERMARK_FLUSH_MS,
+  loadBacklogWatermark,
+  saveBacklogWatermark,
+  sinceParam,
+} from './relayBacklog';
 
 let started = false;
+
+/**
+ * Последняя отметка, ещё не записанная в базу.
+ *
+ * Живёт на уровне модуля, а не в замыкании старта, чтобы `stop` мог дописать
+ * её: приложение уходит в фон вместе с транспортом, и без этого последние до
+ * десяти секунд принятого пришлось бы разбирать заново при следующем запуске.
+ */
+let pendingWatermark: { myDid: string; atMs: number } | null = null;
 
 /**
  * Определяет тип envelope по первым байтам JSON (копия из lanCoordinator; держим
@@ -46,10 +61,31 @@ export async function startInternetTransportIfEnabled(
   if (started) return;
   const myDid = publicKeyToDidKey(pair.publicKey);
   const transport = getInternetTransportSingleton();
+  // v4.32.545: отметка «докуда мы уже прочитали relay». Читается один раз при
+  // старте, дальше живёт в памяти и изредка уходит в базу — см. relayBacklog.
+  // Именно она превращает переподключение в «догрузить всё пропущенное»:
+  // раньше подписка всегда просила последние десять минут и накопленное за
+  // ночь оставалось лежать на relay до истечения срока хранения.
+  let watermark = await loadBacklogWatermark(myDid);
+  let flushedAt = 0;
   transport.start({
     myDid,
     relayBase: c.internet?.relayBase,
     wsBase: c.internet?.wsBase,
+    since: () => sinceParam(watermark, Date.now()),
+    onFrameSeen: (atMs) => {
+      // Только вперёд: кадры внутри пачки приходят не строго по возрастанию
+      // времени, и откат отметки назад означал бы повторный разбор уже
+      // разобранного при следующем подключении.
+      if (atMs <= (watermark ?? 0)) return;
+      watermark = atMs;
+      pendingWatermark = { myDid, atMs };
+      const now = Date.now();
+      if (now - flushedAt < WATERMARK_FLUSH_MS) return;
+      flushedAt = now;
+      pendingWatermark = null;
+      void saveBacklogWatermark(myDid, atMs);
+    },
     onFrame: (senderDid, payload) => {
       // Симметрично lanCoordinator.onFrame: feed → group → DM.
       // v4.32.208: accept 0xF0 + 0xF1 (relay wrapper) — unwrap inside receiveFeedEnvelope.
@@ -68,6 +104,10 @@ export async function startInternetTransportIfEnabled(
 
 export function stopInternetTransportStack(): void {
   if (!started) return;
+  if (pendingWatermark) {
+    void saveBacklogWatermark(pendingWatermark.myDid, pendingWatermark.atMs);
+    pendingWatermark = null;
+  }
   try {
     getInternetTransportSingleton().stop();
   } catch {

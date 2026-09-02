@@ -3253,7 +3253,7 @@ function GroupChatScreen({
           разных приложения, а обои под полосой не было видно вовсе. Отступ под
           часы теперь тоже здесь — оболочка его больше не отбивает. */}
       {searchVisible ? (
-        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
           <AppPressable onPress={closeSearch} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -3308,7 +3308,7 @@ function GroupChatScreen({
           ) : null}
         </GlassSurface>
       ) : (
-        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
           <AppPressable onPress={onBack} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -4382,6 +4382,19 @@ function GroupChatScreen({
               >
                 {sending ? <ActivityIndicator color={contrastingInk(colors.primary)} size="small" /> : <Ionicons name="send" size={18} color={contrastingInk(colors.primary)} />}
               </AppPressable>
+            ) : sending ? (
+              // v4.32.545: место микрофона на время выгрузки занимает часы.
+              // Голосовое в группе кладётся в зашифрованное вложение и только
+              // потом попадает в базу — то есть пузыря нет всю выгрузку, а это
+              // до полуминуты на плохой сети. Раньше в эти полминуты кнопка
+              // просто гасла: человек не понимал, идёт отправка или запись
+              // пропала. Пузырь тут не подделать — у группы нет заглушек, а
+              // класть строку заранее и потом дописывать в неё вложение нельзя:
+              // правка текста проставляет «изменено» (см. updateGroupMessageText),
+              // и каждое голосовое оказалось бы отредактированным.
+              <View style={gcStyles.roundIconBtn} accessibilityRole="progressbar" accessibilityLabel="Голосовое загружается">
+                <ActivityIndicator color={colors.primary} size="small" />
+              </View>
             ) : (
               <VoiceRecorderButton
                 disabled={sending}
@@ -5853,7 +5866,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
         {/* v4.32.540: шапка, поиск и фильтры собраны в одну стеклянную капсулу —
             ту же, что в «Чатах» (ChatListScreen `topChrome`). Раньше «Группы»
             открывались тремя плоскими полосами подряд. */}
-        <GlassSurface style={gsStyles.topChrome} variant="regular">
+        <GlassSurface style={gsStyles.topChrome} variant="regular" watermark>
         <View style={gsStyles.header}>
           <Text style={[gsStyles.title, { color: colors.text }]}>Группы</Text>
           {groups.some((g) => g.unreadCount > 0) ? (

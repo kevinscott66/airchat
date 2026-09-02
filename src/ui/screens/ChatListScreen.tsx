@@ -1176,7 +1176,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         </View>
         );
       })() : null}
-      <GlassSurface style={s.topChrome} variant="regular">
+      <GlassSurface style={s.topChrome} variant="regular" watermark>
         <View style={s.header}>
           <Text style={s.title}>{showArchived ? 'Архив' : 'Чаты'}</Text>
           <View style={s.headerActions}>

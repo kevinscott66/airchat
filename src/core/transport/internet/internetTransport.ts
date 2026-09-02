@@ -36,6 +36,20 @@ import { log } from '../../logger';
 
 type OnFrameCallback = (senderDid: string, payload: Uint8Array) => void;
 
+/**
+ * Опции подписки, отвечающие за «сколько накопленного забрать».
+ *
+ * v4.32.545. Транспорт помечен `@stable` и хранилища не знает — поэтому он не
+ * считает и не хранит отметку, а спрашивает её колбэком у координатора и
+ * сообщает ему время каждого принятого кадра. См. relayBacklog.ts.
+ */
+type BacklogHooks = {
+  /** Значение параметра `?since=` на момент открытия сокета. */
+  since?: () => string;
+  /** Время принятого кадра (мс). Вызывается на каждом кадре. */
+  onFrameSeen?: (atMs: number) => void;
+};
+
 const DEFAULT_RELAY_BASE = 'https://ntfy.sh';
 const DEFAULT_WS_BASE = 'wss://ntfy.sh';
 const RECONNECT_MIN_MS = 2_000;
@@ -107,6 +121,8 @@ export class InternetTransport {
   private lastConnectedAt = 0;
   private lastSendOkAt = 0;
   private wsOpen = false;
+  private since?: () => string;
+  private onFrameSeen?: (atMs: number) => void;
 
   isActive(): boolean {
     return this.active;
@@ -191,7 +207,7 @@ export class InternetTransport {
     }
   }
 
-  start(opts: { myDid: string; onFrame: OnFrameCallback; relayBase?: string; wsBase?: string }): void {
+  start(opts: { myDid: string; onFrame: OnFrameCallback; relayBase?: string; wsBase?: string } & BacklogHooks): void {
     if (Platform.OS === 'web') {
       // На web fetch + WebSocket тоже работают, просто ничего не мешает. Разрешаем.
     }
@@ -200,6 +216,8 @@ export class InternetTransport {
     this.onFrame = opts.onFrame;
     this.relayBase = opts.relayBase ?? DEFAULT_RELAY_BASE;
     this.wsBase = opts.wsBase ?? DEFAULT_WS_BASE;
+    this.since = opts.since;
+    this.onFrameSeen = opts.onFrameSeen;
     this.active = true;
     this.reconnectAttempt = 0;
     this.openWs();
@@ -234,10 +252,18 @@ export class InternetTransport {
   private openWs(): void {
     if (!this.active || !this.myDid) return;
     const topic = topicForDid(this.myDid);
-    // `?since=10m` — забираем сообщения за последние 10 минут при переподключении
-    // (на случай если были оффлайн). Дубликаты отсекаются на receiver-side через
-    // INSERT OR IGNORE / idempotency guards.
-    const url = `${this.wsBase}/${topic}/ws?since=10m`;
+    // `?since=` — сколько накопленного relay отдаст сразу после подписки.
+    // Дубликаты отсекаются на receiver-side через INSERT OR IGNORE /
+    // idempotency guards, поэтому просить с запасом безопасно.
+    //
+    // v4.32.545: было жёстко `10m`. Relay хранит 12 часов, а забирали десять
+    // минут — всё, что старше, терялось, хотя лежало на relay и ждало. Человек,
+    // закрывший приложение на ночь, наутро не получал ни сообщений, ни
+    // публикаций: и те и другие едут одним topic'ом. Теперь значение приходит
+    // от координатора и считается от отметки последнего принятого кадра
+    // (relayBacklog.sinceParam); при её отсутствии — вся глубина хранения.
+    const since = this.since?.() ?? '12h';
+    const url = `${this.wsBase}/${topic}/ws?since=${encodeURIComponent(since)}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
@@ -309,6 +335,12 @@ export class InternetTransport {
           bytes: payload.length,
           senderDid: senderDid.slice(0, 24),
         });
+        // Отметка ставится по времени relay (`time`, unix-секунды), а не по
+        // локальным часам: следующий `since` уйдёт обратно на relay, и считать
+        // его надо в его же системе отсчёта. Своих часов хватает только как
+        // запасного варианта, если поле не пришло.
+        const frameAt = typeof msg.time === 'number' && msg.time > 0 ? msg.time * 1000 : Date.now();
+        this.onFrameSeen?.(frameAt);
         this.onFrame?.(senderDid, payload);
       } catch (e) {
         log.warn('internet_ws_msg_err', { err: e instanceof Error ? e.message : String(e) });

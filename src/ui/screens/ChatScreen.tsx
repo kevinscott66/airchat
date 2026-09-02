@@ -2070,13 +2070,43 @@ function ChatThreadView({
           const tooBig = voiceUploadRefusal(await fileSizeBytes(result.uri), MAX_BLOB_BYTES);
           if (tooBig) throw new Error(tooBig);
           const peerDid = publicKeyToDidKey(new Uint8Array(Buffer.from(peerB64, 'base64')));
+          // v4.32.545: пузырь появляется ДО загрузки вложения. Раньше запись
+          // уходила в uploadEncryptedBlob и на всё время выгрузки — а это
+          // минута на плохой сети и до тридцати секунд до отказа по таймауту —
+          // в переписке не было ничего: ни пузыря, ни часов, ни полоски.
+          // Человек отпускал микрофон и смотрел на пустой экран, не зная,
+          // записалось ли вообще. Снимок отправляется ровно так же (см.
+          // sendWithMedia) и такой пузырь имеет с первого кадра; у голосового
+          // его не было единственно потому, что ветку писали отдельно.
+          //
+          // Текст пузыря — конверт БЕЗ дескриптора вложения: он ещё не
+          // существует. Свой же файл лежит локально, поэтому пузырь сразу
+          // играется, а часы в подписи (status: 'sending') показывают, что
+          // до собеседника он пока не уехал.
+          setOptimisticOutgoing({
+            id: `ui-opt-voice-${Date.now()}`,
+            contactPubB64: peerB64,
+            cid: null,
+            text: makeVoiceText(result.uri, result.durationMs),
+            direction: 'out',
+            status: 'sending',
+            mediaCids: null,
+            createdAt: Date.now(),
+            ownerProfileId: activeProfileId,
+          });
           const blob = await uploadEncryptedBlob(result.uri, 'audio/m4a', peerDid);
           if (!blob) throw new Error('Голосовое не загрузилось. Проверьте соединение и повторите.');
           const voiceText = makeVoiceText(result.uri, result.durationMs, blob);
           await svc.sendMessage(peerB64, voiceText);
-          void appendNewMessages();
+          // Сначала настоящая строка из базы, только потом снимается заглушка:
+          // иначе между её снятием и приходом строки пузырь моргает. Обычное
+          // сличение по тексту (см. appendNewMessages) здесь не сработает —
+          // в настоящем конверте есть дескриптор вложения, в заглушке его нет.
+          await appendNewMessages();
+          setOptimisticOutgoing(null);
         }
       } catch (e) {
+        setOptimisticOutgoing(null);
         await deleteCachedFileUris([result.uri]).catch(() => {});
         log.error('voice_send_failed', { err: rawErrorText(e) });
         showError(userErrorText(e, 'Не удалось отправить голосовое'));
@@ -3020,7 +3050,7 @@ function ChatThreadView({
           ради этого стекло и заводилось. */}
       <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
       {/* Thread header with back button */}
-      <GlassSurface style={[s.threadHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
+      <GlassSurface style={[s.threadHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
         <AppPressable style={s.backBtn} onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Назад к чатам">
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </AppPressable>
