@@ -71,6 +71,20 @@ function verifyRegistration(peerId, roomId, signature, challenge) {
   return verifyEd25519(peerId, message, signature);
 }
 
+/**
+ * Единственное место, где события push попадают в лог. Одна строка JSON на
+ * событие: так их видно и глазами, и через `fly logs | grep push_`. Без этого
+ * доставка была немой — понять, лёг ли реестр токенов на том или остался
+ * в памяти, было нельзя ничем, кроме ssh на машину.
+ *
+ * В самих событиях нет ни токенов, ни идентификаторов собеседников: только
+ * платформа, счётчик и исход отправки.
+ */
+function logEvent(event, fields) {
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({ event, ...fields }));
+}
+
 function createSignalingServer(options = {}) {
   const configuredPort = options.port ?? process.env.PORT;
   const port = configuredPort === undefined ? 3001 : Number(configuredPort);
@@ -79,7 +93,8 @@ function createSignalingServer(options = {}) {
   const maxConnections = options.maxConnections ?? MAX_CONNECTIONS;
   const maxConnectionsPerIp = options.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP;
   const registrationTimeoutMs = options.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS;
-  const push = options.push ?? createPushRoutes({ env: options.env });
+  const push = options.push
+    ?? createPushRoutes({ env: options.env, log: options.log ?? logEvent });
   const httpServer = http.createServer((request, response) => {
     if (push.handle(request, response)) return;
     if (request.method === 'GET' && request.url === '/health') {
