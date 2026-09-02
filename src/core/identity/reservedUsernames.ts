@@ -68,15 +68,23 @@ export type UsernameClaim =
  * «короче пяти символов» и «имя оставлено приложению» — разные разговоры с
  * человеком, и подсказать по ним можно разное.
  */
-export function checkUsernameClaim(value: unknown): UsernameClaim {
+export function checkUsernameClaim(value: unknown, unlocked?: unknown): UsernameClaim {
   const raw = typeof value === 'string' ? value.trim().replace(/^@+/, '').toLowerCase() : '';
   if (!raw) return { ok: false, reason: 'empty' };
   if (!/^[a-z0-9_]+$/.test(raw)) return { ok: false, reason: 'charset' };
   if (raw.length > USERNAME_MAX) return { ok: false, reason: 'too_long' };
+  // v4.32.547: имя, выписанное аккаунту официально, он вправе занять — иначе
+  // список отменял бы собственную выдачу: `founder` лежит в нём как раз затем,
+  // чтобы посторонний не выглядел основателем, и владелец бумаги упирался бы в
+  // ту же дверь. Ключ здесь ровно один: `unlocked` — имя из ПРОВЕРЕННОЙ бумаги
+  // (identity/verification), а не строка из поля ввода. Разблокируется только
+  // оно само: бумага на `founder` не открывает `support`, и обе границы ниже
+  // — и длина, и список — обходятся только для него.
+  const granted = typeof unlocked === 'string' && unlocked.trim().toLowerCase() === raw;
   // Порядок важен: `nft` короче предела И зарезервирован. Про длину человеку
   // сказать полезнее — это подсказка, что делать дальше.
-  if (raw.length < USERNAME_MIN_SELF_SERVICE) return { ok: false, reason: 'too_short' };
-  if (RESERVED_USERNAMES.has(raw)) return { ok: false, reason: 'reserved' };
+  if (!granted && raw.length < USERNAME_MIN_SELF_SERVICE) return { ok: false, reason: 'too_short' };
+  if (!granted && RESERVED_USERNAMES.has(raw)) return { ok: false, reason: 'reserved' };
   // Последним словом — общий нормализатор: границы протокола должны совпасть.
   const normalized = normalizeUsername(raw);
   if (!normalized) return { ok: false, reason: 'charset' };

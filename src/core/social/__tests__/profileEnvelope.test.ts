@@ -10,11 +10,12 @@ import {
   PROFILE_PREFIX,
   type PeerProfileEnvelope,
 } from '../profileEnvelope';
+import { MAX_GRANT_LEN } from '../../identity/verificationGrant';
 
 const NOW = 1_700_000_000_000;
 
 function base(over: Partial<PeerProfileEnvelope> = {}): PeerProfileEnvelope {
-  return { name: 'Кир', bio: 'люблю горы', avatarCid: null, ts: NOW, ...over };
+  return { name: 'Кир', bio: 'люблю горы', avatarCid: null, badge: null, ts: NOW, ...over };
 }
 
 describe('profileEnvelope', () => {
@@ -47,7 +48,7 @@ describe('profileEnvelope', () => {
 
   it('пустые поля допустимы — так снимают фото и стирают «О себе»', () => {
     const env = decodeProfileEnvelope(encodeProfileEnvelope(base({ bio: null, avatarCid: null })), NOW);
-    expect(env).toEqual({ name: 'Кир', bio: null, avatarCid: null, ts: NOW });
+    expect(env).toEqual({ name: 'Кир', bio: null, avatarCid: null, badge: null, ts: NOW });
     // Пустая строка — то же самое, что «не задано».
     const blank = decodeProfileEnvelope(PROFILE_PREFIX + JSON.stringify({ ...base(), bio: '   ' }), NOW);
     expect(blank?.bio).toBeNull();
@@ -172,6 +173,30 @@ describe('свой профиль чистится тем же правилом,
     const once = encodeProfileEnvelope(base({ name: 'Иван\nПетров', bio: 'верх\n\n\n\nниз' }));
     const twice = encodeProfileEnvelope(decodeProfileEnvelope(once, NOW)!);
     expect(twice).toBe(once);
+  });
+
+  // v4.32.547: бумага на галочку едет тем же конвертом. Кодек её НЕ разбирает
+  // — это делает получатель, проверяя подпись; здесь важно ровно то, что она
+  // доезжает неизменной и что порча этого поля не роняет весь конверт.
+  it('бумага на галочку проходит конверт как есть', () => {
+    const paper = JSON.stringify({ payload: '{"v":1}', signature: 'AA==' });
+    expect(decodeProfileEnvelope(encodeProfileEnvelope(base({ badge: paper })), NOW)?.badge).toBe(paper);
+  });
+
+  it('слишком длинная бумага отбрасывается, а имя и «О себе» доезжают', () => {
+    // Обрезать её, в отличие от текста, бессмысленно: обрезанная подпись не
+    // проверится никогда. Но и терять из-за неё настоящее имя нельзя.
+    const raw = PROFILE_PREFIX + JSON.stringify({ ...base(), badge: 'x'.repeat(MAX_GRANT_LEN + 1) });
+    const env = decodeProfileEnvelope(raw, NOW);
+    expect(env?.badge).toBeNull();
+    expect(env?.name).toBe('Кир');
+  });
+
+  it('бумага не строкой — конверт битый целиком', () => {
+    // Длина — вопрос вместимости, тип — вопрос формата: такой конверт собрал
+    // не наш кодек, и верить остальным его полям тоже не за что.
+    const raw = PROFILE_PREFIX + JSON.stringify({ ...base(), badge: 42 });
+    expect(decodeProfileEnvelope(raw, NOW)).toBeNull();
   });
 
   it('своё «О себе» перед записью — то же правило и свой предел', () => {

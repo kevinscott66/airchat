@@ -28,6 +28,9 @@ import {
   normalizeOwnBio,
   type PeerProfileEnvelope,
 } from './profileEnvelope';
+import { ownBadgeGrantFor } from '../identity/ownBadge';
+import { badgeFor } from '../identity/verification';
+import { didFromPubB64 } from '../identity/did';
 import { log } from '../logger';
 
 export { PROFILE_PREFIX };
@@ -183,9 +186,15 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   }
   const shareAvatar = avatarAllowed(await avatarVisibilityFor(pid), audience);
   const avatarCid = avatarUri && shareAvatar ? await currentAvatarCid(pid, avatarUri, now) : null;
+  // v4.32.547: бумага на галочку едет тем же конвертом, что и имя, — иначе ей
+  // понадобился бы свой транспорт, а она нужна ровно там же и ровно тогда же.
+  // Настройке «кто видит фото» она не подчиняется: галочка не про личное, она
+  // существует, чтобы собеседник мог отличить настоящий аккаунт от похожего,
+  // и спрятанная она бесполезна.
+  const badge = await ownBadgeGrantFor(pid);
   return {
-    env: { name, username, bio, avatarCid, ts: stamp },
-    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarUri : '', avatarCid != null),
+    env: { name, username, bio, avatarCid, badge, ts: stamp },
+    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarUri : '', avatarCid != null, badge),
   };
 }
 
@@ -213,9 +222,13 @@ function versionOf(
   username: string | null,
   bio: string | null,
   avatarUri: string,
-  avatarOk: boolean
+  avatarOk: boolean,
+  badge: string | null
 ): number {
-  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarUri}|${avatarOk ? '1' : '0'}`;
+  // v4.32.547: бумага входит в свёртку. Без неё выданная галочка не уехала бы
+  // никому: отметка правки профиля не менялась, версия совпадала с уже
+  // отправленной, и рассылка честно пропускала каждый контакт.
+  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarUri}|${avatarOk ? '1' : '0'}|${badge ?? ''}`;
   // FNV-1a: нужен не криптостойкий хэш, а стабильное число для сравнения
   // «то же самое или уже другое» — обе стороны сравнения свои.
   let h = 0x811c9dc5;
@@ -329,9 +342,14 @@ export async function handleIncomingPeerProfile(
   if (!env || !senderPubB64) return true;
   // Профиль относится к ПОДПИСАННОМУ отправителю: поля «чей» в конверте нет
   // намеренно, иначе один контакт подменял бы фото другому.
+  // v4.32.547: галочка проверяется ЗДЕСЬ, где известен отправитель, и только
+  // здесь. Бумага связана с DID и с именем: сверяем её с ключом, которым
+  // подписано это сообщение, и с тем именем, которое приехало этим же
+  // конвертом. Не сойдётся — контакт запишется без галочки, а не с чужой.
+  const verified = await badgeFor(env.badge, didFromPubB64(senderPubB64), env.username);
   try {
-    await setPeerProfileFor(ownerPid, senderPubB64, env);
-    log.info('profile_applied', { from: senderPubB64.slice(0, 12) });
+    await setPeerProfileFor(ownerPid, senderPubB64, { ...env, verified });
+    log.info('profile_applied', { from: senderPubB64.slice(0, 12), verified: verified ?? '' });
   } catch (e) {
     log.warn('profile_apply_failed', { err: e instanceof Error ? e.message : String(e) });
   }

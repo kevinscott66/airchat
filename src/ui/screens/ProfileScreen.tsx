@@ -40,6 +40,8 @@ import { profileManager } from '../../core/identity/profileManager';
 import { republishProfileFromKv } from '../../core/identity/profile';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, sanitizeOwnDisplayName } from '../../core/identity/ownProfile';
 import { checkUsernameClaim, USERNAME_MIN_SELF_SERVICE } from '../../core/identity/reservedUsernames';
+import { applyOwnBadgeGrant, ownBadgeClaim } from '../../core/identity/ownBadge';
+import type { VerificationClaim } from '../../core/identity/verification';
 import { saveOwnUsernameGlobally } from '../../core/identity/usernameRegistry';
 import { publicIdFor } from '../../core/identity/publicId';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
@@ -48,6 +50,7 @@ import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope'
 import { newAvatarUri } from '../../core/media/avatarFiles';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
 import { authGuard } from '../../core/security/authGuard';
+import { VerifiedMark } from '../components/VerifiedMark';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -138,6 +141,13 @@ function ProfileScreenImpl({
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [editBioDraft, setEditBioDraft] = useState('');
   const [handle, setHandle] = useState('');
+  /**
+   * v4.32.547: своя бумага на официальную галочку — уже проверенная на
+   * собственный DID (см. identity/ownBadge). Держим весь разбор, а не одну
+   * галочку: имя из бумаги нужно и полю ввода — оно разрешает занять
+   * зарезервированное имя, на которое бумага и выдана.
+   */
+  const [badge, setBadge] = useState<VerificationClaim | null>(null);
   const [isEditingHandle, setIsEditingHandle] = useState(false);
   const [editHandleDraft, setEditHandleDraft] = useState('');
   const [peer, setPeer] = useState<string | null>(null);
@@ -242,6 +252,8 @@ function ProfileScreenImpl({
       if (alive && savedStatus) setCustomStatus(savedStatus);
       const savedHandle = await getOwnUsername();
       if (alive && savedHandle) { setHandle(savedHandle); setEditHandleDraft(savedHandle); }
+      const claim = await ownBadgeClaim();
+      if (alive) setBadge(claim);
       const savedPronouns = cleanPronouns(await ownFieldGet('user_pronouns'));
       if (alive && savedPronouns) { setPronouns(savedPronouns); setEditPronounsDraft(savedPronouns); }
       // Social links
@@ -385,11 +397,41 @@ function ProfileScreenImpl({
     }
   };
 
+  /**
+   * v4.32.547: принять бумагу из буфера обмена.
+   *
+   * Проверка идёт целиком в ownBadge и на собственный DID: чужую бумагу сюда
+   * вставить можно, но записана она не будет — галочка привязана к аккаунту, и
+   * именно это отличает её от поля, которое каждый ставит себе сам.
+   */
+  const applyBadgeFromClipboard = async (): Promise<void> => {
+    try {
+      const raw = (await Clipboard.getStringAsync())?.trim();
+      if (!raw) { showError('Буфер обмена пуст'); return; }
+      const claim = await applyOwnBadgeGrant(raw);
+      if (!claim) {
+        showError('Это подтверждение выдано не вашему аккаунту или испорчено');
+        return;
+      }
+      setBadge(claim);
+      await markProfileChanged();
+      void broadcastMyProfile();
+      showSuccess(claim.username === handle
+        ? 'Аккаунт подтверждён'
+        : `Подтверждение принято на @${claim.username} — займите этот юзернейм, чтобы галочка появилась`);
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось прочитать буфер обмена'));
+    }
+  };
+
   const saveHandle = async (): Promise<void> => {
     // v4.32.540: причина отказа называется вслух. Раньше на все случаи была
     // одна строка про занятость, и человек, набравший имя из двух букв, шёл
     // подбирать варианты — получая на каждый тот же ответ.
-    const claim = checkUsernameClaim(editHandleDraft);
+    // v4.32.547: второй аргумент — имя из своей бумаги. Только оно проходит
+    // мимо списка зарезервированных: иначе выданная галочка на `@founder`
+    // упиралась бы в тот самый список, который её и охраняет.
+    const claim = checkUsernameClaim(editHandleDraft, badge?.username);
     if (!claim.ok) {
       showError(
         claim.reason === 'empty' ? 'Введите юзернейм'
@@ -721,6 +763,12 @@ function ProfileScreenImpl({
               <Text style={handle ? styles.handleText : styles.handlePlaceholder}>
                 {handle ? `@${handle}` : 'Добавить @юзернейм'}
               </Text>
+              {/* Галочка показывается только при совпадении имени с бумагой:
+                  переименовавшийся аккаунт контакты видят без неё, и он должен
+                  видеть себя так же — иначе он об этом не узнает. */}
+              {badge && badge.username === handle ? (
+                <VerifiedMark size={15} label="Официальный аккаунт" />
+              ) : null}
               <Ionicons name="create-outline" size={16} color={colors.textMuted} style={{ marginLeft: 6 }} />
             </AppPressable>
           )}
@@ -772,6 +820,28 @@ function ProfileScreenImpl({
                 {pronouns || 'Добавить местоимения'}
               </Text>
               <Ionicons name="create-outline" size={14} color={colors.textMuted} />
+            </AppPressable>
+          )}
+
+          {/*
+            v4.32.547: приём бумаги на галочку. Из буфера, а не отдельным окном
+            ввода: строка длинная, набирать её руками никто не станет, а
+            приходит она всегда откуда-то, откуда её копируют.
+
+            Строка показывается, только когда бумаги ещё нет: у аккаунта с
+            галочкой она превратилась бы в приглашение сменить подтверждение —
+            действие, которого не бывает.
+          */}
+          {badge ? null : (
+            <AppPressable
+              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}
+              onPress={() => void applyBadgeFromClipboard()}
+              testID="profile_badge_paste"
+            >
+              <Ionicons name="shield-checkmark-outline" size={14} color={colors.textMuted} />
+              <Text style={{ color: colors.textMuted, fontSize: scaleFont(13) }}>
+                Вставить подтверждение аккаунта
+              </Text>
             </AppPressable>
           )}
 

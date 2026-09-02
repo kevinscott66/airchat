@@ -50,6 +50,24 @@ describe('checkUsernameClaim', () => {
     expect(checkUsernameClaim('  @Kevin_Scott ')).toEqual({ ok: true, username: 'kevin_scott' });
   });
 
+  // v4.32.547: имя из ПРОВЕРЕННОЙ бумаги на галочку открывает ровно себя.
+  // Второй параметр — не то, что человек набрал в поле, а то, что вернул
+  // readGrant; спутать эти два источника значит отдать `founder` любому.
+  it('выданное имя открывается, и только оно', () => {
+    expect(checkUsernameClaim('founder', 'founder')).toEqual({ ok: true, username: 'founder' });
+    // Бумага на founder не открывает support — ни как служебное имя…
+    expect(checkUsernameClaim('support', 'founder')).toEqual({ ok: false, reason: 'reserved' });
+    // …ни как слишком короткое.
+    expect(checkUsernameClaim('nft', 'founder')).toEqual({ ok: false, reason: 'too_short' });
+    // Регистр и «собака» не мешают: сверяются нормализованные имена.
+    expect(checkUsernameClaim('@Founder', ' FOUNDER ')).toEqual({ ok: true, username: 'founder' });
+  });
+
+  it('выдача не отменяет границы формата', () => {
+    expect(checkUsernameClaim('кевин', 'кевин')).toEqual({ ok: false, reason: 'charset' });
+    expect(checkUsernameClaim('a'.repeat(33), 'a'.repeat(33))).toEqual({ ok: false, reason: 'too_long' });
+  });
+
   it('называет причину для пустого и для запрещённых символов', () => {
     expect(checkUsernameClaim('   ')).toEqual({ ok: false, reason: 'empty' });
     expect(checkUsernameClaim('кевин')).toEqual({ ok: false, reason: 'charset' });

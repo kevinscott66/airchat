@@ -41,6 +41,12 @@ export const OWN_PROFILE_KEYS = [
   'user_custom_status',
   'user_profile_cid',
   'account_created_at',
+  // v4.32.547: выданная аккаунту бумага на официальную галочку. Ключ живёт
+  // здесь, среди полей карточки, ровно затем, чтобы удаление профиля смело и
+  // его: галочка принадлежит аккаунту, а не телефону, и следующему аккаунту с
+  // тем же номером не должна достаться по наследству. Что внутри — см.
+  // identity/verification.
+  'user_verify_grant',
 ] as const;
 
 export type OwnProfileKey = (typeof OWN_PROFILE_KEYS)[number];

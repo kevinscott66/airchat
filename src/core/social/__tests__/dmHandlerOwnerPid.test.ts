@@ -170,7 +170,9 @@ describe('форма исходников', () => {
   });
 
   it('профиль контакта записывается в названный профиль', () => {
-    expect(src('profileSync.ts')).toContain('await setPeerProfileFor(ownerPid, senderPubB64, env);');
+    // v4.32.547: к конверту добавляется результат проверки бумаги на галочку,
+    // но адресат записи прежний — именно ownerPid, а не активный профиль.
+    expect(src('profileSync.ts')).toContain('await setPeerProfileFor(ownerPid, senderPubB64, {');
     expect(src('contacts.ts')).toContain('export async function setPeerProfileFor(\n  pid: number,');
   });
 

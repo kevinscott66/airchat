@@ -19,6 +19,7 @@ import { readEnvelopeBody } from './envelopeBody';
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { displayNameOrNull, sanitizeParagraphText } from './sysLineGuard';
 import { normalizeUsername } from '../identity/username';
+import { MAX_GRANT_LEN } from '../identity/verificationGrant';
 
 /**
  * Занятые байты: \x01…\x0c, \x0e…\x13 (см. storyEnvelope.ts).
@@ -50,6 +51,16 @@ export type PeerProfileEnvelope = {
   bio: string | null;
   /** Фото профиля: обычный CID или `nb:`-дескриптор вложения. */
   avatarCid: string | null;
+  /**
+   * v4.32.547: бумага на официальную галочку — строка как есть, непрочитанная.
+   *
+   * Разбирать её здесь нечем и не нужно: этот модуль отвечает за форму
+   * конверта, а бумага — подписанная нагрузка, и единственный осмысленный
+   * ответ на неё даёт проверка подписи (identity/verification), которая идёт
+   * уже после разбора, зная отправителя. Поэтому поле проходит насквозь и
+   * ограничено только длиной. Отсутствует в конвертах до 4.32.547.
+   */
+  badge?: string | null;
   /** Когда профиль был изменён — по часам отправителя. */
   ts: number;
 };
@@ -70,6 +81,7 @@ export function encodeProfileEnvelope(env: PeerProfileEnvelope): string {
     ...(env.username !== undefined ? { username: normalizeUsername(env.username) } : {}),
     bio: sanitizeParagraphText(env.bio, MAX_BIO_LEN),
     avatarCid: env.avatarCid,
+    ...(env.badge ? { badge: env.badge } : {}),
     ts: env.ts,
   };
   return PROFILE_PREFIX + JSON.stringify(clean);
@@ -119,9 +131,16 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
   if (env.name != null && typeof env.name !== 'string') return null;
   if (env.username != null && typeof env.username !== 'string') return null;
   if (env.bio != null && typeof env.bio !== 'string') return null;
+  if (env.badge != null && typeof env.badge !== 'string') return null;
   const name = displayNameOrNull(env.name, MAX_NAME_LEN);
   const username = env.username === undefined ? undefined : normalizeUsername(env.username);
   const bio = sanitizeParagraphText(env.bio, MAX_BIO_LEN);
+  // Слишком длинная бумага — не повод отбросить весь конверт: имя, фото и «О
+  // себе» в нём настоящие, а галочки просто не будет. Обрезать её, в отличие
+  // от текста, бессмысленно: обрезанная подпись не проверится никогда.
+  const badge = typeof env.badge === 'string' && env.badge.length <= MAX_GRANT_LEN
+    ? env.badge
+    : null;
 
   let avatarCid: string | null = null;
   if (env.avatarCid != null) {
@@ -137,5 +156,5 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
   // все последующие обновления этого контакта.
   const ts = Math.min(env.ts, now + CLOCK_SKEW_MS);
 
-  return { name, ...(username !== undefined ? { username } : {}), bio, avatarCid, ts };
+  return { name, ...(username !== undefined ? { username } : {}), bio, avatarCid, badge, ts };
 }

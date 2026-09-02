@@ -25,6 +25,7 @@ import { AppPressable } from '../components/AppPressable';
 import { AppModal as Modal } from '../components/AppModal';
 import { SafeScreen } from '../components/SafeScreen';
 import { Ionicons } from '@expo/vector-icons';
+import { VerifiedMark } from '../components/VerifiedMark';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedDots } from '../components/AnimatedDots';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
@@ -97,6 +98,12 @@ type ConversationItem = ConversationRow & {
   displayName: string;
   /** v4.32.247: фото контакта из его же конверта профиля (см. profileSync). */
   avatarCid?: string;
+  /**
+   * v4.32.547: официальная галочка контакта. Список чатов — то самое место,
+   * где её отсутствие стоит дорого: похожее имя и похожее фото здесь стоят
+   * рядом с настоящими, и отличить их до открытия переписки больше нечем.
+   */
+  verified?: 'official';
 };
 
 /**
@@ -307,6 +314,9 @@ function ConvRowImpl({
             <Text style={[rowStyles.name, rowFont.name, { color: colors.text }]} numberOfLines={1}>
               {item.displayName}
             </Text>
+            {item.verified === 'official' ? (
+              <VerifiedMark size={14} label="Официальный аккаунт" />
+            ) : null}
           </View>
           <View style={rowStyles.timeRow}>
             {isOut ? (
@@ -680,6 +690,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
       ...c,
       displayName: contactMap.get(c.contactPubB64)?.displayName || shortIdentity(c.contactPubB64),
       avatarCid: contactMap.get(c.contactPubB64)?.avatarCid,
+      verified: contactMap.get(c.contactPubB64)?.verified,
     }));
 
     // Contacts with no conversation yet
@@ -702,6 +713,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           colorTag: null,
           displayName: ct.displayName,
           avatarCid: ct.avatarCid,
+          verified: ct.verified,
         });
       }
     }

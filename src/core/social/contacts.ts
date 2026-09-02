@@ -174,6 +174,19 @@ export type Contact = {
   /** Метка времени применённого конверта — отбрасываем устаревшие. */
   profileTs?: number;
   /**
+   * v4.32.547: официальная галочка контакта — уже проверенная.
+   *
+   * Хранится результатом, а не бумагой, потому что список контактов читается
+   * на каждой отрисовке чатов, а проверка подписи — операция, которой там не
+   * место. Проверку делает приём конверта (profileSync), где известен и
+   * отправитель, и его имя; сюда попадает только её ответ.
+   *
+   * Поле перезаписывается КАЖДЫМ принятым конвертом, включая пустое значение:
+   * аккаунт, сменивший имя или лишившийся бумаги, обязан потерять галочку и у
+   * собеседника, иначе она пережила бы то, что подтверждала.
+   */
+  verified?: 'official';
+  /**
    * v4.32.113 T1: true — контакт создан автоматически при переписке со странgerом
    * (implicit). Такие контакты показываются в списке чатов, но не в «Контакты».
    * Пользователь может явно «Добавить» → implicit становится false.
@@ -410,6 +423,7 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
         const j = JSON.parse(row) as {
           displayName?: unknown; profileCid?: unknown; implicit?: unknown;
           peerName?: unknown; bio?: unknown; avatarCid?: unknown; profileTs?: unknown;
+          peerVerified?: unknown;
         };
         // v4.32.197 (Round-27 #6): coerce/cap fields. Legacy rows + future
         // import paths may produce non-string / multi-MB values that bloat
@@ -440,6 +454,10 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
           ...(bio ? { bio } : {}),
           ...(typeof j.avatarCid === 'string' && j.avatarCid ? { avatarCid: j.avatarCid } : {}),
           ...(typeof j.profileTs === 'number' && Number.isFinite(j.profileTs) ? { profileTs: j.profileTs } : {}),
+          // Единственное допустимое значение сверяется здесь, а не приводится:
+          // строка в базе могла приехать из резервной копии, и «что угодно
+          // непустое» означало бы галочку по чужому файлу.
+          ...(j.peerVerified === 'official' ? { verified: 'official' as const } : {}),
         });
       } catch (e) {
         log.warn('contact_row_parse_failed', { id, err: e instanceof Error ? e.message : String(e) });
@@ -564,7 +582,7 @@ export async function getContactProfileCid(peerPublicKeyB64: string): Promise<st
  */
 export async function setPeerProfile(
   peerPublicKeyB64: string,
-  profile: { name: string | null; username?: string | null; bio: string | null; avatarCid: string | null; ts: number }
+  profile: PeerProfilePatch
 ): Promise<boolean> {
   return await setPeerProfileFor(activeProfileId(), peerPublicKeyB64, profile);
 }
@@ -577,10 +595,20 @@ export async function setPeerProfile(
  * фото ложилось в список контактов другого профиля. Служба переписки знает
  * владельца по своей паре ключей — пусть он и называется.
  */
+export type PeerProfilePatch = {
+  name: string | null;
+  username?: string | null;
+  bio: string | null;
+  avatarCid: string | null;
+  /** v4.32.547: результат проверки бумаги на галочку. Проверяет profileSync. */
+  verified?: 'official' | null;
+  ts: number;
+};
+
 export async function setPeerProfileFor(
   pid: number,
   peerPublicKeyB64: string,
-  profile: { name: string | null; username?: string | null; bio: string | null; avatarCid: string | null; ts: number }
+  profile: PeerProfilePatch
 ): Promise<boolean> {
   const changed = await withContactLock(pid, async () => {
     try {
@@ -596,12 +624,17 @@ export async function setPeerProfileFor(
         ...(profile.username !== undefined ? { peerUsername: profile.username ?? '' } : {}),
         bio: profile.bio ?? '',
         avatarCid: profile.avatarCid ?? '',
+        // Пустая строка — «галочки нет», и записывается она так же обязательно,
+        // как удалённое «О себе»: отсутствие поля в конверте не должно
+        // оставлять в базе вчерашнее подтверждение.
+        ...(profile.verified !== undefined ? { peerVerified: profile.verified ?? '' } : {}),
         profileTs: profile.ts,
       };
       const same =
         (j.peerName ?? '') === next.peerName &&
         (profile.username === undefined || (j.peerUsername ?? '') === next.peerUsername) &&
         (j.bio ?? '') === next.bio &&
+        (profile.verified === undefined || (j.peerVerified ?? '') === (profile.verified ?? '')) &&
         (j.avatarCid ?? '') === next.avatarCid;
       await contactRowSet(pid, peerPublicKeyB64, JSON.stringify({ ...j, ...next }));
       return !same;
