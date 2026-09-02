@@ -2,6 +2,7 @@
   "expo": {
     "name": "airchat",
     "slug": "airchat",
+    "owner": "dobropalm",
     "version": "4.32.539",
     "scheme": "airchat",
     "plugins": [
@@ -63,6 +64,11 @@
       "ios",
       "android",
       "web"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "583951f6-0a65-415a-945e-fd308bea7fe7"
+      }
+    }
   }
 }
