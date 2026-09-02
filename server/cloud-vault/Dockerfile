@@ -3,7 +3,10 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY index.js README.md sync-db.js ./
+# Список файлов перечислен поимённо, чтобы тесты не уезжали в образ. Цена
+# этого — новый модуль надо не забыть дописать сюда: без строки образ
+# собирается молча, а падает уже в проде на require.
+COPY index.js README.md sync-db.js reserved-usernames.js ./
 
 RUN mkdir -p /var/lib/airchat-cloud-vault-example \
   && chown -R node:node /var/lib/airchat-cloud-vault-example
