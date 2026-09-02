@@ -13,6 +13,10 @@ const express = require('express');
 const cors = require('cors');
 const { ed25519 } = require('@noble/curves/ed25519.js');
 const { SyncDatabase, validateMutation } = require('./sync-db');
+const {
+  normalizeClaimableUsername,
+  normalizeLookupUsername,
+} = require('./reserved-usernames');
 
 const app = express();
 // The client archives binary files as base64 twice (inside JSON and in the
@@ -357,6 +361,27 @@ function validateSyncRequest(payload, accountId, op) {
     const mutations = payload.mutations.map(validateMutation);
     if (mutations.some((mutation) => mutation === null)) return null;
     return { ...payload, accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64, mutations, deviceInfo };
+  }
+  if (op === 'claim_username' || op === 'release_username') {
+    // Профиль 0 — основной, дальше идут дополнительные (их максимум четыре на
+    // seed-фразу). Верхняя граница взята той же, что у курсоров pull.
+    if (
+      !Number.isSafeInteger(payload.ownerProfileId) ||
+      payload.ownerProfileId < 0 || payload.ownerProfileId > 1_000_000
+    ) return null;
+    if (op === 'claim_username') {
+      // Правила длины, набора символов и списка оставленных имён проверяет
+      // сервер, а не только экран: клиент можно пересобрать без проверки.
+      const username = normalizeClaimableUsername(payload.username);
+      if (!username) return null;
+      return {
+        ...payload,
+        username,
+        accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64,
+        deviceInfo,
+      };
+    }
+    return { ...payload, accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64, deviceInfo };
   }
   if (op === 'media_put' || op === 'media_get' || op === 'media_delete' || op === 'media_reference') {
     if (typeof payload.mediaId !== 'string' || !MEDIA_ID_RE.test(payload.mediaId)) return null;
@@ -809,6 +834,57 @@ app.post('/v1/sync/:accountId/devices/revoke', (req, res) => {
     return res.status(400).json({ error: 'invalid_target_device' });
   }
   return res.json({ ok: syncDb.revokeDevice(auth.accountId, target) });
+});
+
+/**
+ * Реестр юзернеймов (v4.32.543).
+ *
+ * До него уникальность имени проверялась только среди профилей одного
+ * телефона, то есть не проверялась вовсе: два незнакомых человека занимали
+ * одно имя, и получатель конверта не мог сказать, от кого он. Запись идёт по
+ * той же подписи, что pull/push, — занять имя может только владелец аккаунта.
+ */
+app.post('/v1/sync/:accountId/username/claim', (req, res) => {
+  noStore(res);
+  const accountId = req.params.accountId;
+  const auth = authenticateSyncRequest(req, accountId, 'claim_username');
+  if (auth.error) return res.status(auth.status || 401).json({ error: auth.error });
+  try {
+    const result = syncDb.claimUsername(auth.accountId, auth.payload.ownerProfileId, auth.payload.username);
+    if (!result.ok) return res.status(409).json({ error: result.reason });
+    return res.json({ ok: true, username: result.username });
+  } catch {
+    return res.status(500).json({ error: 'username_claim_failed' });
+  }
+});
+
+app.post('/v1/sync/:accountId/username/release', (req, res) => {
+  noStore(res);
+  const accountId = req.params.accountId;
+  const auth = authenticateSyncRequest(req, accountId, 'release_username');
+  if (auth.error) return res.status(auth.status || 401).json({ error: auth.error });
+  try {
+    return res.json({ ok: syncDb.releaseUsername(auth.accountId, auth.payload.ownerProfileId) });
+  } catch {
+    return res.status(500).json({ error: 'username_release_failed' });
+  }
+});
+
+/**
+ * Справка о занятости — единственный запрос реестра без подписи: спросить
+ * «свободно ли имя» нужно до того, как аккаунт вообще заведён. Наружу уходит
+ * только `taken`. Владельца не называем намеренно: `accountId` — это адрес
+ * его хранилища, и отдавать его по чужому имени нельзя.
+ */
+app.get('/v1/username/:username', (req, res) => {
+  noStore(res);
+  const username = normalizeLookupUsername(req.params.username);
+  if (!username) return res.status(400).json({ error: 'invalid_username' });
+  try {
+    return res.json({ username, taken: syncDb.lookupUsername(username) !== null });
+  } catch {
+    return res.status(500).json({ error: 'username_lookup_failed' });
+  }
 });
 
 const port = Number(process.env.PORT) || 3010;

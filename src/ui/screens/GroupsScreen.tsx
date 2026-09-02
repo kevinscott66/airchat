@@ -116,6 +116,7 @@ import { announceGroupSend } from '../groupSendAnnounce';
 import { groupControlProblem } from '../../core/social/groupControlOutcome';
 import { announceCtl, announceInviteToken } from '../groupControlAnnounce';
 import { useTheme, useScaledFont } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import { publicIdFor } from '../../core/identity/publicId';
 import { avatarShape, badgeDigit, badgeTint, contrastingInk, elevation, font, identityAvatar, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
 import { defaultWallpaper, feedGround, type Wallpaper } from '../wallpapers';
@@ -490,6 +491,7 @@ function GroupChatScreen({
   initialSearchQuery?: string;
 }): React.ReactElement {
   const { colors, scheme, fontSize: themeFontSize } = useTheme();
+  const tabInset = useTabBarInset();
   // v4.32.540: отступ под часы и «остров» перешёл из оболочки на экраны, см. App.tsx.
   const insets = useSafeAreaInsets();
   // v4.32.409: «непрочитанные», «выделено», «закреплено» и своя реакция —
@@ -4307,7 +4309,7 @@ function GroupChatScreen({
               </Text>
             </AppPressable>
           ) : null}
-          <View style={[gcStyles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
+          <View style={[gcStyles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: tabInset }]}>
             {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
                 с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
                 Группы не поддерживают live-location, onShareLiveLocation опускается. */}
@@ -4793,6 +4795,7 @@ function GroupMembersScreen({
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
 }): React.ReactElement {
   const { colors } = useTheme();
+  const tabInset = useTabBarInset();
   const [members, setMembers] = useState<GroupMemberRow[]>([]);
   const [bannedMembers, setBannedMembers] = useState<GroupMemberRow[]>([]);
   const myPubB64 = useMemo(() => Buffer.from(pair.publicKey).toString('base64'), [pair]);
@@ -5276,6 +5279,7 @@ function GroupMembersScreen({
         ) : null}
       </View>
       <FlatList
+        contentContainerStyle={{ paddingBottom: tabInset }}
         data={filteredMembers}
         keyExtractor={(m) => m.peerPubB64}
         renderItem={({ item }) => {
@@ -5512,6 +5516,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
   // на setTab → нет re-render'а тяжёлого JSX tree (5700 строк) → устраняет 2.2с блок.
   const tabRef = useTabRef();
   const { colors } = useTheme();
+  const tabInset = useTabBarInset();
   const insets = useSafeAreaInsets();
   const [nav, setNav] = useState<NavState>({ screen: 'list' });
   const [groups, setGroups] = useState<GroupRow[]>([]);
@@ -5981,6 +5986,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
         ) : null}
 
         <FlatList
+          contentContainerStyle={{ paddingBottom: tabInset }}
           data={filteredGroups}
           keyExtractor={(g) => g.id}
           renderItem={({ item }) => (

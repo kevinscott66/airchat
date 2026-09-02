@@ -153,15 +153,17 @@ describe('шкалы совпадают с design.md', () => {
  *
  * Файла, которого в списке нет, в списке быть и не должно: он не может завести
  * вписанное число вовсе.
+ *
+ * В 543-м из списка вышли Профиль и Настройки: их кегли пересчитываются под
+ * выбранный размер текста, поэтому число там теперь не литерал, а аргумент
+ * `sf(...)`. Квоты у них были 53 и 21 — обе обнулены целиком.
  */
 const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/screens/FeedScreen.tsx': 74,
   'ui/screens/GroupsScreen.tsx': 60,
-  'ui/screens/ProfileScreen.tsx': 53,
   'ui/screens/ChatScreen.tsx': 31,
   'ui/components/modals/chat/ChatContactInfoModal.tsx': 37,
   'ui/screens/ChatListScreen.tsx': 29,
-  'ui/screens/SettingsScreen.tsx': 21,
   'ui/screens/ContactsScreen.tsx': 20,
   'ui/components/StoriesRow.tsx': 14,
   'ui/components/ProfileSelector.tsx': 12,

@@ -70,3 +70,6 @@ dist-*/
 # в репозитории лежат заглушками — в них нет ничего секретного.
 service-account*.json
 *-firebase-adminsdk-*.json
+
+# Локальная база cloud-vault: рантайм-артефакт, не исходник.
+server/cloud-vault/data/

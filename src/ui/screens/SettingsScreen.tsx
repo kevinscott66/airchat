@@ -40,7 +40,8 @@ import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { ACCENT_SWATCHES, avatarShape, badgeTint, colorsForScheme, contrastingInk, font, mono, radius, scrim, tintedIcon, TOUCH_TARGET_MIN, type AppColors, type BadgeTone, type MenuIconHue } from '../theme';
-import { useTheme, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
+import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import {
   kvGet, kvSet, clearAllMessageHistory,
   listQuickReplies, addQuickReply, updateQuickReply, deleteQuickReply,
@@ -159,7 +160,9 @@ function SettingsScreenImpl({
     accentColor, setAccentColor,
     scheme,
   } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const scaleFont = useScaledFont();
+  const tabInset = useTabBarInset();
+  const styles = useMemo(() => makeStyles(colors, scaleFont), [colors, scaleFont]);
   // v4.32.400: всё, что лежит НА кнопке акцентного цвета, считается из неё.
   // Акцент выбирает пользователь, и `normalizeAccent` гарантирует только то,
   // что белое поверх него читается; вписанное руками '#fff' этой гарантии не
@@ -733,7 +736,7 @@ function SettingsScreenImpl({
   const renderMainMenu = () => (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}
       testID="settings_screen"
     >
       <Text style={styles.h1}>Ещё</Text>
@@ -931,7 +934,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderPrivacy = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Конфиденциальность" />
 
       <Text style={styles.sectionTitle}>Последний визит и статус «онлайн»</Text>
@@ -960,7 +963,7 @@ function SettingsScreenImpl({
                 borderWidth: 1, borderColor: lastSeenVisibility === val ? colors.primary : colors.border,
               }}
             >
-              <Text style={{ color: lastSeenVisibility === val ? primaryOn : colors.text, fontSize: 13, fontWeight: '600' }}>{label}</Text>
+              <Text style={{ color: lastSeenVisibility === val ? primaryOn : colors.text, fontSize: scaleFont(13), fontWeight: '600' }}>{label}</Text>
             </AppPressable>
           ))}
         </View>
@@ -998,7 +1001,7 @@ function SettingsScreenImpl({
                 borderWidth: 1, borderColor: avatarVisibility === val ? colors.primary : colors.border,
               }}
             >
-              <Text style={{ color: avatarVisibility === val ? primaryOn : colors.text, fontSize: font.sm, fontWeight: '600' }}>{label}</Text>
+              <Text style={{ color: avatarVisibility === val ? primaryOn : colors.text, fontSize: scaleFont(font.sm), fontWeight: '600' }}>{label}</Text>
             </AppPressable>
           ))}
         </View>
@@ -1063,7 +1066,7 @@ function SettingsScreenImpl({
           <Text style={styles.label}>Автоудаление новых чатов</Text>
           <Text style={styles.desc}>По умолчанию для новых разговоров</Text>
         </View>
-        <Text style={{ color: colors.accent, fontWeight: '600', fontSize: 13 }}>{autoDeleteLabel(defaultAutoDeleteMs)}</Text>
+        <Text style={{ color: colors.accent, fontWeight: '600', fontSize: scaleFont(13) }}>{autoDeleteLabel(defaultAutoDeleteMs)}</Text>
       </AppPressable>
     </ScrollView>
   );
@@ -1073,7 +1076,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderNotifications = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Уведомления и звуки" />
 
       <Text style={styles.sectionTitle}>Типы уведомлений</Text>
@@ -1166,7 +1169,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderAppearance = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Оформление" />
 
       <Text style={styles.sectionTitle}>Тема оформления</Text>
@@ -1194,7 +1197,7 @@ function SettingsScreenImpl({
             return (
               <AppPressable key={opt.value} style={[styles.themeBtn, active && styles.themeBtnActive, { flex: 1, minWidth: 0 }]} onPress={() => void setFontSize(opt.value as FontSizeValue)} accessibilityRole="radio" accessibilityState={{ selected: active }}>
                 <Text style={{ fontSize: opt.value - 3, fontWeight: '700', color: active ? primaryOn : colors.textSecondary }}>А</Text>
-                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive, { fontSize: font.xs }]}>{opt.label}</Text>
+                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive, { fontSize: scaleFont(font.xs) }]}>{opt.label}</Text>
               </AppPressable>
             );
           })}
@@ -1222,7 +1225,7 @@ function SettingsScreenImpl({
         </View>
         {autoNightEnabled ? (
           <AppPressable onPress={() => { setNightStartTmp(autoNightStart); setNightEndTmp(autoNightEnd); setNightTimeModal(true); }} style={{ paddingBottom: 10, paddingHorizontal: 4 }}>
-            <Text style={{ color: colors.accent, fontSize: 13 }}>
+            <Text style={{ color: colors.accent, fontSize: scaleFont(13) }}>
               Изменить время ({String(autoNightStart).padStart(2, '0')}:00 – {String(autoNightEnd).padStart(2, '0')}:00)
             </Text>
           </AppPressable>
@@ -1291,7 +1294,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderData = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Данные и хранилище" />
 
       <Text style={styles.sectionTitle}>Авто-скачивание медиа</Text>
@@ -1409,7 +1412,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderSecurity = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Безопасность" />
 
       <Text style={styles.sectionTitle}>Пароль приложения</Text>
@@ -1450,7 +1453,7 @@ function SettingsScreenImpl({
                     onPress={() => { setAutoLockDelayMs(ms); void kvSet('auto_lock_delay_ms', String(ms)); }}
                     style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.lg, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
                   >
-                    <Text style={{ color: active ? primaryOn : colors.text, fontSize: 12, fontWeight: '600' }}>{label}</Text>
+                    <Text style={{ color: active ? primaryOn : colors.text, fontSize: scaleFont(12), fontWeight: '600' }}>{label}</Text>
                   </AppPressable>
                 );
               })}
@@ -1484,7 +1487,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderVpn = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="VPN" />
       <VpnSettingsSection />
     </ScrollView>
@@ -1495,7 +1498,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderRelay = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Сервер доставки" />
       <RelaySettingsSection />
     </ScrollView>
@@ -1570,7 +1573,7 @@ function SettingsScreenImpl({
                   <View style={[styles.rowBody, { flex: 1 }]}>
                     <Text style={styles.label} numberOfLines={1}>{kindLabel(m.kind)}</Text>
                     <Text style={styles.desc} numberOfLines={1}>{idShort}</Text>
-                    <Text style={[styles.desc, { fontSize: font.xs }]} numberOfLines={1}>{untilText}</Text>
+                    <Text style={[styles.desc, { fontSize: scaleFont(font.xs) }]} numberOfLines={1}>{untilText}</Text>
                   </View>
                   <AppPressable
                     onPress={() => void handleUnmute(m)}
@@ -1596,7 +1599,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderBackup = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Резервная копия" />
 
       <Text style={styles.sectionTitle}>Резервная копия переписок</Text>
@@ -1672,7 +1675,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderQuickReplies = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Быстрые ответы" />
       <Text style={styles.hint}>Сохранённые шаблоны для быстрой отправки в чатах.</Text>
 
@@ -1689,7 +1692,7 @@ function SettingsScreenImpl({
           />
           <View style={[styles.rowBody, { flex: 1 }]}>
             <Text
-              style={[styles.label, { fontSize: 14 }, templateReadable(qr) ? null : { color: colors.textMuted, fontStyle: 'italic' }]}
+              style={[styles.label, { fontSize: scaleFont(14) }, templateReadable(qr) ? null : { color: colors.textMuted, fontStyle: 'italic' }]}
               numberOfLines={2}
             >{templateReadable(qr) ? qr.text : UNREADABLE_TEMPLATE_TEXT}</Text>
           </View>
@@ -1730,7 +1733,7 @@ function SettingsScreenImpl({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderLanguage = () => (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Язык перевода" />
       <Text style={styles.sectionTitle}>Язык перевода сообщений</Text>
       <Text style={styles.hint}>Целевой язык авто-перевода входящих сообщений</Text>
@@ -1959,7 +1962,7 @@ function SettingsScreenImpl({
             <Text style={styles.modalTitle}>{dndTimeModal === 'start' ? 'Начало тихих часов' : 'Конец тихих часов'}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
               <AppPressable onPress={() => setDndTimeTmp((h) => (h - 1 + 24) % 24)} style={styles.hourBtn}><Ionicons name="chevron-down" size={18} color={colors.text} /></AppPressable>
-              <Text style={[styles.label, { minWidth: 60, textAlign: 'center', fontSize: 28 }]}>{String(dndTimeTmp).padStart(2, '0')}:00</Text>
+              <Text style={[styles.label, { minWidth: 60, textAlign: 'center', fontSize: scaleFont(28) }]}>{String(dndTimeTmp).padStart(2, '0')}:00</Text>
               <AppPressable onPress={() => setDndTimeTmp((h) => (h + 1) % 24)} style={styles.hourBtn}><Ionicons name="chevron-up" size={18} color={colors.text} /></AppPressable>
             </View>
             <AppPressable style={styles.pwdPrimaryBtn} onPress={() => {
@@ -2082,14 +2085,14 @@ function SettingsScreenImpl({
 
 // ── Styles ─────────────────────────────────────────────────────────────────────
 
-function makeStyles(c: AppColors) {
+function makeStyles(c: AppColors, sf: (base: number) => number) {
   return StyleSheet.create({
     // Layout
     container: { flex: 1 },
     content: { padding: 16, paddingBottom: 40 },
-    h1: { fontSize: 22, fontWeight: '700', color: c.text, marginBottom: 16 },
-    sectionTitle: { color: c.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 20, marginBottom: 8, letterSpacing: 0.5 },
-    hint: { color: c.textMuted, fontSize: 12, marginBottom: 8, lineHeight: 16 },
+    h1: { fontSize: sf(22), fontWeight: '700', color: c.text, marginBottom: 16 },
+    sectionTitle: { color: c.textSecondary, fontSize: sf(12), fontWeight: '700', marginTop: 20, marginBottom: 8, letterSpacing: 0.5 },
+    hint: { color: c.textMuted, fontSize: sf(12), marginBottom: 8, lineHeight: sf(16) },
 
     // Cards
     card: {
@@ -2102,12 +2105,12 @@ function makeStyles(c: AppColors) {
     },
     row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
     rowBody: { flex: 1, paddingRight: 8 },
-    label: { color: c.text, fontSize: 16, fontWeight: '600' },
-    desc: { color: c.textMuted, fontSize: 12, marginTop: 4, lineHeight: 16 },
+    label: { color: c.text, fontSize: sf(16), fontWeight: '600' },
+    desc: { color: c.textMuted, fontSize: sf(12), marginTop: 4, lineHeight: sf(16) },
     // Подложки и цвета надписи здесь нет: они зависят от состояния и
     // считаются парой на месте вызова (v4.32.396).
     badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.md },
-    badgeText: { fontSize: 12, fontWeight: '600' },
+    badgeText: { fontSize: sf(12), fontWeight: '600' },
 
     // Switch rows
     switchRow: {
@@ -2178,12 +2181,12 @@ function makeStyles(c: AppColors) {
       paddingRight: 8,
       minWidth: 80,
     },
-    backBtnText: { color: c.accent, fontSize: 16, fontWeight: '500' },
+    backBtnText: { color: c.accent, fontSize: sf(16), fontWeight: '500' },
     subTitle: {
       flex: 1,
       textAlign: 'center',
       color: c.text,
-      fontSize: 16,
+      fontSize: sf(16),
       fontWeight: '700',
       paddingHorizontal: 4,
     },
@@ -2202,9 +2205,9 @@ function makeStyles(c: AppColors) {
       borderColor: c.error,
       gap: 10,
     },
-    logoutLabel: { color: c.error, fontSize: 16, fontWeight: '600' },
+    logoutLabel: { color: c.error, fontSize: sf(16), fontWeight: '600' },
     versionTap: { alignSelf: 'center', marginTop: 20, paddingVertical: 6, paddingHorizontal: 10 },
-    versionText: { color: c.textMuted, fontSize: font.xs, textAlign: 'center' },
+    versionText: { color: c.textMuted, fontSize: sf(font.xs), textAlign: 'center' },
 
     // Theme / appearance
     themeRow: { flexDirection: 'row', gap: 8, paddingTop: 10, paddingBottom: 12 },
@@ -2213,7 +2216,7 @@ function makeStyles(c: AppColors) {
       paddingVertical: 9, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceHigh,
     },
     themeBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
-    themeBtnText: { color: c.textSecondary, fontSize: 12, fontWeight: '500' },
+    themeBtnText: { color: c.textSecondary, fontSize: sf(12), fontWeight: '500' },
     themeBtnTextActive: { color: contrastingInk(c.primary), fontWeight: '700' },
     hourBtn: { padding: 8, borderRadius: radius.md, backgroundColor: c.surfaceHigh },
 
@@ -2221,15 +2224,15 @@ function makeStyles(c: AppColors) {
     pwdModalKav: { flex: 1, justifyContent: 'center' },
     pwdModalBg: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 20 },
     pwdModalBox: { backgroundColor: c.surface, borderRadius: radius.lg, padding: 16, borderWidth: 1, borderColor: c.border },
-    pwdInput: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: 12, fontSize: 16, color: c.text, marginBottom: 10 },
+    pwdInput: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: 12, fontSize: sf(16), color: c.text, marginBottom: 10 },
     pwdPrimaryBtn: { backgroundColor: c.primary, padding: 14, borderRadius: radius.md, alignItems: 'center', marginTop: 8 },
-    pwdPrimaryBtnText: { color: contrastingInk(c.primary), fontSize: 16, fontWeight: '600' },
-    pwdCancel: { color: c.accent, textAlign: 'center', marginTop: 14, fontSize: 16 },
-    modalTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginBottom: 8 },
+    pwdPrimaryBtnText: { color: contrastingInk(c.primary), fontSize: sf(16), fontWeight: '600' },
+    pwdCancel: { color: c.accent, textAlign: 'center', marginTop: 14, fontSize: sf(16) },
+    modalTitle: { fontSize: sf(18), fontWeight: '700', color: c.text, marginBottom: 8 },
 
     // Seed
     seedBox: { backgroundColor: c.surfaceHigh, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: c.border },
-    seedText: { color: c.text, fontSize: 15, lineHeight: 24, fontFamily: mono },
+    seedText: { color: c.text, fontSize: sf(15), lineHeight: sf(24), fontFamily: mono },
   });
 }
 

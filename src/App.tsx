@@ -92,6 +92,7 @@ import { PasswordScreen } from './ui/screens/PasswordScreen';
 import { ForgotPasswordScreen } from './ui/screens/ForgotPasswordScreen';
 import { ThemeProvider, useColors, useTheme, useThemedStyles } from './ui/ThemeContext';
 import { TabRefProvider, type TabName } from './ui/TabRefContext';
+import { TabBarInsetProvider } from './ui/TabBarInset';
 import { getTotalUnreadCount, getTotalGroupUnreadCount } from './core/storage/local';
 import { loadPersistedPresence, startPresenceBroadcast, stopPresenceBroadcast } from './core/social/presenceService';
 import { listContacts } from './core/social/contacts';
@@ -184,6 +185,9 @@ type Gate = 'boot' | 'onboarding' | 'backup_warn' | 'ready';
  * светлыми, а таббар, фон под ними и подпись с именем профиля оставались
  * тёмно-синими.
  */
+/** Расчётная высота капсулы таббара до первого `onLayout` (см. `glassTabBar`). */
+const TAB_BAR_ESTIMATE = 76 + spacing.sm;
+
 function useMainTabsStyles() {
   return useThemedStyles((c) => ({
     main: { flex: 1, backgroundColor: c.background },
@@ -204,9 +208,17 @@ function useMainTabsStyles() {
     // v4.32.532: плавающая капсула возвращена. Довод 530-й («таббар — край
     // окна, а не предмет») верен для плоской полосы, но неверен для стекла:
     // стекло обязано быть отдельным предметом, иначе кромке негде пройти.
-    // Честная оговорка: таббар стоит в потоке, содержимое под него НЕ уезжает,
-    // поэтому размывается фон, а не лента. Настоящий оверлей здесь потребовал бы
-    // paddingBottom в каждом скролле всех экранов — это отдельная работа.
+    // v4.32.543: оговорка 532-й снята — капсула вынута из потока и лежит
+    // оверлеем, а её высота раздаётся экранам через `TabBarInsetProvider`.
+    // Теперь под стеклом едет лента, а не пустая заливка. Spacer при скрытом
+    // таббаре остаётся в потоке и продолжает пользоваться `tabBar`.
+    tabBarOverlay: {
+      position: 'absolute' as const,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'transparent',
+    },
     // Тень `overlay` обязательна: стекло само по себе плоское, высоту ему даёт
     // только тень под ним.
     glassTabBar: {
@@ -300,6 +312,13 @@ function MainTabs({
   // (Новости/Чаты/Группы/Профиль/Ещё) вылезают поверх клавиатуры из-за adjustResize.
   const kbHeight = useKeyboardHeight();
   const tabsHidden = kbHeight > 0;
+
+  // v4.32.543: высота плавающей капсулы. Начальное значение — расчётное
+  // (`minHeight` капсулы плюс её нижний отступ), чтобы на первом кадре списки
+  // не рисовались без нижнего отступа и не дёргались после первого `onLayout`.
+  // Дальше значение приходит из самого таббара: в него входит `insets.bottom`,
+  // который на каждом аппарате свой.
+  const [tabBarHeight, setTabBarHeight] = useState(TAB_BAR_ESTIMATE);
 
   // Мониторинг блокировок JS thread. Включён в v4.32.10 «временно», без
   // `__DEV__`-гейта, чтобы видеть реальные блоки в release-сборке.
@@ -1195,6 +1214,7 @@ function MainTabs({
 
   return (
     <TabRefProvider tab={tab}>
+    <TabBarInsetProvider value={tabsHidden ? 0 : tabBarHeight}>
     {/*
       v4.32.540: «По свайпу экрана слева направо по средней части экрана можно
       вернуться на предыдущую страницу». Обёртка стоит здесь, вокруг всех
@@ -1297,7 +1317,13 @@ function MainTabs({
         // ~96px, что и скрытый таббар, — layout стабилен независимо от состояния клавы.
         <View style={[styles.tabBar, { height: insets.bottom }]} />
       ) : (
-      <View style={[styles.tabBar, { paddingBottom: insets.bottom }]}>
+      <View
+        style={[styles.tabBarOverlay, { paddingBottom: insets.bottom }]}
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          setTabBarHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+        }}
+      >
         <GlassSurface style={styles.glassTabBar} intensity={46} variant="regular">
         <View style={styles.tabs}>
           <AppPressable
@@ -1471,6 +1497,7 @@ function MainTabs({
         </Animated.View>
       ) : null}
     </SwipeBackHost>
+    </TabBarInsetProvider>
     </TabRefProvider>
   );
 }

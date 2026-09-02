@@ -102,6 +102,7 @@ import { exportBody } from '../../core/social/exportLine';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import { avatarShape, badgeDigit, badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, font, elevation, inkOn, mono, motion, nestedFill, radius, rippleOn, rowMark, scrim, spacing, TOUCH_TARGET_MIN } from '../theme';
 import { isReducedMotion } from '../motionPrefs';
 import { GlassSurface } from '../components/GlassSurface';
@@ -788,6 +789,7 @@ function ChatThreadView({
   // v4.32.16: gate через tabRef — НЕ prop, чтобы setTab не вызывал re-render тяжёлого треда.
   const tabRef = useTabRef();
   const { colors, scheme } = useTheme();
+  const tabInset = useTabBarInset();
   // v4.32.540: отступ под часы и «остров» теперь у экрана, а не у оболочки.
   const insets = useSafeAreaInsets();
   // v4.32.409: плашка «включён фильтр» в шапке. Шапка — поверхность, а не
@@ -3757,7 +3759,7 @@ function ChatThreadView({
             </View>
           </View>
         ) : null}
-        <View style={[s.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, display: isSelecting ? 'none' : 'flex' }]}>
+        <View style={[s.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: tabInset, display: isSelecting ? 'none' : 'flex' }]}>
           {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
               с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
               Long-press оставляем shortcut-ом на системный picker галереи. */}

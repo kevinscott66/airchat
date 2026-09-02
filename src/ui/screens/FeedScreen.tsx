@@ -101,6 +101,7 @@ import { FeedPostSkeleton } from '../components/SkeletonLoader';
 import { avatarShape, badgeTint, contrastingInk, elevation, font, identityAvatar, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
 import { GroupAvatar } from './groups-components/GroupAvatar';
 import { useTheme, useScaledFont } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { StoriesRow } from '../components/StoriesRow';
 import { useMediaViewer } from '../components/MediaViewer';
@@ -805,6 +806,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   // gate в колбэках читает tabRef.current.
   const tabRef = useTabRef();
   const { colors } = useTheme();
+  const tabInset = useTabBarInset();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const cmStyles = useMemo(() => makeCmStyles(colors), [colors]);
   // v4.32.408: «этот режим включён» рисовалось плашкой `colors.primary + '22'`
@@ -2901,6 +2903,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
 
         <FlatList
           style={styles.list}
+          contentContainerStyle={{ paddingBottom: tabInset }}
           data={listData}
           extraData={{ mutedPosts, bookmarkFilter, colors }}
           keyExtractor={(item) => item.id}

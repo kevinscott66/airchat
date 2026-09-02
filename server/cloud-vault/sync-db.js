@@ -162,13 +162,30 @@ class SyncDatabase {
         ON sync_media (account_id, delete_requested_at, deleted_at);
       CREATE INDEX IF NOT EXISTS idx_sync_media_refs_active
         ON sync_media_refs (account_id, media_id, released_at);
+      -- v4.32.543: реестр юзернеймов. До него уникальность имени проверялась
+      -- только среди профилей одного устройства: два человека, не знающие
+      -- друг о друге, спокойно занимали одно и то же имя, и получатель
+      -- конверта не мог сказать, кто из них кто. Имя — единственный
+      -- человекочитаемый адрес в приложении, поэтому оно живёт здесь, в одной
+      -- строке на всё приложение, а не в локальной базе каждого телефона.
+      -- Обратной связи с личностью запись не даёт: рядом с именем лежит
+      -- account_id, который сервер и так знает, и ничего сверх того.
+      CREATE TABLE IF NOT EXISTS sync_usernames (
+        username TEXT PRIMARY KEY NOT NULL,
+        account_id TEXT NOT NULL,
+        profile_id INTEGER NOT NULL,
+        claimed_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
+        ON sync_usernames (account_id, profile_id);
     `);
     this.ensureDeviceMetadataColumns();
     this.ensureAccountMutationSequenceColumn();
     this.ensureProfileScopedCursors();
     this.ensureEntityHeadsProfileScope();
     this.db.prepare(
-      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '3')
+      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '4')
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ).run();
     const existing = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('server_epoch');
@@ -320,6 +337,61 @@ class SyncDatabase {
       throw error;
     }
     return { ok: true };
+  }
+
+  /**
+   * Занять имя за профилем. Одна транзакция BEGIN IMMEDIATE на всё: между
+   * проверкой «свободно ли» и записью не должно помещаться чужого захвата,
+   * иначе два одновременных запроса получат по «ок» на одно имя.
+   *
+   * Прежнее имя того же профиля освобождается здесь же — иначе брошенные
+   * имена копились бы за каждым, кто хоть раз переименовался.
+   */
+  claimUsername(accountId, profileId, username) {
+    const now = Date.now();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare(
+        'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username = ?',
+      ).get(username);
+      if (row && (row.accountId !== accountId || row.profileId !== profileId)) {
+        this.db.exec('COMMIT');
+        return { ok: false, reason: 'username_taken' };
+      }
+      this.db.prepare(
+        'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username <> ?',
+      ).run(accountId, profileId, username);
+      this.db.prepare(`
+        INSERT INTO sync_usernames (username, account_id, profile_id, claimed_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (username) DO UPDATE SET claimed_at = excluded.claimed_at
+      `).run(username, accountId, profileId, now);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ok: true, username };
+  }
+
+  /** Отпустить имя профиля. Возвращает `true`, если запись была. */
+  releaseUsername(accountId, profileId) {
+    const result = this.db.prepare(
+      'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ?',
+    ).run(accountId, profileId);
+    return (result.changes || 0) > 0;
+  }
+
+  /**
+   * Справка о занятости. Наружу уходит только `taken`: сам `account_id`
+   * остаётся здесь, иначе по чужому имени можно было бы вычислить адрес
+   * хранилища владельца.
+   */
+  lookupUsername(username) {
+    const row = this.db.prepare(
+      'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username = ?',
+    ).get(username);
+    return row || null;
   }
 
   hasAccount(accountId) {

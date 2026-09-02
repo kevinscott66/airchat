@@ -127,13 +127,23 @@ export async function syncDeviceId(): Promise<string> {
   return (await deviceAuth()).deviceId;
 }
 
-function responseError(status: number, code?: string): Error {
-  if (code === 'device_revoked') return new Error('Это устройство отозвано. Войдите снова на этом устройстве.');
-  if (status === 401 || status === 403) return new Error('Синхронизация отклонена сервером.');
-  if (status === 409) return new Error('Устройство или версия данных устарели.');
-  if (status === 429) return new Error('Слишком много запросов синхронизации.');
-  if (status === 413) return new Error('Облачное хранилище переполнено.');
-  return new Error(`Сервер синхронизации недоступен (HTTP ${status}).`);
+/** Ошибка запроса к серверу синхронизации: текст для человека плюс исходный код. */
+export type SyncRequestError = Error & { status: number; code?: string };
+
+/**
+ * v4.32.543: к тексту приложены `status` и `code`. Раньше наружу уходила
+ * только строка, и вызывающему оставалось разбирать её обратно, чтобы
+ * отличить «имя занято» от «сервер не отвечает». Текст не изменился —
+ * добавились поля рядом с ним.
+ */
+function responseError(status: number, code?: string): SyncRequestError {
+  const message = code === 'device_revoked' ? 'Это устройство отозвано. Войдите снова на этом устройстве.'
+    : status === 401 || status === 403 ? 'Синхронизация отклонена сервером.'
+      : status === 409 ? 'Устройство или версия данных устарели.'
+        : status === 429 ? 'Слишком много запросов синхронизации.'
+          : status === 413 ? 'Облачное хранилище переполнено.'
+            : `Сервер синхронизации недоступен (HTTP ${status}).`;
+  return Object.assign(new Error(message), { status, code });
 }
 
 async function fetchSigned<T>(url: string, signed: { payload: string; signature: string }): Promise<T> {
@@ -392,4 +402,76 @@ export function revokeSyncDevice(
   targetDeviceId: string,
 ): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(mnemonic, pair, 'revoke_device', { targetDeviceId }, 'devices/revoke');
+}
+
+/**
+ * Реестр юзернеймов (v4.32.543).
+ *
+ * До него уникальность имени проверялась только среди профилей одного
+ * телефона — то есть не проверялась вовсе. Реестр общий, живёт рядом с
+ * синхронизацией и подписывается тем же ключом устройства.
+ */
+export type UsernameClaimResult =
+  | { ok: true; username: string }
+  | { ok: false; reason: 'taken' | 'rejected' | 'offline' };
+
+/**
+ * Занять имя за профилем. Отказ сервера не бросается наружу исключением:
+ * «занято» — обычный ответ, а не сбой, и экрану нужен именно он, а не текст
+ * ошибки сети. Недоступный сервер отдаётся отдельной причиной `offline`,
+ * чтобы экран мог сохранить имя локально и честно сказать, что глобально
+ * оно пока не закреплено.
+ */
+export async function claimSyncUsername(
+  mnemonic: string,
+  pair: KeyPairBytes,
+  username: string,
+  ownerProfileId: number,
+): Promise<UsernameClaimResult> {
+  try {
+    const response = await request<{ ok: boolean; username: string }>(
+      mnemonic,
+      pair,
+      'claim_username',
+      { username, ownerProfileId },
+      'username/claim',
+    );
+    return response.ok ? { ok: true, username: response.username } : { ok: false, reason: 'rejected' };
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code;
+    if (code === 'username_taken') return { ok: false, reason: 'taken' };
+    // 400-е коды — отказ реестра по правилам имени; всё остальное это связь.
+    const status = (error as { status?: unknown })?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      return { ok: false, reason: 'rejected' };
+    }
+    return { ok: false, reason: 'offline' };
+  }
+}
+
+/** Отпустить имя профиля — при удалении профиля или смене владельца. */
+export function releaseSyncUsername(
+  mnemonic: string,
+  pair: KeyPairBytes,
+  ownerProfileId: number,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(mnemonic, pair, 'release_username', { ownerProfileId }, 'username/release');
+}
+
+/**
+ * Свободно ли имя. Запрос без подписи: спросить нужно и до того, как аккаунт
+ * заведён. Сервер отвечает только «занято/свободно» — владельца он не
+ * называет. `null` означает «спросить не удалось», а не «свободно».
+ */
+export async function lookupSyncUsername(username: string): Promise<boolean | null> {
+  const base = syncBaseUrl();
+  if (!base) return null;
+  try {
+    const response = await fetch(`${base}/v1/username/${encodeURIComponent(username)}`);
+    if (!response.ok) return null;
+    const body = await response.json() as { taken?: unknown };
+    return typeof body.taken === 'boolean' ? body.taken : null;
+  } catch {
+    return null;
+  }
 }

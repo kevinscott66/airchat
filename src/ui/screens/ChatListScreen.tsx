@@ -66,6 +66,7 @@ import {
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useTheme, useScaledFont } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import { StoriesRow } from '../components/StoriesRow';
 import { GlassSurface } from '../components/GlassSurface';
 import { useIpfsGateway, useResolvedMediaUrl } from './chat-components/useResolvedMediaUrls';
@@ -602,6 +603,7 @@ const acStyles = StyleSheet.create({
 
 export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: ChatListProps): React.ReactElement {
   const { colors } = useTheme();
+  const tabInset = useTabBarInset();
   const insets = useSafeAreaInsets();
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
@@ -1388,6 +1390,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
 
       <FlatList
         style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: tabInset }}
         data={filtered}
         keyExtractor={convKeyExtractor}
         renderItem={renderConv}

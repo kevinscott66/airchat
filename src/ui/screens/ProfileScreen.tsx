@@ -38,8 +38,9 @@ import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '.
 import { loadKeyPair } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
 import { republishProfileFromKv } from '../../core/identity/profile';
-import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, sanitizeOwnDisplayName, setOwnUsername } from '../../core/identity/ownProfile';
+import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, sanitizeOwnDisplayName } from '../../core/identity/ownProfile';
 import { checkUsernameClaim, USERNAME_MIN_SELF_SERVICE } from '../../core/identity/reservedUsernames';
+import { saveOwnUsernameGlobally } from '../../core/identity/usernameRegistry';
 import { publicIdFor } from '../../core/identity/publicId';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
@@ -54,7 +55,8 @@ import { WallpaperBackground } from '../components/WallpaperBackground';
 import { defaultWallpaper, feedGround } from '../wallpapers';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { accentOnFill, avatarShape, BRAND_X, font, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, type AppColors } from '../theme';
-import { useTheme } from '../ThemeContext';
+import { useTheme, useScaledFont } from '../ThemeContext';
+import { useTabBarInset } from '../TabBarInset';
 import { safeExternalUrl } from '../../core/net/externalLink';
 import { openExternal, openTypedExternal } from '../utils/openExternal';
 import { formatSpokenDuration } from '../time/durationLabel';
@@ -126,7 +128,9 @@ function ProfileScreenImpl({
     () => feedGround(colors, profileWallpaper),
     [colors, profileWallpaper],
   );
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const scaleFont = useScaledFont();
+  const tabInset = useTabBarInset();
+  const styles = useMemo(() => makeStyles(colors, scaleFont), [colors, scaleFont]);
   const [displayName, setDisplayName] = useState('');
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameDraft, setEditNameDraft] = useState('');
@@ -398,15 +402,25 @@ function ProfileScreenImpl({
       return;
     }
     const raw = claim.username;
-    if (!(await setOwnUsername(raw))) {
-      showError('Юзернейм уже используется другим аккаунтом или не сохранён');
+    // v4.32.543: имя занимается в общем реестре, а не только среди профилей
+    // этого телефона. Раньше два незнакомых человека занимали одно `@name`, и
+    // получатель конверта не мог сказать, от кого он.
+    const saved = await saveOwnUsernameGlobally(raw);
+    if (!saved.ok) {
+      showError(
+        saved.reason === 'taken' ? 'Этот юзернейм уже занят другим человеком'
+          : saved.reason === 'rejected' ? 'Реестр не принял это имя: выберите другое'
+            : 'Юзернейм уже используется другим аккаунтом или не сохранён',
+      );
       return;
     }
     setHandle(raw);
     setIsEditingHandle(false);
     await markProfileChanged();
     void broadcastMyProfile();
-    showSuccess('Юзернейм сохранён для этого аккаунта');
+    showSuccess(saved.scope === 'global'
+      ? 'Юзернейм закреплён за вами'
+      : 'Юзернейм сохранён, но реестр недоступен — закрепим при следующем выходе в сеть');
   };
 
   const saveBio = async (): Promise<void> => {
@@ -600,7 +614,7 @@ function ProfileScreenImpl({
           и так залиты своими поверхностями. Отступ под часы уходит в
           contentContainer, а не в контейнер: скроллу нужно уезжать ПОД полосу,
           а не начинаться под ней. */}
-      <ScrollView style={[styles.container, { backgroundColor: 'transparent' }]} contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]} testID="profile_screen">
+      <ScrollView style={[styles.container, { backgroundColor: 'transparent' }]} contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: tabInset + 40 }]} testID="profile_screen">
         <LoadingOverlay visible={busy} message="Обработка…" />
 
         {multiProfileEnabled && onOpenProfiles ? (
@@ -724,7 +738,7 @@ function ProfileScreenImpl({
               accessibilityLabel={`Постоянный идентификатор аккаунта ${accountPublicId}`}
               testID="profile_public_id"
             >
-              <Text style={{ color: colors.textMuted, fontSize: font.sm, letterSpacing: 0.5 }}>
+              <Text style={{ color: colors.textMuted, fontSize: scaleFont(font.sm), letterSpacing: 0.5 }}>
                 {accountPublicId}
               </Text>
               <Ionicons name="copy-outline" size={13} color={colors.textMuted} style={{ marginLeft: 6 }} />
@@ -754,7 +768,7 @@ function ProfileScreenImpl({
               style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}
               onPress={() => { setEditPronounsDraft(pronouns); setIsEditingPronouns(true); }}
             >
-              <Text style={{ color: pronouns ? colors.textSecondary : colors.textMuted, fontSize: 13 }}>
+              <Text style={{ color: pronouns ? colors.textSecondary : colors.textMuted, fontSize: scaleFont(13) }}>
                 {pronouns || 'Добавить местоимения'}
               </Text>
               <Ionicons name="create-outline" size={14} color={colors.textMuted} />
@@ -835,8 +849,8 @@ function ProfileScreenImpl({
           style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 10, gap: 10 }}
           onPress={() => { setEditStatusDraft(customStatus); setEditStatusVisible(true); }}
         >
-          <Text style={{ fontSize: 20 }}>{customStatus ? customStatus.match(/^\p{Emoji}/u)?.[0] ?? '💬' : '💬'}</Text>
-          <Text style={{ color: customStatus ? colors.text : colors.textMuted, fontSize: 14, flex: 1 }}>
+          <Text style={{ fontSize: scaleFont(20) }}>{customStatus ? customStatus.match(/^\p{Emoji}/u)?.[0] ?? '💬' : '💬'}</Text>
+          <Text style={{ color: customStatus ? colors.text : colors.textMuted, fontSize: scaleFont(14), flex: 1 }}>
             {customStatus || 'Установить статус…'}
           </Text>
           <Ionicons name="create-outline" size={16} color={colors.textMuted} />
@@ -846,8 +860,8 @@ function ProfileScreenImpl({
         {completionPct < 100 ? (
           <View style={{ marginHorizontal: 20, marginBottom: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: colors.textMuted, fontSize: 12 }}>Заполненность профиля</Text>
-              <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '700' }}>{completionPct}%</Text>
+              <Text style={{ color: colors.textMuted, fontSize: scaleFont(12) }}>Заполненность профиля</Text>
+              <Text style={{ color: colors.accent, fontSize: scaleFont(12), fontWeight: '700' }}>{completionPct}%</Text>
             </View>
             <View style={{ height: 4, backgroundColor: colors.border, borderRadius: 2, overflow: 'hidden' }}>
               <View style={{ height: 4, width: `${completionPct}%`, backgroundColor: colors.primary, borderRadius: 2 }} />
@@ -872,23 +886,23 @@ function ProfileScreenImpl({
                 правило то же, что и для чужих ссылок (v4.32.420). */}
             {website ? (
               <AppPressable onPress={() => openTypedExternal(website, 'profile_site')}>
-                <Text style={{ color: colors.accent, fontSize: 13 }} numberOfLines={1}>{website.replace(/^https?:\/\//, '')}</Text>
+                <Text style={{ color: colors.accent, fontSize: scaleFont(13) }} numberOfLines={1}>{website.replace(/^https?:\/\//, '')}</Text>
               </AppPressable>
             ) : null}
             {twitterHandle && /^[A-Za-z0-9_]{1,15}$/.test(twitterHandle) ? (
               // v4.32.183 (Round-13 #10): enforce Twitter handle charset to avoid
               // open-redirect via `foo/../../evil`.
               <AppPressable onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}>
-                <Text style={{ color: accentOnFill(BRAND_X, colors.background, colors.accent), fontSize: 13 }}>𝕏 @{twitterHandle}</Text>
+                <Text style={{ color: accentOnFill(BRAND_X, colors.background, colors.accent), fontSize: scaleFont(13) }}>𝕏 @{twitterHandle}</Text>
               </AppPressable>
             ) : null}
             {githubHandle && /^[A-Za-z0-9-]{1,39}$/.test(githubHandle) ? (
               <AppPressable onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}>
-                <Text style={{ color: colors.text, fontSize: 13 }}>⌥ {githubHandle}</Text>
+                <Text style={{ color: colors.text, fontSize: scaleFont(13) }}>⌥ {githubHandle}</Text>
               </AppPressable>
             ) : null}
             {!website && !twitterHandle && !githubHandle ? (
-              <Text style={{ color: colors.textMuted, fontSize: 13 }}>Добавить ссылки…</Text>
+              <Text style={{ color: colors.textMuted, fontSize: scaleFont(13) }}>Добавить ссылки…</Text>
             ) : null}
           </View>
           <Ionicons name="create-outline" size={16} color={colors.textMuted} />
@@ -993,14 +1007,14 @@ function ProfileScreenImpl({
         ) : null}
         {/* v4.32.585: почему число голосовых может быть занижено. */}
         {stats && approxCountNotice(stats.voicesSent) ? (
-          <Text style={{ color: colors.warning, fontSize: 12, fontStyle: 'italic', textAlign: 'center', marginBottom: 8, paddingHorizontal: 16 }}>
+          <Text style={{ color: colors.warning, fontSize: scaleFont(12), fontStyle: 'italic', textAlign: 'center', marginBottom: 8, paddingHorizontal: 16 }}>
             {approxCountNotice(stats.voicesSent)}
           </Text>
         ) : null}
 
         {accountAgeLabel ? (
           <View style={{ alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{ color: colors.textMuted, fontSize: 12 }}>В AirChat {accountAgeLabel}</Text>
+            <Text style={{ color: colors.textMuted, fontSize: scaleFont(12) }}>В AirChat {accountAgeLabel}</Text>
           </View>
         ) : null}
 
@@ -1197,7 +1211,7 @@ function ProfileScreenImpl({
               <AppPressable onPress={() => setContactsVisible(false)} hitSlop={12} style={{ paddingRight: 10 }}>
                 <Ionicons name="chevron-back" size={26} color={colors.text} />
               </AppPressable>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text, flex: 1 }}>
+              <Text style={{ fontSize: scaleFont(18), fontWeight: '700', color: colors.text, flex: 1 }}>
                 Контакты
               </Text>
             </View>
@@ -1223,30 +1237,30 @@ function ProfileScreenImpl({
             <View style={{ borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: colors.surface, maxHeight: '80%' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <Ionicons name="star" size={18} color={colors.star} style={{ marginRight: 10 }} />
-                <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text, flex: 1 }}>Избранные сообщения</Text>
+                <Text style={{ fontSize: scaleFont(17), fontWeight: '700', color: colors.text, flex: 1 }}>Избранные сообщения</Text>
                 <AppPressable onPress={() => setStarredVisible(false)} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>
               <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
                 {starredEntries.length === 0 ? (
-                  <Text style={{ textAlign: 'center', marginTop: 40, color: colors.textMuted, fontSize: 15 }}>Нет избранных сообщений</Text>
+                  <Text style={{ textAlign: 'center', marginTop: 40, color: colors.textMuted, fontSize: scaleFont(15) }}>Нет избранных сообщений</Text>
                 ) : starredEntries.map((entry) => (
                   <View key={entry.message.id} style={{ paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
                       <Ionicons name="star" size={12} color={colors.star} style={{ marginRight: 6 }} />
-                      <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                      <Text style={{ color: colors.accent, fontSize: scaleFont(12), fontWeight: '600', flex: 1 }} numberOfLines={1}>
                         {entry.kind === 'group' ? '👥 ' : ''}{entry.contextName}
                       </Text>
-                      <Text style={{ color: colors.textMuted, fontSize: font.xs }}>
+                      <Text style={{ color: colors.textMuted, fontSize: scaleFont(font.xs) }}>
                         {dayMonthShort(entry.message.createdAt)}
                       </Text>
                     </View>
                     <Text
                       style={
                         isUnreadableMessage(entry.message)
-                          ? { color: colors.textMuted, fontSize: 14, fontStyle: 'italic' }
-                          : { color: colors.text, fontSize: 14 }
+                          ? { color: colors.textMuted, fontSize: scaleFont(14), fontStyle: 'italic' }
+                          : { color: colors.text, fontSize: scaleFont(14) }
                       }
                       numberOfLines={4}
                     >{isUnreadableMessage(entry.message) ? UNREADABLE_MESSAGE_TEXT : entry.message.text}</Text>
@@ -1258,7 +1272,7 @@ function ProfileScreenImpl({
                       }}
                       style={{ marginTop: 6 }}
                     >
-                      <Text style={{ color: colors.textMuted, fontSize: 12 }}>Убрать из избранного</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: scaleFont(12) }}>Убрать из избранного</Text>
                     </AppPressable>
                   </View>
                 ))}
@@ -1274,12 +1288,12 @@ function ProfileScreenImpl({
             <View style={{ borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: colors.surface, maxHeight: '75%' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <Ionicons name="call" size={18} color={colors.accent} style={{ marginRight: 10 }} />
-                <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text, flex: 1 }}>История звонков</Text>
+                <Text style={{ fontSize: scaleFont(17), fontWeight: '700', color: colors.text, flex: 1 }}>История звонков</Text>
                 {callLogEntries.length > 0 ? (
                   <AppPressable hitSlop={8} onPress={() => {
                     void clearCallLog().then(() => setCallLogEntries([]));
                   }} style={{ marginRight: 12 }}>
-                    <Text style={{ color: colors.error, fontSize: 13 }}>Очистить</Text>
+                    <Text style={{ color: colors.error, fontSize: scaleFont(13) }}>Очистить</Text>
                   </AppPressable>
                 ) : null}
                 <AppPressable onPress={() => setCallLogVisible(false)} hitSlop={8}>
@@ -1290,7 +1304,7 @@ function ProfileScreenImpl({
                 {callLogEntries.length === 0 ? (
                   <View style={{ alignItems: 'center', paddingVertical: 40 }}>
                     <Ionicons name="call-outline" size={44} color={colors.textMuted} />
-                    <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 12 }}>Нет звонков</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: scaleFont(15), marginTop: 12 }}>Нет звонков</Text>
                   </View>
                 ) : callLogEntries.map((entry) => {
                   const isOut = entry.direction === 'outgoing';
@@ -1317,13 +1331,13 @@ function ProfileScreenImpl({
                         <Ionicons name={entry.isVideo ? 'videocam' : 'call'} size={20} color={colors.text} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={{ color: isMissed ? colors.error : colors.text, fontWeight: '600', fontSize: 15 }} numberOfLines={1}>{entry.peerName}</Text>
+                        <Text style={{ color: isMissed ? colors.error : colors.text, fontWeight: '600', fontSize: scaleFont(15) }} numberOfLines={1}>{entry.peerName}</Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
                           <Ionicons name={iconName as 'arrow-up' | 'arrow-down'} size={12} color={iconColor} />
-                          <Text style={{ color: iconColor, fontSize: 12 }}>{durationStr}</Text>
+                          <Text style={{ color: iconColor, fontSize: scaleFont(12) }}>{durationStr}</Text>
                         </View>
                       </View>
-                      <Text style={{ color: colors.textMuted, fontSize: 12 }}>{dateStr}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: scaleFont(12) }}>{dateStr}</Text>
                     </View>
                   );
                 })}
@@ -1382,7 +1396,7 @@ function ProfileScreenImpl({
                 />
                 {/* v4.32.376: копия молчала о том, как ею пользоваться, — а
                     загрузить её до этой версии было и правда некуда. */}
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 12 }}>
+                <Text style={{ color: colors.textMuted, fontSize: scaleFont(12), marginBottom: 12 }}>
                   Копию вставляют в поле восстановления при первом запуске приложения. Пароль не
                   хранится нигде: забудете — копия не откроется.
                 </Text>
@@ -1411,7 +1425,7 @@ function ProfileScreenImpl({
                 maxLength={MAX_CUSTOM_STATUS_LEN}
                 autoFocus
               />
-              <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
+              <Text style={{ color: colors.textMuted, fontSize: scaleFont(12), marginBottom: 8 }}>
                 {editStatusDraft.length}/{MAX_CUSTOM_STATUS_LEN} · Статус виден контактам под вашим именем
               </Text>
               <AppPressable
@@ -1448,7 +1462,7 @@ function ProfileScreenImpl({
   );
 }
 
-function makeStyles(c: AppColors) { return StyleSheet.create({
+function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSheet.create({
   container: { flex: 1, backgroundColor: c.background },
   content: { padding: 16, paddingBottom: 40 },
   profileSwitchCard: {
@@ -1469,9 +1483,9 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderColor: c.border,
   },
   profileSwitchBody: { flex: 1, marginLeft: 10 },
-  profileSwitchLabel: { color: c.textMuted, fontSize: font.xs, fontWeight: '600' },
-  profileSwitchName: { color: c.text, fontSize: font.lg, fontWeight: '700', marginTop: 2 },
-  profileSwitchHint: { color: c.textSecondary, fontSize: font.xs, marginTop: 4 },
+  profileSwitchLabel: { color: c.textMuted, fontSize: sf(font.xs), fontWeight: '600' },
+  profileSwitchName: { color: c.text, fontSize: sf(font.lg), fontWeight: '700', marginTop: 2 },
+  profileSwitchHint: { color: c.textSecondary, fontSize: sf(font.xs), marginTop: 4 },
   avatarSection: { alignItems: 'center', marginBottom: 20 },
   avatarCircle: {
     ...avatarShape(88),
@@ -1502,10 +1516,10 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     maxWidth: '100%',
     paddingHorizontal: 8,
   },
-  username: { fontSize: 22, fontWeight: '700', color: c.text, flexShrink: 1 },
+  username: { fontSize: sf(22), fontWeight: '700', color: c.text, flexShrink: 1 },
   nameEditBlock: { alignItems: 'center', marginTop: 12, width: '100%', paddingHorizontal: 8 },
   nameInput: {
-    fontSize: 20,
+    fontSize: sf(20),
     fontWeight: '600',
     color: c.text,
     textAlign: 'center',
@@ -1521,11 +1535,11 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     gap: 28,
     marginTop: 12,
   },
-  nameEditCancel: { color: c.textMuted, fontSize: 15 },
-  nameEditSave: { color: c.accent, fontSize: 15, fontWeight: '600' },
+  nameEditCancel: { color: c.textMuted, fontSize: sf(15) },
+  nameEditSave: { color: c.accent, fontSize: sf(15), fontWeight: '600' },
   handleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  handleText: { color: c.accent, fontSize: 15 },
-  handlePlaceholder: { color: c.textMuted, fontSize: 14 },
+  handleText: { color: c.accent, fontSize: sf(15) },
+  handlePlaceholder: { color: c.textMuted, fontSize: sf(14) },
   handleEditBlock: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1538,14 +1552,14 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderWidth: 1,
     borderColor: c.primary,
   },
-  handleAt: { color: c.accent, fontSize: 16, fontWeight: '600' },
+  handleAt: { color: c.accent, fontSize: sf(16), fontWeight: '600' },
   handleInput: {
     flex: 1,
     color: c.text,
-    fontSize: 15,
+    fontSize: sf(15),
     padding: 0,
   },
-  userIdLabel: { color: c.textSecondary, fontSize: 13, marginTop: 16 },
+  userIdLabel: { color: c.textSecondary, fontSize: sf(13), marginTop: 16 },
   userIdBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1558,8 +1572,8 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderColor: c.border,
     maxWidth: '100%',
   },
-  userIdText: { color: c.text, fontSize: 13, flex: 1, marginRight: 8 },
-  userIdHint: { color: c.textMuted, fontSize: font.xs, marginTop: 8, textAlign: 'center', paddingHorizontal: 8 },
+  userIdText: { color: c.text, fontSize: sf(13), flex: 1, marginRight: 8 },
+  userIdHint: { color: c.textMuted, fontSize: sf(font.xs), marginTop: 8, textAlign: 'center', paddingHorizontal: 8 },
   bioSection: {
     marginBottom: 16,
     paddingHorizontal: 4,
@@ -1573,8 +1587,8 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderWidth: 1,
     borderColor: c.border,
   },
-  bioText: { flex: 1, color: c.text, fontSize: 14, lineHeight: 20 },
-  bioPlaceholder: { flex: 1, color: c.textMuted, fontSize: 14 },
+  bioText: { flex: 1, color: c.text, fontSize: sf(14), lineHeight: sf(20) },
+  bioPlaceholder: { flex: 1, color: c.textMuted, fontSize: sf(14) },
   bioInput: {
     backgroundColor: c.surface,
     borderRadius: radius.md,
@@ -1582,8 +1596,8 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderColor: c.primary,
     padding: 12,
     color: c.text,
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: sf(14),
+    lineHeight: sf(20),
     minHeight: 72,
     textAlignVertical: 'top',
   },
@@ -1609,8 +1623,8 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     minWidth: 140,
   },
   actionIcon: { marginBottom: 8 },
-  actionTitle: { color: c.text, fontWeight: '700', fontSize: 15 },
-  actionDesc: { color: c.textMuted, fontSize: 12, marginTop: 4 },
+  actionTitle: { color: c.text, fontWeight: '700', fontSize: sf(15) },
+  actionDesc: { color: c.textMuted, fontSize: sf(12), marginTop: 4 },
   exportBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1622,12 +1636,12 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   },
   // v4.32.407: надпись лежит на приглушённой заливке — от неё и считается.
   exportBtnText: { color: inkOn(c, c.primaryMuted).text, fontWeight: '600' },
-  warn: { color: c.warning, marginTop: 8, fontSize: 12 },
+  warn: { color: c.warning, marginTop: 8, fontSize: sf(12) },
   techBox: { marginTop: 12, padding: 10, backgroundColor: c.surface, borderRadius: radius.md },
-  techLabel: { color: c.textMuted, fontSize: font.xs, marginBottom: 4 },
-  techHint: { color: c.textMuted, fontSize: font.xs, marginBottom: 4 },
-  techMono: { color: c.textSecondary, fontSize: font.xs },
-  sectionTitle: { color: c.text, fontWeight: '700', fontSize: 16, marginTop: 20, marginBottom: 8 },
+  techLabel: { color: c.textMuted, fontSize: sf(font.xs), marginBottom: 4 },
+  techHint: { color: c.textMuted, fontSize: sf(font.xs), marginBottom: 4 },
+  techMono: { color: c.textSecondary, fontSize: sf(font.xs) },
+  sectionTitle: { color: c.text, fontWeight: '700', fontSize: sf(16), marginTop: 20, marginBottom: 8 },
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1635,10 +1649,10 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: c.border,
   },
-  settingText: { color: c.text, fontSize: 16, marginLeft: 12, flex: 1 },
+  settingText: { color: c.text, fontSize: sf(16), marginLeft: 12, flex: 1 },
   infoSection: { marginTop: 24 },
-  version: { color: c.textSecondary, fontSize: 13, marginBottom: 8 },
-  infoText: { color: c.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 8 },
+  version: { color: c.textSecondary, fontSize: sf(13), marginBottom: 8 },
+  infoText: { color: c.textMuted, fontSize: sf(13), lineHeight: sf(18), marginBottom: 8 },
   exportKav: { flex: 1 },
   exportScroll: {
     flex: 1,
@@ -1663,9 +1677,9 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
     borderWidth: 1,
     borderColor: c.border,
   },
-  modalTitle: { color: c.text, fontWeight: '700', fontSize: 17, marginBottom: 8 },
-  modalWarning: { color: c.warning, fontSize: 13, marginBottom: 12 },
-  modalHint: { color: c.textSecondary, fontSize: 13, marginBottom: 12, textAlign: 'center' },
+  modalTitle: { color: c.text, fontWeight: '700', fontSize: sf(17), marginBottom: 8 },
+  modalWarning: { color: c.warning, fontSize: sf(13), marginBottom: 12 },
+  modalHint: { color: c.textSecondary, fontSize: sf(13), marginBottom: 12, textAlign: 'center' },
   // v4.32.418: код лежал прямо на поверхности модалки — в тёмной теме без
   // светлого поля тишины, которого требует декодер. Белая плашка здесь не
   // оформление, а часть кода.
@@ -1679,8 +1693,8 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   },
   seedScroll: { maxHeight: 280, marginBottom: 12 },
   seedRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  seedNum: { width: 28, color: c.textMuted, fontSize: 13 },
-  seedWord: { color: c.text, fontSize: 15 },
+  seedNum: { width: 28, color: c.textMuted, fontSize: sf(13) },
+  seedWord: { color: c.text, fontSize: sf(15) },
   input: {
     borderWidth: 1,
     borderColor: c.border,
@@ -1716,12 +1730,12 @@ function makeStyles(c: AppColors) { return StyleSheet.create({
   },
   statValue: {
     color: c.text,
-    fontSize: 22,
+    fontSize: sf(22),
     fontWeight: '700',
   },
   statLabel: {
     color: c.textMuted,
-    fontSize: 12,
+    fontSize: sf(12),
     marginTop: 2,
   },
   statDivider: {
