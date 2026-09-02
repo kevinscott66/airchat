@@ -6,7 +6,7 @@ import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupJoinRequest } from '../../../../core/storage/local';
 import { nameInitial } from '../../../../core/social/contactLabel';
-import { contrastingInk, identityAvatar, scrim } from '../../../theme';
+import { avatarShape, contrastingInk, font, identityAvatar, radius, scrim } from '../../../theme';
 import { shortIdentity } from '../../../identity/shortId';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { shownName } from '../../../../core/social/unreadableName';
@@ -57,16 +57,16 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
                       ) : item.message ? (
                         <Text style={{ color: colors.textSecondary, fontSize: 12 }} numberOfLines={2}>{item.message}</Text>
                       ) : null}
-                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>{numericDate(item.createdAt)}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: font.xs }}>{numericDate(item.createdAt)}</Text>
                     </View>
                     <AppPressable
-                      style={{ backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginRight: 4 }}
+                      style={{ backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6, marginRight: 4 }}
                       onPress={() => onApprove(item)}
                     >
                       <Text style={{ color: contrastingInk(colors.primary), fontSize: 13, fontWeight: '600' }}>Принять</Text>
                     </AppPressable>
                     <AppPressable
-                      style={{ backgroundColor: colors.surfaceHigh, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
+                      style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6 }}
                       onPress={() => onReject(item)}
                     >
                       <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>Отклонить</Text>
@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
   sheetHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
   headerName: { fontSize: 17, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
-  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  avatar: { ...avatarShape(44), alignItems: 'center', justifyContent: 'center' },
   avatarLetter: { fontSize: 18, fontWeight: '600' },
   name: { fontSize: 15, fontWeight: '500' },
   closeBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },

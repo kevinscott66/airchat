@@ -73,7 +73,7 @@ import { usePresence } from '../hooks/usePresence';
 import NetInfo from '@react-native-community/netinfo';
 import { initiateCall, getCurrentCall } from '../../core/social/callService';
 import { contactLabel, nameInitial } from '../../core/social/contactLabel';
-import { contrastingInk, identityAvatar, inkOn, scrim } from '../theme';
+import { avatarShape, badgeDigit, contrastingInk, elevation, font, identityAvatar, inkOn, radius, scrim, spacing } from '../theme';
 import { formatListTime, formatSearchTime } from '../time/listTime';
 import { shortIdentity } from '../identity/shortId';
 import { muteRemainingLabel } from '../time/durationLabel';
@@ -111,19 +111,19 @@ function AvatarCircle({ name, size = 48, avatarCid }: { name: string; size?: num
   // страницы. В светлой теме это почти чёрный на кружке 40%-й светлоты —
   // 2.4:1, буквы в списке чатов там не видно. Чернила считаются из заливки.
   const { fill, ink } = identityAvatar(name || '?');
-  const shape = { width: size, height: size, borderRadius: size / 2 };
+  const shape = avatarShape(size);
   if (uri) {
-    return <Image source={{ uri }} style={[avatarStyles.circle, shape]} accessibilityIgnoresInvertColors />;
+    return <Image source={{ uri }} style={[avatarStyles.tile, shape]} accessibilityIgnoresInvertColors />;
   }
   return (
-    <View style={[avatarStyles.circle, shape, { backgroundColor: fill }]}>
+    <View style={[avatarStyles.tile, shape, { backgroundColor: fill }]}>
       <Text style={[avatarStyles.letter, { fontSize: size * 0.42, color: ink }]}>{letter}</Text>
     </View>
   );
 }
 
 const avatarStyles = StyleSheet.create({
-  circle: { alignItems: 'center', justifyContent: 'center' },
+  tile: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   letter: { fontWeight: '600' },
 });
 
@@ -284,7 +284,7 @@ function ConvRowImpl({
       delayLongPress={400}
     >
       {item.colorTag ? (
-        <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: item.colorTag, borderRadius: 2, marginRight: 8, marginLeft: -4 }} />
+        <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: item.colorTag, borderRadius: radius.sm, marginRight: 8, marginLeft: -4 }} />
       ) : null}
       <View style={rowStyles.avatarWrap}>
         <AvatarCircle name={item.displayName} avatarCid={item.avatarCid} />
@@ -349,7 +349,7 @@ function ConvRowImpl({
               <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
                 <Ionicons name="notifications-off-outline" size={14} color={colors.textMuted} />
                 {item.mutedUntil != null ? (
-                  <Text style={{ fontSize: 10, color: colors.textMuted, marginLeft: 2 }}>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted, marginLeft: 2 }}>
                     {muteRemainingLabel(item.mutedUntil)}
                   </Text>
                 ) : null}
@@ -382,36 +382,36 @@ const rowStyles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    gap: 12,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.md,
   },
   avatarWrap: { position: 'relative' },
   onlineDot: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: -2,
+    right: -2,
     width: 13,
     height: 13,
-    borderRadius: 6.5,
+    borderRadius: radius.full,
     borderWidth: 2,
   },
   body: { flex: 1, gap: 3 },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   nameRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
-  name: { fontSize: 16, fontWeight: '600', flex: 1 },
+  name: { fontSize: font.md, fontWeight: '600', flex: 1, letterSpacing: -0.1 },
   timeRow: { flexDirection: 'row', alignItems: 'center' },
-  time: { fontSize: 12 },
+  time: { fontSize: font.xs, fontVariant: ['tabular-nums'] },
   bottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   previewWrap: { flexDirection: 'row', flex: 1, alignItems: 'center' },
   outArrow: { fontSize: 13 },
-  preview: { fontSize: 14, flex: 1 },
+  preview: { fontSize: font.sm, flex: 1 },
   badgeRow: { flexDirection: 'row', alignItems: 'center' },
   // v4.32.394: заливка — на месте вызова, из палитры. В StyleSheet её быть не
   // может: пользователь выбирает акцент в настройках, а StyleSheet считается
   // один раз при загрузке модуля.
   badge: {
-    borderRadius: 10,
+    borderRadius: radius.sm,
     minWidth: 20,
     paddingHorizontal: 5,
     paddingVertical: 2,
@@ -419,14 +419,12 @@ const rowStyles = StyleSheet.create({
     justifyContent: 'center',
   },
   // Цвет — на месте вызова: он зависит от заливки, а та бывает разной (см. 394).
-  badgeText: { fontSize: 11, fontWeight: '700' },
+  badgeText: { fontSize: badgeDigit, fontWeight: '700', fontVariant: ['tabular-nums'] },
 });
 
 const savedStyles = StyleSheet.create({
   iconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    ...avatarShape(48),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -588,7 +586,7 @@ const acStyles = StyleSheet.create({
   label: { fontSize: 13, marginBottom: 2, marginTop: 12 },
   input: {
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: radius.md,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
@@ -611,6 +609,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
    */
   const [globalSearchScan, setGlobalSearchScan] = useState<SearchScan | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  // v4.32.532: шапка ушла в оверлей, поэтому её высоту больше не занимает
+  // поток — список обязан знать, сколько сверху отступить, чтобы первая строка
+  // не оказалась навсегда под стеклом.
+  const [topInset, setTopInset] = useState(0);
   const [archivedCount, setArchivedCount] = useState(0);
   const [addContactVisible, setAddContactVisible] = useState(false);
   const [broadcastVisible, setBroadcastVisible] = useState(false);
@@ -956,7 +958,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           onPress={() => setColorPickerItem(null)}
         >
           <AppPressable
-            style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 16 }}
+            style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16 }}
             onPress={() => {}}
           >
             <Text style={{ color: colors.text, fontSize: 17, fontWeight: '600', marginBottom: 12 }}>
@@ -1077,7 +1079,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                       });
                     }}
                   >
-                    <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: selected ? colors.primary : colors.surfaceHigh }}>
+                    <View style={{ ...avatarShape(36), alignItems: 'center', justifyContent: 'center', backgroundColor: selected ? colors.primary : colors.surfaceHigh }}>
                       {selected
                         ? <Ionicons name="checkmark" size={18} color={contrastingInk(colors.primary)} />
                         : <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>{nameInitial(c.displayName)}</Text>
@@ -1092,7 +1094,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', padding: 12, gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <TextInput
-                  style={{ flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 15, maxHeight: 100, color: colors.text, backgroundColor: colors.surfaceHigh, borderColor: colors.border }}
+                  style={{ flex: 1, borderWidth: 1, borderRadius: radius.xl, paddingHorizontal: 14, paddingVertical: 8, fontSize: 15, maxHeight: 100, color: colors.text, backgroundColor: colors.surfaceHigh, borderColor: colors.border }}
                   value={broadcastMsg}
                   onChangeText={setBroadcastMsg}
                   placeholder="Сообщение для рассылки…"
@@ -1150,6 +1152,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
       </Modal>
 
       {/* Header */}
+      <View
+        style={s.topOverlay}
+        onLayout={(e) => setTopInset(e.nativeEvent.layout.height)}
+      >
       {isOffline ? (() => {
         // v4.32.402: полоса заливалась '#616161' — серым мимо палитры, одним и
         // тем же в обеих темах. Заливка взята из токена, чернила — из заливки.
@@ -1161,7 +1167,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         </View>
         );
       })() : null}
-      <GlassSurface style={s.topChrome} intensity={36} variant="clear">
+      <GlassSurface style={s.topChrome} variant="regular">
         <View style={s.header}>
           <Text style={s.title}>{showArchived ? 'Архив' : 'Чаты'}</Text>
           <View style={s.headerActions}>
@@ -1262,8 +1268,8 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                     {tab.label}
                   </Text>
                   {showBadge ? (
-                    <View style={{ backgroundColor: tab.color ?? colors.primary, borderRadius: 8, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
-                      <Text style={{ color: contrastingInk(tab.color ?? colors.primary), fontSize: 10, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
+                    <View style={{ backgroundColor: tab.color ?? colors.primary, borderRadius: radius.md, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
+                      <Text style={{ color: contrastingInk(tab.color ?? colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
                     </View>
                   ) : null}
                 </View>
@@ -1273,11 +1279,12 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           </ScrollView>
         ) : null}
       </GlassSurface>
+      </View>
 
       {/* Rename/delete folder modal */}
       <Modal visible={!!renameFolderColor} transparent animationType="fade" onRequestClose={() => setRenameFolderColor(null)}>
         <AppPressable style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 24 }} onPress={() => setRenameFolderColor(null)}>
-          <AppPressable style={{ backgroundColor: colors.surface, borderRadius: 14, padding: 20, gap: 12 }} onPress={() => {}}>
+          <AppPressable style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: 20, gap: 12 }} onPress={() => {}}>
             <Text style={{ color: colors.text, fontSize: 17, fontWeight: '600' }}>Папка</Text>
             <TextInput
               value={renameFolderInput}
@@ -1285,10 +1292,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
               placeholder="Название папки"
               placeholderTextColor={colors.textMuted}
               maxLength={FOLDER_NAME_MAX_LEN}
-              style={{ backgroundColor: colors.surfaceHigh, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, color: colors.text, fontSize: 15 }}
+              style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, color: colors.text, fontSize: 15 }}
             />
             <AppPressable
-              style={{ backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+              style={{ backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, alignItems: 'center' }}
               onPress={() => {
                 if (!renameFolderColor) return;
                 void applyFolderName(renameFolderColor, renameFolderInput);
@@ -1311,6 +1318,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         </AppPressable>
       </Modal>
 
+      <View style={{ flex: 1, paddingTop: topInset }}>
       {/* Conversation list */}
       {/* Global message search results */}
       {/* v4.32.581: строка о непрочитанном стоит ВЫШЕ выдачи и вне её условия —
@@ -1345,10 +1353,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
                     <Text style={[s.globalSearchName, { color: colors.text, flex: 1 }]} numberOfLines={1}>{name}</Text>
-                    {reactChip.kind === 'emoji' ? <Text style={{ fontSize: 11 }}>{reactChip.text}</Text> : null}
+                    {reactChip.kind === 'emoji' ? <Text style={{ fontSize: font.xs }}>{reactChip.text}</Text> : null}
                     {reactChip.kind === 'unreadable' ? (
                       <Text
-                        style={{ fontSize: 11, color: colors.warning }}
+                        style={{ fontSize: font.xs, color: colors.warning }}
                         accessibilityLabel={UNREADABLE_REACTIONS_TEXT}
                       >{UNREADABLE_REACTION_MARK}</Text>
                     ) : null}
@@ -1381,7 +1389,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         windowSize={10}
         removeClippedSubviews={Platform.OS === 'android'}
         ItemSeparatorComponent={() => (
-          <View style={[s.separator, { marginLeft: 74 }]} />
+          <View style={[s.separator, { marginLeft: 76 }]} />
         )}
         ListHeaderComponent={
           !showArchived && !searchQuery && myPubB64 ? (
@@ -1409,7 +1417,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   </Text>
                 </View>
               </AppPressable>
-              <View style={[s.separator, { marginLeft: 74 }]} />
+              <View style={[s.separator, { marginLeft: 76 }]} />
             </>
           ) : null
         }
@@ -1455,6 +1463,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           ) : null
         }
       />
+      </View>
     </View>
   );
 }
@@ -1462,25 +1471,36 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
 function makeStyles(colors: ReturnType<typeof import('../theme').resolveColors>) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.background },
+    // v4.32.532: шапка снова плавающая капсула со стеклом. В 4.32.530 её
+    // распластали по ширине ради «прибора»; направление сменилось — список
+    // должен проезжать ПОД шапкой, иначе размывать нечего и стекло врёт.
+    topOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+    },
     topChrome: {
-      marginHorizontal: 8,
-      marginTop: 8,
-      borderRadius: 24,
-      paddingBottom: 8,
+      marginHorizontal: spacing.sm,
+      marginTop: spacing.sm,
+      borderRadius: radius.xl,
+      paddingBottom: spacing.sm,
+      ...elevation.card,
     },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
     },
-    title: { fontSize: 22, fontWeight: '700', color: colors.text },
+    title: { fontSize: font.xxl, fontWeight: '700', color: colors.text, letterSpacing: -0.5 },
     headerActions: { flexDirection: 'row', gap: 2 },
     headerBtn: {
       width: 40,
       height: 40,
-      borderRadius: 20,
+      borderRadius: radius.md,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -1494,7 +1514,7 @@ function makeStyles(colors: ReturnType<typeof import('../theme').resolveColors>)
       alignItems: 'center',
       gap: 8,
       paddingHorizontal: 13,
-      borderRadius: 19,
+      borderRadius: radius.md,
       backgroundColor: colors.surfaceHigh,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
@@ -1503,7 +1523,7 @@ function makeStyles(colors: ReturnType<typeof import('../theme').resolveColors>)
       flex: 1,
       paddingVertical: 7,
       color: colors.text,
-      fontSize: 15,
+      fontSize: font.md,
     },
     separator: {
       height: StyleSheet.hairlineWidth,
@@ -1515,45 +1535,42 @@ function makeStyles(colors: ReturnType<typeof import('../theme').resolveColors>)
     archiveRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      gap: 12,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      gap: spacing.md,
     },
     archiveIcon: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
+      ...avatarShape(48),
       alignItems: 'center',
       justifyContent: 'center',
     },
-    archiveName: { flex: 1, fontSize: 16, fontWeight: '500' },
-    archiveCount: { fontSize: 14 },
+    archiveName: { flex: 1, fontSize: font.md, fontWeight: '500' },
+    archiveCount: { fontSize: font.sm, fontVariant: ['tabular-nums'] },
+    // v4.32.530: пилюля в пилюле — вкладка-капсула внутри капсулы-полосы —
+    // повторяла форму поиска и счётчиков и ничем от них не отличалась.
+    // Подчёркивание занимает ту же высоту, но состояние «выбрано» читается
+    // формой, а не ещё одной заливкой.
     filterRow: {
-      marginHorizontal: 12,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      borderRadius: 20,
-      backgroundColor: colors.surfaceHigh,
       flexShrink: 0,
       flexGrow: 0,
       height: 40,
     },
-    filterContent: { paddingHorizontal: 2, alignItems: 'center' },
+    filterContent: { paddingHorizontal: spacing.lg, alignItems: 'center', gap: spacing.lg },
     filterTab: {
       alignItems: 'center',
       justifyContent: 'center',
-      paddingHorizontal: 14,
-      height: 34,
-      borderRadius: 17,
+      height: 40,
+      borderBottomWidth: 2,
+      borderBottomColor: 'transparent',
     },
-    filterTabActive: { backgroundColor: colors.surface },
-    filterTabText: { fontSize: 13, fontWeight: '600' },
+    filterTabActive: { borderBottomColor: colors.accent },
+    filterTabText: { fontSize: font.sm, fontWeight: '600', letterSpacing: 0.2 },
     globalSearchSection: { borderBottomWidth: StyleSheet.hairlineWidth, marginBottom: 4 },
     globalSearchTitle: { fontSize: 12, fontWeight: '600', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4, textTransform: 'uppercase' },
     globalSearchSkipped: { fontSize: 12, fontStyle: 'italic', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
     globalSearchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
     globalSearchName: { fontSize: 14, fontWeight: '600' },
     globalSearchPreview: { fontSize: 13, marginTop: 1 },
-    globalSearchTime: { fontSize: 11, marginLeft: 8 },
+    globalSearchTime: { fontSize: font.xs, marginLeft: 8 },
   });
 }

@@ -18,7 +18,7 @@ import { View, Text, TextInput, Pressable, ActivityIndicator } from 'react-nativ
 import { Ionicons } from '@expo/vector-icons';
 
 import { useThemedStyles } from '../ThemeContext';
-import { contrastingInk } from '../theme';
+import { contrastingInk, radius } from '../theme';
 import { AppSwitch } from './AppSwitch';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
@@ -158,7 +158,7 @@ export function RelaySettingsSection(): React.ReactElement {
     hint: { color: c.textMuted, fontSize: 12, marginBottom: 8, lineHeight: 16 },
     card: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: c.border,
       padding: 12,
@@ -167,7 +167,7 @@ export function RelaySettingsSection(): React.ReactElement {
     fieldGroup: { marginBottom: 10 },
     input: {
       backgroundColor: c.background,
-      borderRadius: 8,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       color: c.text,
@@ -196,7 +196,7 @@ export function RelaySettingsSection(): React.ReactElement {
     primaryBtn: {
       flex: 1,
       backgroundColor: c.primary,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingVertical: 12,
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
@@ -211,7 +211,7 @@ export function RelaySettingsSection(): React.ReactElement {
     secondaryBtn: {
       flex: 1,
       backgroundColor: c.surfaceHigh,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingVertical: 12,
       alignItems: 'center' as const,
     },

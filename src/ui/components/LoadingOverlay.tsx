@@ -2,7 +2,7 @@ import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { AppModal as Modal } from './AppModal';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { scrim } from '../theme';
+import { radius, scrim } from '../theme';
 
 export type LoadingOverlayProps = {
   visible: boolean;
@@ -35,7 +35,7 @@ export function LoadingOverlay({
       backgroundColor: c.surface,
       paddingVertical: 24,
       paddingHorizontal: 28,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: c.border,
       alignItems: 'center' as const,

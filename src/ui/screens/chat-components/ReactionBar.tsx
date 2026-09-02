@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { useTheme } from '../../ThemeContext';
-import { reactionInk } from '../../theme';
+import { font, radius, reactionInk } from '../../theme';
 import { parseReactionMap } from '../../../core/social/reactionMapPolicy';
 import { UNREADABLE_REACTIONS_TEXT } from '../../../core/storage/unreadableText';
 
@@ -65,7 +65,7 @@ const rStyles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
   // Ни заливки, ни цвета счётчика здесь нет: они зависят от поверхности под
   // плашкой, а StyleSheet считается один раз при загрузке модуля.
-  pill: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, gap: 2 },
+  pill: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, paddingHorizontal: 6, paddingVertical: 2, gap: 2 },
   emoji: { fontSize: 13 },
-  count: { fontSize: 11 },
+  count: { fontSize: font.xs },
 });

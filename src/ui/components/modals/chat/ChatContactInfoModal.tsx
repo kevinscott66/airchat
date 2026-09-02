@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { identityAvatar, scrim } from '../../../theme';
+import { avatarShape, font, identityAvatar, mono, radius, scrim } from '../../../theme';
 import { showError, showSuccess } from '../../userFeedback';
 import { exportBody } from '../../../../core/social/exportLine';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
@@ -201,11 +201,11 @@ export function ContactInfoModal({
             {peerAvatarUri ? (
               <Image
                 source={{ uri: peerAvatarUri }}
-                style={{ width: 72, height: 72, borderRadius: 36, marginBottom: 10 }}
+                style={{ ...avatarShape(72), marginBottom: 10 }}
                 accessibilityIgnoresInvertColors
               />
             ) : (
-              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: peerCircle.fill, alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
+              <View style={{ ...avatarShape(72), backgroundColor: peerCircle.fill, alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
                 <Text style={{ fontSize: 28, fontWeight: '700', color: peerCircle.ink }}>{initial}</Text>
               </View>
             )}
@@ -234,17 +234,17 @@ export function ContactInfoModal({
           <View style={{ flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
             <View style={{ alignItems: 'center', flex: 1 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{msgCount}</Text>
-              <Text style={{ fontSize: 11, color: colors.textMuted }}>всего</Text>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted }}>всего</Text>
             </View>
             <View style={{ width: StyleSheet.hairlineWidth, backgroundColor: colors.border }} />
             <View style={{ alignItems: 'center', flex: 1 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{sentCount}</Text>
-              <Text style={{ fontSize: 11, color: colors.textMuted }}>отправлено</Text>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted }}>отправлено</Text>
             </View>
             <View style={{ width: StyleSheet.hairlineWidth, backgroundColor: colors.border }} />
             <AppPressable style={{ alignItems: 'center', flex: 1 }} onPress={() => mediaCount > 0 && setMediaGalleryVisible(true)}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: mediaCount > 0 ? colors.accent : colors.text }}>{mediaCount}</Text>
-              <Text style={{ fontSize: 11, color: colors.textMuted }}>медиа</Text>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted }}>медиа</Text>
             </AppPressable>
           </View>
           {firstMsgDate ? (
@@ -293,10 +293,10 @@ export function ContactInfoModal({
 
           {mutualGroups.length > 0 ? (
             <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
-              <Text style={{ fontSize: 11, color: colors.textMuted, marginBottom: 8, fontWeight: '600' }}>ОБЩИЕ ГРУППЫ</Text>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 8, fontWeight: '600' }}>ОБЩИЕ ГРУППЫ</Text>
               {mutualGroups.slice(0, 5).map((g) => (
                 <View key={g.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: identityAvatar(g.id).fill, alignItems: 'center', justifyContent: 'center' }}>
+                  <View style={{ ...avatarShape(36), backgroundColor: identityAvatar(g.id).fill, alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ color: identityAvatar(g.id).ink, fontSize: 14, fontWeight: '700' }}>{nameInitial(g.name)}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
@@ -323,8 +323,8 @@ export function ContactInfoModal({
                 );
               }}
             >
-              <Text style={{ fontSize: 11, color: colors.textMuted, marginBottom: 4 }}>КЛЮЧ БЕЗОПАСНОСТИ</Text>
-              <Text style={{ fontSize: 15, fontFamily: 'monospace', color: colors.text, letterSpacing: 1.5 }}>
+              <Text style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 4 }}>КЛЮЧ БЕЗОПАСНОСТИ</Text>
+              <Text style={{ fontSize: 15, fontFamily: mono, color: colors.text, letterSpacing: 1.5 }}>
                 {computeSafetyCode(myPubB64, peerB64)}
               </Text>
             </AppPressable>
@@ -452,10 +452,10 @@ export function ContactInfoModal({
       {/* Rename sub-modal */}
       <Modal visible={renameVisible} transparent animationType="fade" onRequestClose={() => setRenameVisible(false)}>
         <KeyboardAvoidingView style={{ flex: 1, justifyContent: 'center', padding: 24, backgroundColor: scrim.modal }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 20 }}>
+          <View style={{ backgroundColor: colors.surface, borderRadius: radius.xl, padding: 20 }}>
             <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 12 }}>Изменить имя</Text>
             <TextInput
-              style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, fontSize: 16, marginBottom: 16 }}
+              style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 10, color: colors.text, fontSize: 16, marginBottom: 16 }}
               value={newName}
               onChangeText={setNewName}
               autoFocus
@@ -476,10 +476,10 @@ export function ContactInfoModal({
       {/* Note edit sub-modal */}
       <Modal visible={noteEditVisible} transparent animationType="fade" onRequestClose={() => setNoteEditVisible(false)}>
         <KeyboardAvoidingView style={{ flex: 1, justifyContent: 'center', padding: 24, backgroundColor: scrim.modal }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 20 }}>
+          <View style={{ backgroundColor: colors.surface, borderRadius: radius.xl, padding: 20 }}>
             <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 12 }}>Заметка о контакте</Text>
             <TextInput
-              style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, fontSize: 15, marginBottom: 16, minHeight: 80, textAlignVertical: 'top' }}
+              style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 10, color: colors.text, fontSize: 15, marginBottom: 16, minHeight: 80, textAlignVertical: 'top' }}
               value={noteDraft}
               onChangeText={setNoteDraft}
               autoFocus

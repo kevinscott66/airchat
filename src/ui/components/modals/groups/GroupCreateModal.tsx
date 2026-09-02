@@ -18,7 +18,7 @@ import { AppPressable } from '../../AppPressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../../ThemeContext';
 import { announceCtl } from '../../../groupControlAnnounce';
-import { primaryInk } from '../../../theme';
+import { primaryInk, radius } from '../../../theme';
 import type { KeyPairBytes } from '../../../../core/crypto/keyManager';
 import { listContacts, type Contact } from '../../../../core/social/contacts';
 import {
@@ -241,13 +241,13 @@ const cgStyles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '600' },
   body: { padding: 20, gap: 8 },
   label: { fontSize: 13, marginBottom: 2, marginTop: 12 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  input: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
   typeRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
   // v4.32.418: контуры незанятой кнопки и пустого квадратика были вписаны
   // как '#444' и '#666' — в тёмной теме это 1.80:1 и 3.06:1 к поверхности,
   // то есть невыбранный тип группы почти не виден. Цвет переехал на место
   // вызова и берётся из `mutedFill` — токена «заливка, которую видно».
-  typeBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: 'transparent', borderWidth: 1 },
+  typeBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.xl, backgroundColor: 'transparent', borderWidth: 1 },
   contactRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
 });

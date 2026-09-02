@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { nameInitial } from '../../../core/social/contactLabel';
-import { identityAvatar } from '../../theme';
+import { avatarShape, identityAvatar } from '../../theme';
 
 /**
  * Кружок отправителя в групповой переписке.
@@ -15,7 +15,7 @@ export function GrpSenderAvatar({ name, seed, size = 28 }: { name: string; seed:
   const letter = nameInitial(name);
   const { fill, ink } = identityAvatar(seed);
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: fill, alignItems: 'center', justifyContent: 'center', marginRight: 6, flexShrink: 0 }}>
+    <View style={[avatarShape(size), { backgroundColor: fill, alignItems: 'center', justifyContent: 'center', marginRight: 6, flexShrink: 0 }]}>
       <Text style={{ fontSize: size * 0.44, fontWeight: '700', color: ink }}>{letter}</Text>
     </View>
   );

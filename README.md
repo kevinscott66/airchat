@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo/airchat-mark.png" alt="" width="96" height="96">
+</p>
+
 # AirChat
 
 A decentralised mobile messenger that keeps working when the network does not.
@@ -7,6 +11,16 @@ the internet is unavailable, censored or untrusted, messages route over LAN,
 direct peer connections, long-range radio or a store-and-forward mesh instead.
 Identity is a self-owned `did:key` derived from a BIP39 seed phrase — there is
 no account, no phone number and no server that holds your messages.
+
+## Web build
+
+A browser port is deployed at [air.dobropalm.tech](https://air.dobropalm.tech).
+
+It offers only the channels a browser can actually reach — ordinary
+connectivity and WebRTC. LAN discovery over mDNS, Wi-Fi Direct and the
+long-range radio transports are hidden there rather than stubbed: no browser
+can open those sockets or drive that hardware, and a control that pretends
+otherwise is worse than an absent one.
 
 ## Transports
 
@@ -61,7 +75,7 @@ React Native 0.83 · Expo SDK 55 · Hermes · TypeScript · libp2p / Helia ·
 `@noble/curves`, `@noble/ciphers`, `@noble/hashes` · BIP39 · `did-jwt` ·
 expo-sqlite · React Navigation · Sentry · Gradle / Xcode native modules
 
-99k lines of TypeScript across `src/`, 333 test files.
+101k lines of TypeScript across `src/`, 334 test suites.
 
 ## Build
 

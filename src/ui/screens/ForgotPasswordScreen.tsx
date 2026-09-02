@@ -12,7 +12,7 @@ import { authGuard } from '../../core/security/authGuard';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 
 type Props = {
   onSuccess: () => void;
@@ -52,7 +52,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
     input: {
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 10,
+      borderRadius: radius.md,
       padding: 12,
       fontSize: 16,
       color: c.text,
@@ -63,7 +63,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
     button: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
       marginTop: 8,
     },

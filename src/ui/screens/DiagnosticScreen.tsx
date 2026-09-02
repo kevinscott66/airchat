@@ -9,11 +9,25 @@ import {
 import { getEmbeddedVpnRunning } from '../../core/vpn/airChatVpnController';
 import { SafeScreen } from '../components/SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 import { rawErrorText } from '../components/userErrorText';
 
-/** Выходной узел в цепочке Xray задаётся на сервере, не в assets/config.json клиента. */
-const FOREIGN_EXIT_HINT = '84.32.190.250:8443';
+/**
+ * Выходной узел в цепочке Xray задаётся на сервере, не в assets/config.json
+ * клиента.
+ *
+ * v4.32.528: здесь стоял конкретный адрес выхода — литералом, в открытом
+ * репозитории. Клиент к нему не обращается (см. комментарий выше), то есть
+ * строка была только подписью на экране, но подписью, публикующей рабочий узел
+ * вместе с портом. Знать этот адрес приложение и не может: он живёт на сервере
+ * и меняется без пересборки, так что литерал вдобавок устаревал молча — а
+ * подпись «ожидаемый выходной узел» звучит тем увереннее, чем она старее.
+ *
+ * Проверка цепочки всё равно делается не в приложении: клиент видит только
+ * вход. Поэтому экран теперь говорит, где смотреть, вместо того чтобы называть
+ * адрес, который он не проверял.
+ */
+const FOREIGN_EXIT_HINT = 'задаётся на сервере (в приложении не хранится)';
 
 function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
@@ -50,7 +64,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
     intro: { color: c.textSecondary, fontSize: 13, lineHeight: 18, marginBottom: 16 },
     card: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       padding: 14,
       marginBottom: 12,
     },
@@ -60,7 +74,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
     button: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       alignItems: 'center' as const,
       marginTop: 8,
     },
@@ -118,7 +132,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
 
       if (!aliveRef.current) return;
       setForeignLine(
-        `В приложении задаётся только вход (см. выше). Выход ${FOREIGN_EXIT_HINT} настраивается на сервере; проверка цепочки — tcpdump на VPS или логи Xray.`
+        `В приложении задаётся только вход (см. выше). Выход ${FOREIGN_EXIT_HINT}; проверка цепочки — tcpdump на VPS или логи Xray.`
       );
     } finally {
       if (aliveRef.current) setBusy(false);

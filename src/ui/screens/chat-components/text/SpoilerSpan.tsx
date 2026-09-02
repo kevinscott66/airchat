@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Text } from 'react-native';
-import { spoilerPlate } from '../../../theme';
+import { radius, spoilerPlate } from '../../../theme';
 
 /**
  * Спойлер — плашка, скрывающая текст до нажатия.
@@ -15,7 +15,7 @@ export function SpoilerSpan({ text, style, host }: { text: string; style?: objec
   if (revealed) return <Text style={style}>{text}</Text>;
   return (
     <Text
-      style={[style, { backgroundColor: spoilerPlate(host), color: 'transparent', borderRadius: 3 }]}
+      style={[style, { backgroundColor: spoilerPlate(host), color: 'transparent', borderRadius: radius.sm }]}
       onPress={() => setRevealed(true)}
     >{text}</Text>
   );

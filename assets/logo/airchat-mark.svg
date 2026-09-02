@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="AirChat">
+  <defs>
+    <linearGradient id="airchat-mark" x1="120" y1="96" x2="392" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A594FF"/>
+      <stop offset="1" stop-color="#6A56EE"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#airchat-mark)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 128 L128 384"/>
+    <path d="M256 128 L384 384"/>
+    <path d="M160 320 L224 320"/>
+    <path d="M288 320 L352 320"/>
+    <circle cx="256" cy="320" r="24" stroke-width="20"/>
+  </g>
+  <g fill="url(#airchat-mark)">
+    <circle cx="256" cy="128" r="38"/>
+    <circle cx="128" cy="384" r="38"/>
+    <circle cx="384" cy="384" r="38"/>
+  </g>
+</svg>

@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { KeyboardHost } from '../../KeyboardHost';
 import { useTheme } from '../../../ThemeContext';
-import { primaryInk, scrim } from '../../../theme';
+import { font, primaryInk, radius, scrim } from '../../../theme';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PollCreatorModal
@@ -114,7 +114,7 @@ export function PollCreatorModal({
             показывает имена. Настоящей анонимности здесь быть не может, а
             обещать её на экране, где люди высказываются, — прямой вред.
           */}
-          <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8, marginLeft: 28 }}>
+          <Text style={{ color: colors.textMuted, fontSize: font.xs, marginBottom: 8, marginLeft: 28 }}>
             Имена не показываются в результатах. Полной анонимности нет: голос
             приходит участникам подписанным сообщением.
           </Text>
@@ -137,10 +137,10 @@ const pollStyles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: scrim.modal },
   sheet: { borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, paddingBottom: 40 },
   title: { fontSize: 17, fontWeight: '700', marginBottom: 16 },
-  questionInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, marginBottom: 12 },
+  questionInput: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, marginBottom: 12 },
   optionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  optionInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14 },
+  optionInput: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14 },
   addOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
   btnRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
-  btn: { flex: 1, borderWidth: 1, borderRadius: 10, alignItems: 'center', paddingVertical: 12 },
+  btn: { flex: 1, borderWidth: 1, borderRadius: radius.md, alignItems: 'center', paddingVertical: 12 },
 });

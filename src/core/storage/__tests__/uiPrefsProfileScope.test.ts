@@ -184,12 +184,18 @@ describe('форма исходников', () => {
 
   it('панель эмодзи и реакции больше не тянут kv динамическим импортом', () => {
     const chat = fs.readFileSync(path.join(SRC, 'ui/screens/ChatScreen.tsx'), 'utf8');
+    // v4.32.534: сама панель уехала в chat-components/EmojiPanel.tsx — её
+    // открывают оба экрана, и держать её в одном из них было незачем. Правило
+    // то же: свои записи она читает через namespace профиля.
+    const panel = fs.readFileSync(path.join(SRC, 'ui/screens/chat-components/EmojiPanel.tsx'), 'utf8');
     // Общий kvGet/kvSet в этом экране не нужен вовсе: всё, что он читал, — эти
     // три записи, и каждая теперь идёт через namespace профиля.
-    expect(chat).not.toMatch(/\{\s*kvGet:\s*kg/);
-    expect(chat).not.toContain("m.kvGet('");
-    expect(chat).not.toContain("m.kvSet('");
-    expect(chat).toContain('void scopedKvGet(RECENT_EMOJIS_PANEL_KEY).then(');
+    for (const src of [chat, panel]) {
+      expect(src).not.toMatch(/\{\s*kvGet:\s*kg/);
+      expect(src).not.toContain("m.kvGet('");
+      expect(src).not.toContain("m.kvSet('");
+    }
+    expect(panel).toContain('void scopedKvGet(RECENT_EMOJIS_PANEL_KEY).then(');
     expect(chat).toContain('await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));');
   });
 });

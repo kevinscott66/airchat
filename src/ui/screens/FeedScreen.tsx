@@ -97,7 +97,7 @@ import { commentCountFromThread } from '../../core/social/commentCount';
 import { RichText } from '../components/RichText';
 import { LocationMessage } from '../components/LocationMessage';
 import { FeedPostSkeleton } from '../components/SkeletonLoader';
-import { type AppColors, badgeTint, contrastingInk, identityAvatar, inkOn, mediaScrim, nestedFill, reactionInk, readableInk, scrim } from '../theme';
+import { avatarShape, badgeTint, contrastingInk, font, identityAvatar, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
 import { GroupAvatar } from './groups-components/GroupAvatar';
 import { useTheme } from '../ThemeContext';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
@@ -134,7 +134,7 @@ import {
   translateFailureMessage,
 } from '../../core/social/cloudTranslate';
 import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
-import { LinkPreview, extractFirstUrl } from './ChatScreen';
+import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
 import { calendarDaysAgo, isSameCalendarDay } from '../../core/time/calendarTime';
 import { formatByteSize } from '../../core/media/byteSize';
 import { Buffer } from 'buffer';
@@ -142,7 +142,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { shortIdentity } from '../identity/shortId';
 import { clockTime, dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
-import { GlassSurface } from '../components/GlassSurface';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const MODAL_HEIGHT_COLLAPSED = SCREEN_HEIGHT * 0.72;
@@ -371,7 +370,7 @@ function FeedPollBubble({
             <View style={pollBubbleStyles.optRow}>
               {poll.allowMultiple ? (
                 <View style={{
-                  width: 18, height: 18, borderRadius: 4, borderWidth: 2,
+                  width: 18, height: 18, borderRadius: radius.md, borderWidth: 2,
                   borderColor: isMyVote ? colors.primary : colors.border,
                   backgroundColor: isMyVote ? colors.primary : 'transparent',
                   marginRight: 8, alignItems: 'center', justifyContent: 'center',
@@ -397,9 +396,9 @@ function FeedPollBubble({
 }
 
 const pollBubbleStyles = StyleSheet.create({
-  container: { marginHorizontal: 12, marginBottom: 8, padding: 12, borderRadius: 12, borderWidth: 1 },
+  container: { marginHorizontal: 12, marginBottom: 8, padding: 12, borderRadius: radius.lg, borderWidth: 1 },
   question: { fontSize: 15, fontWeight: '600', flex: 1 },
-  option: { borderRadius: 8, borderWidth: 1.5, marginBottom: 7, overflow: 'hidden' },
+  option: { borderRadius: radius.md, borderWidth: 1.5, marginBottom: 7, overflow: 'hidden' },
   optBar: { position: 'absolute', top: 0, left: 0, bottom: 0 },
   optRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 9 },
   optText: { fontSize: 14, flex: 1 },
@@ -585,7 +584,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
             ) : null}
             {translatedText ? (
               <View style={{ marginTop: 4, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
-                <Text style={{ fontSize: 11, color: colors.textMuted, marginBottom: 2 }}>{t('feed.translationLabel')}</Text>
+                <Text style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 2 }}>{t('feed.translationLabel')}</Text>
                 <Text style={[styles.body, { color: colors.textSecondary }]}>{translatedText}</Text>
               </View>
             ) : null}
@@ -622,7 +621,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
                 flexDirection: 'row',
                 alignItems: 'center',
                 padding: 10,
-                borderRadius: 10,
+                borderRadius: radius.md,
                 borderWidth: StyleSheet.hairlineWidth,
                 borderColor: colors.border,
                 backgroundColor: colors.surface,
@@ -2768,12 +2767,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         {/* v4.32.36: компактный header — убраны subtitle (лишние 2 строки) и idRow
             (DID дублируется в Профиле). Это поднимает первый пост ближе к верху
             экрана — раньше вертикальный оверхед ~250px прижимал посты к середине. */}
-        <GlassSurface style={styles.feedChrome} intensity={34} variant="clear">
+        <View style={styles.feedChrome}>
         <View style={styles.topRow}>
           <Text style={[styles.h1, { flex: 1 }]}>{t('feed.title')}</Text>
           <AppPressable
             onPress={() => { setBookmarkFilter((v) => !v); setArchiveFilter(false); setActiveHashtag(null); setFeedSearch(''); }}
-            style={[styles.composeBtn, bookmarkFilter && { backgroundColor: activeTint.fill, borderRadius: 8 }]}
+            style={[styles.composeBtn, bookmarkFilter && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
             hitSlop={8}
           >
             <Ionicons name={bookmarkFilter ? 'bookmark' : 'bookmark-outline'} size={22} color={bookmarkFilter ? activeTint.ink : colors.textSecondary} />
@@ -2781,7 +2780,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
           {/* v4.32.34: вход в Архив — иконка «archive», визуально подсвечена когда режим активен. */}
           <AppPressable
             onPress={() => { setArchiveFilter((v) => !v); setBookmarkFilter(false); setActiveHashtag(null); setFeedSearch(''); }}
-            style={[styles.composeBtn, archiveFilter && { backgroundColor: activeTint.fill, borderRadius: 8 }]}
+            style={[styles.composeBtn, archiveFilter && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
             hitSlop={8}
             testID="btn_archive_filter"
           >
@@ -2797,7 +2796,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
           </AppPressable>
         </View>
         {/* Feed search bar */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: 10, marginBottom: 0, paddingHorizontal: 10, paddingVertical: 7 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, marginBottom: 0, paddingHorizontal: 10, paddingVertical: 7 }}>
           <Ionicons name="search" size={16} color={colors.textMuted} style={{ marginRight: 6 }} />
           <TextInput
             value={feedSearch}
@@ -2812,7 +2811,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
             </AppPressable>
           ) : null}
         </View>
-        </GlassSurface>
+        </View>
 
         {/* Trending hashtags row */}
         {!feedSearch && !activeHashtag && trendingHashtags.length > 0 ? (
@@ -2826,7 +2825,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
               <AppPressable
                 key={tag}
                 onPress={() => setActiveHashtag(tag)}
-                style={{ backgroundColor: colors.surfaceHigh, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
+                style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.lg, paddingHorizontal: 10, paddingVertical: 4, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
               >
                 <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '500' }}>{tag}</Text>
               </AppPressable>
@@ -2838,7 +2837,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         {activeHashtag ? (
           <AppPressable
             onPress={() => setActiveHashtag(null)}
-            style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: activeTint.fill, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 5 }}
+            style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: activeTint.fill, borderRadius: radius.xl, paddingHorizontal: 12, paddingVertical: 5 }}
           >
             <Text style={{ color: activeTint.ink, fontWeight: '600', fontSize: 14 }}>{activeHashtag}</Text>
             <Ionicons name="close-circle" size={15} color={activeTint.ink} style={{ marginLeft: 4 }} />
@@ -2848,7 +2847,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         {mutedAuthors.size > 0 ? (
           <AppPressable
             onPress={() => Alert.alert(t('feed.mutedAuthorsTitle'), t('feed.mutedAuthorsMsg', { count: mutedAuthors.size }), [{ text: t('common.ok') }])}
-            style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: quietTint.fill, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 5 }}
+            style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: quietTint.fill, borderRadius: radius.xl, paddingHorizontal: 12, paddingVertical: 5 }}
           >
             <Ionicons name="eye-off-outline" size={14} color={quietTint.ink} style={{ marginRight: 4 }} />
             <Text style={{ color: quietTint.ink, fontSize: 13 }}>{t('feed.mutedCount', { count: mutedAuthors.size })}</Text>
@@ -2991,7 +2990,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
               <AppPressable
                 onPress={() => setReactionTarget(null)}
                 hitSlop={8}
-                style={{ marginTop: 16, paddingVertical: 10, paddingHorizontal: 24, borderRadius: 12, alignSelf: 'stretch', alignItems: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
+                style={{ marginTop: 16, paddingVertical: 10, paddingHorizontal: 24, borderRadius: radius.lg, alignSelf: 'stretch', alignItems: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
                 accessibilityRole="button"
                 accessibilityLabel={t('common.cancel')}
               >
@@ -3186,7 +3185,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                         { label: 'B', prefix: '**', suffix: '**', style: { fontWeight: '700' as const } },
                         { label: 'I', prefix: '_', suffix: '_', style: { fontStyle: 'italic' as const } },
                         { label: 'S', prefix: '~~', suffix: '~~', style: { textDecorationLine: 'line-through' as const } },
-                        { label: '`', prefix: '`', suffix: '`', style: { fontFamily: 'monospace' as const } },
+                        { label: '`', prefix: '`', suffix: '`', style: { fontFamily: mono } },
                         { label: '||', prefix: '||', suffix: '||', style: {} },
                       ].map(({ label, prefix, suffix, style: fStyle }) => (
                         <AppPressable
@@ -3194,7 +3193,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           onPress={() => formatDraftText(prefix, suffix)}
                           hitSlop={6}
                           style={({ pressed }) => ({
-                            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6,
+                            paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.md,
                             backgroundColor: pressed ? activeTint.fill : 'transparent',
                             borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
                             marginRight: 2,
@@ -3281,7 +3280,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                             flexDirection: 'row',
                             alignItems: 'center',
                             padding: 10,
-                            borderRadius: 10,
+                            borderRadius: radius.md,
                             borderWidth: StyleSheet.hairlineWidth,
                             borderColor: colors.border,
                             backgroundColor: colors.surface,
@@ -3328,7 +3327,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           setDraft(newText);
                           setHashtagSuggestions([]);
                         }}
-                        style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, backgroundColor: activeTint.fill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.accent }}
+                        style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.lg, backgroundColor: activeTint.fill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.accent }}
                       >
                         <Text style={{ fontSize: 13, color: activeTint.ink, fontWeight: '500' }}>{tag}</Text>
                       </AppPressable>
@@ -3351,10 +3350,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           setDraft(newText);
                           setFeedEmojiSuggestions([]);
                         }}
-                        style={{ alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
+                        style={{ alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
                       >
                         <Text style={{ fontSize: 20 }}>{emoji}</Text>
-                        <Text style={{ fontSize: 9, color: colors.textMuted, marginTop: 1 }}>{key}</Text>
+                        <Text style={{ fontSize: font.xs, color: colors.textMuted, marginTop: 1 }}>{key}</Text>
                       </AppPressable>
                     ))}
                   </ScrollView>
@@ -3375,7 +3374,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           setDraft(newText);
                           setMentionSuggestions([]);
                         }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, backgroundColor: activeTint.fill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.accent, gap: 4 }}
+                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.lg, backgroundColor: activeTint.fill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.accent, gap: 4 }}
                       >
                         <Ionicons name="person-outline" size={13} color={activeTint.ink} />
                         <Text style={{ fontSize: 13, color: activeTint.ink, fontWeight: '500' }}>{name}</Text>
@@ -3392,7 +3391,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                 >
                   {!isPollMode && !editingPost ? (
                     <AppPressable
-                      style={[styles.iconAction, uris.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: 8 } : null]}
+                      style={[styles.iconAction, uris.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => void pickImages()}
                       onLongPress={() => {
                         Alert.alert(t('feed.mediaSheetTitle'), '', [
@@ -3411,7 +3410,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                   ) : null}
                   {!editingPost ? (
                     <AppPressable
-                      style={[styles.iconAction, isPollMode && { backgroundColor: activeTint.fill, borderRadius: 8 }]}
+                      style={[styles.iconAction, isPollMode && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
                       onPress={() => {
                         setIsPollMode((v) => !v);
                         setDraft('');
@@ -3424,7 +3423,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                   ) : null}
                   {!isPollMode && !editingPost ? (
                     <AppPressable
-                      style={[styles.iconAction, postLocationTag ? { backgroundColor: activeTint.fill, borderRadius: 8 } : null]}
+                      style={[styles.iconAction, postLocationTag ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => {
                         if (postLocationTag) {
                           setPostLocationTag(null);
@@ -3456,7 +3455,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                   ) : null}
                   {!isPollMode && !editingPost ? (
                     <AppPressable
-                      style={[styles.iconAction, pickedDocs.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: 8 } : null]}
+                      style={[styles.iconAction, pickedDocs.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => void pickDocs()}
                     >
                       <Ionicons name="document-attach-outline" size={24} color={pickedDocs.length > 0 ? activeTint.ink : colors.textMuted} />
@@ -3581,7 +3580,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                             {Object.entries(cReactions).filter(([, dids]) => dids.length > 0).map(([emoji, dids]) => (
                               <AppPressable
                                 key={emoji}
-                                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: dids.includes(did) ? commentTint.fill : colors.surfaceHigh, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, gap: 2 }}
+                                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: dids.includes(did) ? commentTint.fill : colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 6, paddingVertical: 2, gap: 2 }}
                                 onPress={() => {
                                   void toggleCommentReaction(pair, c.id, c.postId, emoji)
                                     .then((list) =>
@@ -3598,7 +3597,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                                 accessibilityLabel={t('feed.a11yReaction', { emoji, count: dids.length })}
                               >
                                 <Text style={{ fontSize: 12 }}>{emoji}</Text>
-                                <Text style={{ fontSize: 11, color: dids.includes(did) ? commentTint.ink : colors.textMuted }}>{dids.length}</Text>
+                                <Text style={{ fontSize: font.xs, color: dids.includes(did) ? commentTint.ink : colors.textMuted }}>{dids.length}</Text>
                               </AppPressable>
                             ))}
                           </View>
@@ -3623,7 +3622,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           style={{ padding: 4 }}
                         >
                           <Ionicons name={iHearted ? 'heart' : 'heart-outline'} size={16} color={iHearted ? colors.error : colors.textMuted} />
-                          {heartCount > 0 ? <Text style={{ fontSize: 10, color: colors.textMuted, textAlign: 'center' }}>{heartCount}</Text> : null}
+                          {heartCount > 0 ? <Text style={{ fontSize: font.xs, color: colors.textMuted, textAlign: 'center' }}>{heartCount}</Text> : null}
                         </AppPressable>
                         {isOwn ? (
                           <AppPressable
@@ -3800,9 +3799,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                             различитель, что и везде в приложении. */}
                         <View
                           style={{
-                            width: 36,
-                            height: 36,
-                            borderRadius: 18,
+                            ...avatarShape(36),
                             backgroundColor: identityAvatar(v.viewerDid).fill,
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -3845,7 +3842,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
             </View>
             <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               <TextInput
-                style={{ backgroundColor: colors.surfaceHigh, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, color: colors.text, fontSize: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
+                style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, color: colors.text, fontSize: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
                 placeholder={t('feed.shareSearchPlaceholder')}
                 placeholderTextColor={colors.textMuted}
                 value={shareQuery}
@@ -3906,7 +3903,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                   disabled={shareSending}
                   style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}
                 >
-                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: identityAvatar(c.peerPublicKey).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                  <View style={{ ...avatarShape(40), backgroundColor: identityAvatar(c.peerPublicKey).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
                     <Text style={{ color: identityAvatar(c.peerPublicKey).ink, fontWeight: '700', fontSize: 16 }}>
                       {nameInitial(c.displayName)}
                     </Text>
@@ -4048,25 +4045,25 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
 }
 
 function makeCmStyles(c: AppColors) { return StyleSheet.create({
-  commentRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10, paddingHorizontal: 12, marginHorizontal: 8, marginVertical: 4, backgroundColor: c.surface, borderRadius: 12 },
+  commentRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10, paddingHorizontal: 12, marginHorizontal: 8, marginVertical: 4, backgroundColor: c.surface, borderRadius: radius.lg },
   commentAuthor: { color: c.accent, fontWeight: '600', fontSize: 13 },
-  commentTime: { color: c.textMuted, fontSize: 11 },
+  commentTime: { color: c.textMuted, fontSize: font.xs },
   commentText: { color: c.text, fontSize: 14, lineHeight: 20, marginTop: 2 },
   // v4.32.588: пометка вместо пустого пузыря — тот же размер, но спокойнее.
   commentUnreadable: { color: c.warning, fontStyle: 'italic' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingTop: 8, paddingHorizontal: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, paddingBottom: 8, backgroundColor: c.background },
-  commentInput: { flex: 1, color: c.text, fontSize: 15, backgroundColor: c.surfaceHigh, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, maxHeight: 100, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+  commentInput: { flex: 1, color: c.text, fontSize: 15, backgroundColor: c.surfaceHigh, borderRadius: radius.xl, paddingHorizontal: 14, paddingVertical: 8, maxHeight: 100, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
   sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center' },
   sendInk: { color: contrastingInk(c.primary) },
   // v4.32.159: full-screen comments UI.
   screenHeader: { flexDirection: 'row', alignItems: 'center', minHeight: 48, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border, backgroundColor: c.background },
   screenHeaderSide: { width: 44, alignItems: 'center', justifyContent: 'center' },
   screenHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '600', color: c.text },
-  pinnedPost: { padding: 14, marginHorizontal: 8, marginTop: 8, marginBottom: 4, borderRadius: 14, backgroundColor: c.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+  pinnedPost: { padding: 14, marginHorizontal: 8, marginTop: 8, marginBottom: 4, borderRadius: radius.lg, backgroundColor: c.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
   pinnedAuthor: { color: c.text, fontWeight: '600', fontSize: 14 },
-  pinnedTime: { color: c.textMuted, fontSize: 11, marginTop: 1 },
+  pinnedTime: { color: c.textMuted, fontSize: font.xs, marginTop: 1 },
   pinnedBody: { color: c.text, fontSize: 15, lineHeight: 21 },
-  pinnedReactionPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.surfaceHigh, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3 },
+  pinnedReactionPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.surfaceHigh, borderRadius: radius.lg, paddingHorizontal: 8, paddingVertical: 3 },
   pinnedReactionCount: { fontSize: 12, color: c.textSecondary, fontWeight: '500' },
   separatorRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 10, paddingHorizontal: 16, gap: 10 },
   separatorLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: c.border },
@@ -4087,7 +4084,8 @@ function makeStyles(c: AppColors) {
   // v4.32.36: paddingTop уменьшен с 16 до 8, чтобы h1 «Новости» не отваливался
   // ниже статус-бара больше, чем нужно. Боковой padding 16 остаётся.
   container: { flex: 1, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16, backgroundColor: c.background },
-  feedChrome: { marginBottom: 8, borderRadius: 18, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 8 },
+  // v4.32.530: см. topChrome в списке чатов — то же решение, та же причина.
+  feedChrome: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
   list: { flex: 1 },
   // v4.32.36: topRow теперь одна строка (h1 + кнопки); marginBottom 8 вместо 4.
   topRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
@@ -4099,7 +4097,7 @@ function makeStyles(c: AppColors) {
   unreadBanner: {
     backgroundColor: c.primaryMuted,
     padding: 10,
-    borderRadius: 10,
+    borderRadius: radius.md,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: c.border,
@@ -4111,7 +4109,7 @@ function makeStyles(c: AppColors) {
     alignItems: 'center',
     backgroundColor: queue.fill,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: radius.md,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: c.warning,
@@ -4119,7 +4117,7 @@ function makeStyles(c: AppColors) {
   queueText: { color: queue.ink, fontSize: 13, fontWeight: '600' },
   // Подсказка лежит на той же подложке, значит и считается от неё, а не от
   // фона экрана: textMuted проверен на фоне, а не на янтаре.
-  queueHint: { color: queueInk.secondary, fontSize: 11, marginTop: 4 },
+  queueHint: { color: queueInk.secondary, fontSize: font.xs, marginTop: 4 },
   timeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 2 },
   pendingSpinner: { marginLeft: 8 },
   pendingLabel: { color: c.accent, fontSize: 12, marginLeft: 6, fontWeight: '600' },
@@ -4130,7 +4128,7 @@ function makeStyles(c: AppColors) {
   card: {
     padding: 12,
     backgroundColor: c.surface,
-    borderRadius: 8,
+    borderRadius: radius.md,
     marginBottom: 8,
     borderWidth: 1,
     borderColor: c.border,
@@ -4153,7 +4151,7 @@ function makeStyles(c: AppColors) {
   unreadableRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   unreadableText: { color: c.warning, fontSize: 15, fontStyle: 'italic', flex: 1 },
   mediaRow: { marginTop: 8 },
-  thumb: { width: 120, height: 120, borderRadius: 8, marginRight: 8, backgroundColor: c.primaryMuted },
+  thumb: { width: 120, height: 120, borderRadius: radius.md, marginRight: 8, backgroundColor: c.primaryMuted },
   modalOverlay: {
     flex: 1,
     backgroundColor: scrim.modal,
@@ -4231,7 +4229,7 @@ function makeStyles(c: AppColors) {
     minHeight: 120,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     padding: 12,
     color: c.text,
     backgroundColor: c.surface,
@@ -4257,7 +4255,7 @@ function makeStyles(c: AppColors) {
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: radius.md,
   },
   previewRow: {
     marginBottom: 8,
@@ -4273,14 +4271,14 @@ function makeStyles(c: AppColors) {
     position: 'relative',
     width: THUMB,
     height: THUMB,
-    borderRadius: 14,
+    borderRadius: radius.lg,
     overflow: 'visible',
     backgroundColor: c.primaryMuted,
   },
   previewImg: {
     width: THUMB,
     height: THUMB,
-    borderRadius: 14,
+    borderRadius: radius.lg,
     backgroundColor: c.primaryMuted,
   },
   previewIndexBadge: {
@@ -4297,7 +4295,7 @@ function makeStyles(c: AppColors) {
   },
   previewIndexText: {
     color: mediaScrim.ink,
-    fontSize: 11,
+    fontSize: font.xs,
     fontWeight: '700',
   },
   removeImg: {
@@ -4305,12 +4303,12 @@ function makeStyles(c: AppColors) {
     top: -6,
     right: -6,
     backgroundColor: c.background,
-    borderRadius: 12,
+    borderRadius: radius.lg,
   },
   previewAddTile: {
     width: THUMB,
     height: THUMB,
-    borderRadius: 14,
+    borderRadius: radius.lg,
     borderWidth: 2,
     borderColor: c.primary,
     borderStyle: 'dashed',
@@ -4320,7 +4318,7 @@ function makeStyles(c: AppColors) {
     backgroundColor: badgeTint(c, 'accent', c.background).fill,
   },
   previewAddText: {
-    fontSize: 11,
+    fontSize: font.xs,
     color: badgeTint(c, 'accent', c.background).ink,
     marginTop: 2,
     fontWeight: '600',
@@ -4352,7 +4350,7 @@ function makeStyles(c: AppColors) {
     alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: 20,
+    borderRadius: radius.xl,
     backgroundColor: c.surface,
   },
   iconActionText: { color: c.accent, marginLeft: 6, fontWeight: '600' },
@@ -4384,7 +4382,7 @@ function makeStyles(c: AppColors) {
     // умолчанию, одинаковый в обеих темах. Плашка — вложенный блок на карточке,
     // поэтому считается от неё, как и в переписке (см. reactionInk).
     backgroundColor: reaction.fill,
-    borderRadius: 20,
+    borderRadius: radius.xl,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderWidth: 1,
@@ -4416,7 +4414,7 @@ function makeStyles(c: AppColors) {
   // `text` давал на этой карточке 1.10:1.
   emojiSheet: {
     backgroundColor: c.surfaceHigh,
-    borderRadius: 20,
+    borderRadius: radius.xl,
     padding: 20,
     width: 320,
     alignItems: 'center',

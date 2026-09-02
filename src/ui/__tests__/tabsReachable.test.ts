@@ -32,11 +32,20 @@ function quoted(text: string): string[] {
   return out;
 }
 
-/** Табы, чьё тело смонтировано в App.tsx. */
+/**
+ * Табы, чьё тело смонтировано в App.tsx.
+ *
+ * v4.32.533: признак сменился с `display: tab === '…'` на `<ScreenSlot
+ * active={tab === '…'}>`. Само правило то же — «тело таба стоит в дереве», —
+ * просто прятать его теперь умеет отдельный компонент, который заодно
+ * проигрывает появление. Прежний признак искать бессмысленно: `display` ушёл
+ * внутрь ScreenSlot и в App.tsx его больше нет.
+ */
+const MOUNT_MARK = '<ScreenSlot active={tab === ';
 function mounted(): string[] {
   return APP.split('\n')
-    .filter((l) => l.includes('display: tab === '))
-    .map((l) => quoted(l.slice(l.indexOf('display: tab === ')))[0]);
+    .filter((l) => l.includes(MOUNT_MARK))
+    .map((l) => quoted(l.slice(l.indexOf(MOUNT_MARK)))[0]);
 }
 
 /** Табы, которые можно выбрать кнопкой в панели. */

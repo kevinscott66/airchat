@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { scrim } from '../../../theme';
+import { font, scrim } from '../../../theme';
 import { COPY_ACTION, COPY_LINK_ACTION } from '../../../clipboardText';
 
 export interface QuickReactTarget {
@@ -184,7 +184,7 @@ const ActionRow = memo(ActionRowImpl);
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 20 },
-  sectionLabel: { fontSize: 10, fontWeight: '600', paddingHorizontal: 12, paddingTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionLabel: { fontSize: font.xs, fontWeight: '600', paddingHorizontal: 12, paddingTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
   emojiRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingTop: 12 },
   emojiRowTight: { paddingTop: 0 },
   emojiBtn: { padding: 6, marginHorizontal: 4 },

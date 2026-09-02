@@ -27,6 +27,7 @@ import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../c
 import { Ionicons } from '@expo/vector-icons';
 import { BlockedContactsList } from '../components/BlockedContactsList';
 import { VpnSettingsSection } from '../components/VpnSettingsSection';
+import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
 import { HelpScreen } from './HelpScreen';
@@ -38,7 +39,7 @@ import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
-import { ACCENT_SWATCHES, type AppColors, badgeTint, type BadgeTone, colorsForScheme, contrastingInk, type MenuIconHue, scrim, tintedIcon } from '../theme';
+import { ACCENT_SWATCHES, avatarShape, badgeTint, colorsForScheme, contrastingInk, font, mono, radius, scrim, tintedIcon, TOUCH_TARGET_MIN, type AppColors, type BadgeTone, type MenuIconHue } from '../theme';
 import { useTheme, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import {
   kvGet, kvSet, clearAllMessageHistory,
@@ -783,14 +784,18 @@ function SettingsScreenImpl({
           label="Безопасность"
           onPress={() => setSubScreen('security')}
         />
-        <View style={styles.menuDivider} />
-        <MenuRow
-          iconName="lock-closed-outline"
-          hue="teal"
-          label="VPN (обход блокировок)"
-          onPress={() => setSubScreen('vpn')}
-          testID="settings_vpn_row"
-        />
+        {EMBEDDED_VPN_AVAILABLE && (
+          <>
+            <View style={styles.menuDivider} />
+            <MenuRow
+              iconName="lock-closed-outline"
+              hue="teal"
+              label="VPN (обход блокировок)"
+              onPress={() => setSubScreen('vpn')}
+              testID="settings_vpn_row"
+            />
+          </>
+        )}
         <View style={styles.menuDivider} />
         <MenuRow
           iconName="cloud-outline"
@@ -939,7 +944,7 @@ function SettingsScreenImpl({
                 void privacyPrefSet('privacy_last_seen_visibility', val).then(() => broadcastLastSeenPref());
               }}
               style={{
-                paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16,
+                paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.xl,
                 backgroundColor: lastSeenVisibility === val ? colors.primary : colors.background,
                 borderWidth: 1, borderColor: lastSeenVisibility === val ? colors.primary : colors.border,
               }}
@@ -1094,11 +1099,11 @@ function SettingsScreenImpl({
         {dndEnabled ? (
           <View style={[styles.switchRow, styles.switchRowLast, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
             <Text style={[styles.label, { flex: 1 }]}>Часы</Text>
-            <AppPressable onPress={() => { setDndTimeTmp(dndStart); setDndTimeModal('start'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+            <AppPressable onPress={() => { setDndTimeTmp(dndStart); setDndTimeModal('start'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 6 }}>
               <Text style={{ color: colors.accent, fontWeight: '600' }}>{String(dndStart).padStart(2, '0')}:00</Text>
             </AppPressable>
             <Text style={{ color: colors.textMuted }}>–</Text>
-            <AppPressable onPress={() => { setDndTimeTmp(dndEnd); setDndTimeModal('end'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+            <AppPressable onPress={() => { setDndTimeTmp(dndEnd); setDndTimeModal('end'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 6 }}>
               <Text style={{ color: colors.accent, fontWeight: '600' }}>{String(dndEnd).padStart(2, '0')}:00</Text>
             </AppPressable>
           </View>
@@ -1140,7 +1145,7 @@ function SettingsScreenImpl({
             return (
               <AppPressable key={opt.value} style={[styles.themeBtn, active && styles.themeBtnActive, { flex: 1, minWidth: 0 }]} onPress={() => void setFontSize(opt.value as FontSizeValue)} accessibilityRole="radio" accessibilityState={{ selected: active }}>
                 <Text style={{ fontSize: opt.value - 3, fontWeight: '700', color: active ? primaryOn : colors.textSecondary }}>А</Text>
-                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive, { fontSize: 10 }]}>{opt.label}</Text>
+                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive, { fontSize: font.xs }]}>{opt.label}</Text>
               </AppPressable>
             );
           })}
@@ -1196,8 +1201,12 @@ function SettingsScreenImpl({
               // Скринридер читал вслух шестнадцатеричный код — «решётка, эф,
               // четыре, четыре…». Теперь название цвета.
               accessibilityLabel={entry ? `Цвет акцента: ${entry.name}` : 'Цвет акцента по умолчанию'}
+              // v4.32.528: было 34×34 — меньше минимальной цели касания (44).
+              // Образцы стоят вплотную сеткой, то есть промах попадал не в
+              // пустоту, а в соседний цвет: «нажал не туда» здесь означало
+              // «перекрасил приложение».
               style={{
-                width: 34, height: 34, borderRadius: 17,
+                width: TOUCH_TARGET_MIN, height: TOUCH_TARGET_MIN, borderRadius: radius.full,
                 backgroundColor: swatch,
                 borderWidth: selected ? 3 : 1,
                 // Обводка выбранного образца лежит на фоне карточки, а не на
@@ -1206,13 +1215,19 @@ function SettingsScreenImpl({
                 alignItems: 'center', justifyContent: 'center',
               }}
             >
-              {/* Или галочка, или подпись. Раньше у выбранного образца «по
-                  умолчанию» рисовались обе — галочка ложилась поверх текста
-                  внутри кружка 34px, и не читалось ни то, ни другое. */}
+              {/* Или галочка, или значок сброса. Раньше у выбранного образца
+                  «по умолчанию» рисовались обе — галочка ложилась поверх текста
+                  внутри кружка 34px, и не читалось ни то, ни другое.
+
+                  v4.32.528: сам текст «По\nумол.» тоже убран. Он был набран
+                  восьмым кеглем в две строки — вдвое ниже порога читаемости, и
+                  иначе в кружок не влезал. Значок сброса говорит то же самое
+                  («вернуть исходный цвет») и читается; полное название по-
+                  прежнему произносит accessibilityLabel выше. */}
               {selected ? (
-                <Ionicons name="checkmark" size={16} color={ink} />
+                <Ionicons name="checkmark" size={18} color={ink} />
               ) : c === null ? (
-                <Text style={{ color: ink, fontSize: 8, fontWeight: '700', textAlign: 'center' }}>По{'\n'}умол.</Text>
+                <Ionicons name="refresh" size={18} color={ink} />
               ) : null}
             </AppPressable>
             );
@@ -1324,14 +1339,18 @@ function SettingsScreenImpl({
           </View>
           <StatusBadge tone={ipfsOnline ? 'success' : 'muted'} text={ipfsOnline ? 'Вкл' : 'Выкл'} />
         </View>
-        <View style={[styles.row, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-          <Ionicons name="wifi-outline" size={22} color={lanPeerCount > 0 ? colors.accent : colors.textMuted} style={{ marginRight: 10 }} />
-          <View style={styles.rowBody}>
-            <Text style={styles.label}>Wi-Fi LAN</Text>
-            <Text style={styles.desc}>{lanPeerCount > 0 ? `${lanPeerCount} устройств в сети` : 'Нет устройств рядом'}</Text>
+        {/* В браузере строки нет вовсе: «0 устройств» там значило бы «искали и
+            не нашли», а на деле поиск невозможен — см. platformCapabilities. */}
+        {LOCAL_RADIO_TRANSPORTS_AVAILABLE && (
+          <View style={[styles.row, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+            <Ionicons name="wifi-outline" size={22} color={lanPeerCount > 0 ? colors.accent : colors.textMuted} style={{ marginRight: 10 }} />
+            <View style={styles.rowBody}>
+              <Text style={styles.label}>Wi-Fi LAN</Text>
+              <Text style={styles.desc}>{lanPeerCount > 0 ? `${lanPeerCount} устройств в сети` : 'Нет устройств рядом'}</Text>
+            </View>
+            <StatusBadge tone={lanPeerCount > 0 ? 'accent' : 'muted'} text={lanPeerCount > 0 ? String(lanPeerCount) : '0'} />
           </View>
-          <StatusBadge tone={lanPeerCount > 0 ? 'accent' : 'muted'} text={lanPeerCount > 0 ? String(lanPeerCount) : '0'} />
-        </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -1380,7 +1399,7 @@ function SettingsScreenImpl({
                 return (
                   <AppPressable key={ms}
                     onPress={() => { setAutoLockDelayMs(ms); void kvSet('auto_lock_delay_ms', String(ms)); }}
-                    style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
+                    style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.lg, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
                   >
                     <Text style={{ color: active ? primaryOn : colors.text, fontSize: 12, fontWeight: '600' }}>{label}</Text>
                   </AppPressable>
@@ -1502,7 +1521,7 @@ function SettingsScreenImpl({
                   <View style={[styles.rowBody, { flex: 1 }]}>
                     <Text style={styles.label} numberOfLines={1}>{kindLabel(m.kind)}</Text>
                     <Text style={styles.desc} numberOfLines={1}>{idShort}</Text>
-                    <Text style={[styles.desc, { fontSize: 11 }]} numberOfLines={1}>{untilText}</Text>
+                    <Text style={[styles.desc, { fontSize: font.xs }]} numberOfLines={1}>{untilText}</Text>
                   </View>
                   <AppPressable
                     onPress={() => void handleUnmute(m)}
@@ -1649,7 +1668,7 @@ function SettingsScreenImpl({
             if (!quickReplyInput.trim()) return;
             void addQuickReply(profileManager.getActiveProfile()?.id ?? 1, quickReplyInput).then(() => { setQuickReplyInput(''); loadQuickReplies(); });
           }}
-          style={{ backgroundColor: colors.primary, borderRadius: 10, padding: 10 }}
+          style={{ backgroundColor: colors.primary, borderRadius: radius.md, padding: 10 }}
         >
           <Ionicons name="add" size={20} color={primaryOn} />
         </AppPressable>
@@ -1720,7 +1739,7 @@ function SettingsScreenImpl({
                   const platformLabel = device.platform === 'ios' ? 'iOS' : device.platform === 'android' ? 'Android' : device.platform === 'web' ? 'Web' : device.platform || 'AirChat';
                   return (
                     <View key={device.deviceId} style={{ paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: isCurrent ? colors.primary : colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
+                      <View style={{ ...avatarShape(38), backgroundColor: isCurrent ? colors.primary : colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
                         <Ionicons name={device.platform === 'web' ? 'laptop-outline' : 'phone-portrait-outline'} size={20} color={isCurrent ? primaryOn : colors.textMuted} />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -2024,7 +2043,7 @@ function makeStyles(c: AppColors) {
     // Cards
     card: {
       backgroundColor: c.surface,
-      borderRadius: 10,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       paddingHorizontal: 12,
@@ -2036,7 +2055,7 @@ function makeStyles(c: AppColors) {
     desc: { color: c.textMuted, fontSize: 12, marginTop: 4, lineHeight: 16 },
     // Подложки и цвета надписи здесь нет: они зависят от состояния и
     // считаются парой на месте вызова (v4.32.396).
-    badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+    badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.md },
     badgeText: { fontSize: 12, fontWeight: '600' },
 
     // Switch rows
@@ -2055,7 +2074,7 @@ function makeStyles(c: AppColors) {
       alignItems: 'center',
       backgroundColor: c.surface,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       gap: 10,
@@ -2068,7 +2087,7 @@ function makeStyles(c: AppColors) {
     // Menu card (grouped rows)
     menuCard: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: c.border,
       overflow: 'hidden',
@@ -2088,7 +2107,7 @@ function makeStyles(c: AppColors) {
     menuIcon: {
       width: 34,
       height: 34,
-      borderRadius: 8,
+      borderRadius: radius.md,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -2125,7 +2144,7 @@ function makeStyles(c: AppColors) {
       alignItems: 'center',
       backgroundColor: c.surface,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       borderWidth: 1,
       // v4.32.400: было '#4a2a2a' — тёмно-бурый, подобранный под тёмную тему;
       // на белой карточке светлой темы это просто грязная рамка мимо палитры.
@@ -2134,32 +2153,32 @@ function makeStyles(c: AppColors) {
     },
     logoutLabel: { color: c.error, fontSize: 16, fontWeight: '600' },
     versionTap: { alignSelf: 'center', marginTop: 20, paddingVertical: 6, paddingHorizontal: 10 },
-    versionText: { color: c.textMuted, fontSize: 11, textAlign: 'center' },
+    versionText: { color: c.textMuted, fontSize: font.xs, textAlign: 'center' },
 
     // Theme / appearance
     themeRow: { flexDirection: 'row', gap: 8, paddingTop: 10, paddingBottom: 12 },
     themeBtn: {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-      paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceHigh,
+      paddingVertical: 9, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceHigh,
     },
     themeBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
     themeBtnText: { color: c.textSecondary, fontSize: 12, fontWeight: '500' },
     themeBtnTextActive: { color: contrastingInk(c.primary), fontWeight: '700' },
-    hourBtn: { padding: 8, borderRadius: 8, backgroundColor: c.surfaceHigh },
+    hourBtn: { padding: 8, borderRadius: radius.md, backgroundColor: c.surfaceHigh },
 
     // Modals
     pwdModalKav: { flex: 1, justifyContent: 'center' },
     pwdModalBg: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 20 },
-    pwdModalBox: { backgroundColor: c.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: c.border },
-    pwdInput: { borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 12, fontSize: 16, color: c.text, marginBottom: 10 },
-    pwdPrimaryBtn: { backgroundColor: c.primary, padding: 14, borderRadius: 10, alignItems: 'center', marginTop: 8 },
+    pwdModalBox: { backgroundColor: c.surface, borderRadius: radius.lg, padding: 16, borderWidth: 1, borderColor: c.border },
+    pwdInput: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: 12, fontSize: 16, color: c.text, marginBottom: 10 },
+    pwdPrimaryBtn: { backgroundColor: c.primary, padding: 14, borderRadius: radius.md, alignItems: 'center', marginTop: 8 },
     pwdPrimaryBtnText: { color: contrastingInk(c.primary), fontSize: 16, fontWeight: '600' },
     pwdCancel: { color: c.accent, textAlign: 'center', marginTop: 14, fontSize: 16 },
     modalTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginBottom: 8 },
 
     // Seed
-    seedBox: { backgroundColor: c.surfaceHigh, borderRadius: 10, padding: 14, borderWidth: 1, borderColor: c.border },
-    seedText: { color: c.text, fontSize: 15, lineHeight: 24, fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace' },
+    seedBox: { backgroundColor: c.surfaceHigh, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: c.border },
+    seedText: { color: c.text, fontSize: 15, lineHeight: 24, fontFamily: mono },
   });
 }
 

@@ -24,6 +24,13 @@ if (!config.resolver.assetExts.includes('db')) {
   config.resolver.assetExts.push('db');
 }
 
+// expo-sqlite на web — это wa-sqlite, собранный в WebAssembly: его воркер
+// импортирует `wa-sqlite.wasm` как ассет. Без этого расширения Metro ищет
+// .wasm среди исходников и обрывает веб-бандл на resolve.
+if (!config.resolver.assetExts.includes('wasm')) {
+  config.resolver.assetExts.push('wasm');
+}
+
 // expo-asset (pulled in via expo/Expo.fx) imports `expo-constants`; ensure Metro resolves it from the app root.
 // @expo/vector-icons: hoisted to root — Metro must not resolve to missing expo/node_modules/@expo/vector-icons (ENOENT on package.json).
 // Local native modules live in main repo's /modules
@@ -66,9 +73,43 @@ const nodePolyfills = {
   os: 'os-browserify',
 };
 
+// ─── Веб-сборка: подмена нативных модулей ────────────────────────────────────
+// Metro складывает в бандл всё, на что есть статический require, даже если
+// вызов стоит за `Platform.OS`-проверкой и никогда не исполнится. Для нативных
+// пакетов это означает попытку собрать код, которого в вебе нет, — поэтому
+// подменяем их адресно и только при platform === 'web'.
+//
+// Две группы, и разница между ними принципиальная:
+//   * перенос — у браузера есть своя реализация того же самого (WebRTC,
+//     Notification API), и шим отдаёт её под нативным именем;
+//   * граница платформы — реализации нет и быть не может (TCP-сокеты, mDNS,
+//     Wi-Fi Direct), шим кидает при вызове, чтобы неверный маршрут был виден.
+const WEB_SHIMS = {
+  // перенос на браузерные API
+  'react-native-webrtc': 'web/shims/react-native-webrtc.tsx',
+  '@notifee/react-native': 'web/shims/notifee.ts',
+  '@react-native-firebase/messaging': 'web/shims/firebase-messaging.ts',
+  // отсутствие, предусмотренное контрактом самого модуля: `airchat-vpn`
+  // экспортирует requireOptionalNativeModule(...) → null, и потребители уже
+  // проверяют `if (!mod)`. Шим отдаёт тот же null, а не кидающий Proxy: Proxy
+  // истинен и проскочил бы мимо этих проверок.
+  'airchat-vpn': 'web/shims/airchat-vpn.ts',
+  // граница платформы
+  'react-native-tcp-socket': 'web/shims/unavailable-native-module.ts',
+  'react-native-zeroconf': 'web/shims/unavailable-native-module.ts',
+  'react-native-wifi-p2p': 'web/shims/unavailable-native-module.ts',
+};
+
 const origResolveRequest = config.resolver.resolveRequest;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === 'web') {
+    const shim = WEB_SHIMS[moduleName];
+    if (shim) {
+      return { type: 'sourceFile', filePath: path.resolve(__dirname, shim) };
+    }
+  }
+
   // Явный entry: иногда цепочка Expo resolvers не находит пакет в Haste (UnableToResolveError на устройстве).
   if (moduleName === '@expo/vector-icons') {
     const entry = path.join(NODE_MODULES_DIR, '@expo/vector-icons/build/IconsLazy.js');

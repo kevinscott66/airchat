@@ -29,7 +29,7 @@ import type { AudioRecorder, AudioPlayer } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../ThemeContext';
 import { useBubbleSurface } from '../BubbleKindContext';
-import { contrastingInk, fadedOn } from '../theme';
+import { contrastingInk, fadedOn, font, radius } from '../theme';
 import { deleteCachedFileUris, resolveBlobToLocalFile, type BlobRef } from '../../core/media/mediaBlob';
 import { formatClockDuration } from '../time/durationLabel';
 import { failed, IDLE_GATE, pressIn, pressOut, ready, type RecorderGate } from './recorderGate';
@@ -294,7 +294,7 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
           {/* Live waveform */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, height: 32, width: LIVE_BARS * 5 }}>
             {liveBars.map((h, i) => (
-              <View key={i} style={{ width: 3, height: h, borderRadius: 2, backgroundColor: i === LIVE_BARS - 1 ? colors.error : trail }} />
+              <View key={i} style={{ width: 3, height: h, borderRadius: radius.sm, backgroundColor: i === LIVE_BARS - 1 ? colors.error : trail }} />
             ))}
           </View>
           <Animated.View
@@ -539,7 +539,7 @@ const vpStyles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 20,
+    borderRadius: radius.xl,
     paddingVertical: 8,
     paddingHorizontal: 12,
     gap: 10,
@@ -563,7 +563,7 @@ const vpStyles = StyleSheet.create({
   },
   progressFill: {
     height: '100%',
-    borderRadius: 2,
+    borderRadius: radius.sm,
   },
   speedBtn: {
     minWidth: 32,
@@ -575,6 +575,6 @@ const vpStyles = StyleSheet.create({
     fontWeight: '700',
   },
   duration: {
-    fontSize: 11,
+    fontSize: font.xs,
   },
 });

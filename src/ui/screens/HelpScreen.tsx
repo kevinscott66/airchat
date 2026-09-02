@@ -4,6 +4,8 @@ import { AppPressable } from '../components/AppPressable';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeScreen } from '../components/SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
+import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
+import { radius } from '../theme';
 
 type Props = {
   onClose: () => void;
@@ -26,7 +28,7 @@ export function HelpScreen({ onClose }: Props): React.ReactElement {
     content: { padding: 16, paddingBottom: 32 },
     card: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       padding: 16,
       marginBottom: 12,
       borderWidth: 1,
@@ -56,14 +58,21 @@ export function HelpScreen({ onClose }: Props): React.ReactElement {
           </Text>
         </View>
 
-        <View style={styles.card}>
-          <Ionicons name="wifi" size={32} color={colors.accent} />
-          <Text style={styles.cardTitle}>Связь без интернета</Text>
-          <Text style={styles.cardText}>
-            AirChat работает в локальной Wi-Fi сети без подключения к интернету. Подключитесь к одной
-            точке доступа с собеседником — и общайтесь даже там, где нет мобильной связи.
-          </Text>
-        </View>
+        {/* v4.32.528: карточка — не описание продукта, а инструкция: «подключитесь
+            к одной точке доступа». В браузере выполнить её нельзя, и выполнивший
+            всё равно никого не увидит. Такая подсказка не просто бесполезна, она
+            уводит от рабочих способов связи, которые на этой платформе есть.
+            См. platformCapabilities. */}
+        {LOCAL_RADIO_TRANSPORTS_AVAILABLE && (
+          <View style={styles.card}>
+            <Ionicons name="wifi" size={32} color={colors.accent} />
+            <Text style={styles.cardTitle}>Связь без интернета</Text>
+            <Text style={styles.cardText}>
+              AirChat работает в локальной Wi-Fi сети без подключения к интернету. Подключитесь к одной
+              точке доступа с собеседником — и общайтесь даже там, где нет мобильной связи.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.card}>
           <Ionicons name="cloud-outline" size={32} color={colors.accent} />

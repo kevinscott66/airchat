@@ -4,7 +4,7 @@ import { useTheme } from '../../../ThemeContext';
 import { isGrpBigEmoji } from '../../groups-utils/emoji';
 import { parseGroupFmtSegments } from '../../groups-utils/parseText';
 import { MAX_RENDER_SEGMENTS, sanitizeBodyForRender } from '../../../utils/renderText';
-import { accentOnFill, bubbleSurface, contrastingInk } from '../../../theme';
+import { accentOnFill, bubbleSurface, contrastingInk, mono } from '../../../theme';
 import { GrpSpoilerSpan } from './GrpSpoilerSpan';
 import { openExternal } from '../../../utils/openExternal';
 
@@ -55,7 +55,7 @@ export function GrpFormattedText({ text, style, onMentionPress, isMe }: { text: 
           <GrpSpoilerSpan key={idx} text={seg.text} style={style} host={bubble.fill} />
         ) : seg.strikethrough ? (
           <Text key={idx} style={{ textDecorationLine: 'line-through' }}>{seg.text}</Text>
-        ) : seg.code ? <Text key={idx} style={{ fontFamily: 'monospace', backgroundColor: bubble.plate.fill, color: bubble.plate.ink.text, fontSize: 13 }}>{seg.text}</Text>
+        ) : seg.code ? <Text key={idx} style={{ fontFamily: mono, backgroundColor: bubble.plate.fill, color: bubble.plate.ink.text, fontSize: 13 }}>{seg.text}</Text>
         : seg.bold ? <Text key={idx} style={{ fontWeight: '700' }}>{seg.text}</Text>
         : seg.italic ? <Text key={idx} style={{ fontStyle: 'italic' }}>{seg.text}</Text>
         : <Text key={idx}>{seg.text}</Text>

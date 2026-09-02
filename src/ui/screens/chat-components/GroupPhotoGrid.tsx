@@ -5,7 +5,7 @@ import { isNbCid } from '../../../core/media/mediaBlob';
 import { parseMediaCidsColumn } from '../../../core/media/mediaCidPolicy';
 import { useResolvedMediaUrls } from './useResolvedMediaUrls';
 import { useAutoDownloadGate } from './useAutoDownloadGate';
-import { mediaScrim } from '../../theme';
+import { mediaScrim, radius } from '../../theme';
 
 /**
  * Сетка фотографий в пузыре группы.
@@ -57,7 +57,7 @@ export function GroupPhotoGrid({
   if (holdBack) {
     return (
       <AppPressable onPress={() => setWanted(true)}>
-        <View style={{ width: TOTAL_W, height: 80, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: tileBackground }}>
+        <View style={{ width: TOTAL_W, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: tileBackground }}>
           <Text style={{ fontSize: 13, color: mutedColor }}>
             📷 Медиа ({entries.length}) — нажмите, чтобы загрузить
           </Text>
@@ -104,7 +104,7 @@ export function GroupPhotoGrid({
 
   if (shown.length === 2) {
     return (
-      <View style={{ flexDirection: 'row', gap: 2, borderRadius: 12, overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', gap: 2, borderRadius: radius.lg, overflow: 'hidden' }}>
         {[0, 1].map((i) => tile(i, HALF_W, 160))}
       </View>
     );
@@ -112,7 +112,7 @@ export function GroupPhotoGrid({
 
   if (shown.length === 3) {
     return (
-      <View style={{ flexDirection: 'row', gap: 2, borderRadius: 12, overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', gap: 2, borderRadius: radius.lg, overflow: 'hidden' }}>
         {tile(0, Math.floor(TOTAL_W * 0.6), 160)}
         <View style={{ gap: 2 }}>{[1, 2].map((i) => tile(i, Math.floor(TOTAL_W * 0.4) - 2, 79))}</View>
       </View>
@@ -120,7 +120,7 @@ export function GroupPhotoGrid({
   }
 
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: 12, overflow: 'hidden' }}>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: radius.lg, overflow: 'hidden' }}>
       {shown.map((_url, i) =>
         tile(
           i,

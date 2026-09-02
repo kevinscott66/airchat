@@ -19,7 +19,7 @@ import {
 } from '../../core/identity/profileManager';
 import { showError, showSuccess } from './userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { inkOn, primaryInk, scrim, tintedPlate } from '../theme';
+import { font, inkOn, primaryInk, radius, scrim, tintedPlate } from '../theme';
 import { shortIdentity } from '../identity/shortId';
 import { userErrorText } from './userErrorText';
 
@@ -84,7 +84,7 @@ export function ProfileSelector({
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       padding: 12,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       backgroundColor: c.surface,
       borderWidth: 1,
       borderColor: c.border,
@@ -101,7 +101,7 @@ export function ProfileSelector({
     },
     profileInfo: { flex: 1, marginLeft: 10 },
     profileName: { fontSize: 16, fontWeight: '600' as const, color: c.text },
-    profileDid: { fontSize: 11, color: c.textMuted, marginTop: 4 },
+    profileDid: { fontSize: font.xs, color: c.textMuted, marginTop: 4 },
     activeProfileName: { color: activeInk.text },
     activeProfileDid: { color: activeInk.muted },
     rowActions: {
@@ -117,7 +117,7 @@ export function ProfileSelector({
     input: {
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 10,
+      borderRadius: radius.md,
       padding: 12,
       fontSize: 16,
       color: c.text,
@@ -127,7 +127,7 @@ export function ProfileSelector({
     createButton: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     createButtonText: { color: primaryInk(c).text, fontSize: 16, fontWeight: '600' as const },
@@ -152,7 +152,7 @@ export function ProfileSelector({
     },
     renameBox: {
       backgroundColor: c.background,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       padding: 18,
       borderWidth: 1,
       borderColor: c.border,

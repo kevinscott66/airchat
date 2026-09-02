@@ -5,7 +5,7 @@ import { setBackupWarnAck } from '../../core/backup/seedPhrase';
 import { SafeScreen } from '../components/SafeScreen';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 
 type Props = {
   onContinue: () => void;
@@ -37,7 +37,7 @@ export function BackupWarningScreen({ onContinue }: Props): React.ReactElement {
     btn: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     btnText: { color: primaryInk(c).text, fontWeight: '600' as const },

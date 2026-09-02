@@ -13,7 +13,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 import {
   generateMnemonicAndStore,
   getStoredMnemonic,
@@ -85,14 +85,14 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     btn: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
       marginBottom: 12,
     },
     btnSecondary: {
       backgroundColor: c.surface,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     btnText: { color: primaryInk(c).text, fontWeight: '600' as const },
@@ -101,7 +101,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       minHeight: 120,
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 8,
+      borderRadius: radius.md,
       padding: 12,
       color: c.text,
       backgroundColor: c.surface,
@@ -111,7 +111,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     pwdInput: {
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 8,
+      borderRadius: radius.md,
       padding: 12,
       color: c.text,
       backgroundColor: c.surface,

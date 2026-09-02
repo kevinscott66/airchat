@@ -32,15 +32,16 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { radius } from '../theme';
 
 const { width: W } = Dimensions.get('window');
 
 // ─── константы дизайна ───────────────────────────────────────────────────────
-const BG          = '#0b1020';
-const PRIMARY     = '#3d5afe';
-const ACCENT      = '#7ecbff';
-const TEXT_DIM    = '#4a5578';
-const TEXT_MSG    = '#6b7a9e';
+const BG          = '#0B0B12';
+const PRIMARY     = '#6A56EE';
+const ACCENT      = '#9B8CFF';
+const TEXT_DIM    = '#7C7C96';
+const TEXT_MSG    = '#A6A6BD';
 
 const ICON_SIZE   = 52;
 const CIRCLE_SIZE = 88;
@@ -329,7 +330,7 @@ const styles = StyleSheet.create({
   barTrack: {
     width: BAR_WIDTH,
     height: 3,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     backgroundColor: `${PRIMARY}30`,
     overflow: 'hidden',
   },
@@ -339,7 +340,7 @@ const styles = StyleSheet.create({
     left: 0,
     width: BAR_WIDTH,
     height: 3,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     backgroundColor: ACCENT,
   },
 
