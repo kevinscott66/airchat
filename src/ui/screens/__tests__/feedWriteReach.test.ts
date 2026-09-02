@@ -102,8 +102,11 @@ describe('действия над публикацией идут через о�
   });
 
   it('удаление, архив и скрытие автора перечитывают ленту после записи', () => {
-    expect(SCREEN).toContain("runFeedOp(() => deleteFeedPost(pair, p.id), t('feed.deletePostFailed'))");
-    expect(SCREEN).toContain("runFeedOp(() => deleteFeedPostLocal(p.id), t('feed.deletePostFailed'))");
+    // v4.32.546: удаление стало асинхронной веткой — после записи показывается
+    // охват рассылки, поэтому вызов обёрнут в async-колбэк, но вход тот же.
+    expect(SCREEN).toContain("const reach = await deleteFeedPost(pair, p.id);");
+    expect(SCREEN).toContain("await deleteFeedPostLocal(p.id);");
+    expect(SCREEN).toContain("}, t('feed.deletePostFailed'));");
     expect(SCREEN).toContain("runFeedOp(() => toggleMuteAuthor(p.authorDid), t('feed.muteAuthorFailed'))");
     expect(SCREEN).toContain("}, t('feed.archiveFailed'))");
   });

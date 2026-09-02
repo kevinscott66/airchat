@@ -4041,7 +4041,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                       showSuccess(isArchivedP ? t('feed.unarchivedToast') : t('feed.archivedToast'));
                     }, t('feed.archiveFailed')),
                   )}
-                  {row('trash-outline', t('feed.menuDeletePost'), () => {
+                  {/* v4.32.546: пункт меню называет свой охват. Своя публикация
+                      удаляется у всех — конверт feed_delete уходит каждому
+                      контакту, и получатель стирает её у себя; чужая гасится
+                      только локально. Раньше обе ветки звались одинаково
+                      («Удалить публикацию»), а подсказка к своей и вовсе
+                      обещала, что у контактов запись останется. */}
+                  {row('trash-outline', isSelfP ? t('feed.menuDeletePostEveryone') : t('feed.menuDeletePostMine'), () => {
                     Alert.alert(
                       t('feed.deletePostConfirm'),
                       isSelfP
@@ -4054,9 +4060,21 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           style: 'destructive',
                           onPress: () => {
                             if (isSelfP) {
-                              runFeedOp(() => deleteFeedPost(pair, p.id), t('feed.deletePostFailed'));
+                              // Охват показываем честно: контакт, до которого конверт
+                              // не дошёл ни одним транспортом, узнает об удалении
+                              // только когда появится в сети.
+                              runFeedOp(async () => {
+                                const reach = await deleteFeedPost(pair, p.id);
+                                const missed = reach.total - reach.success;
+                                showSuccess(missed > 0
+                                  ? t('feed.deletedPartly', { n: missed })
+                                  : t('feed.deletedEverywhere'));
+                              }, t('feed.deletePostFailed'));
                             } else {
-                              runFeedOp(() => deleteFeedPostLocal(p.id), t('feed.deletePostFailed'));
+                              runFeedOp(async () => {
+                                await deleteFeedPostLocal(p.id);
+                                showSuccess(t('feed.deletedLocally'));
+                              }, t('feed.deletePostFailed'));
                             }
                           },
                         },

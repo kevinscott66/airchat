@@ -252,6 +252,12 @@ export class FeedStorage {
             deleted_at INTEGER NOT NULL
           );
           CREATE INDEX IF NOT EXISTS idx_fct_post ON feed_comment_tombstones(post_id);
+          CREATE TABLE IF NOT EXISTS feed_post_tombstones (
+            post_id TEXT PRIMARY KEY NOT NULL,
+            author_did TEXT NOT NULL,
+            deleted_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_fpt_at ON feed_post_tombstones(deleted_at);
           CREATE TABLE IF NOT EXISTS feed_post_views (
             post_id TEXT NOT NULL,
             viewer_did TEXT NOT NULL,
@@ -401,6 +407,15 @@ export class FeedStorage {
 
   async savePost(row: Omit<FeedPostRow, 'read' | 'reactions'> & { read?: number }): Promise<void> {
     const d = await this.ensureDb();
+    // v4.32.546: надгробие поста. Автор удаляет публикацию «у всех» — envelope
+    // `feed_delete` уходит каждому контакту, но сам пост мог не доехать раньше
+    // удаления: с 4.32.545 сокет переигрывает до 12 часов накопленного, и в этом
+    // окне ретрай `feed_post` спокойно приходит после `feed_delete` (или тем же
+    // окном, но другим транспортом — LAN против интернета). Без надгробия
+    // удалённая публикация воскресала у получателя.
+    // Надгробие подавляет только пост ТОГО ЖЕ автора: post_id генерирует
+    // отправитель, и без сверки автора чужое надгробие блокировало бы чужой пост.
+    if (await this.postTombstoned(d, row.id, row.authorDid)) return;
     // v4.32.31: idempotent insert only. UPDATE был убран: он затирал read и text
     // у получателя при retry feed_post envelope (автор повторно слал после offline
     // окна → у B пост становился непрочитанным снова + свежая локальная
@@ -560,6 +575,10 @@ export class FeedStorage {
   /** Apply one authenticated remote post without changing unrelated local rows. */
   async upsertSyncPost(row: FeedPostRow): Promise<void> {
     const d = await this.ensureDb();
+    // v4.32.546: то же надгробие, что и в savePost. Облачный снимок второго
+    // устройства ещё какое-то время содержит удалённый пост, и без проверки
+    // он приезжал обратно ближайшим pull'ом.
+    if (await this.postTombstoned(d, row.id, row.authorDid)) return;
     const dek = await getOrCreateDataEncryptionKey();
     await d.runAsync(
       `INSERT INTO feed
@@ -634,9 +653,9 @@ export class FeedStorage {
     );
   }
 
-  async deleteSyncPost(postId: string): Promise<void> {
-    const d = await this.ensureDb();
-    await d.runAsync('DELETE FROM feed WHERE id = ?', [postId]);
+  /** v4.32.546: удаление с другого устройства аккаунта — тоже с надгробием. */
+  async deleteSyncPost(postId: string, deletedAt: number = Date.now()): Promise<void> {
+    await this.deletePost(postId, deletedAt);
   }
 
   async deleteSyncComment(commentId: string, postId: string, deletedAt: number): Promise<void> {
@@ -736,9 +755,51 @@ export class FeedStorage {
     return row?.count ?? 0;
   }
 
-  async deletePost(postId: string): Promise<void> {
+  /**
+   * v4.32.546: удаление ставит надгробие, чтобы запоздавший `feed_post` не
+   * воскресил публикацию. Автора берём из самой строки — так одна и та же
+   * запись покрывает и своё удаление «у всех», и локальное скрытие чужого поста.
+   * Комментарии и просмотры удалённого поста больше ниоткуда не достижимы,
+   * поэтому уходят вместе с ним, а не остаются сиротами в базе.
+   */
+  async deletePost(postId: string, deletedAt: number = Date.now()): Promise<void> {
     const d = await this.ensureDb();
+    const row = await d.getFirstAsync<{ author_did: string }>(
+      'SELECT author_did FROM feed WHERE id = ?',
+      [postId]
+    );
+    if (row) await this.savePostTombstone(postId, row.author_did, deletedAt);
     await d.runAsync('DELETE FROM feed WHERE id = ?', [postId]);
+    await d.runAsync('DELETE FROM feed_comments WHERE post_id = ?', [postId]);
+    await d.runAsync('DELETE FROM feed_post_views WHERE post_id = ?', [postId]);
+  }
+
+  /**
+   * v4.32.546: надгробие без строки поста — случай, когда `feed_delete` пришёл
+   * раньше самого `feed_post`. Автор здесь берётся из подписанного конверта:
+   * `parseAndVerifyFeedEnvelope` уже сверил подпись и то, что
+   * `payload.authorDid === senderDid`, так что подделать чужое надгробие нельзя.
+   * INSERT OR IGNORE — первое удаление и есть настоящее время удаления.
+   */
+  async savePostTombstone(postId: string, authorDid: string, deletedAt: number): Promise<void> {
+    const d = await this.ensureDb();
+    await d.runAsync(
+      'INSERT OR IGNORE INTO feed_post_tombstones (post_id, author_did, deleted_at) VALUES (?, ?, ?)',
+      [postId, authorDid, deletedAt]
+    );
+  }
+
+  /** Есть ли надгробие этого автора на этот post_id. */
+  private async postTombstoned(
+    d: SQLite.SQLiteDatabase,
+    postId: string,
+    authorDid: string
+  ): Promise<boolean> {
+    const t = await d.getFirstAsync<{ author_did: string }>(
+      'SELECT author_did FROM feed_post_tombstones WHERE post_id = ?',
+      [postId]
+    );
+    return t != null && t.author_did === authorDid;
   }
 
   /** v4.32.65: editedAt опционален — receiver передаёт payload.ts envelope'а,

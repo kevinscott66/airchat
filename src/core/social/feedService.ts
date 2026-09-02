@@ -2379,7 +2379,13 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         // подписать feed_delete{postId: чужой} и стереть чужой пост локально у всех.
         const existing = await s.getPost(payload.postId);
         if (!existing) {
-          log.info('feed_delete_unknown_post', { postId: payload.postId.slice(0, 24) });
+          // v4.32.546: раньше здесь был просто выход, и «удалить у всех»
+          // проигрывало гонку с доставкой самого поста: конверт `feed_post`
+          // приходил следом (ретрай автора, второй транспорт, переигранное
+          // окно ретеншена) и публикация оставалась у получателя навсегда.
+          // Надгробие запоминает удаление до того, как пост появился.
+          await s.savePostTombstone(payload.postId, payload.authorDid, payload.ts);
+          log.info('feed_delete_tombstoned', { postId: payload.postId.slice(0, 24) });
           break;
         }
         if (existing.authorDid !== payload.authorDid) {
@@ -3238,20 +3244,26 @@ export async function getFeedCommentCounts(postIds: string[]): Promise<Record<st
   return counts;
 }
 
+/** Сколько контактов приняли `feed_delete`: `total` — кому слали, `success` — кто принял. */
+export type FeedDeleteReach = { total: number; success: number };
+
 /**
  * Удалить свой пост локально + разослать feed_delete.
  * v4.32.24: pair нужен чтобы подписать delete-envelope. Удалять можно только свой пост.
  * v4.32.29: предварительная auth-проверка на уровне SQL (на случай если UI вызвал для чужого)
  * + очистка kvStore от inline media.
+ * v4.32.546: возвращает охват рассылки. Удаление «у всех» — доставка, а не команда
+ * серверу: контакт, до которого конверт не дошёл вообще (нет ни сети, ни реле),
+ * останется с публикацией, и человек имеет право это знать сразу, а не гадать.
  */
-export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promise<void> {
+export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promise<FeedDeleteReach> {
   const myDid = publicKeyToDidKey(pair.publicKey);
   const s = await ensureStorage();
   const existing = await s.getPost(postId);
-  if (!existing) return;
+  if (!existing) return { total: 0, success: 0 };
   if (existing.authorDid !== myDid) {
     log.warn('feed_delete_not_owner', { postId: postId.slice(0, 24) });
-    return;
+    return { total: 0, success: 0 };
   }
   await cleanupInlinePayloads(postId);
   await s.deletePost(postId);
@@ -3265,7 +3277,8 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
     ts: Date.now(),
     data,
   };
-  await signAndBroadcastFeedEnvelope(pair, payload);
+  const res = await signAndBroadcastFeedEnvelope(pair, payload);
+  return { total: res?.delivered.total ?? 0, success: res?.delivered.success ?? 0 };
 }
 
 /**
