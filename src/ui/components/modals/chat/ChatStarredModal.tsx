@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { scrim } from '../../../theme';
+import { font, scrim } from '../../../theme';
 import { dayMonthShortYear } from '../../../../core/time/ruDateTime';
 import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
 
@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
   row: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   rowMetaWrap: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   starIcon: { marginRight: 6 },
-  meta: { fontSize: 11 },
+  meta: { fontSize: font.xs },
   rowTextUnreadable: { fontStyle: 'italic' },
   rowText: { fontSize: 14 },
   unstarBtn: { marginTop: 6 },

@@ -6,7 +6,7 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import type { GroupMessageRow } from '../../../../core/storage/local';
-import { scrim } from '../../../theme';
+import { font, radius, scrim } from '../../../theme';
 import { COPY_ACTION, COPY_LINK_ACTION } from '../../../clipboardText';
 
 export interface GroupQuickReactModalProps {
@@ -129,8 +129,8 @@ function GroupQuickReactModalImpl(props: GroupQuickReactModalProps) {
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: scrim.modal },
-  picker: { borderRadius: 16, paddingTop: 12, paddingHorizontal: 8, minWidth: 300 },
-  recentLabel: { fontSize: 10, fontWeight: '600', paddingHorizontal: 8, paddingTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+  picker: { borderRadius: radius.xl, paddingTop: 12, paddingHorizontal: 8, minWidth: 300 },
+  recentLabel: { fontSize: font.xs, fontWeight: '600', paddingHorizontal: 8, paddingTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   pickerRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 4, paddingBottom: 8 },
   pickerBtn: { padding: 10 },
   emoji: { fontSize: 26 },

@@ -3,8 +3,8 @@ import { Image, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { openMapAt } from '../../utils/openExternal';
-import { MAP_PAPER, mediaScrim } from '../../theme';
-import { parseLocationMeta } from '../ChatScreen';
+import { font, MAP_PAPER, mediaScrim, radius } from '../../theme';
+import { parseLocationMeta } from '../../../core/social/locationEnvelope';
 import { useBubbleSurface } from '../../BubbleKindContext';
 
 const TILE = 256;
@@ -69,7 +69,7 @@ export function LocationBubble({ text, isOutgoing }: { text: string; isOutgoing:
 
   return (
     <AppPressable
-      style={{ width: PREVIEW_W, borderRadius: 14, overflow: 'hidden', backgroundColor: bubble.plate.fill }}
+      style={{ width: PREVIEW_W, borderRadius: radius.lg, overflow: 'hidden', backgroundColor: bubble.plate.fill }}
       onPress={() => openMapAt(meta.lat, meta.lon)}
     >
       {!mapFailed ? (
@@ -89,7 +89,7 @@ export function LocationBubble({ text, isOutgoing }: { text: string; isOutgoing:
             <Ionicons name="location" size={32} color={mediaScrim.error} />
           </View>
           {/* «open in maps» affordance. */}
-          <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: mediaScrim.bar, borderRadius: 11, padding: 4 }}>
+          <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: mediaScrim.bar, borderRadius: radius.md, padding: 4 }}>
             <Ionicons name="open-outline" size={14} color={mediaScrim.ink} />
           </View>
         </View>
@@ -98,7 +98,7 @@ export function LocationBubble({ text, isOutgoing }: { text: string; isOutgoing:
         <Ionicons name="location" size={mapFailed ? 28 : 18} color={iconColor} />
         <View style={{ flex: 1 }}>
           <Text numberOfLines={1} style={{ color: textColor, fontWeight: '600', fontSize: 13 }}>{title}</Text>
-          <Text numberOfLines={1} style={{ color: mutedColor, fontSize: 11 }}>{coords}</Text>
+          <Text numberOfLines={1} style={{ color: mutedColor, fontSize: font.xs }}>{coords}</Text>
         </View>
         {mapFailed ? <Ionicons name="open-outline" size={16} color={mutedColor} /> : null}
       </View>

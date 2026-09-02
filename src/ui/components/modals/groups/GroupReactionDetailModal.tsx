@@ -3,7 +3,7 @@ import { View, Text, ScrollView } from 'react-native';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint, scrim } from '../../../theme';
+import { avatarShape, badgeTint, radius, scrim } from '../../../theme';
 import type { GroupMemberRow } from '../../../../core/storage/local';
 import { nameInitial } from '../../../../core/social/contactLabel';
 import { shortIdentity } from '../../../identity/shortId';
@@ -36,7 +36,7 @@ export function GroupReactionDetailModal({
   return (
     <Modal transparent animationType="fade" visible={target !== null} onRequestClose={onClose}>
       <AppPressable style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', alignItems: 'center', padding: 24 }} onPress={onClose}>
-        <AppPressable onPress={(e) => e.stopPropagation()} style={{ borderRadius: 14, paddingVertical: 20, paddingHorizontal: 24, width: 300, maxWidth: '90%', alignItems: 'center', gap: 10, backgroundColor: colors.surface }}>
+        <AppPressable onPress={(e) => e.stopPropagation()} style={{ borderRadius: radius.lg, paddingVertical: 20, paddingHorizontal: 24, width: 300, maxWidth: '90%', alignItems: 'center', gap: 10, backgroundColor: colors.surface }}>
           {/* Emoji tabs */}
           {entries.length > 1 ? (
             <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4, flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -44,7 +44,7 @@ export function GroupReactionDetailModal({
                 <AppPressable
                   key={emoji}
                   onPress={() => setActiveTab(emoji)}
-                  style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: activeTab === emoji ? colors.accent : colors.border, backgroundColor: activeTab === emoji ? tabTint.fill : 'transparent' }}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.xl, borderWidth: 1.5, borderColor: activeTab === emoji ? colors.accent : colors.border, backgroundColor: activeTab === emoji ? tabTint.fill : 'transparent' }}
                 >
                   <Text style={{ fontSize: 18 }}>{emoji}</Text>
                   <Text style={{ fontSize: 12, color: activeTab === emoji ? tabTint.ink : colors.textMuted, marginLeft: 4, fontWeight: '600' }}>{users.length}</Text>
@@ -59,7 +59,7 @@ export function GroupReactionDetailModal({
             <ScrollView showsVerticalScrollIndicator={false}>
               {activeUsers.map((pub) => (
                 <View key={pub} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
+                  <View style={{ ...avatarShape(32), backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ fontSize: 14 }}>{nameInitial(pubToName(pub))}</Text>
                   </View>
                   <Text style={{ color: colors.text, fontSize: 15 }}>{pubToName(pub)}</Text>
@@ -70,7 +70,7 @@ export function GroupReactionDetailModal({
               ) : null}
             </ScrollView>
           </View>
-          <AppPressable onPress={onClose} style={{ marginTop: 4, paddingHorizontal: 24, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}>
+          <AppPressable onPress={onClose} style={{ marginTop: 4, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border }}>
             <Text style={{ color: colors.text, fontSize: 14 }}>Закрыть</Text>
           </AppPressable>
         </AppPressable>

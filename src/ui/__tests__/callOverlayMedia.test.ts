@@ -7,7 +7,23 @@ const service = fs.readFileSync(path.join(__dirname, '..', '..', 'core', 'social
 describe('call media UI contract', () => {
   it('renders WebRTC video only for video calls and subscribes to media snapshots', () => {
     expect(overlay).toContain("require('react-native-webrtc').RTCView");
-    expect(overlay).toContain("if (Platform.OS === 'web') return null;");
+    // Раньше здесь проверялся безусловный выход по `Platform.OS === 'web'`.
+    // Он стоял не потому, что в браузере не бывает видеозвонка, а потому, что
+    // нативного `react-native-webrtc` там нет и require падал. С веб-портом
+    // модуль на web подменяется на web/shims/react-native-webrtc.tsx, где
+    // RTCView — это <video srcObject>, то есть настоящее видео; выход по
+    // платформе стал бы отключением работающей возможности.
+    //
+    // Утверждение при этом не снято, а перенесено на то, чем оно было по
+    // существу: загрузка модуля обязана быть защищённой. Проверяется отсутствие
+    // модуля вообще (try/catch → null), а не имя платформы.
+    //
+    // Отрицания («в файле нет строки Platform.OS === 'web'») здесь намеренно
+    // нет: разбора комментариев у этого теста, в отличие от paletteLiterals,
+    // не заведено, и такое утверждение падало бы на объяснении, ПОЧЕМУ проверку
+    // по платформе убрали. Утверждать надо наличие нужного, а не отсутствие
+    // упоминания ненужного.
+    expect(overlay).toMatch(/try \{[\s\S]*?require\('react-native-webrtc'\)[\s\S]*?\} catch \{[\s\S]*?return null;/);
     expect(overlay).toContain('subscribeCallMedia');
     expect(overlay).toContain('getCallMediaStreams');
     expect(overlay).toContain('call.isVideo ?');

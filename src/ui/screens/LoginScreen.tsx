@@ -21,7 +21,7 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { showError } from '../components/userFeedback';
 import { SafeScreen } from '../components/SafeScreen';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { primaryInk } from '../theme';
+import { primaryInk, radius } from '../theme';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText } from '../components/userErrorText';
 
@@ -145,7 +145,7 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
     input: {
       borderWidth: 1,
       borderColor: c.border,
-      borderRadius: 8,
+      borderRadius: radius.md,
       padding: 12,
       color: c.text,
       marginBottom: 16,
@@ -156,7 +156,7 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
     btn: {
       backgroundColor: c.primary,
       padding: 14,
-      borderRadius: 10,
+      borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     btnDisabled: { opacity: 0.4 },

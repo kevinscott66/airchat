@@ -8,7 +8,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Text, type TextStyle } from 'react-native';
 import { MAX_RENDER_SEGMENTS, sanitizeBodyForRender } from '../utils/renderText';
 import { useColors } from '../ThemeContext';
-import { inkOn, nestedFill, searchMark, spoilerPlate, type TintedIcon } from '../theme';
+import { inkOn, mono, nestedFill, radius, searchMark, spoilerPlate, type TintedIcon } from '../theme';
 import { openExternal } from '../utils/openExternal';
 
 type Segment =
@@ -76,7 +76,7 @@ function SpoilerText({ value, style, host }: { value: string; style?: TextStyle 
   if (revealed) return <Text style={style}>{value}</Text>;
   return (
     <Text
-      style={[style as TextStyle, { backgroundColor: spoilerPlate(host), color: 'transparent', borderRadius: 3 }]}
+      style={[style as TextStyle, { backgroundColor: spoilerPlate(host), color: 'transparent', borderRadius: radius.sm }]}
       onPress={() => setRevealed(true)}
     >
       {value}
@@ -196,7 +196,7 @@ export function RichText({
             return <Text key={i} style={{ fontStyle: 'italic' }}>{seg.value}</Text>;
           case 'code':
             return (
-              <Text key={i} style={{ fontFamily: 'monospace', fontSize: 13, backgroundColor: codeFill, color: codeInk.text }}>
+              <Text key={i} style={{ fontFamily: mono, fontSize: 13, backgroundColor: codeFill, color: codeInk.text }}>
                 {seg.value}
               </Text>
             );

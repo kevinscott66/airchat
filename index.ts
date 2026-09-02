@@ -1,3 +1,7 @@
+// Веб-рантайм Metro: HMR, обработчик отказов промисов и мост к dev-серверу.
+// На ios/android разрешается в native-заглушку самого пакета и ничего не делает,
+// поэтому импорт общий, а не за Platform-веткой.
+import '@expo/metro-runtime';
 import './src/bootstrap-logbox';
 import './polyfill-event-target';
 import 'react-native-gesture-handler';
@@ -56,6 +60,8 @@ import App from './src/App';
 import { AppErrorBoundary } from './src/ui/AppErrorBoundary';
 import { log } from './src/core/logger';
 import { darkColors } from './src/ui/theme';
+import { installWebFocusRing } from './src/ui/webFocusRing';
+import { installMotionPrefs } from './src/ui/motionPrefs';
 
 if (__DEV__) {
   // eslint-disable-next-line no-console
@@ -76,5 +82,8 @@ function Root(): React.ReactElement {
     )
   );
 }
+
+installWebFocusRing();
+installMotionPrefs();
 
 registerRootComponent(Root);

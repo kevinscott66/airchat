@@ -10,14 +10,12 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
-  Image,
   Alert,
   ActionSheetIOS,
   Platform,
   Vibration,
   ScrollView,
   Clipboard,
-  Dimensions,
   Keyboard,
   PanResponder,
   Animated as RNAnimated,
@@ -58,15 +56,13 @@ import * as DocumentPicker from 'expo-document-picker';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { listContacts, type Contact } from '../../core/social/contacts';
 import { getMessagingService, previewLabelForText } from '../../core/social/messaging';
-import { deleteCachedFileUris, uploadEncryptedBlob, isBlobRef, isNbCid, parseNbCid, MAX_BLOB_BYTES, type BlobRef } from '../../core/media/mediaBlob';
+import { deleteCachedFileUris, uploadEncryptedBlob, MAX_BLOB_BYTES } from '../../core/media/mediaBlob';
 import { resolveMediaCidsToUris } from '../../core/media/resolveMediaCids';
 import { shareTextExport } from '../../core/media/cacheFiles';
-import { isPlainCid } from '../../core/cid';
 import { parseMediaCidsColumn } from '../../core/media/mediaCidPolicy';
 import { scheduleMessage } from '../../core/social/scheduledMessages';
 import { loadConfig } from '../../core/config';
 import type { ChatMessageRow } from '../../core/storage/local';
-import { openExternal } from '../utils/openExternal';
 import {
   markConversationRead,
   setConversationDraft,
@@ -88,7 +84,6 @@ import {
   listQuickReplies,
   type QuickReply,
   searchChatMessages,
-  kvGet,
   recentlyDeletedKey,
 } from '../../core/storage/local';
 import { v4 as uuidv4 } from 'uuid';
@@ -107,8 +102,9 @@ import { exportBody } from '../../core/social/exportLine';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../ThemeContext';
-import { badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, inkOn, nestedFill, rippleOn, rowMark, scrim } from '../theme';
-import { useBubbleSurface } from '../BubbleKindContext';
+import { avatarShape, badgeDigit, badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, font, elevation, inkOn, mono, motion, nestedFill, radius, rippleOn, rowMark, scrim, spacing, TOUCH_TARGET_MIN } from '../theme';
+import { isReducedMotion } from '../motionPrefs';
+import { GlassSurface } from '../components/GlassSurface';
 import { ChatListScreen } from './ChatListScreen';
 import { subscribeChatWrites } from '../../core/storage/local';
 import { isUnreadableMessage, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT } from '../../core/storage/unreadableText';
@@ -136,7 +132,7 @@ import {
   translateFailureMessage,
 } from '../../core/social/cloudTranslate';
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
-import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, RECENT_EMOJIS_PANEL_KEY, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
+import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
 import { insertSortedDesc } from '../../core/utils/insertSortedDesc';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
@@ -165,9 +161,14 @@ import { anchorStillPresent, clampHitIndex, hitIndexForAnchor, hitLabel, hitSetK
 import { truncateReplyPreview } from '../../core/social/messagePreview';
 import { isContactCard, makeContactCardText } from '../../core/social/contactCardEnvelope';
 import { isForwardedMessage, makeForwardBundleText, makeForwardText, parseForwardedMessage } from '../../core/social/forwardEnvelope';
-import { DOC_PREFIX, isDocMessage, makeDocText, parseDocEnvelope } from '../../core/social/docEnvelope';
-import { LOCATION_PREFIX, isLocationMessage, makeLocationText, parseLocationMeta } from '../../core/social/locationEnvelope';
-import { VIEW_ONCE_PREFIX_CONST, isViewOnceMessage, stripViewOncePrefix } from './chat-utils/viewOnce';
+import { isDocMessage, makeDocText } from '../../core/social/docEnvelope';
+import { isLocationMessage, makeLocationText } from '../../core/social/locationEnvelope';
+import { isViewOnceMessage, makeViewOnceText, stripViewOncePrefix } from './chat-utils/viewOnce';
+import { isVoiceMessage, makeVoiceText } from '../../core/social/voiceEnvelope';
+import { reverseGeocodeLabel } from '../../core/social/geocode';
+import { EmojiPanel } from './chat-components/EmojiPanel';
+import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
+import { SendEffectOverlay, detectSendEffect } from './chat-components/SendEffectOverlay';
 import { runViewOnceTap, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
 import { getEmojiSuggestions, isBigEmoji } from './chat-utils/emoji';
 import {
@@ -209,177 +210,9 @@ import { LocationBubble } from './chat-components/LocationBubble';
 import { LiveLocationBubble } from './chat-components/LiveLocationBubble';
 import { MediaStrip } from './chat-components/MediaStrip';
 import { contactLabel, nameInitial } from '../../core/social/contactLabel';
-import {
-  createLinkPreviewStore,
-  tooLargeToRead,
-  type LinkPreviewCard,
-} from '../../core/social/linkPreviewStore';
-
-import {
-  LINK_PREVIEW_INCOMING_KEY,
-  parseIncomingLinkPreviewPref,
-  shouldLoadLinkPreview,
-} from '../../core/social/linkPreviewPolicy';
-
-// ─── Link preview ─────────────────────────────────────────────────────────────
-
-const URL_RE = /https?:\/\/[^\s<>"']+/;
-// v4.32.540: не голая Map. Отмена загрузки больше не считается ответом об
-// адресе, сетевой сбой стоит попытку, а память имеет предел — см.
-// core/social/linkPreviewStore.
-const previewStore = createLinkPreviewStore();
-
-export function extractFirstUrl(text: string): string | null {
-  const m = URL_RE.exec(text);
-  return m ? m[0] : null;
-}
-
-/**
- * Карточка предпросмотра ссылки.
- *
- * fromPeer — адрес пришёл от собеседника (входящее сообщение, сообщение
- * группы, запись ленты), а не набран самим пользователем. Такие адреса по
- * умолчанию НЕ загружаются: иначе чужая ссылка превращается в маяк, который
- * отдаёт отправителю IP-адрес получателя и момент открытия чата в обход
- * отключённых уведомлений о прочтении (см. core/social/linkPreviewPolicy).
- */
-export function LinkPreview({ url, isOutgoing, fromPeer }: { url: string; isOutgoing: boolean; fromPeer: boolean }): React.ReactElement | null {
-  const { colors } = useTheme();
-  // Заливка пузыря-хозяина. Через контекст, а не через `colors.bubbleOut`:
-  // ту же карточку рисует и экран групп, где свой пузырь залит `primary`.
-  const host = useBubbleSurface(isOutgoing);
-  const [preview, setPreview] = useState<LinkPreviewCard | null | undefined>(() => {
-    const known = previewStore.get(url);
-    return known.kind === 'card' ? known.card : known.kind === 'none' ? null : undefined;
-  });
-
-  useEffect(() => {
-    if (!previewStore.shouldFetch(url)) {
-      const known = previewStore.get(url);
-      setPreview(known.kind === 'card' ? known.card : null);
-      return;
-    }
-    let cancelled = false;
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 6000);
-    void (async () => {
-      try {
-        if (fromPeer && !shouldLoadLinkPreview(true, parseIncomingLinkPreviewPref(await kvGet(LINK_PREVIEW_INCOMING_KEY)))) {
-          // Ничего не запрашиваем и ничего не кэшируем: настройку могут
-          // включить, не перезапуская приложение.
-          if (!cancelled) setPreview(null);
-          return;
-        }
-        const res = await fetch(url, { method: 'GET', headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
-        if (cancelled) return;
-        if (!res.ok) {
-          // Ответ получен — про адрес это уже сведение: страницы нет.
-          previewStore.remember(url, null);
-          setPreview(null);
-          return;
-        }
-        if (tooLargeToRead(res.headers.get('content-length'))) {
-          // Читать целиком нельзя: карточка не стоит того, чтобы враждебная
-          // ссылка положила приложение на память.
-          previewStore.remember(url, null);
-          setPreview(null);
-          return;
-        }
-        const html = await res.text();
-        if (cancelled) return;
-        const ogTitle = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const titleTag = /<title[^>]*>([^<]+)<\/title>/i.exec(html)?.[1];
-        const ogDesc = /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1]
-          ?? /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const ogImage = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const title = (ogTitle ?? titleTag ?? '').trim().slice(0, 100);
-        const description = (ogDesc ?? '').trim().slice(0, 160);
-        let domain = '';
-        try { domain = new URL(url).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
-        // Resolve relative image URL
-        let image: string | null = null;
-        if (ogImage) {
-          try {
-            image = ogImage.startsWith('http') ? ogImage : new URL(ogImage, url).href;
-          } catch { /* ignore */ }
-        }
-        const result = title ? { title, description, domain, image } : null;
-        previewStore.remember(url, result);
-        if (!cancelled) setPreview(result);
-      } catch {
-        // Отмена — это про нас, а не про адрес: карточку просто не дождались,
-        // и запоминать тут нечего. Считать попытку можно только тогда, когда
-        // мы действительно ждали ответа и не получили его.
-        if (cancelled) return;
-        const spent = previewStore.noteFailure(url);
-        setPreview(spent ? null : undefined);
-      }
-    })();
-    return () => { cancelled = true; clearTimeout(to); ctrl.abort(); };
-  }, [url, fromPeer]);
-
-  if (!preview) return null;
-
-  // v4.32.401: карточка — вложенный блок. Сначала считается её заливка от
-  // пузыря-хозяина, и только потом чернила от заливки; обратный порядок в
-  // светлой теме давал белое по светло-синему (см. 395).
-  const hostFill = host.fill;
-  const cardFill = nestedFill(hostFill);
-  const cardInk = inkOn(colors, cardFill);
-  const accentColor = cardInk.accent;
-  const textColor = cardInk.text;
-  const subtextColor = cardInk.secondary;
-
-  return (
-    <AppPressable
-      onPress={() => openExternal(url, 'chat_link_preview')}
-      style={[lpStyles.card, { borderColor: cardInk.muted, backgroundColor: cardFill }]}
-    >
-      {preview.image ? (
-        <View style={{ borderRadius: 6, overflow: 'hidden', marginBottom: 6 }}>
-          <Image
-            source={{ uri: preview.image }}
-            style={{ width: '100%', height: 140, resizeMode: 'cover' }}
-            onError={() => {/* ignore broken images */}}
-          />
-        </View>
-      ) : null}
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <View style={[lpStyles.bar, { backgroundColor: accentColor }]} />
-        <View style={{ flex: 1 }}>
-          <Text style={[lpStyles.domain, { color: accentColor }]} numberOfLines={1}>{preview.domain}</Text>
-          <Text style={[lpStyles.title, { color: textColor }]} numberOfLines={2}>{preview.title}</Text>
-          {preview.description ? (
-            <Text style={[lpStyles.desc, { color: subtextColor }]} numberOfLines={2}>{preview.description}</Text>
-          ) : null}
-        </View>
-      </View>
-    </AppPressable>
-  );
-}
-
-const lpStyles = StyleSheet.create({
-  card: {
-    borderRadius: 8,
-    borderWidth: 1,
-    overflow: 'hidden',
-    marginTop: 6,
-    paddingHorizontal: 8,
-    paddingBottom: 6,
-    paddingTop: 6,
-    minWidth: 160,
-  },
-  bar: { width: 3, borderRadius: 3, minHeight: 36 },
-  domain: { fontSize: 11, fontWeight: '600', marginBottom: 2 },
-  title: { fontSize: 13, fontWeight: '500', marginBottom: 2 },
-  desc: { fontSize: 12, lineHeight: 16 },
-});
-
 // ─── Forward Message Modal ────────────────────────────────────────────────────
 // Extracted to src/ui/components/modals/chat/ChatForwardModal.tsx (B.3.f).
-// Re-exported here for backward compatibility with GroupsScreen.tsx.
 import { ForwardModal } from '../components/modals/chat/ChatForwardModal';
-export { ForwardModal };
 import { ReactionsModal } from '../components/modals/chat/ChatReactionsModal';
 import { MessageInfoModal } from '../components/modals/chat/ChatMessageInfoModal';
 
@@ -461,7 +294,7 @@ function ReactionDetailModal({
             <ScrollView showsVerticalScrollIndicator={false}>
               {activeDids.map((did) => (
                 <View key={did} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
+                  <View style={{ ...avatarShape(32), backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ fontSize: 14 }}>{nameInitial(didToName(did))}</Text>
                   </View>
                   <Text style={{ color: colors.text, fontSize: 15 }}>{didToName(did)}</Text>
@@ -482,11 +315,11 @@ function ReactionDetailModal({
 }
 const rdStyles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  sheet: { borderRadius: 14, paddingVertical: 20, paddingHorizontal: 24, width: 300, maxWidth: '90%', alignItems: 'center', gap: 10 },
+  sheet: { borderRadius: radius.lg, paddingVertical: 20, paddingHorizontal: 24, width: 300, maxWidth: '90%', alignItems: 'center', gap: 10 },
   heading: { fontSize: 28, marginBottom: 6 },
-  tab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5 },
+  tab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.xl, borderWidth: 1.5 },
   name: { fontSize: 15, textAlign: 'center' },
-  closeBtn: { marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  closeBtn: { marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1 },
 });
 
 // ─── Message bubble ──────────────────────────────────────────────────────────
@@ -611,6 +444,30 @@ const MessageRow = React.memo(
       },
     })).current;
 
+    /**
+     * v4.32.532: новое сообщение приезжает, а не возникает.
+     *
+     * Анимация даётся ТОЛЬКО свежему сообщению (моложе двух секунд на момент
+     * монтирования). FlatList переиспользует строки при прокрутке; без этого
+     * условия вся переписка заново выезжала бы каждый раз, когда её пролистали
+     * туда-обратно, — а это ровно тот случай, когда анимация мешает.
+     *
+     * Решение принимается один раз в ref: `Date.now()` при каждом рендере
+     * менял бы ответ на середине жизни строки.
+     */
+    const appear = useRef(new RNAnimated.Value(
+      !isReducedMotion() && Date.now() - item.createdAt < 2000 ? 0 : 1
+    )).current;
+    useEffect(() => {
+      // @ts-expect-error _value — единственный способ прочитать стартовое значение
+      if (appear._value === 1) return;
+      RNAnimated.timing(appear, {
+        toValue: 1,
+        duration: motion.base,
+        useNativeDriver: true,
+      }).start();
+    }, [appear]);
+
     // v4.32.237: системная строка личного чата («включены исчезающие
     // сообщения») — серым по центру, без пузыря, свайпов и меню, как в
     // группах. Возврат стоит после всех хуков, иначе порядок хуков поплывёт.
@@ -629,7 +486,13 @@ const MessageRow = React.memo(
         style={[
           s.bubbleRow,
           isOut ? s.bubbleOut : s.bubbleIn,
-          { transform: [{ translateX: swipeAnim }] },
+          {
+            opacity: appear,
+            transform: [
+              { translateX: swipeAnim },
+              { translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) },
+            ],
+          },
           isSelected ? { backgroundColor: rowMark(colors, 'selected') } : searchMatch ? { backgroundColor: rowMark(colors, 'found') } : null,
         ]}
         {...(onSelect ? {} : panResponder.panHandlers)}
@@ -650,7 +513,7 @@ const MessageRow = React.memo(
           </View>
         ) : null}
         <AppPressable
-          style={[s.bubble, { backgroundColor: bubbleBg }]}
+          style={[s.bubble, isOut ? s.bubbleAnchorOut : s.bubbleAnchorIn, { backgroundColor: bubbleBg }]}
           delayLongPress={400}
           onLongPress={() => onSelect ? onSelect(item) : onLongPress(item)}
           onPress={() => {
@@ -751,7 +614,7 @@ const MessageRow = React.memo(
                 {fwdLabel ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, paddingBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bubble.hairline }}>
                     <Ionicons name="arrow-redo-outline" size={12} color={bubble.icon} />
-                    <Text style={{ fontSize: 11, color: bubble.icon, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
+                    <Text style={{ fontSize: font.xs, color: bubble.icon, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
                   </View>
                 ) : null}
                 {isBigEmoji(displayText) ? (
@@ -770,7 +633,7 @@ const MessageRow = React.memo(
                 {translatedText ? (
                   <>
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: bubble.hairline, marginVertical: 5 }} />
-                    <Text style={{ fontSize: 11, color: bubble.ink.secondary, marginBottom: 2 }}>🌐 переведено</Text>
+                    <Text style={{ fontSize: font.xs, color: bubble.ink.secondary, marginBottom: 2 }}>🌐 переведено</Text>
                     <MessageBlock text={translatedText} baseStyle={[s.bubbleText, { color: bubble.ink.text, fontSize: msgFontSize - 1 }]} isOutgoing={isOut} />
                   </>
                 ) : null}
@@ -793,7 +656,7 @@ const MessageRow = React.memo(
             isViewOnceMessage(item.text ?? '') ? (
               <AppPressable
                 onPress={() => onViewOnceTap?.(item)}
-                style={{ alignItems: 'center', justifyContent: 'center', height: 120, borderRadius: 12, backgroundColor: bubble.plate.fill, marginTop: 4 }}
+                style={{ alignItems: 'center', justifyContent: 'center', height: 120, borderRadius: radius.lg, backgroundColor: bubble.plate.fill, marginTop: 4 }}
               >
                 <Ionicons name="eye-outline" size={32} color={bubble.plate.ink.secondary} />
                 <Text style={{ color: bubble.plate.ink.text, fontSize: 13, marginTop: 6, fontWeight: '500' }}>
@@ -886,89 +749,14 @@ const MessageRow = React.memo(
 // Extracted to src/ui/components/modals/chat/ChatReactionsModal.tsx (B.3.f).
 // Extracted to src/ui/components/modals/chat/ChatMessageInfoModal.tsx (B.3.f).
 
-// ─── Send effect particles ────────────────────────────────────────────────────
-export const SEND_EFFECT_TRIGGERS: Record<string, string[]> = {
-  '🎉': ['🎉', '🎊', '✨', '🎉', '🎊', '✨', '🎉', '🎊', '✨', '🎉'],
-  '🎊': ['🎊', '🎉', '✨', '🎊', '🎉', '✨', '🎊', '🎉', '✨', '🎊'],
-  '❤️': ['❤️', '💕', '💖', '❤️', '💕', '💗', '❤️', '💖', '💕', '❤️'],
-  '💕': ['💕', '❤️', '💖', '💕', '💗', '💘', '💕', '💖', '❤️', '💕'],
-  '🔥': ['🔥', '🔥', '💥', '🔥', '🔥', '✨', '🔥', '💥', '🔥', '🔥'],
-  '🎂': ['🎂', '🎈', '🎉', '🎁', '🎈', '🎊', '🎂', '🎈', '✨', '🎉'],
-  '👏': ['👏', '👏', '⭐', '👏', '⭐', '👏', '👏', '⭐', '👏', '✨'],
-  '🥳': ['🥳', '🎉', '🎊', '🥳', '✨', '🎉', '🎊', '🥳', '🎈', '✨'],
-};
-
-export function detectSendEffect(text: string): string[] | null {
-  for (const [trigger, particles] of Object.entries(SEND_EFFECT_TRIGGERS)) {
-    if (text.includes(trigger)) return particles;
-  }
-  return null;
-}
-
-export function SendEffectOverlay({ particles, onDone }: { particles: string[]; onDone: () => void }): React.ReactElement {
-  const { width: SW, height: SH } = Dimensions.get('window');
-  const anims = useRef(particles.map(() => ({
-    y: new RNAnimated.Value(0),
-    x: new RNAnimated.Value(0),
-    opacity: new RNAnimated.Value(1),
-    scale: new RNAnimated.Value(0.5),
-  }))).current;
-  // v4.32.124 (AUDIT P0 #9): capture onDone via ref so the animation's
-  // completion callback always calls the latest parent handler, even though
-  // the effect intentionally runs once (empty deps). Without this, a re-
-  // render of the parent with a different `onDone` leaves the animation
-  // calling a stale closure at completion.
-  const onDoneRef = useRef(onDone);
-  useEffect(() => { onDoneRef.current = onDone; }, [onDone]);
-
-  useEffect(() => {
-    const animations = anims.map((a, i) => {
-      const delay = i * 60;
-      const xTarget = (Math.random() - 0.5) * SW * 0.8;
-      const yTarget = -(SH * 0.5 + Math.random() * SH * 0.3);
-      return RNAnimated.sequence([
-        RNAnimated.delay(delay),
-        RNAnimated.parallel([
-          RNAnimated.spring(a.scale, { toValue: 1, useNativeDriver: true, tension: 200, friction: 8 }),
-          RNAnimated.timing(a.y, { toValue: yTarget, duration: 900, useNativeDriver: true }),
-          RNAnimated.timing(a.x, { toValue: xTarget, duration: 900, useNativeDriver: true }),
-          RNAnimated.sequence([
-            RNAnimated.delay(400),
-            RNAnimated.timing(a.opacity, { toValue: 0, duration: 500, useNativeDriver: true }),
-          ]),
-        ]),
-      ]);
-    });
-    RNAnimated.stagger(40, animations).start(() => onDoneRef.current());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <View pointerEvents="none" style={{ position: 'absolute', bottom: 80, left: SW / 2, zIndex: 9999 }}>
-      {anims.map((a, i) => (
-        <RNAnimated.Text
-          key={i}
-          style={{
-            position: 'absolute',
-            fontSize: 28,
-            transform: [{ translateX: a.x }, { translateY: a.y }, { scale: a.scale }],
-            opacity: a.opacity,
-          }}
-        >
-          {particles[i]}
-        </RNAnimated.Text>
-      ))}
-    </View>
-  );
-}
 
 
 // ─── Wallpaper Picker Modal ───────────────────────────────────────────────────
 // v4.32.410: набор фонов переехал в src/ui/wallpapers.ts — это ДАННЫЕ, а не
 // часть экрана, и рядом с ними живёт правило «что читается поверх обоев».
-import { feedGround, type Wallpaper } from '../wallpapers';
+import { defaultWallpaper, feedGround, type Wallpaper } from '../wallpapers';
+import { WallpaperBackground } from '../components/WallpaperBackground';
 import { WallpaperPickerModal } from '../components/modals/chat/ChatWallpaperPickerModal';
-export { WallpaperPickerModal };
 
 // ─── Schedule Message Modal ───────────────────────────────────────────────────
 import { ScheduleModal } from '../components/modals/chat/ChatScheduleModal';
@@ -978,223 +766,9 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
-export { ScheduleModal };
 
 
 
-// ─── Emoji picker panel ───────────────────────────────────────────────────────
-const EMOJI_CATEGORIES: { icon: string; label: string; emojis: string[] }[] = [
-  {
-    icon: '😊', label: 'Смайлы',
-    emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'],
-  },
-  {
-    icon: '👋', label: 'Жесты',
-    emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦾','🦵','🦶','👂','🦻','👃','🫀','🫁','🧠','🦷','🦴','👀','👁️','👅','👄','💋','🩸'],
-  },
-  {
-    icon: '🐶', label: 'Животные',
-    emojis: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦟','🦗','🕷️','🦂','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🐊','🐅','🐆','🦓','🦍','🦧','🦣','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐈','🐓','🦃','🦤','🦚','🦜','🦢','🦩','🕊️','🐇','🦝','🦨','🦡','🦫','🦦','🦥','🐁','🐀','🐿️','🦔'],
-  },
-  {
-    icon: '🍕', label: 'Еда',
-    emojis: ['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥬','🥒','🌶️','🫑','🥕','🧄','🧅','🥔','🍠','🥐','🥯','🍞','🥖','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🌭','🍔','🍟','🍕','🫓','🥪','🥙','🧆','🌮','🌯','🫔','🥗','🥘','🫕','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥮','🍢','🧁','🍰','🎂','🍮','🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🧃','🥤','🧋','☕','🍵','🫖','🍶','🍺','🍷','🥂','🥃','🍸','🍹','🧉'],
-  },
-  {
-    icon: '⚽', label: 'Спорт',
-    emojis: ['⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🥏','🎱','🪀','🏓','🏸','🏒','🥅','⛳','🪁','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸️','🥌','🎿','⛷️','🏂','🏋️','🤼','🤸','⛹️','🤺','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚵','🚴','🏆','🥇','🥈','🥉','🏅','🎖️','🏵️','🎗️','🎫','🎟️','🎪','🤹','🎭','🎨','🎬','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🎲','♟️','🎯','🎳','🎮','🕹️'],
-  },
-  {
-    icon: '✈️', label: 'Путешествия',
-    emojis: ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍️','🛵','🦽','🦼','🛺','🚲','🛴','🛹','🛼','🚏','🛣️','🛤️','⛽','🚨','🚥','🚦','🛑','🚧','⚓','🛟','⛵','🛶','🚤','🛳️','⛴️','🛥️','🚢','✈️','🛩️','🛫','🛬','🪂','💺','🚁','🚟','🚠','🚡','🛰️','🚀','🛸','🌠','🌌','🌃','🏙️','🌉','🌁','🗾','🎑','🏔️','⛰️','🌋','🗻','🏕️','🏖️','🏜️','🏝️','🏞️','🏟️','🏛️','🏗️','🧱','🏘️','🏚️','🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏧','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽'],
-  },
-  {
-    icon: '💡', label: 'Объекты',
-    emojis: ['💡','🔦','🕯️','🪔','🧯','🛢️','💰','💴','💵','💶','💷','💸','💳','🪙','💹','📈','📉','📊','📋','📌','📍','🗂️','🗃️','🗄️','🗑️','🔒','🔓','🔏','🔐','🔑','🗝️','🔨','🪓','⛏️','⚒️','🛠️','🗡️','⚔️','🔫','🪃','🛡️','🪚','🔧','🪛','🔩','⚙️','🗜️','⚖️','🦯','🔗','⛓️','🪝','🧲','🪜','⚗️','🔭','🔬','🩺','🩻','💊','💉','🩹','🩼','🩺','🩻','🚪','🛏️','🛋️','🪑','🚽','🪠','🚿','🛁','🪤','🪒','🧴','🪥','🧷','🧹','🧺','🧻','🪣','🧼','🫧','🪞','🪟','🛒','🚪','📦','📫','📬','📭','📮','🗳️','✏️','✒️','🖊️','🖋️','📝','📁','📂','🗂️','📅','📆','🗒️','🗓️','📇','📈','📉','📊','📋','📌','📍','✂️','🗃️','🗄️','🗑️'],
-  },
-  {
-    icon: '❤️', label: 'Символы',
-    emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈹','🛂','🛃','🛄','🛅'],
-  },
-];
-
-const SKIN_MODIFIERS = ['\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'] as const;
-// Emojis that support skin tone modifiers (people/hands/gestures)
-const SKIN_TONE_SUPPORT_RE = /[\u{1F44D}-\u{1F44F}\u{1F466}-\u{1F469}\u{1F46E}-\u{1F471}\u{1F473}-\u{1F477}\u{1F47C}\u{1F481}-\u{1F483}\u{1F485}-\u{1F487}\u{1F4AA}\u{1F574}-\u{1F575}\u{1F590}\u{1F595}-\u{1F596}\u{1F645}-\u{1F647}\u{1F64B}-\u{1F64F}\u{1F6A3}\u{1F6B4}-\u{1F6B6}\u{1F6C0}\u{1F6CC}\u{261D}\u{26F9}\u{270A}-\u{270D}\u{1F918}-\u{1F91F}\u{1F930}-\u{1F939}\u{1F93C}-\u{1F93E}\u{1F9B5}-\u{1F9B6}\u{1F9B8}-\u{1F9B9}\u{1F9BB}\u{1F9CD}-\u{1F9CF}\u{1F9D1}-\u{1F9DD}]/u;
-
-export function EmojiPanel({
-  onEmoji,
-  colors,
-}: {
-  onEmoji: (emoji: string) => void;
-  colors: ReturnType<typeof useTheme>['colors'];
-}): React.ReactElement {
-  const [catIdx, setCatIdx] = useState(0);
-  const [skinTarget, setSkinTarget] = useState<string | null>(null);
-  const [emojiSearchQ, setEmojiSearchQ] = useState('');
-  const [recentEmojis, setRecentEmojis] = useState<string[]>([]);
-  const cat = EMOJI_CATEGORIES[catIdx];
-
-  useEffect(() => {
-    // v4.32.190 (Round-20 #5): alive guard + Array.isArray shape check.
-    let alive = true;
-    void scopedKvGet(RECENT_EMOJIS_PANEL_KEY).then((raw) => {
-      if (!alive || !raw) return;
-      try {
-        const p = JSON.parse(raw);
-        if (Array.isArray(p)) setRecentEmojis(p.filter((x): x is string => typeof x === 'string').slice(0, 24));
-      } catch { /* ignore */ }
-    });
-    return () => { alive = false; };
-  }, []);
-
-  const handleEmoji = (emoji: string) => {
-    onEmoji(emoji);
-    setRecentEmojis((prev) => {
-      const next = [emoji, ...prev.filter((e) => e !== emoji)].slice(0, 24);
-      void scopedKvSet(RECENT_EMOJIS_PANEL_KEY, JSON.stringify(next));
-      return next;
-    });
-  };
-
-  const allEmojis = EMOJI_CATEGORIES.flatMap((c) => c.emojis);
-  const searchResults = emojiSearchQ.trim()
-    ? allEmojis.filter((e) => {
-        const q = emojiSearchQ.toLowerCase();
-        // Simple: check if the emoji text includes the query (useful for emoji keyboard names in some environments)
-        // Also check name from EMOJI_CATEGORIES labels heuristically
-        return e.includes(q) || EMOJI_SEARCH_HINTS[e]?.some((kw) => kw.includes(q));
-      }).slice(0, 80)
-    : null;
-
-  const EmojiGrid = ({ emojis }: { emojis: string[] }) => (
-    <View style={epStyles.grid}>
-      {emojis.map((emoji) => {
-        const supportsSkin = SKIN_TONE_SUPPORT_RE.test(emoji);
-        return (
-          <AppPressable
-            key={emoji}
-            style={[epStyles.emojiCell, supportsSkin && { position: 'relative' }]}
-            onPress={() => handleEmoji(emoji)}
-            onLongPress={() => supportsSkin ? setSkinTarget(emoji) : handleEmoji(emoji)}
-          >
-            <Text style={epStyles.emojiGlyph}>{emoji}</Text>
-            {supportsSkin ? (
-              <View style={{ position: 'absolute', bottom: 2, right: 4, width: 4, height: 4, borderRadius: 2, backgroundColor: colors.textMuted, opacity: 0.5 }} />
-            ) : null}
-          </AppPressable>
-        );
-      })}
-    </View>
-  );
-
-  return (
-    <View style={[epStyles.root, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-      {/* Skin tone picker popover */}
-      {skinTarget !== null ? (
-        <AppPressable
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, backgroundColor: scrim.modal, justifyContent: 'center', alignItems: 'center' }}
-          onPress={() => setSkinTarget(null)}
-        >
-          <View style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 12, padding: 8, gap: 4, borderWidth: 1, borderColor: colors.border, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 }}>
-            <AppPressable onPress={() => { handleEmoji(skinTarget); setSkinTarget(null); }} style={{ padding: 6 }}>
-              <Text style={{ fontSize: 26 }}>{skinTarget}</Text>
-            </AppPressable>
-            {SKIN_MODIFIERS.map((mod) => (
-              <AppPressable key={mod} onPress={() => { handleEmoji(skinTarget + mod); setSkinTarget(null); }} style={{ padding: 6 }}>
-                <Text style={{ fontSize: 26 }}>{skinTarget}{mod}</Text>
-              </AppPressable>
-            ))}
-          </View>
-        </AppPressable>
-      ) : null}
-      {/* Search bar */}
-      <View style={[epStyles.searchRow, { backgroundColor: colors.surfaceHigh, borderBottomColor: colors.border }]}>
-        <Ionicons name="search" size={15} color={colors.textMuted} style={{ marginRight: 6 }} />
-        <TextInput
-          value={emojiSearchQ}
-          onChangeText={setEmojiSearchQ}
-          placeholder="Поиск эмодзи…"
-          placeholderTextColor={colors.textMuted}
-          style={{ flex: 1, color: colors.text, fontSize: 13, paddingVertical: 4 }}
-          returnKeyType="done"
-        />
-        {emojiSearchQ ? (
-          <AppPressable onPress={() => setEmojiSearchQ('')} hitSlop={8}>
-            <Ionicons name="close-circle" size={15} color={colors.textMuted} />
-          </AppPressable>
-        ) : null}
-      </View>
-      {!emojiSearchQ ? (
-        <>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={[epStyles.catRow, { borderBottomColor: colors.border }]}
-            contentContainerStyle={{ paddingHorizontal: 4 }}
-          >
-            <AppPressable
-              style={[epStyles.catTab, catIdx === -1 && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
-              onPress={() => setCatIdx(-1)}
-            >
-              <Text style={epStyles.catIcon}>🕐</Text>
-            </AppPressable>
-            {EMOJI_CATEGORIES.map((c, i) => (
-              <AppPressable
-                key={c.label}
-                style={[epStyles.catTab, i === catIdx && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
-                onPress={() => setCatIdx(i)}
-              >
-                <Text style={epStyles.catIcon}>{c.icon}</Text>
-              </AppPressable>
-            ))}
-          </ScrollView>
-          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always">
-            {catIdx === -1 ? (
-              recentEmojis.length > 0 ? <EmojiGrid emojis={recentEmojis} /> : (
-                <Text style={{ textAlign: 'center', color: colors.textMuted, marginTop: 20, fontSize: 13 }}>Ещё нет истории</Text>
-              )
-            ) : (
-              <EmojiGrid emojis={cat.emojis} />
-            )}
-          </ScrollView>
-        </>
-      ) : searchResults !== null ? (
-        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always">
-          {searchResults.length > 0
-            ? <EmojiGrid emojis={searchResults} />
-            : <Text style={{ textAlign: 'center', color: colors.textMuted, marginTop: 20, fontSize: 13 }}>Ничего не найдено</Text>
-          }
-        </ScrollView>
-      ) : null}
-    </View>
-  );
-}
-
-/** Compact keyword hints for emoji search (common terms → emoji). */
-const EMOJI_SEARCH_HINTS: Record<string, string[]> = {
-  '😀': ['smile','радость','смех'], '😂': ['laugh','смех','lol'], '❤️': ['heart','любовь','love'],
-  '👍': ['like','хорошо','ок','ok'], '👎': ['dislike','плохо'], '🔥': ['fire','огонь','hot'],
-  '🎉': ['party','праздник','ура'], '🎊': ['party','праздник'], '✨': ['star','искры','блеск'],
-  '💪': ['strong','сила','мышца'], '🙏': ['pray','просьба','спасибо'], '💯': ['100','отлично'],
-  '🤔': ['think','думать','hmm'], '😍': ['love','красиво','влюблён'], '😎': ['cool','круто','очки'],
-  '🥰': ['love','сердечко'], '😭': ['cry','плачу','грустно'], '😡': ['angry','злость','гнев'],
-  '🚀': ['rocket','ракета','запуск'], '💡': ['idea','идея','лампочка'], '👏': ['clap','аплодисменты'],
-  '🎸': ['guitar','гитара','музыка'], '🐶': ['dog','собака','пёс'], '🐱': ['cat','кот','кошка'],
-  '🍕': ['pizza','пицца'], '☕': ['coffee','кофе'], '🍺': ['beer','пиво'], '🎂': ['cake','торт','ДР'],
-  '📱': ['phone','телефон'], '💻': ['laptop','ноутбук','компьютер'], '📷': ['camera','фото'],
-};
-
-const epStyles = StyleSheet.create({
-  root: { height: 280, borderTopWidth: StyleSheet.hairlineWidth },
-  searchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
-  catRow: { maxHeight: 44, borderBottomWidth: StyleSheet.hairlineWidth },
-  catTab: { paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  catIcon: { fontSize: 20 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 4, paddingVertical: 6 },
-  emojiCell: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  emojiGlyph: { fontSize: 24 },
-});
 
 // ─── ChatThreadView — pure thread UI ─────────────────────────────────────────
 function ChatThreadView({
@@ -1212,7 +786,7 @@ function ChatThreadView({
 }): React.ReactElement {
   // v4.32.16: gate через tabRef — НЕ prop, чтобы setTab не вызывал re-render тяжёлого треда.
   const tabRef = useTabRef();
-  const { colors } = useTheme();
+  const { colors, scheme } = useTheme();
   // v4.32.409: плашка «включён фильтр» в шапке. Шапка — поверхность, а не
   // фон экрана, поэтому подложка считается от неё, а значок — от подложки.
   const headerTint = useMemo(() => badgeTint(colors, 'accent', colors.surface), [colors]);
@@ -1324,9 +898,19 @@ function ChatThreadView({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const msgInputRef = useRef<any>(null);
   const [chatWallpaper, setChatWallpaper] = useState<Wallpaper | null>(null);
+  /**
+   * Что на самом деле нарисовано под лентой.
+   *
+   * v4.32.533: у разговора без выбора обои теперь тоже есть — градиент по
+   * теме. Плоская заливка `colors.background` была не «отсутствием
+   * оформления», а таким же решением, просто невидимым, и именно из-за него
+   * все разговоры выглядели одинаково. Явный выбор «Без обоев» из набора
+   * по-прежнему возможен и по-прежнему даёт плоский фон.
+   */
+  const wallpaper = chatWallpaper ?? defaultWallpaper(scheme);
   // v4.32.410: всё, что лежит на ленте, считается от ОБОЕВ, а не от палитры.
   // То же правило, что в группах с 387-го, — теперь общее на оба экрана.
-  const feed = useMemo(() => feedGround(colors, chatWallpaper), [colors, chatWallpaper]);
+  const feed = useMemo(() => feedGround(colors, wallpaper), [colors, wallpaper]);
   const [mediaGalleryVisible, setMediaGalleryVisible] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
@@ -1481,7 +1065,7 @@ function ChatThreadView({
         const p = JSON.parse(raw) as unknown;
         if (p && typeof p === 'object' && !Array.isArray(p)) {
           const o = p as Record<string, unknown>;
-          if ((o.type === 'color' || o.type === 'image') && typeof o.value === 'string') {
+          if ((o.type === 'color' || o.type === 'image' || o.type === 'mesh') && typeof o.value === 'string') {
             setChatWallpaper({ type: o.type, value: o.value });
           }
         }
@@ -3367,7 +2951,7 @@ function ChatThreadView({
               'rgba(128,128,128,0.25)' здесь стоял поверх чего угодно, а
               надпись бралась из палитры — в светлой теме на тёмных обоях это
               было чёрным по тёмному. */}
-          <View style={{ backgroundColor: isUnread ? feed.loud.fill : feed.quiet.fill, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 4 }}>
+          <View style={{ backgroundColor: isUnread ? feed.loud.fill : feed.quiet.fill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4 }}>
             <Text style={{ color: isUnread ? feed.loud.ink : feed.quiet.ink.secondary, fontSize: 12, fontWeight: isUnread ? '700' : '500' }}>{sep.label}</Text>
           </View>
         </AppPressable>
@@ -3423,7 +3007,7 @@ function ChatThreadView({
       onLayout={(e) => setRootHeight(e.nativeEvent.layout.height)}
     >
       {/* Thread header with back button */}
-      <View style={[s.threadHeader, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+      <GlassSurface style={s.threadHeader} variant="regular">
         <AppPressable style={s.backBtn} onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Назад к чатам">
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </AppPressable>
@@ -3494,7 +3078,7 @@ function ChatThreadView({
             </>
           ) : null}
           <AppPressable
-            style={[s.headerIconBtn, mediaFilterActive && { backgroundColor: headerTint.fill, borderRadius: 6 }]}
+            style={[s.headerIconBtn, mediaFilterActive && { backgroundColor: headerTint.fill, borderRadius: radius.md }]}
             accessibilityRole="button"
             accessibilityLabel="Медиа в чате"
             accessibilityState={{ selected: mediaFilterActive }}
@@ -3727,7 +3311,7 @@ function ChatThreadView({
             </AppPressable>
           ) : null}
         </View>
-      </View>
+      </GlassSurface>
 
       {/* v4.32.105 K.11: на Android behavior=undefined — adjustResize из манифеста сам ресайзит
           окно, KAV с padding вызывал двойную компенсацию (контент сжимался дважды, TextInput
@@ -3735,17 +3319,11 @@ function ChatThreadView({
       <View style={{ flex: 1, paddingBottom: manualKbPad }}>
         {/* v4.32.410: обои-снимок сохранялись под типом 'color', и путь к
             файлу подставлялся в backgroundColor — то есть «Выбрать фото из
-            галереи» не работало. Снимок рисуется картинкой под лентой, а
-            непрозрачная подложка под ним нужна на время загрузки. */}
-        <View style={{ flex: 1, backgroundColor: feed.ground }}>
-        {chatWallpaper?.type === 'image' ? (
-          <Image
-            source={{ uri: chatWallpaper.value }}
-            style={StyleSheet.absoluteFill}
-            resizeMode="cover"
-            accessibilityIgnoresInvertColors
-          />
-        ) : null}
+            галереи» не работало.
+            v4.32.533: три случая (цвет, градиент, снимок) съехались в один
+            слой — WallpaperBackground. */}
+        <View style={{ flex: 1 }}>
+        <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
         <FlashList
           ref={flashListRef}
           style={{ flex: 1 }}
@@ -3783,7 +3361,7 @@ function ChatThreadView({
           ListEmptyComponent={
             <View style={{ alignItems: 'center', paddingTop: 60 }}>
               {/* Надпись лежит на обоях — на своей плашке, как и дата. */}
-              <View style={{ backgroundColor: feed.quiet.fill, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 }}>
+              <View style={{ backgroundColor: feed.quiet.fill, borderRadius: radius.lg, paddingHorizontal: 14, paddingVertical: 8 }}>
                 <Text style={{ color: feed.quiet.ink.secondary, textAlign: 'center' }}>
                   Нет сообщений. Отправьте первое!
                 </Text>
@@ -3801,8 +3379,8 @@ function ChatThreadView({
             onPress={() => flashListRef.current?.scrollToOffset({ offset: 0, animated: true })}
           >
             {openUnreadCount > 0 ? (
-              <View style={{ position: 'absolute', top: -6, right: -6, backgroundColor: colors.errorFill, borderRadius: 9, minWidth: 18, paddingHorizontal: 4, alignItems: 'center' }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: 10, fontWeight: '700' }}>{openUnreadCount > 99 ? '99+' : String(openUnreadCount)}</Text>
+              <View style={{ position: 'absolute', top: -6, right: -6, backgroundColor: colors.errorFill, borderRadius: radius.md, minWidth: 18, paddingHorizontal: 4, alignItems: 'center' }}>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{openUnreadCount > 99 ? '99+' : String(openUnreadCount)}</Text>
               </View>
             ) : null}
             <Ionicons name="chevron-down" size={22} color={contrastingInk(colors.primary)} />
@@ -3845,7 +3423,7 @@ function ChatThreadView({
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={[s.pinnedLabel, { color: colors.accent }]}>Закреплённое</Text>
                   {total > 1 ? (
-                    <Text style={{ fontSize: 11, color: colors.textMuted }}>{pinnedMsgIdx + 1}/{total}</Text>
+                    <Text style={{ fontSize: font.xs, color: colors.textMuted }}>{pinnedMsgIdx + 1}/{total}</Text>
                   ) : null}
                 </View>
                 <Text
@@ -3886,7 +3464,7 @@ function ChatThreadView({
 
         {peerTyping && !isSavedMessages ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 6, gap: 8, backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
-            <View style={{ backgroundColor: colors.surfaceHigh, borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 100 }}>
+            <View style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.xl, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 100 }}>
               <AnimatedDots dotColor={colors.textMuted} dotSize={6} dotSpacing={4} stepDurationMs={300} />
             </View>
           </View>
@@ -4114,7 +3692,7 @@ function ChatThreadView({
             {([
               { marker: '**', label: 'B', style: { fontWeight: '700' as const } },
               { marker: '_', label: 'I', style: { fontStyle: 'italic' as const } },
-              { marker: '`', label: '<>', style: { fontFamily: 'monospace' as const } },
+              { marker: '`', label: '<>', style: { fontFamily: mono } },
               { marker: '~~', label: 'S', style: { textDecorationLine: 'line-through' as const } },
               { marker: '||', label: '||', style: {} },
             ] as const).map(({ marker, label, style }) => (
@@ -4235,7 +3813,7 @@ function ChatThreadView({
               maxLength={MAX_MESSAGE_TEXT}
             />
             {msg.length > 3500 ? (
-              <Text style={{ alignSelf: 'flex-end', marginBottom: 14, marginRight: 4, fontSize: 10, color: msg.length > 4000 ? colors.error : colors.textMuted }}>
+              <Text style={{ alignSelf: 'flex-end', marginBottom: 14, marginRight: 4, fontSize: font.xs, color: msg.length > 4000 ? colors.error : colors.textMuted }}>
                 {MAX_MESSAGE_TEXT - msg.length}
               </Text>
             ) : null}
@@ -4255,7 +3833,11 @@ function ChatThreadView({
                 }
               }}
             >
-              <Text style={{ fontSize: 20 }}>{showEmojiPanel ? '⌨️' : '😊'}</Text>
+              {/* v4.32.533: значок из того же набора, что и соседи по пилюле.
+                  Литерал '😊' рисовался системным шрифтом эмодзи: на Android это
+                  Noto Color Emoji, на вебе — что окажется у пользователя, и рядом
+                  с однотонным Ionicons он выглядел вставкой из другого места. */}
+              <Ionicons name={showEmojiPanel ? 'keypad-outline' : 'happy-outline'} size={20} color={colors.accent} />
             </AppPressable>
             {/* Inline flash (быстрые ответы) — справа внутри пилюли */}
             <AppPressable
@@ -4466,7 +4048,7 @@ function ChatThreadView({
         <WallpaperPickerModal
           visible={wallpaperPickerVisible}
           peerB64={peerB64}
-          current={chatWallpaper}
+          current={wallpaper}
           onClose={() => setWallpaperPickerVisible(false)}
           onApply={(wp) => setChatWallpaper(wp)}
         />
@@ -4663,74 +4245,6 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
   );
 }
 
-const VOICE_PREFIX = '\x01voice:';
-/** View-once media: show image once, then auto-delete. */
-export const VIEW_ONCE_PREFIX = VIEW_ONCE_PREFIX_CONST;
-/** Makes view-once text — wraps normal text/caption with VIEW_ONCE_PREFIX. */
-export function makeViewOnceText(caption: string): string { return `${VIEW_ONCE_PREFIX}${caption}`; }
-
-// Кодек пересылки переехал в core/social/forwardEnvelope.ts: он собирал
-// строку из чужого имени и чужого текста без единой проверки — см. разбор
-// трёх поломок в шапке того файла. Реэкспорт — чтобы GroupsScreen и
-// остальные импорты остались на месте.
-export { FORWARD_PREFIX } from '../../core/social/forwardEnvelope';
-export { isForwardedMessage, makeForwardBundleText, makeForwardText, parseForwardedMessage };
-
-// Конверты места переехали в core/social/locationEnvelope.ts: подпись места
-// проверялась только по длине, поэтому чужая подпись рисовалась заголовком
-// пузыря как есть. Реэкспорт — чтобы импорты экранов остались на месте.
-export { LOCATION_PREFIX, isLocationMessage, makeLocationText, parseLocationMeta };
-
-/**
- * Reverse-geocode coords into a short human address for the location bubble
- * label (e.g. «ул. Ленина, 12, Магадан»). Uses the on-device platform geocoder
- * via expo-location; fully best-effort — returns '' on any failure (offline, no
- * Play Services, no result) so the bubble falls back to showing coordinates.
- * Caller must already hold foreground-location permission.
- */
-export async function reverseGeocodeLabel(lat: number, lon: number): Promise<string> {
-  try {
-    const Location = await import('expo-location');
-    const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-    const a = results[0];
-    if (!a) return '';
-    const street = a.street ? (a.streetNumber ? `${a.street}, ${a.streetNumber}` : a.street) : (a.name ?? '');
-    const city = a.city ?? a.subregion ?? a.region ?? '';
-    const parts = [street, city].map((s) => (s ?? '').trim()).filter((s) => s.length > 0);
-    // de-dup when street already equals the city/name
-    const uniq = parts.filter((s, i) => parts.indexOf(s) === i);
-    return uniq.join(', ').slice(0, 120);
-  } catch {
-    return '';
-  }
-}
-// Конверт документа переехал в core/social/docEnvelope.ts: имя файла бралось
-// из сети как есть, поэтому невидимый U+202E показывал .exe как .pdf — см.
-// разбор в шапке того файла. Здесь остаётся только проверка самого CID: она
-// тянет core/media и в чистый модуль не помещается.
-export { DOC_PREFIX, isDocMessage, makeDocText };
-
-export function parseDocMeta(text: string): { name: string; size: number; cid: string } | null {
-  const meta = parseDocEnvelope(text);
-  if (!meta) return null;
-  // v4.32.190 (Round-20 #2): strict CID shape so a peer can't splice URL path
-  // chars into `${gateway}/ipfs/${cid}` (Linking.openURL redirect).
-  // v4.32.226: accept either a plain IPFS CID or an `nb:` encrypted-blob
-  // descriptor (mobile path). nb refs are shape-validated via parseNbCid so a
-  // peer still can't splice arbitrary URL chars into the gateway path —
-  // DocBubble never builds a gateway URL for nb refs.
-  if (isNbCid(meta.cid)) {
-    if (!parseNbCid(meta.cid)) return null;
-  } else if (!isPlainCid(meta.cid)) {
-    return null;
-  }
-  return meta;
-}
-
-export function isVoiceMessage(text: string): boolean {
-  return text.startsWith(VOICE_PREFIX);
-}
-
 // IB-02 (v4.32.227): legacy/leaked envelopes that were stored WITHOUT their
 // leading control byte (e.g. bare `grp:{...}` / `voice:{...}` from older builds)
 // bypass the prefix detectors above and would otherwise render their raw JSON —
@@ -4740,10 +4254,10 @@ export function isVoiceMessage(text: string): boolean {
 // byte; this only neutralises pre-existing rows at render time.
 const LEAKED_GROUP_ENVELOPE_RE = /^(?:grp|grpr):\{/;
 const LEGACY_MEDIA_ENVELOPE_RE = /^(voice|doc|loc|liveloc|vo):\{/;
-export function isLeakedGroupEnvelope(text: string): boolean {
+function isLeakedGroupEnvelope(text: string): boolean {
   return LEAKED_GROUP_ENVELOPE_RE.test(text);
 }
-export function legacyMediaPlaceholder(text: string): string | null {
+function legacyMediaPlaceholder(text: string): string | null {
   const m = text.match(LEGACY_MEDIA_ENVELOPE_RE);
   if (!m) return null;
   switch (m[1]) {
@@ -4756,86 +4270,67 @@ export function legacyMediaPlaceholder(text: string): string | null {
   }
 }
 
-// Кодек карточки контакта переехал в core/social/contactCardEnvelope.ts:
-// разбор недоверенного JSON не место держать в экране, который его же и
-// роняет при мусоре на входе. Реэкспорт — чтобы GroupsScreen и остальные
-// импорты остались на месте.
-export { CONTACT_CARD_PREFIX, parseContactCard } from '../../core/social/contactCardEnvelope';
-export { isContactCard, makeContactCardText };
-
-export function parseVoiceMeta(text: string): { uri: string; durationMs: number; blob?: BlobRef } | null {
-  if (!text.startsWith(VOICE_PREFIX)) return null;
-  try {
-    // v4.32.190 (Round-20 #3): strict shape + http(s) allowlist on uri
-    // (mirror GroupChatScreen v4.32.185) so a peer can't feed `file://`,
-    // `data:`, `content://` into the audio player when mediaCids are
-    // absent. durationMs must be a finite non-negative number.
-    const p = JSON.parse(text.slice(VOICE_PREFIX.length)) as unknown;
-    if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-    const o = p as Record<string, unknown>;
-    if (typeof o.uri !== 'string' || o.uri.length === 0 || o.uri.length > 2048) return null;
-    if (typeof o.durationMs !== 'number' || !isFinite(o.durationMs) || o.durationMs < 0 || o.durationMs > 24 * 3600_000) return null;
-    // NOTE: uri scheme check (http(s)/ipfs vs local file://) is done at
-    // the renderer level (MediaStrip) because the sender's own outgoing
-    // bubble legitimately stores file:// pointing at the recording.
-    // v4.32.226: optional `b` = E2E-encrypted-blob descriptor (ntfy attachment)
-    // so the recipient can fetch the audio bytes when IPFS is unavailable.
-    const blob = isBlobRef(o.b) ? (o.b as BlobRef) : undefined;
-    return { uri: o.uri, durationMs: o.durationMs, blob };
-  } catch {
-    return null;
-  }
-}
-
-export function makeVoiceText(localUri: string, durationMs: number, blob?: BlobRef): string {
-  return `${VOICE_PREFIX}${JSON.stringify(blob ? { uri: localUri, durationMs, b: blob } : { uri: localUri, durationMs })}`;
-}
-
 
 
 
 
 
 const s = StyleSheet.create({
+  // v4.32.532: шапка диалога стала той же стеклянной капсулой, что и шапка
+  // списка и таббар. Разные шапки на соседних экранах читаются как разные
+  // приложения. Оговорка та же, что у таббара: капсула стоит в потоке, лента
+  // под неё не уезжает, размывается фон, а не сообщения.
   threadHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.sm,
+    borderRadius: radius.xl,
     gap: 8,
+    ...elevation.card,
   },
   backBtn: { padding: 8 },
   headerInfo: { flex: 1 },
-  headerName: { fontSize: 17, fontWeight: '600' },
-  headerStatus: { fontSize: 12, marginTop: 1 },
+  headerName: { fontSize: font.lg, fontWeight: '600', letterSpacing: -0.2 },
+  headerStatus: { fontSize: font.xs, marginTop: 1 },
   headerRight: { flexDirection: 'row', gap: 4 },
   headerIconBtn: { padding: 8 },
-  bubbleRow: { flexDirection: 'row', marginBottom: 6, alignItems: 'center' },
+  bubbleRow: { flexDirection: 'row', marginBottom: spacing.sm, alignItems: 'center' },
   bubbleOut: { justifyContent: 'flex-end' },
   bubbleIn: { justifyContent: 'flex-start' },
   selCircle: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   selToolbar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth, gap: 8 },
   selToolbarBtn: { alignItems: 'center', gap: 3, paddingHorizontal: 6 },
-  selToolbarLabel: { fontSize: 11, fontWeight: '600' },
+  selToolbarLabel: { fontSize: font.xs, fontWeight: '600' },
   selToolbarActions: { flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
-  bubble: { maxWidth: '88%', borderRadius: 16, padding: 10 },
-  bubbleText: { fontSize: 15 },
+  // v4.32.530: пузырь был скруглён одинаково со всех четырёх сторон, и
+  // сторону отправителя приходилось искать по краю экрана. Угол у основания
+  // срезан до 4: это единственная деталь, по которой «моё» и «его» различимы,
+  // даже когда лента сжата, а цвета выключены высокой контрастностью.
+  bubble: { maxWidth: '80%', borderRadius: radius.lg, padding: spacing.md },
+  // v4.32.532: якорный угол был 4 — при скруглении 22 это уже не «хвостик»,
+  // а скол. Пузырь должен читаться округлым целиком, поэтому угол у автора
+  // только приглушён до sm, а не срезан.
+  bubbleAnchorOut: { borderBottomRightRadius: radius.sm },
+  bubbleAnchorIn: { borderBottomLeftRadius: radius.sm },
+  bubbleText: { fontSize: font.md },
   messageFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 4, minHeight: 16 },
   messageFooterOut: { justifyContent: 'flex-end' },
   messageFooterIn: { justifyContent: 'flex-start' },
   // Без цвета: он приходит от поверхности (см. footerInk). Оставленный здесь
   // «запасной» цвет и есть та ловушка, из-за которой оба этих текста годами
   // рисовались одним серым на четырёх разных фонах.
-  messageTime: { fontSize: 11, marginRight: 4 },
-  editedLabel: { fontSize: 10, fontStyle: 'italic' },
+  messageTime: { fontSize: font.xs, marginRight: 4, fontVariant: ['tabular-nums'] },
+  editedLabel: { fontSize: font.xs, fontStyle: 'italic' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', paddingVertical: 6, paddingHorizontal: 6, gap: 4, borderTopWidth: StyleSheet.hairlineWidth },
   // v4.32.58: Telegram-style pill composer — TextInput в капсуле с inline emoji,
   // attach/mic/send — круглые кнопки снаружи (слева/справа).
-  inputPill: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 22, paddingLeft: 14, paddingRight: 2, minHeight: 42 },
-  pillText: { flex: 1, paddingVertical: 10, paddingRight: 6, maxHeight: 100, fontSize: 15 },
-  pillInlineBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
-  roundIconBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  inputPill: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: radius.md, paddingLeft: spacing.md, paddingRight: 2, minHeight: TOUCH_TARGET_MIN },
+  pillText: { flex: 1, paddingVertical: 10, paddingRight: 6, maxHeight: 100, fontSize: font.md },
+  pillInlineBtn: { width: 36, height: 36, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
+  roundIconBtn: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   // legacy (ещё используется в некоторых местах ChatScreen — оверлеях и т.п.)
   inputGrow: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, maxHeight: 100, fontSize: 15 },
   iconBtn: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
@@ -4860,25 +4355,25 @@ const s = StyleSheet.create({
   typingRow: { paddingHorizontal: 16, paddingBottom: 4 },
   typingText: { fontSize: 12, fontStyle: 'italic' },
   pinnedBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth },
-  pinnedLabel: { fontSize: 11, fontWeight: '600', marginBottom: 1 },
+  pinnedLabel: { fontSize: font.xs, fontWeight: '600', marginBottom: 1 },
   pinnedText: { fontSize: 13 },
-  quotedBlock: { flexDirection: 'row', alignItems: 'stretch', borderRadius: 6, marginBottom: 6, overflow: 'hidden' },
+  quotedBlock: { flexDirection: 'row', alignItems: 'stretch', borderRadius: radius.md, marginBottom: 6, overflow: 'hidden' },
   quotedBar: { width: 3 },
   quotedText: { flex: 1, fontSize: 12, paddingHorizontal: 8, paddingVertical: 4, fontStyle: 'italic' },
-  replyBar: { flexDirection: 'row', alignItems: 'center', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 10, marginBottom: 4, borderLeftWidth: 3 },
+  replyBar: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 10, marginBottom: 4, borderLeftWidth: 3 },
   replyBarBody: { flex: 1 },
-  replyLabel: { fontSize: 11, fontWeight: '600', marginBottom: 2 },
+  replyLabel: { fontSize: font.xs, fontWeight: '600', marginBottom: 2 },
   replyPreview: { fontSize: 13 },
   replyClear: { padding: 4 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', borderRadius: 8, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 10, marginBottom: 4, gap: 8 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6, marginHorizontal: 10, marginBottom: 4, gap: 8 },
   searchInput: { flex: 1, fontSize: 14 },
   formatBar: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 4, borderTopWidth: StyleSheet.hairlineWidth, gap: 4 },
-  formatBtn: { width: 36, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1 },
+  formatBtn: { width: 36, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1 },
   formatBtnText: { fontSize: 14 },
   emojiStrip: { borderTopWidth: StyleSheet.hairlineWidth, maxHeight: 52 },
-  emojiSuggestBtn: { alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, marginHorizontal: 2 },
+  emojiSuggestBtn: { alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, marginHorizontal: 2 },
   emojiSuggestEmoji: { fontSize: 20 },
-  emojiSuggestKey: { fontSize: 9, marginTop: 1 },
+  emojiSuggestKey: { fontSize: font.xs, marginTop: 1 },
 });
 
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.

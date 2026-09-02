@@ -4,12 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { AppPressable } from '../../components/AppPressable';
 import { isVideoDoc } from '../chat-utils/media';
-import { parseDocMeta } from '../ChatScreen';
+import { parseDocMeta } from '../../../core/social/docMeta';
 import { fileExt, parseNbCid, resolveBlobToLocalFile } from '../../../core/media/mediaBlob';
 import { gatewayUrl } from '../../../core/media/gatewayUrl';
 import { useBubbleSurface } from '../../BubbleKindContext';
 import { openExternal } from '../../utils/openExternal';
 import { formatByteSize } from '../../../core/media/byteSize';
+import { font, radius } from '../../theme';
 
 // InlineVideoPlayer — inline document-video playback (expo-video). Owns the
 // useVideoPlayer hook at its top level so DocBubble can render it conditionally
@@ -27,7 +28,7 @@ function InlineVideoPlayer({
     p.play();
   });
   return (
-    <View style={{ width: 240, borderRadius: 10, overflow: 'hidden' }}>
+    <View style={{ width: 240, borderRadius: radius.md, overflow: 'hidden' }}>
       <VideoView
         player={player}
         style={{ width: 240, height: 160 }}
@@ -116,7 +117,7 @@ export function DocBubble({
     }
     return (
       <AppPressable
-        style={{ width: 220, borderRadius: 10, overflow: 'hidden', backgroundColor: bubble.plate.fill }}
+        style={{ width: 220, borderRadius: radius.md, overflow: 'hidden', backgroundColor: bubble.plate.fill }}
         onPress={() => { if (blobRef) { void playBlobVideo(); } else { setVideoPlaying(true); } }}
       >
         <View style={{ height: 120, alignItems: 'center', justifyContent: 'center' }}>
@@ -125,7 +126,7 @@ export function DocBubble({
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingBottom: 8, gap: 6 }}>
           <Ionicons name="videocam-outline" size={14} color={mutedColor} />
           <Text style={{ color: textColor, fontSize: 12, flex: 1 }} numberOfLines={1}>{meta.name}</Text>
-          <Text style={{ color: mutedColor, fontSize: 11 }}>{sizeStr}</Text>
+          <Text style={{ color: mutedColor, fontSize: font.xs }}>{sizeStr}</Text>
         </View>
       </AppPressable>
     );
@@ -144,7 +145,7 @@ export function DocBubble({
       <Ionicons name="document-outline" size={28} color={iconColor} />
       <View style={{ flex: 1 }}>
         <Text style={{ color: textColor, fontWeight: '600', fontSize: 13 }} numberOfLines={2}>{meta.name}</Text>
-        <Text style={{ color: mutedColor, fontSize: 11 }}>{sizeStr}</Text>
+        <Text style={{ color: mutedColor, fontSize: font.xs }}>{sizeStr}</Text>
       </View>
       {opening ? <ActivityIndicator size="small" color={mutedColor} /> : <Ionicons name="download-outline" size={18} color={mutedColor} />}
     </AppPressable>

@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { scrim } from '../../../theme';
+import { font, radius, scrim } from '../../../theme';
 
 const REACTION_EMOJIS = ['❤️', '👍', '👎', '😂', '😮', '😢', '🔥', '👏', '🎉', '💯'];
 
@@ -69,11 +69,11 @@ export function ReactionsModal({
 
 const rmStyles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: scrim.modal },
-  panel: { borderRadius: 16, padding: 12 },
+  panel: { borderRadius: radius.xl, padding: 12 },
   row: { gap: 4, paddingHorizontal: 4 },
   emojiBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   emoji: { fontSize: 26 },
-  sectionLabel: { fontSize: 11, fontWeight: '600', paddingHorizontal: 6, marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionLabel: { fontSize: font.xs, fontWeight: '600', paddingHorizontal: 6, marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
   divider: { height: StyleSheet.hairlineWidth, marginVertical: 6, marginHorizontal: 4 },
   moreBtnWrapper: {},
   moreBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },

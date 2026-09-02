@@ -10,7 +10,7 @@ import { View, Text, Image } from 'react-native';
 import { AppPressable } from './AppPressable';
 import { openMapAt } from '../utils/openExternal';
 import { Ionicons } from '@expo/vector-icons';
-import { badgeTint, font, mediaScrim, primaryInk, spacing } from '../theme';
+import { badgeTint, font, mediaScrim, primaryInk, radius, spacing } from '../theme';
 import { useThemedStyles, useColors, useTheme } from '../ThemeContext';
 
 type Props = {
@@ -34,7 +34,7 @@ export function LocationMessage({ lat, lng, address }: Props): React.ReactElemen
   const styles = useThemedStyles((c) => ({
     container: {
       backgroundColor: c.surface,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       overflow: 'hidden' as const,
       maxWidth: 300,
       borderWidth: 1,
@@ -117,7 +117,7 @@ export function LocationMessage({ lat, lng, address }: Props): React.ReactElemen
       backgroundColor: mediaScrim.bar,
       paddingHorizontal: 8,
       paddingVertical: 3,
-      borderRadius: 10,
+      borderRadius: radius.md,
     },
     badgeText: {
       color: mediaScrim.ink,
@@ -132,10 +132,10 @@ export function LocationMessage({ lat, lng, address }: Props): React.ReactElemen
       backgroundColor: mediaScrim.bar,
       paddingHorizontal: 4,
       paddingVertical: 1,
-      borderRadius: 3,
+      borderRadius: radius.sm,
     },
     attributionText: {
-      fontSize: 8,
+      fontSize: font.xs,
       color: mediaScrim.inkMuted,
     },
     footer: {

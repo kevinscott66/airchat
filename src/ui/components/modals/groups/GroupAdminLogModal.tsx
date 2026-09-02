@@ -4,7 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { scrim, tintedPlate } from '../../../theme';
+import { font, scrim, tintedPlate } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupMessageRow } from '../../../../core/storage/local';
 import { parseGroupSysText } from '../../../screens/GroupsScreen';
@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
   entryIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   entryBody: { flex: 1 },
   entryText: { fontSize: 14 },
-  entryDate: { fontSize: 11, marginTop: 2 },
+  entryDate: { fontSize: font.xs, marginTop: 2 },
   empty: { alignItems: 'center', paddingVertical: 40 },
   emptyText: { marginTop: 12, fontSize: 14 },
 });

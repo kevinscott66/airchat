@@ -2,6 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import { FormattedText } from './FormattedText';
 import { useBubbleSurface } from '../../../BubbleKindContext';
+import { mono, radius } from '../../../theme';
 
 /** Splits text by fenced code blocks (``` ... ```) and renders each part appropriately. */
 export function MessageBlock({ text, baseStyle, isOutgoing }: { text: string; baseStyle?: object; isOutgoing?: boolean }): React.ReactElement {
@@ -23,8 +24,8 @@ export function MessageBlock({ text, baseStyle, isOutgoing }: { text: string; ba
           const firstNl = inner.indexOf('\n');
           const code = firstNl > -1 ? inner.slice(firstNl + 1) : inner;
           return (
-            <View key={idx} style={{ backgroundColor: bubble.plate.fill, borderRadius: 6, padding: 8, marginVertical: 4 }}>
-              <Text style={{ fontFamily: 'monospace', fontSize: 12, color: bubble.plate.ink.text }}>{code.trim()}</Text>
+            <View key={idx} style={{ backgroundColor: bubble.plate.fill, borderRadius: radius.md, padding: 8, marginVertical: 4 }}>
+              <Text style={{ fontFamily: mono, fontSize: 12, color: bubble.plate.ink.text }}>{code.trim()}</Text>
             </View>
           );
         }

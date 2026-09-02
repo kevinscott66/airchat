@@ -79,12 +79,23 @@ export type DialogBackupFileV1 = {
   groupMembers?: GroupMemberBackupRow[];
 };
 
-function backupUri(profileId: number): string {
+/**
+ * `null`, когда каталога документов нет вовсе — так выглядит web: у страницы
+ * нет файловой системы приложения, и `FileSystem.documentDirectory` там пуст.
+ *
+ * Раньше здесь кидали `documentDirectory unavailable`. На нативе это было
+ * равносильно `null` (базы без каталога не бывает), а на web давало
+ * необработанный reject из отложенного экспорта — ошибку про отсутствие того,
+ * чего на этой платформе и не должно быть. Остальные пути модуля
+ * (`legacyBackupUri`, `deleteDialogBackupForProfile`, `deleteAllDialogBackups`)
+ * уже возвращались молча; теперь и этот ведёт себя так же.
+ *
+ * Данные при этом не теряются: копия на диск — дублирующая подстраховка поверх
+ * SQLite, а сама база в браузере живёт в wa-sqlite и переживает перезагрузку.
+ */
+function backupUri(profileId: number): string | null {
   const base = FileSystem.documentDirectory;
-  if (!base) {
-    throw new Error('documentDirectory unavailable');
-  }
-  return `${base}${backupFilename(profileId)}`;
+  return base ? `${base}${backupFilename(profileId)}` : null;
 }
 
 /** Копия до v4.32.280 — одна на устройство; её содержимое принадлежало первому профилю. */
@@ -227,6 +238,13 @@ export async function exportDialogBackupToFile(): Promise<string | null> {
     return null;
   }
   const pid = activeProfileId();
+  // До сбора payload: он читает всю переписку из базы, и делать это ради
+  // записи, которой некуда идти, незачем.
+  const uri = backupUri(pid);
+  if (!uri) {
+    log.debug('dialog_backup_skip_no_filesystem');
+    return null;
+  }
   const messages = await exportRawChatMessageRows(pid);
   const kv = await exportDialogKvSnapshot(pid);
   const conversations = await exportConversationMetaRows(pid);
@@ -242,7 +260,6 @@ export async function exportDialogBackupToFile(): Promise<string | null> {
     groupMessages: groups.messages,
     groupMembers: groups.members,
   };
-  const uri = backupUri(pid);
   await FileSystem.writeAsStringAsync(uri, JSON.stringify(payload), {
     encoding: FileSystem.EncodingType.UTF8,
   });
@@ -373,6 +390,10 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
 export async function tryRestoreDialogBackupFromFile(): Promise<number> {
   const pid = activeProfileId();
   let readUri = backupUri(pid);
+  if (!readUri) {
+    log.debug('dialog_backup_no_filesystem');
+    return 0;
+  }
   if (!(await FileSystem.getInfoAsync(readUri)).exists) {
     // Копию, снятую до v4.32.280, наследует только первый профиль: она одна на
     // устройство и не помнит, чья она, а второму аккаунту чужая переписка не нужна.

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeScreen } from '../components/SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import type { AppColors } from '../theme';
+import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 
 type StylesSubset = ReturnType<typeof makeStyles>;
 
@@ -57,9 +58,17 @@ export function PrivacyPolicyScreen({ onBack }: Props): React.ReactElement {
           Сообщения защищены симметричным шифрованием XChaCha20-Poly1305 с ключами, создаваемыми для каждой сессии. Ваш долгосрочный приватный ключ Ed25519 хранится на устройстве (SecureStore) и не покидает его без явного экспорта резервной копии.
         </Section>
 
-        <Section title="Wi-Fi LAN (локальная сеть)" styles={styles}>
-          Приложение поддерживает обмен сообщениями через локальную Wi-Fi сеть без подключения к интернету. Все сообщения шифруются на устройстве до отправки — незашифрованный текст по сети не передаётся.
-        </Section>
+        {/* v4.32.528: раздел политики отвечает на вопрос «что это приложение
+            делает с моими данными», а не «что умеет продукт вообще». В браузере
+            локальной сети приложение не касается — сокет и mDNS ему недоступны, —
+            и раздел про неё описывал бы чужое поведение. Лишний раздел в политике
+            не безобиден: он размывает границу того, на что пользователь
+            соглашается. См. platformCapabilities. */}
+        {LOCAL_RADIO_TRANSPORTS_AVAILABLE ? (
+          <Section title="Wi-Fi LAN (локальная сеть)" styles={styles}>
+            Приложение поддерживает обмен сообщениями через локальную Wi-Fi сеть без подключения к интернету. Все сообщения шифруются на устройстве до отправки — незашифрованный текст по сети не передаётся.
+          </Section>
+        ) : null}
 
         <Section title="Интернет (Wi-Fi / мобильная сеть)" styles={styles}>
           Для связи через интернет приложение использует зашифрованные соединения по Wi-Fi или мобильной сети. Содержимое сообщений не передаётся на серверы в открытом виде.

@@ -9,7 +9,7 @@ import { type GroupMemberRow } from '../../../../core/storage/local';
 import { nameInitial } from '../../../../core/social/contactLabel';
 import { shownName } from '../../../../core/social/unreadableName';
 import { roleLabel, roleTone } from '../../../../core/social/groupRolePolicy';
-import { contrastingInk, identityAvatar, scrim } from '../../../theme';
+import { avatarShape, contrastingInk, font, identityAvatar, mono, radius, scrim } from '../../../theme';
 import { shortIdentity } from '../../../identity/shortId';
 
 export interface GroupMemberSheetModalProps {
@@ -72,7 +72,7 @@ function GroupMemberSheetModalImpl({
               {(() => {
                 const avatar = identityAvatar(member.peerPubB64);
                 return (
-                  <View style={[styles.avatar, { width: 64, height: 64, borderRadius: 32, alignSelf: 'center', backgroundColor: avatar.fill }]}>
+                  <View style={[styles.avatar, { ...avatarShape(64), alignSelf: 'center', backgroundColor: avatar.fill }]}>
                     <Text style={{ color: avatar.ink, fontSize: 26, fontWeight: '600' }}>{nameInitial(member.displayName)}</Text>
                   </View>
                 );
@@ -87,7 +87,7 @@ function GroupMemberSheetModalImpl({
                   {roleLabel(member.role)}
                 </Text>
               ) : null}
-              <Text style={{ color: colors.textMuted, fontSize: 11, textAlign: 'center', fontFamily: 'monospace', marginBottom: 16 }}>{shortIdentity(member.peerPubB64, 12)}</Text>
+              <Text style={{ color: colors.textMuted, fontSize: font.xs, textAlign: 'center', fontFamily: mono, marginBottom: 16 }}>{shortIdentity(member.peerPubB64, 12)}</Text>
               <View style={{ gap: 8, paddingHorizontal: 16, paddingBottom: 24 }}>
                 <AppPressable
                   style={[styles.sheetBtn, { backgroundColor: colors.primary }]}
@@ -161,13 +161,13 @@ const styles = StyleSheet.create({
   headerName: { fontSize: 17, fontWeight: '600' },
   avatar: { alignItems: 'center', justifyContent: 'center' },
   role: { fontSize: 12, marginTop: 1 },
-  sheetBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 12, paddingVertical: 12 },
+  sheetBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg, paddingVertical: 12 },
   /**
    * Действия модерации идут списком, а не в ряд: их стало три, и в одну
    * строку помещались только огрызки подписей («Снять», «Назначить»), по
    * которым не понять, что именно снимут.
    */
-  actionRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.lg, paddingVertical: 13, paddingHorizontal: 14 },
   actionLabel: { fontSize: 15, fontWeight: '500', marginLeft: 10 },
 });
 

@@ -4,7 +4,7 @@ import { AppPressable } from './AppPressable';
 import { listContacts, type Contact } from '../../core/social/contacts';
 import { rateLimiter } from '../../core/security/rateLimiter';
 import { useTheme } from '../ThemeContext';
-import { readableInk } from '../theme';
+import { font, radius, readableInk } from '../theme';
 import { contactLabel } from '../../core/social/contactLabel';
 import { shortIdentity } from '../identity/shortId';
 
@@ -97,8 +97,8 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     rowText: { flex: 1, marginRight: 8 },
     name: { color: colors.text, fontWeight: '600' },
-    mono: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
-    unblock: { backgroundColor: colors.primaryMuted, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+    mono: { color: colors.textMuted, fontSize: font.xs, marginTop: 4 },
+    unblock: { backgroundColor: colors.primaryMuted, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md },
     // v4.32.407: `accent` подобран под ФОН страницы, а надпись лежит на
     // приглушённой заливке — на ней он давал 3.4–4.4:1 при любом акценте.
     unblockText: { color: readableInk(colors.accent, colors.primaryMuted, 4.5), fontWeight: '600', fontSize: 13 },

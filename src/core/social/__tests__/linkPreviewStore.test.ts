@@ -16,8 +16,10 @@ import {
   type LinkPreviewCard,
 } from '../linkPreviewStore';
 
+// v4.32.534: карточка уехала из ChatScreen.tsx в свой модуль — экран диалога
+// раздавал её группам и ленте как бочка ре-экспортов. Проверки те же.
 const CHAT = fs.readFileSync(
-  path.join(__dirname, '../../../ui/screens/ChatScreen.tsx'),
+  path.join(__dirname, '../../../ui/screens/chat-components/LinkPreview.tsx'),
   'utf8',
 );
 
@@ -158,7 +160,7 @@ describe('linkPreviewStore: предел размера страницы', () =>
   });
 });
 
-describe('карточка ссылки на экране', () => {
+describe('карточка ссылки: модуль LinkPreview', () => {
   it('голой Map больше нет', () => {
     expect(CHAT).not.toContain('const previewCache = new Map<');
     expect(CHAT).not.toContain('previewCache.set(');

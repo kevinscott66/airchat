@@ -164,10 +164,10 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
     permTitleRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, flexWrap: 'wrap' as const },
     permTitle:  { fontSize: font.md, fontWeight: '700' as const, color: c.text },
     requiredBadge: {
-      fontSize: 9, fontWeight: '700' as const, color: c.accent,
+      fontSize: font.xs, fontWeight: '700' as const, color: c.accent,
       backgroundColor: `${c.primary}22`,
       paddingHorizontal: 5, paddingVertical: 1,
-      borderRadius: 4, overflow: 'hidden' as const,
+      borderRadius: radius.md, overflow: 'hidden' as const,
       textTransform: 'uppercase' as const, letterSpacing: 0.3,
     },
     permDesc:   { fontSize: font.sm, color: c.textSecondary, lineHeight: 18, marginTop: 2 },
@@ -175,7 +175,7 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
 
     permStatusWrap: { minWidth: 80, alignItems: 'flex-end' as const },
     statusBadge:    { borderRadius: radius.full, paddingHorizontal: 8, paddingVertical: 3 },
-    statusText:     { fontSize: 11, fontWeight: '600' as const },
+    statusText:     { fontSize: font.xs, fontWeight: '600' as const },
 
     btnRow: { flexDirection: 'row' as const, gap: spacing.sm, marginTop: spacing.sm },
     primaryBtn: {

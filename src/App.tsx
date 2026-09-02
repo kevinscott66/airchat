@@ -103,11 +103,13 @@ import { scheduleAfterFirstFrame } from './core/utils/firstFrameGate';
 import { setOpenIntentConsumer } from './notifications/openIntent';
 import { useBackHandler } from './core/hooks/useBackHandler';
 import { SplashOverlay, type SplashOverlayRef } from './ui/components/SplashOverlay';
-import { primaryInk, toastSurface } from './ui/theme';
+import { badgeDigit, elevation, font, primaryInk, radius, spacing, toastSurface } from './ui/theme';
 import type { AppColors, ColorScheme } from './ui/theme';
 import { contactLabel } from './core/social/contactLabel';
 import { shortIdentity } from './ui/identity/shortId';
 import { GlassSurface } from './ui/components/GlassSurface';
+import { TabGlyph } from './ui/components/TabGlyph';
+import { ScreenSlot } from './ui/components/ScreenSlot';
 
 log.info('boot_trace', { step: 'App.tsx_module_loaded' });
 
@@ -184,11 +186,20 @@ function useMainTabsStyles() {
     main: { flex: 1, backgroundColor: c.background },
     tabBody: { flex: 1, backgroundColor: c.background },
     tabBar: { backgroundColor: 'transparent' },
+    // v4.32.532: плавающая капсула возвращена. Довод 530-й («таббар — край
+    // окна, а не предмет») верен для плоской полосы, но неверен для стекла:
+    // стекло обязано быть отдельным предметом, иначе кромке негде пройти.
+    // Честная оговорка: таббар стоит в потоке, содержимое под него НЕ уезжает,
+    // поэтому размывается фон, а не лента. Настоящий оверлей здесь потребовал бы
+    // paddingBottom в каждом скролле всех экранов — это отдельная работа.
+    // Тень `overlay` обязательна: стекло само по себе плоское, высоту ему даёт
+    // только тень под ним.
     glassTabBar: {
-      marginHorizontal: 8,
-      marginBottom: 6,
-      borderRadius: 22,
+      marginHorizontal: spacing.sm,
+      marginBottom: spacing.sm,
+      borderRadius: radius.xl,
       minHeight: 76,
+      ...elevation.overlay,
     },
     tabs: {
       flexDirection: 'row' as const,
@@ -197,14 +208,14 @@ function useMainTabsStyles() {
       backgroundColor: 'transparent',
     },
     tabBtn: { paddingVertical: 6, paddingHorizontal: 4, alignItems: 'center' as const, minWidth: 52 },
-    tabText: { color: c.textSecondary, fontSize: 10, marginTop: 4, textAlign: 'center' as const },
-    tabActive: { color: c.accent, fontWeight: '700' as const, fontSize: 10, marginTop: 4, textAlign: 'center' as const },
+    tabText: { color: c.textSecondary, fontSize: font.xs, marginTop: 4, textAlign: 'center' as const },
+    tabActive: { color: c.accent, fontWeight: '700' as const, fontSize: font.xs, marginTop: 4, textAlign: 'center' as const },
     tabBadge: {
       position: 'absolute' as const,
       top: -4,
       right: -8,
       backgroundColor: c.primary,
-      borderRadius: 8,
+      borderRadius: radius.sm,
       minWidth: 16,
       paddingHorizontal: 3,
       paddingVertical: 1,
@@ -214,11 +225,11 @@ function useMainTabsStyles() {
     // Счётчик лежит на c.primary — не белый по договорённости, а чернила,
     // посчитанные от заливки. Сегодня это тот же белый, но теперь он выводится
     // там же, где и все остальные чернила на акценте (v4.32.414).
-    tabBadgeText: { color: primaryInk(c).text, fontSize: 9, fontWeight: '700' as const },
-    userHint: { color: c.textMuted, fontSize: 11, flex: 1, textAlign: 'center' as const },
+    tabBadgeText: { color: primaryInk(c).text, fontSize: badgeDigit, fontWeight: '700' as const, fontVariant: ['tabular-nums' as const] },
+    userHint: { color: c.textMuted, fontSize: font.xs, flex: 1, textAlign: 'center' as const },
     userHintRow: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, paddingBottom: 6, paddingHorizontal: 12 },
     profileSwitchBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 3, paddingLeft: 8 },
-    profileSwitchHint: { color: c.textMuted, fontSize: 10 },
+    profileSwitchHint: { color: c.textMuted, fontSize: font.xs },
     inAppBanner: {
       position: 'absolute' as const,
       top: 0,
@@ -235,7 +246,7 @@ function useMainTabsStyles() {
       backgroundColor: toastSurface.fill,
       marginHorizontal: 12,
       marginTop: 8,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       paddingHorizontal: 14,
       paddingVertical: 12,
       shadowColor: '#000',
@@ -1176,31 +1187,31 @@ function MainTabs({
     >
       <View style={styles.tabBody}>
         {mountedTabs.has('feed') ? (
-          <View style={{ display: tab === 'feed' ? 'flex' : 'none', flex: 1 }}>
+          <ScreenSlot active={tab === 'feed'}>
             <FeedScreen pair={pair} did={did} feedTick={feedTick} />
-          </View>
+          </ScreenSlot>
         ) : tab === 'feed' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_feed" /></View> : null}
         {mountedTabs.has('chat') ? (
-          <View style={{ display: tab === 'chat' ? 'flex' : 'none', flex: 1 }}>
+          <ScreenSlot active={tab === 'chat'}>
             <ChatScreen
               pair={pair}
               peerJump={peerJump}
               popToListToken={chatPopToken}
               onConversationClosed={handleConversationClosed}
             />
-          </View>
+          </ScreenSlot>
         ) : tab === 'chat' && mountingTab === 'chat' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_chat" /></View> : null}
         {mountedTabs.has('groups') ? (
-          <View style={{ display: tab === 'groups' ? 'flex' : 'none', flex: 1 }}>
+          <ScreenSlot active={tab === 'groups'}>
             <GroupsScreen
               pair={pair}
               groupJump={groupJump ?? undefined}
               onOpenDm={handleOpenDmFromGroup}
             />
-          </View>
+          </ScreenSlot>
         ) : tab === 'groups' && mountingTab === 'groups' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_groups" /></View> : null}
         {mountedTabs.has('profile') ? (
-          <View style={{ display: tab === 'profile' ? 'flex' : 'none', flex: 1 }}>
+          <ScreenSlot active={tab === 'profile'}>
             <ProfileScreen
               did={did}
               pair={pair}
@@ -1211,16 +1222,16 @@ function MainTabs({
               onDisplayNameChanged={handleDisplayNameChanged}
               onOpenChatWithPeer={handleOpenChatWithPeer}
             />
-          </View>
+          </ScreenSlot>
         ) : tab === 'profile' && mountingTab === 'profile' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_profile" /></View> : null}
         {mountedTabs.has('settings') ? (
-          <View style={{ display: tab === 'settings' ? 'flex' : 'none', flex: 1 }}>
+          <ScreenSlot active={tab === 'settings'}>
             <SettingsScreen
               profilesEnabled={multiProfileEnabled}
               onProfileIdentityUpdated={handleProfileIdentityUpdated}
               onLogout={onWalletLogout}
             />
-          </View>
+          </ScreenSlot>
         ) : tab === 'settings' && mountingTab === 'settings' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_settings" /></View> : null}
       </View>
       {multiProfileEnabled ? (
@@ -1253,9 +1264,10 @@ function MainTabs({
             }}
             testID="tab_feed"
           >
-            <Ionicons
-              name={tab === 'feed' ? 'newspaper' : 'newspaper-outline'}
-              size={22}
+            <TabGlyph
+              active={tab === 'feed'}
+              name="newspaper"
+              inactiveName="newspaper-outline"
               color={tabColor(tab === 'feed')}
             />
             <Text style={tab === 'feed' ? styles.tabActive : styles.tabText}>Новости</Text>
@@ -1272,12 +1284,12 @@ function MainTabs({
             }}
             testID="tab_chat"
           >
-            <View style={{ position: 'relative' }}>
-              <Ionicons
-                name={tab === 'chat' ? 'chatbubbles' : 'chatbubbles-outline'}
-                size={22}
-                color={tabColor(tab === 'chat')}
-              />
+            <TabGlyph
+              active={tab === 'chat'}
+              name="chatbubbles"
+              inactiveName="chatbubbles-outline"
+              color={tabColor(tab === 'chat')}
+            >
               {chatUnread > 0 ? (
                 <View style={styles.tabBadge}>
                   <Text style={styles.tabBadgeText}>
@@ -1285,7 +1297,7 @@ function MainTabs({
                   </Text>
                 </View>
               ) : null}
-            </View>
+            </TabGlyph>
             <Text style={tab === 'chat' ? styles.tabActive : styles.tabText}>Чаты</Text>
           </AppPressable>
           <AppPressable
@@ -1297,12 +1309,12 @@ function MainTabs({
             }}
             testID="tab_groups"
           >
-            <View style={{ position: 'relative' }}>
-              <Ionicons
-                name={tab === 'groups' ? 'people' : 'people-outline'}
-                size={22}
-                color={tabColor(tab === 'groups')}
-              />
+            <TabGlyph
+              active={tab === 'groups'}
+              name="people"
+              inactiveName="people-outline"
+              color={tabColor(tab === 'groups')}
+            >
               {groupUnread > 0 ? (
                 <View style={styles.tabBadge}>
                   <Text style={styles.tabBadgeText}>
@@ -1310,7 +1322,7 @@ function MainTabs({
                   </Text>
                 </View>
               ) : null}
-            </View>
+            </TabGlyph>
             <Text style={tab === 'groups' ? styles.tabActive : styles.tabText}>Группы</Text>
           </AppPressable>
           <AppPressable
@@ -1322,9 +1334,10 @@ function MainTabs({
             }}
             testID="tab_profile"
           >
-            <Ionicons
-              name={tab === 'profile' ? 'person' : 'person-outline'}
-              size={22}
+            <TabGlyph
+              active={tab === 'profile'}
+              name="person"
+              inactiveName="person-outline"
               color={tabColor(tab === 'profile')}
             />
             <Text style={tab === 'profile' ? styles.tabActive : styles.tabText}>Профиль</Text>
@@ -1338,9 +1351,10 @@ function MainTabs({
             }}
             testID="tab_settings"
           >
-            <Ionicons
-              name={tab === 'settings' ? 'settings' : 'settings-outline'}
-              size={22}
+            <TabGlyph
+              active={tab === 'settings'}
+              name="settings"
+              inactiveName="settings-outline"
               color={tabColor(tab === 'settings')}
             />
             <Text style={tab === 'settings' ? styles.tabActive : styles.tabText}>Ещё</Text>

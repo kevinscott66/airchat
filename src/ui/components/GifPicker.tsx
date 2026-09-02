@@ -38,7 +38,7 @@ export { GIF_PREFIX, isGifMessage, parseGifUrl } from '../../core/social/gifEnve
 export { makeGifText };
 
 import { getConfigSync } from '../../core/config';
-import { mediaScrim, scrim } from '../theme';
+import { font, mediaScrim, radius, scrim } from '../theme';
 import {
   buildTenorUrl,
   classifyTenorStatus,
@@ -127,10 +127,10 @@ export function GifBubble({ url, isMe }: { url: string | null; isMe: boolean }):
 }
 
 const gb = StyleSheet.create({
-  wrap: { width: 200, height: 150, borderRadius: 10, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  wrap: { width: 200, height: 150, borderRadius: radius.md, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   img: { width: 200, height: 150 },
-  badge: { position: 'absolute', bottom: 6, right: 6, backgroundColor: mediaScrim.bar, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
-  badgeText: { color: mediaScrim.ink, fontSize: 10, fontWeight: '700' },
+  badge: { position: 'absolute', bottom: 6, right: 6, backgroundColor: mediaScrim.bar, borderRadius: radius.md, paddingHorizontal: 5, paddingVertical: 2 },
+  badgeText: { color: mediaScrim.ink, fontSize: font.xs, fontWeight: '700' },
 });
 
 // ─── Picker modal ─────────────────────────────────────────────────────────────
@@ -359,7 +359,7 @@ function useSheetStyles(): {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: t.surface,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingHorizontal: 10,
       paddingVertical: 8,
       margin: 12,
@@ -374,7 +374,7 @@ function useSheetStyles(): {
     cell: {
       width: CELL_SIZE,
       height: CELL_SIZE,
-      borderRadius: 8,
+      borderRadius: radius.md,
       overflow: 'hidden',
       backgroundColor: t.surface,
     },

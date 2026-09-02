@@ -3,7 +3,7 @@ import { Text } from 'react-native';
 import { useTheme } from '../../../ThemeContext';
 import { parseFormattedSegments } from '../../chat-utils/parseText';
 import { MAX_RENDER_SEGMENTS, sanitizeBodyForRender } from '../../../utils/renderText';
-import { accentOnFill } from '../../../theme';
+import { accentOnFill, mono } from '../../../theme';
 import { SpoilerSpan } from './SpoilerSpan';
 import { useBubbleSurface } from '../../../BubbleKindContext';
 import { openExternal } from '../../../utils/openExternal';
@@ -57,7 +57,7 @@ export function FormattedText({
             {seg.text}
           </Text>
         ) : seg.code ? (
-          <Text key={idx} style={{ fontFamily: 'monospace', backgroundColor: bubble.plate.fill, color: bubble.plate.ink.text, fontSize: 13 }}>{seg.text}</Text>
+          <Text key={idx} style={{ fontFamily: mono, backgroundColor: bubble.plate.fill, color: bubble.plate.ink.text, fontSize: 13 }}>{seg.text}</Text>
         ) : seg.spoiler ? (
           <SpoilerSpan key={idx} text={seg.text} style={style} host={bubble.fill} />
         ) : seg.strikethrough ? (

@@ -14,7 +14,7 @@ import { View, Text, TextInput, Pressable, ActivityIndicator } from 'react-nativ
 import { Ionicons } from '@expo/vector-icons';
 
 import { AppSwitch } from './AppSwitch';
-import { contrastingInk } from '../theme';
+import { contrastingInk, radius } from '../theme';
 import { useThemedStyles } from '../ThemeContext';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
@@ -173,7 +173,7 @@ export function VpnSettingsSection(): React.ReactElement {
     hint: { color: c.textMuted, fontSize: 12, marginBottom: 8, lineHeight: 16 },
     card: {
       backgroundColor: c.surface,
-      borderRadius: 12,
+      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: c.border,
       padding: 12,
@@ -182,7 +182,7 @@ export function VpnSettingsSection(): React.ReactElement {
     fieldGroup: { marginBottom: 10 },
     input: {
       backgroundColor: c.background,
-      borderRadius: 8,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: c.border,
       color: c.text,
@@ -194,7 +194,7 @@ export function VpnSettingsSection(): React.ReactElement {
     linkInput: { flex: 1 },
     parseBtn: {
       backgroundColor: c.surfaceHigh,
-      borderRadius: 8,
+      borderRadius: radius.md,
       paddingHorizontal: 12,
       justifyContent: 'center' as const,
       minHeight: 38,
@@ -219,7 +219,7 @@ export function VpnSettingsSection(): React.ReactElement {
     primaryBtn: {
       flex: 1,
       backgroundColor: c.primary,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingVertical: 12,
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
@@ -234,7 +234,7 @@ export function VpnSettingsSection(): React.ReactElement {
     secondaryBtn: {
       flex: 1,
       backgroundColor: c.surfaceHigh,
-      borderRadius: 10,
+      borderRadius: radius.md,
       paddingVertical: 12,
       alignItems: 'center' as const,
     },

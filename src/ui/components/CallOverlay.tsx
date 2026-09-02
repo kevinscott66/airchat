@@ -3,9 +3,9 @@
  * WebRTC ownership stays in callService; this component renders its snapshots.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, StatusBar, Vibration, Platform, type StyleProp, type ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Vibration, type StyleProp, type ViewStyle } from 'react-native';
 import { AppPressable } from './AppPressable';
-import { callTone, mediaScrim, type CallTone } from '../theme';
+import { avatarShape, callTone, font, mediaScrim, radius, type CallTone } from '../theme';
 import { AppModal as Modal } from './AppModal';
 import { setAudioModeAsync } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,7 +45,12 @@ type RtcViewProps = {
 type RtcViewComponent = React.ComponentType<RtcViewProps>;
 
 function loadRtcView(): RtcViewComponent | null {
-  if (Platform.OS === 'web') return null;
+  // На web `react-native-webrtc` подменяется на web/shims/react-native-webrtc.tsx
+  // (см. WEB_SHIMS в metro.config.js): там RTCView — это <video srcObject>,
+  // то есть настоящее видео, а не заглушка. Раньше здесь стоял безусловный
+  // выход по Platform.OS === 'web', потому что нативного модуля в браузере нет
+  // и require падал; теперь есть что грузить, и ветка не нужна — try/catch
+  // ниже по-прежнему держит случай, когда модуля нет совсем.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('react-native-webrtc').RTCView as RtcViewComponent;
@@ -66,8 +71,8 @@ function CallerAvatar({ name, tone, compact = false }: { name: string; tone: Cal
 }
 
 const av = StyleSheet.create({
-  circle: { width: 100, height: 100, borderRadius: 50, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
-  compactCircle: { width: 64, height: 64, borderRadius: 32, marginBottom: 0 },
+  circle: { ...avatarShape(100), alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  compactCircle: { ...avatarShape(64), marginBottom: 0 },
   text: { fontSize: 36, fontWeight: '700' },
   compactText: { fontSize: 24 },
 });
@@ -342,7 +347,7 @@ const s = StyleSheet.create({
   videoHeader: { position: 'absolute', top: 18, left: 20, right: 20 },
   videoPeerName: { fontSize: 20, fontWeight: '700' },
   videoState: { fontSize: 14, marginTop: 4 },
-  localPreviewFrame: { position: 'absolute', right: 16, bottom: 18, width: 112, height: 164, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: mediaScrim.ink, backgroundColor: mediaScrim.fill },
+  localPreviewFrame: { position: 'absolute', right: 16, bottom: 18, width: 112, height: 164, borderRadius: radius.md, overflow: 'hidden', borderWidth: 1, borderColor: mediaScrim.ink, backgroundColor: mediaScrim.fill },
   localPreview: { flex: 1 },
   localVideoOff: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   localVideoOffText: { fontSize: 12, textAlign: 'center', marginTop: 8 },
@@ -350,7 +355,7 @@ const s = StyleSheet.create({
   videoControls: { paddingTop: 16, paddingBottom: 4, backgroundColor: mediaScrim.bar },
   controlRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', flexWrap: 'wrap', columnGap: 14, rowGap: 12, paddingHorizontal: 12 },
   controlBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 8, borderRadius: 36, minWidth: 76, minHeight: 72 },
-  controlLabel: { fontSize: 11, marginTop: 5, textAlign: 'center' },
+  controlLabel: { fontSize: font.xs, marginTop: 5, textAlign: 'center' },
   hangupRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', columnGap: 48 },
   answerAction: { alignItems: 'center' },
   incomingLabel: { fontSize: 13, minWidth: 72, textAlign: 'center', marginTop: 8 },

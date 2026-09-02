@@ -2,7 +2,7 @@
   "expo": {
     "name": "airchat",
     "slug": "airchat",
-    "version": "4.32.527",
+    "version": "4.32.536",
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders"
@@ -13,12 +13,12 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0b1020"
+      "backgroundColor": "#0B0B12"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.anonymous.airchat",
-      "buildNumber": "527",
+      "buildNumber": "530",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "AirChat использует камеру для съёмки фото и видео в чатах.",
@@ -36,7 +36,7 @@
       "googleServicesFile": "./google-services.json",
       "versionCode": 519,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0B0B12",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -45,7 +45,20 @@
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "name": "AirChat",
+      "shortName": "AirChat",
+      "themeColor": "#0B0B12",
+      "backgroundColor": "#0B0B12",
+      "display": "standalone",
+      "lang": "en",
+      "output": "single"
+    },
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ]
   }
 }

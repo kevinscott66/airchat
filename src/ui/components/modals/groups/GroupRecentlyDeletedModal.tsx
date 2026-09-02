@@ -4,7 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint, scrim, type TintedIcon } from '../../../theme';
+import { badgeTint, font, radius, scrim, type TintedIcon } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { POLL_PREFIX } from '../../../../core/storage/local';
 import { dayMonthShort } from '../../../../core/time/ruDateTime';
@@ -123,10 +123,10 @@ const styles = StyleSheet.create({
   row: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   rowHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   rowIcon: { marginRight: 4 },
-  rowSender: { fontSize: 11, flex: 1 },
-  rowDate: { fontSize: 11 },
+  rowSender: { fontSize: font.xs, flex: 1 },
+  rowDate: { fontSize: font.xs },
   rowText: { fontSize: 14, marginBottom: 8 },
-  restoreBtn: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 5 },
+  restoreBtn: { alignSelf: 'flex-start', borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 5 },
   restoreText: { fontSize: 13, fontWeight: '600' },
 });
 

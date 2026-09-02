@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { showError, showSuccess } from '../../components/userFeedback';
 import { useTheme } from '../../ThemeContext';
-import { pollInk } from '../../theme';
+import { font, pollInk, radius } from '../../theme';
 import {
   getPollVotes,
   parsePollText,
@@ -122,7 +122,7 @@ export function DmPollBubble({
               <Text style={{ color: isMine ? ink.accent : (isQuiz && hasVoted && isCorrect ? ink.correct : ink.text), fontWeight: isMine || (isQuiz && isCorrect) ? '700' : '400', flex: 1 }}>
                 {isMine ? '✓ ' : (isQuiz && hasVoted && isCorrect ? '✓ ' : '')}{opt}
               </Text>
-              <Text style={{ color: ink.muted, fontSize: 11 }}>{count}</Text>
+              <Text style={{ color: ink.muted, fontSize: font.xs }}>{count}</Text>
             </View>
             <View style={{ height: 4, borderRadius: 2, backgroundColor: ink.track, overflow: 'hidden', marginBottom: 6 }}>
               <View style={{ height: 4, borderRadius: 2, backgroundColor: barColor, width: `${pct * 100}%` }} />
@@ -132,12 +132,12 @@ export function DmPollBubble({
       })}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
         {isClosed ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 4, borderRadius: 6, backgroundColor: ink.track }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 4, borderRadius: radius.md, backgroundColor: ink.track }}>
             <Ionicons name="lock-closed" size={11} color={ink.onTrack} style={{ marginRight: 3 }} />
-            <Text style={{ color: ink.onTrack, fontSize: 11, fontWeight: '600' }}>Завершён</Text>
+            <Text style={{ color: ink.onTrack, fontSize: font.xs, fontWeight: '600' }}>Завершён</Text>
           </View>
         ) : null}
-        <Text style={{ color: ink.muted, fontSize: 11, flex: 1 }}>{isQuiz ? 'Викторина · ' : ''}{allowMultiple ? '☑️ Несколько · ' : ''}{poll.anonymous ? '🔒 Без имён · ' : ''}{votesLabel(total)}</Text>
+        <Text style={{ color: ink.muted, fontSize: font.xs, flex: 1 }}>{isQuiz ? 'Викторина · ' : ''}{allowMultiple ? '☑️ Несколько · ' : ''}{poll.anonymous ? '🔒 Без имён · ' : ''}{votesLabel(total)}</Text>
         {total > 0 ? (
           <AppPressable
             onPress={() => {

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { AppPressable } from './components/AppPressable';
 import { ErrorHandler, ErrorSeverity, type AppError } from '../core/errorHandler';
 import { log } from '../core/logger';
-import { contrastingInk, darkColors } from './theme';
+import { contrastingInk, darkColors, radius } from './theme';
 
 type Props = { children: ReactNode };
 
@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
     backgroundColor: darkColors.primary,
     paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: radius.md,
   },
   btnText: { color: contrastingInk(darkColors.primary), fontWeight: '600' },
 });

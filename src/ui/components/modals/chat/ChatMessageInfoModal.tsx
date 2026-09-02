@@ -5,7 +5,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import type { ChatMessageRow } from '../../../../core/storage/local';
-import { primaryInk, scrim } from '../../../theme';
+import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
 
 // ─── Message Info Modal ───────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ export function MessageInfoModal({
   return (
     <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onClose}>
       <AppPressable style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 24 }} onPress={onClose}>
-        <AppPressable onPress={() => {/* stop */}} style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 20 }}>
+        <AppPressable onPress={() => {/* stop */}} style={{ backgroundColor: colors.surface, borderRadius: radius.xl, padding: 20 }}>
           <Text style={{ color: colors.text, fontWeight: '700', fontSize: 17, marginBottom: 16 }}>Сведения о сообщении</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
             <Ionicons name="send-outline" size={18} color={colors.accent} style={{ marginRight: 10 }} />
@@ -66,16 +66,16 @@ export function MessageInfoModal({
               <View style={{ flexDirection: 'row', gap: 16, marginTop: 8, marginBottom: 4 }}>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{chars}</Text>
-                  <Text style={{ fontSize: 11, color: colors.textMuted }}>символов</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>символов</Text>
                 </View>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{words}</Text>
-                  <Text style={{ fontSize: 11, color: colors.textMuted }}>слов</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>слов</Text>
                 </View>
               </View>
             );
           })() : null}
-          <AppPressable onPress={onClose} style={{ marginTop: 16, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}>
+          <AppPressable onPress={onClose} style={{ marginTop: 16, backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, alignItems: 'center' }}>
             <Text style={{ color: primaryInk(colors).text, fontWeight: '700' }}>Закрыть</Text>
           </AppPressable>
         </AppPressable>

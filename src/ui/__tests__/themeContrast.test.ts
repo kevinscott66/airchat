@@ -15,7 +15,7 @@ import { Appearance } from 'react-native';
 import { bannerColors } from '../components/StatusBanner';
 import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, colorsForScheme, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
 import type { AdminLogTone } from '../../core/social/groupAdminLog';
-import { WALLPAPER_PRESETS, feedGround, type Wallpaper } from '../wallpapers';
+import { WALLPAPER_MESHES, WALLPAPER_PRESETS, feedGround, meshById, type Wallpaper } from '../wallpapers';
 
 /** Относительная яркость sRGB, WCAG 2.1 §relative luminance. */
 function luminance(hex: string): number {
@@ -1188,9 +1188,17 @@ describe('лента: плашки «включено»', () => {
   });
 
   it('в светлой теме акцент на прежней плашке не дотягивал', () => {
-    const p = lightColors;
-    expect(contrast(p.accent, mix(p.primary, p.background, 0x22 / 255))).toBeLessThan(4.5);
-    expect(contrast(p.accent, mix(p.primary, p.background, 0x33 / 255))).toBeLessThan(4.5);
+    // v4.32.529: значения приколочены, а не взяты из палитры. Это свидетель:
+    // он показывает, ЧТО рисовалось до 408-го и почему плашке понадобился
+    // сплошной токен. Читать сюда живую палитру — значит утверждать, будто
+    // сегодняшняя тоже не дотягивает; после ухода бренда с индиго
+    // (#0068D6 → #00697F) это стало неправдой, и тест упал на собственной
+    // посылке, а не на регрессе. Свидетель обязан называть свои цвета.
+    const WAS_ACCENT = '#036B96';
+    const WAS_PRIMARY = '#0068D6';
+    const bg = lightColors.background;
+    expect(contrast(WAS_ACCENT, mix(WAS_PRIMARY, bg, 0x22 / 255))).toBeLessThan(4.5);
+    expect(contrast(WAS_ACCENT, mix(WAS_PRIMARY, bg, 0x33 / 255))).toBeLessThan(4.5);
   });
 });
 
@@ -1279,15 +1287,26 @@ describe('модалки: плашки, кружки и столбики', () =>
   });
 
   test('прежние плашки не дотягивали до порога текста', () => {
+    // v4.32.529: те же приколоченные значения и по той же причине — см.
+    // «в светлой теме акцент на прежней плашке не дотягивал».
+    const WAS_ACCENT = '#036B96';
+    const WAS_PRIMARY = '#0068D6';
     const p = lightColors;
     // Номер в списке активных и значок документа.
-    expect(contrast(p.accent, mix(p.primary, p.surface, 0x33 / 255))).toBeLessThan(4.5);
-    expect(contrast(p.accent, mix(p.primary, p.background, 0x22 / 255))).toBeLessThan(4.5);
+    expect(contrast(WAS_ACCENT, mix(WAS_PRIMARY, p.surface, 0x33 / 255))).toBeLessThan(4.5);
+    expect(contrast(WAS_ACCENT, mix(WAS_PRIMARY, p.background, 0x22 / 255))).toBeLessThan(4.5);
     // Кружок «прочитали».
-    expect(contrast(p.accent, mix(p.primary, p.surface, 0x44 / 255))).toBeLessThan(4.5);
+    expect(contrast(WAS_ACCENT, mix(WAS_PRIMARY, p.surface, 0x44 / 255))).toBeLessThan(4.5);
     // Кнопка «Восстановить» — надпись бралась тем же `primary`, что и подложка.
-    for (const [, q] of palettes) {
-      expect(contrast(q.primary, mix(q.primary, q.surface, 0x22 / 255))).toBeLessThan(4.5);
+    // Прежние бренды приколочены по той же причине: живая палитра здесь
+    // утверждала бы, что сегодняшняя кнопка тоже нечитаема, а это уже неправда.
+    const WAS_PRIMARY_BY_THEME: ReadonlyArray<readonly [string, string]> = [
+      ['dark', '#3d5afe'],
+      ['light', WAS_PRIMARY],
+    ];
+    for (const [name, wasPrimary] of WAS_PRIMARY_BY_THEME) {
+      const surface = name === 'dark' ? darkColors.surface : lightColors.surface;
+      expect(contrast(wasPrimary, mix(wasPrimary, surface, 0x22 / 255))).toBeLessThan(4.5);
     }
   });
 
@@ -1379,6 +1398,71 @@ describe('обои: лента поверх выбранного пользов�
     const worst = mix(mediaScrim.fill, '#ffffff', mediaScrim.barAlpha);
     expect(contrast(mediaScrim.error, worst)).toBeLessThan(3);
     expect(contrast(mediaScrim.error, mediaScrim.fill)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  describe('градиентные обои: `ground` — худшая точка градиента, а не его основное поле', () => {
+    // Градиент неоднороден, поэтому «цвет под лентой» у него — не `base`, а та
+    // точка, где пятна утащили поверхность дальше всего В СТОРОНУ чернил:
+    // у тёмного полотна самая светлая, у светлого — самая тёмная. Плашка,
+    // доказанная против неё, читается и над всем остальным полем.
+    // Пятна перекрываются (rx у большинства ≈ 0.9 — почти вся ширина), поэтому
+    // худший случай считается по всем подмножествам и порядкам наложения:
+    // так значение не зависит от того, в каком порядке они перечислены.
+    const composite = (base: string, blobs: readonly { color: string; opacity: number }[]): string => {
+      let worst: string | null = null;
+      const toward = luminance(base) <= 0.5 ? 1 : -1;
+      const walk = (acc: string, rest: readonly { color: string; opacity: number }[]) => {
+        if (worst === null || (luminance(acc) - luminance(worst)) * toward > 0) worst = acc;
+        rest.forEach((b, i) => walk(mix(b.color, acc, b.opacity), rest.filter((_, j) => j !== i)));
+      };
+      walk(base, blobs);
+      return worst as unknown as string;
+    };
+
+    test.each(WALLPAPER_MESHES.map((m) => [m.label, m.id] as const))(
+      'у градиента «%s» объявленный `ground` совпадает с посчитанным',
+      (_label, id) => {
+        const mesh = meshById(id);
+        expect(mesh).not.toBeNull();
+        expect(mesh?.base).toMatch(/^#[0-9a-f]{6}$/);
+        expect(mesh?.ground).toBe(composite(mesh!.base, mesh!.blobs));
+      },
+    );
+
+    it('у градиентов уникальные ключи и названия, и есть светлые и тёмные', () => {
+      const ids = new Set(WALLPAPER_MESHES.map((m) => m.id));
+      const labels = new Set(WALLPAPER_MESHES.map((m) => m.label));
+      expect(ids.size).toBe(WALLPAPER_MESHES.length);
+      expect(labels.size).toBe(WALLPAPER_MESHES.length);
+      const light = WALLPAPER_MESHES.filter((m) => luminance(m.base) > 0.5);
+      expect(light.length).toBeGreaterThanOrEqual(2);
+      expect(WALLPAPER_MESHES.length - light.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('незнакомый ключ градиента не роняет ленту, а возвращает её на фон темы', () => {
+      // Ключ приходит из хранилища: набор мог поменяться между версиями.
+      const feed = feedGround(darkColors, { type: 'mesh', value: 'нет-такого' });
+      expect(meshById('нет-такого')).toBeNull();
+      expect(feed.known).toBe(true);
+      expect(feed.ground).toBe(darkColors.background);
+    });
+
+    describe.each(palettes)('%s тема', (_name, p) => {
+      test.each(WALLPAPER_MESHES.map((m) => [m.label, m.id] as const))(
+        'на градиенте «%s» плашка ленты читается в худшей его точке',
+        (_label, id) => {
+          const feed = feedGround(p, { type: 'mesh', value: id });
+          expect(feed.known).toBe(true);
+          expect(feed.ground).toBe(meshById(id)?.ground);
+          expect(contrast(feed.quiet.ink.text, feed.quiet.fill)).toBeGreaterThanOrEqual(4.5);
+          expect(contrast(feed.quiet.ink.secondary, feed.quiet.fill)).toBeGreaterThanOrEqual(4.5);
+          for (const ink of [feed.quiet.ink.muted, feed.quiet.ink.accent, feed.quiet.ink.error, feed.quiet.ink.star, feed.quiet.ink.success]) {
+            expect(contrast(ink, feed.quiet.fill)).toBeGreaterThanOrEqual(3);
+          }
+          expect(contrast(feed.loud.ink, feed.loud.fill)).toBeGreaterThanOrEqual(4.5);
+        },
+      );
+    });
   });
 
   it('снимок обоев не выдаётся за цвет фона', () => {

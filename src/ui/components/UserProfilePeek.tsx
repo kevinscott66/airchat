@@ -26,7 +26,7 @@ import { AppModal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
 import { AppPressable } from './AppPressable';
 import { useColors } from '../ThemeContext';
-import { font, primaryInk, scrim, spacing } from '../theme';
+import { avatarShape, font, mono, primaryInk, radius, scrim, spacing } from '../theme';
 import { showSuccess, showError } from './userFeedback';
 import {
   addContact,
@@ -404,7 +404,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: radius.xl,
     padding: spacing.md,
     maxWidth: 420,
     width: '100%',
@@ -416,9 +416,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    ...avatarShape(56),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -439,7 +437,7 @@ const styles = StyleSheet.create({
   },
   didBox: {
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: radius.md,
     padding: spacing.sm,
     marginBottom: spacing.sm,
   },
@@ -449,7 +447,7 @@ const styles = StyleSheet.create({
   },
   didValue: {
     fontSize: font.md,
-    fontFamily: 'monospace',
+    fontFamily: mono,
   },
   actions: {
     marginTop: spacing.xs,
@@ -466,7 +464,7 @@ const styles = StyleSheet.create({
   },
   renameInput: {
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     fontSize: font.md,

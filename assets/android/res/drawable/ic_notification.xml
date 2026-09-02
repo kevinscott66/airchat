@@ -15,6 +15,11 @@
 
   Силуэт белый и одноцветный: Android сам маскирует small icon по альфе и
   красит его в цвет системы, поэтому цвета и градиенты здесь бессмысленны.
+
+  v4.32.535: вместо шаблонного «облачка» здесь теперь фирменная марка — та же
+  сетка из трёх узлов, что и в assets/logo/airchat-mark.svg, пересчитанная из
+  viewBox 512 в 24dp (масштаб 22/332, габарит с полем в 1dp по краю). Кольцо
+  центрального узла на 24dp схлопнулось бы в грязь, поэтому здесь он сплошной.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -22,6 +27,24 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.12"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M12,3.518 L3.518,20.482" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.12"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M12,3.518 L20.482,20.482" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.12"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M5.638,16.241 L18.362,16.241" />
+    <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M20,2H4C2.9,2 2,2.9 2,4v12c0,1.1 0.9,2 2,2h4v4l4,-4h8c1.1,0 2,-0.9 2,-2V4C22,2.9 21.1,2 20,2z" />
+        android:pathData="M9.482,3.518 a2.518,2.518 0 1,0 5.036,0 a2.518,2.518 0 1,0 -5.036,0 M1,20.482 a2.518,2.518 0 1,0 5.036,0 a2.518,2.518 0 1,0 -5.036,0 M17.964,20.482 a2.518,2.518 0 1,0 5.036,0 a2.518,2.518 0 1,0 -5.036,0 M10.2,16.241 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0" />
 </vector>
