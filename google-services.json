@@ -1,1 +1,39 @@
-/Users/dobropalm/airchat/google-services.json
+{
+  "_comment": [
+    "Заглушка, парная GoogleService-Info.plist. Настоящий файл выгружается из",
+    "консоли Firebase (Project settings → Android app) и кладётся сюда под тем",
+    "же именем. Без него сборка проходит, но FCM-токен получить не удаётся,",
+    "и уведомления на Android не приходят вовсе.",
+    "",
+    "До 4.32.539 на этом месте лежал симлинк на рабочую копию разработчика:",
+    "у всех остальных он висел в пустоту, а package_name при этом читался не",
+    "тот, что собирается. Здесь должен быть обычный файл."
+  ],
+  "project_info": {
+    "project_number": "YOUR_PROJECT_NUMBER",
+    "project_id": "your-firebase-project-id",
+    "storage_bucket": "your-firebase-project-id.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:xxxxxxxxxxxxxxxx",
+        "android_client_info": {
+          "package_name": "tech.dobropalm.airchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_KEY_FROM_FIREBASE_CONSOLE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

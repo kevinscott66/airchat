@@ -16,7 +16,7 @@ Messaging**.
 
 Firebase → Project settings → Your apps → Add app → Android.
 
-- Package name: `com.anonymous.airchat` (значение `android.package` в `app.json`)
+- Package name: `tech.dobropalm.airchat` (значение `android.package` в `app.json`)
 
 Скачанный файл кладётся в корень репозитория **вместо** заглушки
 `google-services.json`. Заглушку видно по `REPLACE_WITH_KEY_FROM_FIREBASE_CONSOLE`.
@@ -25,7 +25,7 @@ Firebase → Project settings → Your apps → Add app → Android.
 
 Firebase → Add app → iOS.
 
-- Bundle ID: `com.anonymous.airchat` (значение `ios.bundleIdentifier` в `app.json`)
+- Bundle ID: `tech.dobropalm.airchat` (значение `ios.bundleIdentifier` в `app.json`)
 
 Файл кладётся в корень репозитория вместо заглушки
 `GoogleService-Info.plist`. `app.json` уже указывает на него через
