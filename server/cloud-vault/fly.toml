@@ -4,6 +4,12 @@ primary_region = "ams"
 [build]
   dockerfile = "Dockerfile"
 
+[env]
+  # On Fly the request arrives from the fly-proxy over the internal network, so
+  # `trust proxy: 'loopback'` never matches and `req.ip` is the same address for
+  # every client. Fly sets Fly-Client-IP itself, overwriting what a client sent.
+  CLIENT_IP_HEADER = "Fly-Client-IP"
+
 [http_service]
   internal_port = 3010
   force_https = true

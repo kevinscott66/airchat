@@ -68,7 +68,19 @@ Session geo is deliberately coarse: the service stores only the normalized
 coordinates or a location history. Existing SQLite databases receive the six
 session metadata columns on service startup.
 
-Set the app runtime override to the HTTPS base URL:
+Point the app at the service in one of two places.
+
+At build time, with `EXPO_PUBLIC_CLOUD_VAULT_URL`. `assets/config.json` in git
+carries a placeholder host on purpose, so a build that is not given this
+variable talks to nowhere and the feature stays off. The variable answers
+"where", not "whether": `cloudBackup.enabled` still comes from the file.
+
+```sh
+EXPO_PUBLIC_CLOUD_VAULT_URL=https://cloud.example.com npx expo start
+```
+
+At runtime, with the override file, which wins over the build-time value —
+someone running their own vault keeps their own choice:
 
 ```json
 {

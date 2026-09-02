@@ -176,3 +176,48 @@ describe('нормализация на всех путях сборки кон�
     expect(mod.getConfigSync().internet?.relayBase).toBe('https://ntfy.example.com');
   });
 });
+
+describe('адрес облачной копии из переменной сборки', () => {
+  // v4.32.541: в git на месте адреса лежит заглушка, и именно она уезжала в
+  // сборку — восстановление из облака молча не работало. Настоящий адрес
+  // приходит переменной сборки; проверяется, что она доходит до эффективного
+  // конфига на обоих путях и что порядок старшинства не перевёрнут.
+  const ENV = 'EXPO_PUBLIC_CLOUD_VAULT_URL';
+  afterEach(() => {
+    delete process.env[ENV];
+  });
+
+  it('без переменной остаётся заглушка из файла — она и была причиной', async () => {
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.cloudBackup?.baseUrl).toBe('https://agents.example.com:8443/cloud-vault');
+  });
+
+  it('переменная сборки заменяет заглушку', async () => {
+    process.env[ENV] = 'https://cloud.example.com';
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.cloudBackup).toEqual({ enabled: true, baseUrl: 'https://cloud.example.com' });
+  });
+
+  it('на синхронном пути тоже — иначе половина приложения ходила бы на заглушку', () => {
+    process.env[ENV] = 'https://cloud.example.com/';
+    expect(freshConfig().getConfigSync().cloudBackup?.baseUrl).toBe('https://cloud.example.com');
+  });
+
+  it('переопределение из Documents сильнее переменной сборки', async () => {
+    // Переменная — заводское значение конкретной сборки, а не приказ. Свой
+    // сервер, вписанный человеком, должен оставаться его выбором.
+    process.env[ENV] = 'https://cloud.example.com';
+    const cfg = await loadWithOverride({
+      cloudBackup: { enabled: true, baseUrl: 'https://mine.example.com' },
+    });
+    expect(cfg.cloudBackup?.baseUrl).toBe('https://mine.example.com');
+  });
+
+  it('негодное значение переменной выключает функцию, а не подставляет заглушку', async () => {
+    // Подставить обратно заглушку было бы хуже: она так же нерабочая, но
+    // выглядит настроенной, и ошибку сборки никто бы не заметил.
+    process.env[ENV] = 'http://cloud.example.com';
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.cloudBackup).toEqual({ enabled: false, baseUrl: '' });
+  });
+});

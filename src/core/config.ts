@@ -471,6 +471,37 @@ async function readUserOverride(): Promise<Partial<AppConfig>> {
   return {};
 }
 
+/**
+ * Заводской конфиг сборки: `assets/config.json` плюс адрес облачной копии из
+ * переменной сборки (v4.32.541).
+ *
+ * В git на месте адреса лежит заглушка `agents.example.com` — и именно она
+ * уезжала в сборку, поэтому восстановление из облака молча не работало: путь
+ * синхронизации закрыт проверкой `cloudBackup.enabled`, а она гаснет сама,
+ * когда адрес негодный. Настоящий адрес в публичный репозиторий класть
+ * незачем, поэтому он приходит из `EXPO_PUBLIC_CLOUD_VAULT_URL` — тем же
+ * способом, что и DSN в core/errorHandler.
+ *
+ * Переменная отвечает на вопрос «куда», а не «включать ли»: флаг `enabled`
+ * остаётся из файла, и сборка с выключённой облачной копией не включится от
+ * одной переменной. Негодное значение переменной здесь не отсеивается —
+ * его отсеет общее правило в normalizeEndpoints и запишет в журнал; тихо
+ * подставить обратно заглушку было бы хуже: адрес-заглушка так же нерабочий,
+ * но выглядит как настроенный.
+ *
+ * `require` оставлен внутри: три пути сборки конфига полагаются на то, что он
+ * бросает, когда файла в сборке нет.
+ */
+function bundledConfig(): AppConfig {
+  const bundled = require('../../assets/config.json') as AppConfig;
+  const fromEnv =
+    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_CLOUD_VAULT_URL
+      ? process.env.EXPO_PUBLIC_CLOUD_VAULT_URL
+      : '';
+  if (!fromEnv) return bundled;
+  return { ...bundled, cloudBackup: { ...bundled.cloudBackup, enabled: !!bundled.cloudBackup?.enabled, baseUrl: fromEnv } };
+}
+
 export async function loadConfig(): Promise<AppConfig> {
   if (cached) return cached;
   // v4.32.226: read the user override FIRST and apply it on EVERY path. The
@@ -480,7 +511,7 @@ export async function loadConfig(): Promise<AppConfig> {
   // switching (saveConfigOverride / manual file push) a no-op on such builds.
   const patch = await readUserOverride();
   try {
-    const bundled = require('../../assets/config.json') as AppConfig;
+    const bundled = bundledConfig();
     cached = finalizeConfig(deepMerge(DEFAULT_CONFIG, { ...bundled, ...patch }));
     return cached;
   } catch (e) {
@@ -495,7 +526,7 @@ export async function loadConfig(): Promise<AppConfig> {
 export function getConfigSync(): AppConfig {
   if (cached) return cached;
   try {
-    const bundled = require('../../assets/config.json') as AppConfig;
+    const bundled = bundledConfig();
     cached = finalizeConfig(deepMerge(DEFAULT_CONFIG, bundled));
     return cached;
   } catch {
@@ -545,7 +576,7 @@ export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<App
 
   let bundled: Partial<AppConfig> = {};
   try {
-    bundled = require('../../assets/config.json') as AppConfig;
+    bundled = bundledConfig();
   } catch {
     /* no bundled config — defaults + override only */
   }

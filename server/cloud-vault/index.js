@@ -79,9 +79,19 @@ const ACCOUNT_LOCK_STALE_MS = 60_000;
 
 function hardenStoragePermissions() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   const visit = (target) => {
     const stat = fs.lstatSync(target);
     if (stat.isSymbolicLink()) throw new Error(`Refusing symlink in cloud storage: ${target}`);
+    // A mounted volume carries entries this process does not own and cannot
+    // chmod: mkfs puts a root-owned `lost+found` at the root of every ext4
+    // volume, and the service runs unprivileged. Those entries are not vault
+    // data and never will be — the service only ever writes as itself — so
+    // walking past them is right, while dying on them means refusing to start
+    // on any real volume at all. The service's OWN files still throw: there
+    // the failure means the guarantee is gone, and starting anyway would hide
+    // it.
+    if (uid !== null && stat.uid !== uid) return;
     fs.chmodSync(target, stat.isDirectory() ? 0o700 : 0o600);
     if (stat.isDirectory()) {
       for (const name of fs.readdirSync(target)) visit(path.join(target, name));
@@ -101,6 +111,31 @@ const MEDIA_MAX_FILES = Number.isSafeInteger(Number(process.env.MEDIA_MAX_FILES)
   : 10_000;
 const MAX_RATE_BUCKETS = 10_000;
 
+// Which header carries the real client address, if any. Empty by default, and
+// that default is the safe one: behind Nginx nothing strips an inbound
+// `Fly-Client-IP`, so trusting a header unasked would let a client mint a
+// fresh rate-limit bucket per request simply by changing it.
+//
+// It has to be settable because `trust proxy: 'loopback'` below only covers
+// the Nginx deployment. On Fly.io the request reaches the machine from the
+// fly-proxy over the internal network, so loopback never matches and `req.ip`
+// is the same proxy address for every client: one busy device would spend the
+// whole per-minute budget and the rest would get 429. Fly sets `Fly-Client-IP`
+// itself and overwrites whatever the client sent, so naming it there is both
+// safe and necessary.
+const CLIENT_IP_HEADER = String(process.env.CLIENT_IP_HEADER || '').trim().toLowerCase();
+
+function rateLimitKey(req) {
+  if (CLIENT_IP_HEADER) {
+    const raw = req.headers[CLIENT_IP_HEADER];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    // Cut the length: the key goes into a Map that is capped by count, not by
+    // size, and a header is attacker-controlled text.
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 64);
+  }
+  return req.ip || 'unknown';
+}
+
 app.disable('x-powered-by');
 // Nginx is the only public listener. Trusting loopback makes Express resolve
 // the real client address from X-Forwarded-For instead of rate-limiting every
@@ -109,7 +144,7 @@ app.set('trust proxy', 'loopback');
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
   const now = Date.now();
-  const key = req.ip || 'unknown';
+  const key = rateLimitKey(req);
   const bucket = rateBuckets.get(key);
   if (!bucket || now - bucket.startedAt >= RATE_WINDOW_MS) {
     if (rateBuckets.size >= MAX_RATE_BUCKETS) {
