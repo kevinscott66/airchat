@@ -359,6 +359,18 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
    * (1.00:1), а непройденная часть волны давала 1.28–1.62:1 при графическом
    * пороге 3:1. В своём пузыре всё писалось белым с прозрачностью: в светлой
    * теме длительность читалась на 3.04:1.
+   *
+   * v4.32.540: плашка убрана совсем. 413-й развёл её с пузырём по цвету, и
+   * плеер стало видно — но видно стало ИМЕННО плашку: скруглённый прямоугольник
+   * внутри такого же скруглённого прямоугольника. Вложенная подложка нужна
+   * там, где внутри пузыря лежит чужеродный блок (превью ссылки, врезка кода,
+   * карточка контакта): она отделяет цитируемое от сказанного. Голосовое —
+   * это и есть само сообщение, отделять его в своём же пузыре не от чего.
+   *
+   * Контраст при этом не теряется: роли `ink` пузыря считаются от его заливки
+   * ровно так же, как считались роли плашки от её собственной, — то есть
+   * `muted` держит графический порог 3:1 для дорожки, `secondary` — 4.5:1 для
+   * длительности. Меняется подложка, а не правило.
    */
   const bubble = useBubbleSurface(!!isOutgoing);
   const [sound, setSound] = useState<AudioPlayer | null>(null);
@@ -489,12 +501,11 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
     }
   }, [speed, sound]);
 
-  const accentColor = bubble.plate.ink.accent;
-  const bgColor = bubble.plate.fill;
+  const accentColor = bubble.ink.accent;
   const progress = totalMs > 0 ? positionMs / totalMs : 0;
 
   return (
-    <View style={[vpStyles.container, { backgroundColor: bgColor }]}>
+    <View style={vpStyles.container}>
       <AppPressable onPress={() => void togglePlayback()} style={vpStyles.playBtn} disabled={loading}>
         {loading ? (
           <ActivityIndicator size="small" color={accentColor} />
@@ -512,7 +523,7 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         <AppPressable
           onLayout={(e: LayoutChangeEvent) => { progressWidth.current = e.nativeEvent.layout.width; }}
           onPress={(e) => void seekTo(e)}
-          style={[vpStyles.progressTrack, { backgroundColor: bubble.plate.ink.muted }]}
+          style={[vpStyles.progressTrack, { backgroundColor: bubble.ink.muted }]}
           hitSlop={6}
         >
           <View
@@ -522,7 +533,7 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
             ]}
           />
         </AppPressable>
-        <Text style={[vpStyles.duration, { color: bubble.plate.ink.secondary }]}>
+        <Text style={[vpStyles.duration, { color: bubble.ink.secondary }]}>
           {playing || positionMs > 0 ? formatClockDuration(positionMs) : formatClockDuration(totalMs)}
         </Text>
       </View>
@@ -539,9 +550,9 @@ const vpStyles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: radius.xl,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    // Отступы были собственными полями плашки. Плашки нет — поля берёт на себя
+    // пузырь, и остаётся только вертикальный люфт под кнопку 36×36.
+    paddingVertical: 2,
     gap: 10,
     minWidth: 180,
     maxWidth: 260,

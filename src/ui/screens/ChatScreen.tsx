@@ -105,6 +105,7 @@ import { useTheme } from '../ThemeContext';
 import { avatarShape, badgeDigit, badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, font, elevation, inkOn, mono, motion, nestedFill, radius, rippleOn, rowMark, scrim, spacing, TOUCH_TARGET_MIN } from '../theme';
 import { isReducedMotion } from '../motionPrefs';
 import { GlassSurface } from '../components/GlassSurface';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatListScreen } from './ChatListScreen';
 import { subscribeChatWrites } from '../../core/storage/local';
 import { isUnreadableMessage, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT } from '../../core/storage/unreadableText';
@@ -787,6 +788,8 @@ function ChatThreadView({
   // v4.32.16: gate через tabRef — НЕ prop, чтобы setTab не вызывал re-render тяжёлого треда.
   const tabRef = useTabRef();
   const { colors, scheme } = useTheme();
+  // v4.32.540: отступ под часы и «остров» теперь у экрана, а не у оболочки.
+  const insets = useSafeAreaInsets();
   // v4.32.409: плашка «включён фильтр» в шапке. Шапка — поверхность, а не
   // фон экрана, поэтому подложка считается от неё, а значок — от подложки.
   const headerTint = useMemo(() => badgeTint(colors, 'accent', colors.surface), [colors]);
@@ -3006,8 +3009,16 @@ function ChatThreadView({
       style={{ flex: 1, backgroundColor: colors.background }}
       onLayout={(e) => setRootHeight(e.nativeEvent.layout.height)}
     >
+      {/* v4.32.540: обои поднялись из-под ленты в самый низ экрана. Раньше слой
+          стоял ПОСЛЕ шапки, то есть начинался под ней, и весь верх — полоса
+          часов и поле вокруг капсулы — оставался плоской `colors.background`.
+          Фон переписки обрывался ровно там, где на него смотрят первым делом.
+          Клип у слоя свой (`overflow: 'hidden'` внутри), поэтому дрейф пятен
+          по-прежнему не вылезает за экран, а шапка теперь размывает обои —
+          ради этого стекло и заводилось. */}
+      <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
       {/* Thread header with back button */}
-      <GlassSurface style={s.threadHeader} variant="regular">
+      <GlassSurface style={[s.threadHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
         <AppPressable style={s.backBtn} onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Назад к чатам">
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </AppPressable>
@@ -3317,13 +3328,7 @@ function ChatThreadView({
           окно, KAV с padding вызывал двойную компенсацию (контент сжимался дважды, TextInput
           уходил за клавиатуру). На iOS behavior=padding остаётся — там adjustResize не существует. */}
       <View style={{ flex: 1, paddingBottom: manualKbPad }}>
-        {/* v4.32.410: обои-снимок сохранялись под типом 'color', и путь к
-            файлу подставлялся в backgroundColor — то есть «Выбрать фото из
-            галереи» не работало.
-            v4.32.533: три случая (цвет, градиент, снимок) съехались в один
-            слой — WallpaperBackground. */}
         <View style={{ flex: 1 }}>
-        <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
         <FlashList
           ref={flashListRef}
           style={{ flex: 1 }}

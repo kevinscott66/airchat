@@ -89,6 +89,7 @@ import type { FeedPostRow } from '../../core/storage/feedStorage';
 import { log, measurePerformance } from '../../core/logger';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
+import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { readPlaceOnce } from '../../core/social/deviceLocation';
@@ -97,9 +98,9 @@ import { commentCountFromThread } from '../../core/social/commentCount';
 import { RichText } from '../components/RichText';
 import { LocationMessage } from '../components/LocationMessage';
 import { FeedPostSkeleton } from '../components/SkeletonLoader';
-import { avatarShape, badgeTint, contrastingInk, font, identityAvatar, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
+import { avatarShape, badgeTint, contrastingInk, elevation, font, identityAvatar, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
 import { GroupAvatar } from './groups-components/GroupAvatar';
-import { useTheme } from '../ThemeContext';
+import { useTheme, useScaledFont } from '../ThemeContext';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { StoriesRow } from '../components/StoriesRow';
 import { useMediaViewer } from '../components/MediaViewer';
@@ -145,7 +146,6 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const MODAL_HEIGHT_COLLAPSED = SCREEN_HEIGHT * 0.72;
-const MODAL_HEIGHT_KEYBOARD = SCREEN_HEIGHT * 0.92;
 const THUMB = 88;
 // v4.32.54: Telegram/WhatsApp-style лимит прикрепляемых фото к одной публикации.
 // Больше — превью теряет смысл (узкие квадраты, неудобный скролл), envelope раздувается.
@@ -496,6 +496,13 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
     onViewersPress, onBookmarkToggle, onShareToChat, onNativeShare,
   } = props;
   const { t } = useTranslation();
+  // v4.32.540: тело публикации — такая же «читальная поверхность», как пузырь
+  // переписки, поэтому размер текста из настроек обязан доезжать и сюда.
+  const scaleFont = useScaledFont();
+  const bodyFont = useMemo(
+    () => ({ fontSize: scaleFont(15), lineHeight: scaleFont(22) }),
+    [scaleFont],
+  );
 
   // v4.32.589: имя автора могло не открыться ключом — тогда оно приходит
   // пустой строкой, и `?? 'Контакт'` её не ловит. Пометка вместо пустоты.
@@ -575,7 +582,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
         return (
           <>
             {bodyText.length > 0 ? (
-              <RichText text={bodyText} style={styles.body} onHashtagPress={onHashtagPress} searchTerm={feedSearch.trim() || undefined} host={item.read === 0 ? colors.surfaceHigh : colors.surface} />
+              <RichText text={bodyText} style={[styles.body, bodyFont]} onHashtagPress={onHashtagPress} searchTerm={feedSearch.trim() || undefined} host={item.read === 0 ? colors.surfaceHigh : colors.surface} />
             ) : null}
             {geo ? (
               <View style={{ marginTop: 8 }}>
@@ -812,6 +819,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   // в светлой теме и 3.09:1 в тёмной — «Скрыто авторов: N» не читалось.
   const quietTint = useMemo(() => badgeTint(colors, 'muted', colors.background), [colors]);
   const insets = useSafeAreaInsets();
+  // v4.32.540: комментарии читают ровно так же, как ленту, — размер текста из
+  // настроек должен работать и здесь.
+  const scaleFont = useScaledFont();
+  const commentFont = useMemo(
+    () => ({ fontSize: scaleFont(14), lineHeight: scaleFont(20) }),
+    [scaleFont],
+  );
   const [posts, setPosts] = useState<FeedPostRow[]>([]);
   // v4.32.503: обновлению нужен текущий список, но брать его из зависимостей
   // нельзя — loadFeed пересобирался бы на каждое изменение ленты и перезапускал
@@ -2758,8 +2772,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
     void loadFeed();
   }, [pair, loadFeed]);
 
+  // v4.32.540: 'top' вернулся сюда из оболочки — теперь полосу под часы
+  // отбивает каждый экран сам, а фон под ней идёт на всю высоту.
   return (
-    <SafeScreen edges={['left', 'right']} style={{ flex: 1, backgroundColor: colors.background }}>
+    <SafeScreen edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: colors.background }}>
       <KeyboardHost>
       <View style={[styles.container, { backgroundColor: colors.background }]} testID="feed_screen">
         {/* Полноэкранный оверлей только вне модалки — иначе дублируется с кнопкой «Публикация…». */}
@@ -2767,7 +2783,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         {/* v4.32.36: компактный header — убраны subtitle (лишние 2 строки) и idRow
             (DID дублируется в Профиле). Это поднимает первый пост ближе к верху
             экрана — раньше вертикальный оверхед ~250px прижимал посты к середине. */}
-        <View style={styles.feedChrome}>
+        {/* v4.32.540: та же стеклянная капсула, что в «Чатах» (topChrome) и в
+            группах. Раньше «Новости» открывались плоской полосой с волосяной
+            линией внизу: три вкладки — три разных верха. */}
+        <GlassSurface style={styles.feedChrome} variant="regular">
         <View style={styles.topRow}>
           <Text style={[styles.h1, { flex: 1 }]}>{t('feed.title')}</Text>
           <AppPressable
@@ -2811,7 +2830,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
             </AppPressable>
           ) : null}
         </View>
-        </View>
+        </GlassSurface>
 
         {/* Trending hashtags row */}
         {!feedSearch && !activeHashtag && trendingHashtags.length > 0 ? (
@@ -3019,7 +3038,18 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                 softwareKeyboardLayoutMode="resize" убирает место под клавиатуру).
                 Раньше фиксированная height от SCREEN_HEIGHT или windowHeight давала
                 то перелёт (шапка выше экрана), то крошечный листок ~130px.
-                На iOS сохраняем старое поведение с KeyboardAvoidingView + MODAL_HEIGHT_*. */}
+
+                v4.32.540: iOS с открытой клавиатурой переведён на то же правило.
+                Прежде лист получал ФИКСИРОВАННУЮ высоту 0.92 экрана и при этом
+                стоял в контейнере с `justify-content: flex-end`, которому
+                KeyboardAvoidingView добавлял снизу целую клавиатуру. Два
+                смещения складывались: на экране 852 pt верх листа оказывался на
+                852 − 336 − 784 = −268 pt, то есть «Отмена», заголовок и
+                «Опубликовать» уезжали за верхнюю кромку вместе с началом текста.
+                Свободное место над клавиатурой и так известно контейнеру —
+                достаточно его занять (flex: 1), а не назначать долю экрана.
+                Свёрнутый лист (клавиатуры нет) остаётся прежним: 0.72 экрана
+                снизу — это его форма, а не следствие расчёта. */}
             <KeyboardAvoidingView
               style={styles.modalKeyboardAvoid}
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -3028,17 +3058,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
               <View
                 style={[
                   styles.modalSheet,
-                  Platform.OS === 'ios'
+                  Platform.OS === 'ios' && !keyboardVisible
                     ? {
-                        height: keyboardVisible
-                          ? MODAL_HEIGHT_KEYBOARD
-                          : MODAL_HEIGHT_COLLAPSED,
+                        height: MODAL_HEIGHT_COLLAPSED,
                         paddingBottom: Math.max(insets.bottom, 12),
                       }
                     : {
                         flex: 1,
                         marginTop: insets.top + 8,
-                        paddingBottom: Math.max(insets.bottom, 12),
+                        // Под клавиатурой жест-полосы нет — её отступ там лишний.
+                        paddingBottom: Platform.OS === 'ios' ? 12 : Math.max(insets.bottom, 12),
                       },
                 ]}
               >
@@ -3485,31 +3514,38 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
       >
         {/* v4.32.25: GestureHandlerRootView обязателен для RNGH Pressable внутри Modal на Android. */}
         <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
-          {/* v4.32.160 P2 audit #3: presentationStyle="fullScreen" на Android рисует за
-              system bars — SafeAreaView по умолчанию (все edges) добавлял бы лишний
-              top-inset, и шапка съезжала вниз. Пропускаем top на Android, оставляем
-              bottom/left/right везде. */}
+          {/*
+            v4.32.540: у SafeAreaView отобраны 'top' и 'bottom'. Отступы под часы
+            и под жест-полосу теперь стоят на самих краях содержимого — шапке и
+            строке ввода, — и вот почему.
+
+            Верх. Полосу отбивал SafeAreaView на iOS и шапка на Android: одно
+            правило, две реализации, и на iOS оно не срабатывало. `SafeAreaView`
+            из safe-area-context внутри `Modal` берёт метрики не окна модалки, а
+            провайдера снаружи; в fullScreen-модалке они не совпадают, и отступ
+            выходил нулевым — «Назад» и заголовок уезжали под часы и под
+            «остров». Явный `insets.top` на шапке одинаков на обеих системах и
+            от метрик модалки не зависит.
+
+            Низ. 'bottom' у SafeAreaView лежал СНАРУЖИ KeyboardAvoidingView, и
+            строка ввода уже добавляла себе тот же отступ сама (см. ниже) — под
+            клавиатурой оставался лишний пробел в высоту жест-полосы.
+
+            Следом обнулился и `keyboardVerticalOffset`: он компенсировал ровно
+            тот верхний отступ, которого у контейнера больше нет. KAV занимает
+            экран целиком, начиная с нуля, — смещать его не от чего.
+          */}
           <SafeAreaView
             style={{ flex: 1, backgroundColor: colors.background }}
-            edges={Platform.OS === 'android' ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']}
+            edges={['left', 'right']}
           >
             <KeyboardAvoidingView
               style={{ flex: 1 }}
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              // v4.32.163 P2#4 fix: на iPhone с notch внутри fullScreen Modal SafeAreaView
-              // добавляет top-inset, но KeyboardAvoidingView его не учитывает и input
-              // заезжает под клавиатуру на ~safeArea.top. Передаём insets.top на iOS.
-              // Android использует softwareKeyboardLayoutMode=resize (app.json), клавиатура
-              // ресайзит окно сама — offset=0 корректен.
-              keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+              keyboardVerticalOffset={0}
             >
               {/* Header bar: ← | title | (search placeholder) */}
-              {/* v4.32.227 (KB-1): fullScreen Modal draws behind the status bar and the
-                  SafeAreaView above intentionally drops the 'top' edge — so the header
-                  itself must carry the status-bar inset, otherwise the title/back row
-                  slides under the clock/battery/notification strip. Apply insets.top on
-                  Android (iOS gets it from the SafeAreaView 'top' edge). */}
-              <View style={[cmStyles.screenHeader, Platform.OS === 'android' ? { paddingTop: insets.top } : null]}>
+              <View style={[cmStyles.screenHeader, { paddingTop: insets.top }]}>
                 <AppPressable onPress={closeComments} hitSlop={12} style={cmStyles.screenHeaderSide} accessibilityRole="button" accessibilityLabel={t('common.close')}>
                   <Ionicons name="chevron-back" size={26} color={colors.accent} />
                 </AppPressable>
@@ -3570,9 +3606,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                         {/* v4.32.588: непрочитанный комментарий приходил
                             пустой строкой и рисовался пустым пузырём. */}
                         {feedCommentIsUnreadable(c) ? (
-                          <Text style={[cmStyles.commentText, cmStyles.commentUnreadable]}>{UNREADABLE_COMMENT_TEXT}</Text>
+                          <Text style={[cmStyles.commentText, commentFont, cmStyles.commentUnreadable]}>{UNREADABLE_COMMENT_TEXT}</Text>
                         ) : (
-                          <Text style={cmStyles.commentText}>{c.text}</Text>
+                          <Text style={[cmStyles.commentText, commentFont]}>{c.text}</Text>
                         )}
                         {/* Reaction pills row */}
                         {Object.keys(cReactions).length > 0 ? (
@@ -4085,7 +4121,17 @@ function makeStyles(c: AppColors) {
   // ниже статус-бара больше, чем нужно. Боковой padding 16 остаётся.
   container: { flex: 1, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16, backgroundColor: c.background },
   // v4.32.530: см. topChrome в списке чатов — то же решение, та же причина.
-  feedChrome: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+  // v4.32.540: капсула, а не полоса. Волосяная линия снизу убрана — у отдельного
+  // предмета кромка своя, по всему контуру, и её рисует само стекло.
+  feedChrome: {
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.sm,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
+    ...elevation.card,
+  },
   list: { flex: 1 },
   // v4.32.36: topRow теперь одна строка (h1 + кнопки); marginBottom 8 вместо 4.
   topRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },

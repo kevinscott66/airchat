@@ -208,3 +208,17 @@ export function useThemedStyles<T extends StyleSheet.NamedStyles<T>>(
   const { colors } = useContext(ThemeContext);
   return useMemo(() => StyleSheet.create(factory(colors)), [colors]); // eslint-disable-line react-hooks/exhaustive-deps
 }
+
+/**
+ * v4.32.540: «Размер текста» в настройках раньше доезжал только до пузырей
+ * переписки — на ленте, в списках и в комментариях он ничего не менял, и со
+ * стороны выглядел как неработающая настройка. Глобально подменить `Text`
+ * нельзя: в RN 0.83 это обычная функция-компонент без `render`, а `defaultProps`
+ * у функциональных компонентов React 19 игнорирует. Поэтому масштабируем явно —
+ * хук отдаёт функцию, которая пересчитывает базовый размер из токенов `font`
+ * пропорционально выбору (15 pt — «Средний», то есть множитель 1).
+ */
+export function useScaledFont(): (base: number) => number {
+  const { fontSize } = useContext(ThemeContext);
+  return useCallback((base: number) => Math.round((base * fontSize) / 15), [fontSize]);
+}

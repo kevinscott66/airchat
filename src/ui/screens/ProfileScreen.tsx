@@ -39,7 +39,8 @@ import { loadKeyPair } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
 import { republishProfileFromKv } from '../../core/identity/profile';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, sanitizeOwnDisplayName, setOwnUsername } from '../../core/identity/ownProfile';
-import { normalizeUsername } from '../../core/identity/username';
+import { checkUsernameClaim, USERNAME_MIN_SELF_SERVICE } from '../../core/identity/reservedUsernames';
+import { publicIdFor } from '../../core/identity/publicId';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
 import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope';
@@ -48,6 +49,9 @@ import { broadcastMyProfile, markProfileChanged } from '../../core/social/profil
 import { authGuard } from '../../core/security/authGuard';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WallpaperBackground } from '../components/WallpaperBackground';
+import { defaultWallpaper, feedGround } from '../wallpapers';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { accentOnFill, avatarShape, BRAND_X, font, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, type AppColors } from '../theme';
 import { useTheme } from '../ThemeContext';
@@ -106,7 +110,22 @@ function ProfileScreenImpl({
 }: Props): React.ReactElement {
   // v4.32.16: gate через tabRef из Context; prop isActive удалён — React.memo bail-out.
   const tabRef = useTabRef();
-  const { colors } = useTheme();
+  const { colors, scheme } = useTheme();
+  // v4.32.540: отступ под часы — теперь дело экрана, а не оболочки (см. App.tsx).
+  const insets = useSafeAreaInsets();
+  // v4.32.540: постоянный идентификатор аккаунта выводится из DID, то есть из
+  // ключа. Переименование, смена юзернейма и аватара его не трогают.
+  const accountPublicId = useMemo(() => publicIdFor('account', did), [did]);
+  // v4.32.540: у профиля появился фон. Это тот же слой, что под перепиской, и
+  // тот же пресет по умолчанию — «aurora» в тёмной теме, «daylight» в светлой.
+  // Своего выбора у профиля нет умышленно: обои настраиваются у разговора,
+  // где их видно за текстом; здесь фон — фирменная подложка, а не настройка,
+  // и второй ручкой к тому же предмету он быть не должен.
+  const profileWallpaper = useMemo(() => defaultWallpaper(scheme), [scheme]);
+  const profileGround = useMemo(
+    () => feedGround(colors, profileWallpaper),
+    [colors, profileWallpaper],
+  );
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [displayName, setDisplayName] = useState('');
   const [isEditingName, setIsEditingName] = useState(false);
@@ -363,11 +382,22 @@ function ProfileScreenImpl({
   };
 
   const saveHandle = async (): Promise<void> => {
-    const raw = normalizeUsername(editHandleDraft);
-    if (!raw) {
-      showError('Юзернейм обязателен: 3–32 символа, только a-z, 0-9, _');
+    // v4.32.540: причина отказа называется вслух. Раньше на все случаи была
+    // одна строка про занятость, и человек, набравший имя из двух букв, шёл
+    // подбирать варианты — получая на каждый тот же ответ.
+    const claim = checkUsernameClaim(editHandleDraft);
+    if (!claim.ok) {
+      showError(
+        claim.reason === 'empty' ? 'Введите юзернейм'
+          : claim.reason === 'charset' ? 'Только латиница, цифры и «_» — без пробелов и знаков'
+            : claim.reason === 'too_long' ? 'Юзернейм длиннее 32 символов'
+              : claim.reason === 'too_short'
+                ? `Юзернейм короче ${USERNAME_MIN_SELF_SERVICE} символов — короткие имена оставлены приложению`
+                : 'Это имя оставлено приложению: выберите другое',
+      );
       return;
     }
+    const raw = claim.username;
     if (!(await setOwnUsername(raw))) {
       showError('Юзернейм уже используется другим аккаунтом или не сохранён');
       return;
@@ -565,7 +595,12 @@ function ProfileScreenImpl({
 
   return (
     <SafeScreen edges={['left', 'right']} style={{ flex: 1, backgroundColor: colors.background }}>
-      <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={styles.content} testID="profile_screen">
+      <WallpaperBackground wallpaper={profileWallpaper} ground={profileGround.ground} />
+      {/* Лента профиля прозрачна — иначе фон под ней не виден; карточки внутри
+          и так залиты своими поверхностями. Отступ под часы уходит в
+          contentContainer, а не в контейнер: скроллу нужно уезжать ПОД полосу,
+          а не начинаться под ней. */}
+      <ScrollView style={[styles.container, { backgroundColor: 'transparent' }]} contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]} testID="profile_screen">
         <LoadingOverlay visible={busy} message="Обработка…" />
 
         {multiProfileEnabled && onOpenProfiles ? (
@@ -675,6 +710,26 @@ function ProfileScreenImpl({
               <Ionicons name="create-outline" size={16} color={colors.textMuted} style={{ marginLeft: 6 }} />
             </AppPressable>
           )}
+          {/*
+            v4.32.540: постоянный идентификатор аккаунта. Юзернейм меняют, имя
+            и фотографию тем более — а это выводится из ключа и не меняется
+            никогда, поэтому по нему собеседник и сверяет, тот ли это человек.
+          */}
+          {accountPublicId ? (
+            <AppPressable
+              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
+              onPress={() => {
+                void Clipboard.setStringAsync(accountPublicId).then(() => showSuccess(COPIED_ID));
+              }}
+              accessibilityLabel={`Постоянный идентификатор аккаунта ${accountPublicId}`}
+              testID="profile_public_id"
+            >
+              <Text style={{ color: colors.textMuted, fontSize: font.sm, letterSpacing: 0.5 }}>
+                {accountPublicId}
+              </Text>
+              <Ionicons name="copy-outline" size={13} color={colors.textMuted} style={{ marginLeft: 6 }} />
+            </AppPressable>
+          ) : null}
           {/* Pronouns */}
           {isEditingPronouns ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>

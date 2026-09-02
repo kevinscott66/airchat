@@ -43,6 +43,11 @@ import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { userErrorText } from './userErrorText';
 import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
+// v4.32.540: чужой профиль — обложка из набора обоев и постоянный
+// идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
+import { WallpaperBackground } from './WallpaperBackground';
+import { coverWallpaperFor } from '../wallpapers';
+import { publicIdFor } from '../../core/identity/publicId';
 
 export interface UserProfilePeekProps {
   /** Видна ли модалка. */
@@ -129,6 +134,13 @@ export function UserProfilePeek({
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
   const displayName = identity.contactName;
 
+  // v4.32.540: постоянный идентификатор аккаунта — выводится из DID, то есть
+  // из ключа: переименование контакта у себя его не трогает.
+  const peerPublicId = useMemo(() => publicIdFor('account', resolved?.did ?? ''), [resolved]);
+  // Обложка — от идентификатора, а не от имени: переименовал контакт у себя,
+  // а карточка осталась той же самой.
+  const cover = useMemo(() => coverWallpaperFor(peerPublicId), [peerPublicId]);
+
   const handleCopyId = useCallback(async () => {
     if (!resolved) return;
     try {
@@ -138,6 +150,16 @@ export function UserProfilePeek({
       showError('Не удалось скопировать');
     }
   }, [resolved]);
+
+  const handleCopyPublicId = useCallback(async () => {
+    if (!peerPublicId) return;
+    try {
+      await Clipboard.setStringAsync(peerPublicId);
+      showSuccess(COPIED_ID);
+    } catch {
+      showError('Не удалось скопировать');
+    }
+  }, [peerPublicId]);
 
   const handleShareId = useCallback(async () => {
     if (!resolved) return;
@@ -234,12 +256,23 @@ export function UserProfilePeek({
         />
         {/* Card поверх backdrop; inner-тапы не закрывают модалку. */}
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
+              {/*
+                v4.32.540: полоса обоев вместо пустого верха карточки. Клип и
+                скругление стоят здесь, а не на слое: слой умеет только
+                заполнять родителя, а верхние углы у него общие с карточкой.
+              */}
+              <View style={styles.cover} pointerEvents="none">
+                <WallpaperBackground wallpaper={cover} ground={colors.surface} />
+              </View>
+              <View style={styles.body}>
               <View style={styles.header}>
-                <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
+                {/* Кольцо цветом карточки: кружок наезжает на обложку, и без
+                    него инициалы теряются на светлых пресетах. */}
+                <View style={[styles.avatar, { backgroundColor: colors.primary, borderColor: colors.surface }]}>
                   <Text style={[styles.avatarText, { color: primaryInk(colors).text }]}>{identity.initials}</Text>
                 </View>
                 {renaming ? (
-                  <View style={{ flex: 1, marginLeft: spacing.md }}>
+                  <View style={styles.headerBody}>
                     <TextInput
                       value={renameDraft}
                       onChangeText={setRenameDraft}
@@ -272,7 +305,7 @@ export function UserProfilePeek({
                     </View>
                   </View>
                 ) : (
-                  <View style={{ flex: 1, marginLeft: spacing.md }}>
+                  <View style={styles.headerBody}>
                     <Text
                       style={[
                         styles.name,
@@ -300,6 +333,29 @@ export function UserProfilePeek({
                   {shortDid(resolved.did, 10)}
                 </Text>
               </View>
+
+              {/*
+                v4.32.540: короткий постоянный идентификатор — то, что можно
+                продиктовать вслух и сверить, в отличие от DID в шестьдесят
+                знаков. Он выводится из ключа: имя контакта человек меняет у
+                себя как хочет, идентификатор от этого не меняется.
+              */}
+              {peerPublicId ? (
+                <AppPressable
+                  style={[styles.didBox, { borderColor: colors.border }]}
+                  onPress={() => void handleCopyPublicId()}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Постоянный идентификатор: ${peerPublicId}`}
+                  testID="peek_public_id"
+                >
+                  <Text style={[styles.didLabel, { color: colors.textSecondary }]}>
+                    Постоянный идентификатор
+                  </Text>
+                  <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1} selectable>
+                    {peerPublicId}
+                  </Text>
+                </AppPressable>
+              ) : null}
 
               <View style={styles.actions}>
                 {!isSelf && (
@@ -388,6 +444,7 @@ export function UserProfilePeek({
                   </Text>
                 </AppPressable>
               </View>
+              </View>
         </View>
       </View>
       </KeyboardHost>
@@ -405,20 +462,36 @@ const styles = StyleSheet.create({
   },
   card: {
     borderRadius: radius.xl,
-    padding: spacing.md,
+    // v4.32.540: отступ уехал внутрь, в `body`: обложка идёт от края до края,
+    // а с общим padding она висела бы белой рамкой внутри карточки.
     maxWidth: 420,
     width: '100%',
     alignSelf: 'center',
+    overflow: 'hidden',
+  },
+  cover: {
+    height: 96,
+  },
+  body: {
+    padding: spacing.md,
   },
   header: {
-    flexDirection: 'row',
     alignItems: 'center',
+    // Кружок наезжает на обложку ровно наполовину: так видно и обложку, и то,
+    // что аватар принадлежит карточке, а не полосе.
+    marginTop: -46,
     marginBottom: spacing.md,
+  },
+  headerBody: {
+    width: '100%',
+    marginTop: spacing.sm,
+    alignItems: 'center',
   },
   avatar: {
     ...avatarShape(56),
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 3,
   },
   // v4.32.419: цвет инициалов переехал на место вызова — заливка кружка
   // это `primary`, который выбирает пользователь, а лист стилей считается
@@ -430,10 +503,12 @@ const styles = StyleSheet.create({
   name: {
     fontSize: font.lg,
     fontWeight: '700',
+    textAlign: 'center',
   },
   hint: {
     fontSize: font.sm,
     marginTop: 2,
+    textAlign: 'center',
   },
   didBox: {
     borderWidth: 1,
@@ -463,6 +538,7 @@ const styles = StyleSheet.create({
     fontSize: font.md,
   },
   renameInput: {
+    alignSelf: 'stretch',
     borderWidth: 1,
     borderRadius: radius.md,
     paddingHorizontal: spacing.sm,

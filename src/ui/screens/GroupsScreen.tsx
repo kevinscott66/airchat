@@ -39,6 +39,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GlassSurface } from '../components/GlassSurface';
 import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
@@ -114,8 +115,9 @@ import { showError, showSuccess } from '../components/userFeedback';
 import { announceGroupSend } from '../groupSendAnnounce';
 import { groupControlProblem } from '../../core/social/groupControlOutcome';
 import { announceCtl, announceInviteToken } from '../groupControlAnnounce';
-import { useTheme } from '../ThemeContext';
-import { avatarShape, badgeDigit, badgeTint, contrastingInk, font, identityAvatar, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
+import { useTheme, useScaledFont } from '../ThemeContext';
+import { publicIdFor } from '../../core/identity/publicId';
+import { avatarShape, badgeDigit, badgeTint, contrastingInk, elevation, font, identityAvatar, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
 import { defaultWallpaper, feedGround, type Wallpaper } from '../wallpapers';
 import { WallpaperBackground } from '../components/WallpaperBackground';
 import { isVoiceMessage, parseVoiceMeta, makeVoiceText } from '../../core/social/voiceEnvelope';
@@ -285,7 +287,7 @@ import {
   isTrulyMissing,
   lookupValue,
 } from '../../core/utils/lookupResult';
-import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK, COPIED_ID } from '../clipboardText';
 export { ruPlural, membersLabel, subscribersLabel };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -314,6 +316,13 @@ function GroupListRow({
   myPubB64?: string;
 }): React.ReactElement {
   const { colors } = useTheme();
+  // v4.32.540: настройка «Размер текста» доезжает и до строк списка групп —
+  // раньше она меняла только пузыри внутри переписки.
+  const scaleFont = useScaledFont();
+  const rowFont = useMemo(
+    () => ({ name: { fontSize: scaleFont(16) }, preview: { fontSize: scaleFont(14) } }),
+    [scaleFont],
+  );
   const avatarUri = useResolvedMediaUrl(item.avatarCid, gateway ?? '');
   /**
    * v4.32.580: подпись последней реплики не открылась ключом данных. «Нет
@@ -393,7 +402,7 @@ function GroupListRow({
           <View style={glStyles.nameRow}>
             {item.pinned ? <Ionicons name="pin" size={13} color={colors.textMuted} style={{ marginRight: 3 }} /> : null}
             {item.type === 'channel' ? <Ionicons name="megaphone-outline" size={13} color={colors.textMuted} style={{ marginRight: 3 }} /> : null}
-            <Text style={[glStyles.name, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
+            <Text style={[glStyles.name, rowFont.name, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
             {item.memberCount > 0 ? (
               <Text style={{ fontSize: font.xs, color: colors.textMuted, marginLeft: 6, flexShrink: 0 }}>
                 {item.type === 'channel' ? `${item.memberCount} подп.` : `${item.memberCount} уч.`}
@@ -406,6 +415,7 @@ function GroupListRow({
           <Text
             style={[
               glStyles.preview,
+              rowFont.preview,
               previewUnreadable || draftUnreadable ? { fontStyle: 'italic' as const } : null,
               { color: showDraftLabel ? colors.error : draftUnreadable ? colors.warning : previewUnreadable ? colors.textMuted : colors.textSecondary },
             ]}
@@ -480,6 +490,8 @@ function GroupChatScreen({
   initialSearchQuery?: string;
 }): React.ReactElement {
   const { colors, scheme, fontSize: themeFontSize } = useTheme();
+  // v4.32.540: отступ под часы и «остров» перешёл из оболочки на экраны, см. App.tsx.
+  const insets = useSafeAreaInsets();
   // v4.32.409: «непрочитанные», «выделено», «закреплено» и своя реакция —
   // одна и та же плашка акцента, и во всех пяти местах она подмешивалась
   // прозрачностью прямо на месте вызова. Подложка считается от поверхности,
@@ -3233,9 +3245,13 @@ function GroupChatScreen({
           поэтому фон виден ровно под лентой.
           v4.32.533: цвет, градиент и снимок — один слой. */}
       <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
-      {/* Header */}
+      {/* v4.32.540: шапка группы стала такой же плавающей стеклянной капсулой,
+          как в личной переписке (v4.32.532). Раньше здесь стояла глухая полоса
+          `colors.surface` во всю ширину: соседние вкладки читались как два
+          разных приложения, а обои под полосой не было видно вовсе. Отступ под
+          часы теперь тоже здесь — оболочка его больше не отбивает. */}
       {searchVisible ? (
-        <View style={[gcStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
           <AppPressable onPress={closeSearch} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -3288,9 +3304,9 @@ function GroupChatScreen({
           ) : searchResults !== null && searchQuery.trim() ? (
             <Text style={{ fontSize: 12, color: colors.textMuted, marginHorizontal: 8 }}>0</Text>
           ) : null}
-        </View>
+        </GlassSurface>
       ) : (
-        <View style={[gcStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular">
           <AppPressable onPress={onBack} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -3748,7 +3764,7 @@ function GroupChatScreen({
               <Ionicons name="settings-outline" size={22} color={colors.text} />
             </AppPressable>
           ) : null}
-        </View>
+        </GlassSurface>
       )}
 
       {/* Pinned message banner */}
@@ -4678,6 +4694,19 @@ function GroupChatScreen({
 
 const gcStyles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8 },
+  // v4.32.540: та же капсула, что у шапки личной переписки (ChatScreen
+  // `threadHeader`). Тень обязательна: стекло плоское, высоту ему даёт тень.
+  glassHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.sm,
+    borderRadius: radius.xl,
+    gap: 8,
+    ...elevation.card,
+  },
   iconBtn: { padding: 8 },
   headerInfo: { flex: 1 },
   headerName: { fontSize: 17, fontWeight: '600' },
@@ -4786,6 +4815,12 @@ function GroupMembersScreen({
   const [nameInput, setNameInput] = useState(group.name);
   const [editingDesc, setEditingDesc] = useState(false);
   const [descInput, setDescInput] = useState(group.description ?? '');
+  // v4.32.540: выводится из uuid группы и её типа — не из названия. Название
+  // и фото меняет администратор, идентификатор не меняется никогда.
+  const groupPublicId = useMemo(
+    () => publicIdFor(group.type === 'channel' ? 'channel' : 'group', group.id),
+    [group.id, group.type],
+  );
   /**
    * v4.32.515: «сохранено ли уже это значение» спрашиваем у себя, а не у
    * пропа. `group` приезжает из навигационного состояния и после записи в базу
@@ -5197,6 +5232,28 @@ function GroupMembersScreen({
             </AppPressable>
           )}
           <Text style={{ color: colors.textMuted, fontSize: 12 }}>{membersLabel(members.length)}</Text>
+          {/*
+            v4.32.540: постоянный идентификатор группы. Название и фото меняет
+            любой администратор — по ним нельзя понять, та ли это группа, в
+            которую тебя звали. Это выводится из uuid и не меняется, а
+            приставка (`GR`/`CH`) отличает группу от канала: у канала с тем же
+            uuid идентификатор ДРУГОЙ, перепутать их нельзя.
+          */}
+          {groupPublicId ? (
+            <AppPressable
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              onPress={() => {
+                Clipboard.setString(groupPublicId);
+                showSuccess(COPIED_ID);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Постоянный идентификатор: ${groupPublicId}`}
+              testID="group_public_id"
+            >
+              <Text style={{ color: colors.textMuted, fontSize: font.xs, letterSpacing: 0.5 }}>{groupPublicId}</Text>
+              <Ionicons name="copy-outline" size={12} color={colors.textMuted} />
+            </AppPressable>
+          ) : null}
         </View>
       </View>
 
@@ -5762,7 +5819,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
 
   if (nav.screen === 'members' && pair) {
     return (
-      <SafeScreen edges={['left', 'right']} style={{ flex: 1 }}>
+      <SafeScreen edges={['top', 'left', 'right']} style={{ flex: 1 }}>
         <GroupMembersScreen
           key={nav.group.id}
           group={nav.group}
@@ -5788,6 +5845,10 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
           }}
         />
 
+        {/* v4.32.540: шапка, поиск и фильтры собраны в одну стеклянную капсулу —
+            ту же, что в «Чатах» (ChatListScreen `topChrome`). Раньше «Группы»
+            открывались тремя плоскими полосами подряд. */}
+        <GlassSurface style={gsStyles.topChrome} variant="regular">
         <View style={gsStyles.header}>
           <Text style={[gsStyles.title, { color: colors.text }]}>Группы</Text>
           {groups.some((g) => g.unreadCount > 0) ? (
@@ -5824,7 +5885,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
         </View>
 
         {/* Filter tabs */}
-        <View style={[gsStyles.filterRow, { borderBottomColor: colors.border }]}>
+        <View style={[gsStyles.filterRow, { borderBottomWidth: 0 }]}>
           {([
             { id: 'all' as const, label: 'Все', badge: groups.reduce((s, g) => s + (g.unreadCount > 0 ? 1 : 0), 0) },
             { id: 'unread' as const, label: 'Непрочит.', badge: groups.filter((g) => g.unreadCount > 0).length },
@@ -5854,6 +5915,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
             );
           })}
         </View>
+        </GlassSurface>
 
         {/* Cross-group message search results */}
         {/* v4.32.581: строка о непрочитанном стоит ВЫШЕ выдачи и вне её условия —
@@ -6013,6 +6075,15 @@ const gsStyles = StyleSheet.create({
   createBtn: { padding: 4 },
   separator: { height: StyleSheet.hairlineWidth },
   grpSearchWrap: {},
+  // v4.32.540: капсула верхней части списка, зеркало `topChrome` из «Чатов».
+  topChrome: {
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.sm,
+    borderRadius: radius.xl,
+    paddingBottom: spacing.xs,
+    overflow: 'hidden',
+    ...elevation.card,
+  },
   grpSearchInput: {},
   filterRow: {
     flexDirection: 'row',

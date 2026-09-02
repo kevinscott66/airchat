@@ -20,6 +20,7 @@ import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
 import { getMessagingService } from './messaging';
 import { canReachPeer } from './sendGate';
+import { avatarVisibilityFor, type AvatarVisibility } from '../settings/avatarVisibility';
 import {
   PROFILE_PREFIX,
   encodeProfileEnvelope,
@@ -128,7 +129,40 @@ async function currentAvatarCid(pid: number, uri: string, now: number): Promise<
  * последнего изменения профиля: иначе каждая пересборка выглядела бы как
  * новая версия и рассылка шла бы по кругу.
  */
-async function buildEnvelope(pid: number): Promise<Built | null> {
+/**
+ * v4.32.540: фотография профиля подчиняется отдельному решению человека.
+ *
+ * `audience` — кому этот конверт: `contacts` для рассылки по списку контактов,
+ * `direct` для того, кто просто открыл переписку и в контактах может не
+ * значиться. Настройка «кто видит фото» разбирается ЗДЕСЬ, на сборке, а не на
+ * экране: конверт уезжает и из фоновых служб, и правило должно быть одним
+ * куском кода на всех отправителей.
+ *
+ * `nobody` — фотография не покидает устройство совсем. `contacts` — уходит
+ * только по списку контактов. `everybody` (по умолчанию, как было до этой
+ * версии) — уходит всем, с кем идёт переписка.
+ */
+type Audience = 'contacts' | 'direct';
+
+/** Есть ли собеседник в списке контактов этого профиля. Ошибку чтения списка
+ *  трактуем как «нет»: показать фотографию тому, кому не положено, хуже, чем
+ *  не показать её тому, кому положено, — второе чинится следующей рассылкой. */
+async function isMyContact(pid: number, peerPubB64: string): Promise<boolean> {
+  try {
+    return (await listContactsFor(pid)).some((c) => c.peerPublicKey === peerPubB64);
+  } catch (e) {
+    log.warn('profile_contact_check_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
+function avatarAllowed(visibility: AvatarVisibility, audience: Audience): boolean {
+  if (visibility === 'nobody') return false;
+  if (visibility === 'contacts') return audience === 'contacts';
+  return true;
+}
+
+async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Promise<Built | null> {
   const name = await getOwnDisplayNameFor(pid);
   const username = await getOwnUsernameFor(pid);
   // v4.32.378: тем же правилом, каким конверт чистится на сборке. Иначе
@@ -147,10 +181,11 @@ async function buildEnvelope(pid: number): Promise<Built | null> {
     stamp = now;
     await scopedKvSetFor(pid, CHANGED_AT_KEY, String(stamp));
   }
-  const avatarCid = avatarUri ? await currentAvatarCid(pid, avatarUri, now) : null;
+  const shareAvatar = avatarAllowed(await avatarVisibilityFor(pid), audience);
+  const avatarCid = avatarUri && shareAvatar ? await currentAvatarCid(pid, avatarUri, now) : null;
   return {
     env: { name, username, bio, avatarCid, ts: stamp },
-    version: versionOf(stamp, name, username, bio, avatarUri, avatarCid != null),
+    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarUri : '', avatarCid != null),
   };
 }
 
@@ -253,7 +288,17 @@ export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
   const svc = getMessagingService();
   if (!svc) return;
   const pid = activeProfileId();
-  const built = await buildEnvelope(pid);
+  // v4.32.540: этот путь охватывает и тех, кого нет в контактах, — значит для
+  // настройки «фото видят только контакты» он и есть та граница, за которую
+  // фотография не уходит. Но собеседник МОЖЕТ быть в контактах: тогда фото ему
+  // положено, и «direct» здесь означало бы, что настройка прячет фото и от
+  // тех, для кого её включали. Поэтому список читается — но только когда от
+  // ответа что-то зависит.
+  const audience: Audience =
+    (await avatarVisibilityFor(pid)) === 'contacts' && !(await isMyContact(pid, peerPubB64))
+      ? 'direct'
+      : 'contacts';
+  const built = await buildEnvelope(pid, audience);
   if (!built) return;
   const { version } = built;
   const sent = await loadSent(pid);

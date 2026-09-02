@@ -61,8 +61,16 @@ import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs
 import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../../core/backup/seedPhrase';
 import { isCloudVaultConfigured, uploadCloudVault, validateCloudPassword } from '../../core/backup/cloudVault';
+// v4.32.540: фотография профиля — отдельное решение от «когда я в сети»:
+// лицо прячут не по тем же причинам, по которым прячут активность.
+import {
+  parseAvatarVisibility,
+  setAvatarVisibility,
+  type AvatarVisibility,
+} from '../../core/settings/avatarVisibility';
 import { setMyLastSeenVisibility } from '../../core/social/presenceService';
 import { broadcastLastSeenPref } from '../../core/social/presencePrefSync';
+import { broadcastMyProfile } from '../../core/social/profileSync';
 import { LINK_PREVIEW_INCOMING_KEY, parseIncomingLinkPreviewPref } from '../../core/social/linkPreviewPolicy';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
 import { getLanTransportSingleton } from '../../core/transport/lan/lanTransport';
@@ -204,6 +212,7 @@ function SettingsScreenImpl({
 
   // ── Privacy state ──────────────────────────────────────────────────────────
   const [lastSeenVisibility, setLastSeenVisibility] = useState<'everybody' | 'contacts' | 'nobody'>('everybody');
+  const [avatarVisibility, setAvatarVisibilityState] = useState<AvatarVisibility>('everybody');
   const [onlyContactsCanMsg, setOnlyContactsCanMsg] = useState(false);
   const [onlyContactsCanAddToGroup, setOnlyContactsCanAddToGroup] = useState(false);
   const [disableReadReceipts, setDisableReadReceipts] = useState(false);
@@ -258,6 +267,7 @@ function SettingsScreenImpl({
   useEffect(() => {
     void Promise.all([
       privacyPrefGet('privacy_last_seen_visibility'),
+      privacyPrefGet('privacy_avatar_visibility'),
       privacyPrefGet('privacy_only_contacts_msg'),
       kvGet('notify_dm'),
       kvGet('notify_feed'),
@@ -281,8 +291,9 @@ function SettingsScreenImpl({
       // разбор значения (границы, мусор) один на всё приложение.
       getDefaultDisappearMs(),
       kvGet(LINK_PREVIEW_INCOMING_KEY),
-    ]).then(([lsVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev]) => {
+    ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev]) => {
       if (lsVis === 'everybody' || lsVis === 'contacts' || lsVis === 'nobody') setLastSeenVisibility(lsVis);
+      setAvatarVisibilityState(parseAvatarVisibility(avVis));
       setOnlyContactsCanMsg(onlyContacts === 'true');
       setNotifyDm(nDm !== 'false');
       setNotifyFeed(nFeed !== 'false');
@@ -950,6 +961,44 @@ function SettingsScreenImpl({
               }}
             >
               <Text style={{ color: lastSeenVisibility === val ? primaryOn : colors.text, fontSize: 13, fontWeight: '600' }}>{label}</Text>
+            </AppPressable>
+          ))}
+        </View>
+      </View>
+
+      {/*
+        v4.32.540: фотография профиля была единственным полем карточки без
+        собственного решения — поставил один раз, и она уезжала всем, с кем
+        идёт переписка. Отозвать её было нечем, кроме как удалить у себя.
+        Подпись говорит ровно то, что делает код: настройка управляет
+        РАССЫЛКОЙ карточки, а уже полученную кем-то фотографию она забрать не
+        может — как и любая настройка в переписке без сервера.
+      */}
+      <Text style={styles.sectionTitle}>Фотография профиля</Text>
+      <Text style={styles.hint}>
+        Кому уходит ваше фото вместе с карточкой профиля. Тот, кто получил его
+        раньше, сохранит свою копию: отозвать уже отправленное нельзя.
+      </Text>
+      <View style={styles.card}>
+        <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', paddingVertical: 12 }}>
+          {([['everybody', 'Все'], ['contacts', 'Контакты'], ['nobody', 'Никто']] as [AvatarVisibility, string][]).map(([val, label]) => (
+            <AppPressable
+              key={val}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: avatarVisibility === val }}
+              onPress={() => {
+                setAvatarVisibilityState(val);
+                // Новую карточку разошлём сразу: иначе выбор «Никто» вступал бы
+                // в силу только при следующей правке профиля.
+                void setAvatarVisibility(val).then(() => broadcastMyProfile());
+              }}
+              style={{
+                paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.xl,
+                backgroundColor: avatarVisibility === val ? colors.primary : colors.background,
+                borderWidth: 1, borderColor: avatarVisibility === val ? colors.primary : colors.border,
+              }}
+            >
+              <Text style={{ color: avatarVisibility === val ? primaryOn : colors.text, fontSize: font.sm, fontWeight: '600' }}>{label}</Text>
             </AppPressable>
           ))}
         </View>
@@ -1997,8 +2046,10 @@ function SettingsScreenImpl({
   // ── MAIN RENDER ────────────────────────────────────────────────────────────
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // v4.32.540: 'top' вернулся сюда из оболочки — теперь полосу под часы
+  // отбивает каждый экран сам, а фон под ней идёт на всю высоту.
   return (
-    <SafeScreen edges={['left', 'right']} style={{ flex: 1, backgroundColor: colors.background }}>
+    <SafeScreen edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: colors.background }}>
       {subScreen === null && renderMainMenu()}
       {subScreen === 'privacy' && renderPrivacy()}
       {subScreen === 'notifications' && renderNotifications()}

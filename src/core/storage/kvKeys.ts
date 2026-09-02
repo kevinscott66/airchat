@@ -66,6 +66,10 @@ export const PRIVACY_PREF_KEYS = [
   // (`allow_cloud_translate`) было общим на устройство и не записывалось вовсе
   // — см. social/translateConsent.
   'privacy_allow_cloud_translate',
+  // v4.32.540: кто видит фотографию профиля. Отдельно от «когда я в сети»
+  // намеренно: фотография это лицо, а не признак активности, и люди прячут
+  // одно, не собираясь прятать другое.
+  'privacy_avatar_visibility',
 ] as const;
 
 export type PrivacyPrefKey = (typeof PRIVACY_PREF_KEYS)[number];

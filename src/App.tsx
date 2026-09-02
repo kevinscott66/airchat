@@ -103,12 +103,14 @@ import { startJsThreadWatcher } from './core/utils/jsThreadWatcher';
 import { scheduleAfterFirstFrame } from './core/utils/firstFrameGate';
 import { setOpenIntentConsumer } from './notifications/openIntent';
 import { useBackHandler } from './core/hooks/useBackHandler';
+import { SwipeBackHost } from './ui/components/SwipeBackHost';
 import { SplashOverlay, type SplashOverlayRef } from './ui/components/SplashOverlay';
 import { badgeDigit, elevation, font, primaryInk, radius, spacing, toastSurface } from './ui/theme';
 import type { AppColors, ColorScheme } from './ui/theme';
 import { contactLabel } from './core/social/contactLabel';
 import { shortIdentity } from './ui/identity/shortId';
 import { GlassSurface } from './ui/components/GlassSurface';
+import { AirChatWordmark } from './ui/components/AirChatWordmark';
 import { TabGlyph } from './ui/components/TabGlyph';
 import { ScreenSlot } from './ui/components/ScreenSlot';
 
@@ -186,6 +188,18 @@ function useMainTabsStyles() {
   return useThemedStyles((c) => ({
     main: { flex: 1, backgroundColor: c.background },
     tabBody: { flex: 1, backgroundColor: c.background },
+    // Знак в полосе статуса: прижат к её нижней кромке и не ловит касания —
+    // полоса принадлежит системе, кликать в ней нечего.
+    islandMark: {
+      position: 'absolute' as const,
+      top: 0,
+      left: 0,
+      right: 0,
+      alignItems: 'center' as const,
+      justifyContent: 'flex-end' as const,
+      paddingBottom: 2,
+    },
+    islandMarkGlyph: { opacity: 0.72 },
     tabBar: { backgroundColor: 'transparent' },
     // v4.32.532: плавающая капсула возвращена. Довод 530-й («таббар — край
     // окна, а не предмет») верен для плоской полосы, но неверен для стекла:
@@ -1181,11 +1195,27 @@ function MainTabs({
 
   return (
     <TabRefProvider tab={tab}>
-    <View
-      style={[styles.main, { paddingTop: insets.top }]}
+    {/*
+      v4.32.540: «По свайпу экрана слева направо по средней части экрана можно
+      вернуться на предыдущую страницу». Обёртка стоит здесь, вокруг всех
+      вкладок разом: жест ведёт в тот же стек «Назад», что и системная кнопка,
+      поэтому отдельной логики возврата ни одному экрану заводить не нужно.
+    */}
+    <SwipeBackHost
+      style={styles.main}
       testID="main_tabs"
       collapsable={false}
     >
+      {/*
+        v4.32.540: верхний отступ под часы и «остров» снят с оболочки и роздан
+        экранам. Раньше полоса safe-area была частью оболочки и заливалась
+        `c.background` — а значит обои переписки, единственный фон, который в
+        приложении вообще есть, обрывались по нижнюю кромку часов. Теперь экран
+        занимает стекло целиком, фон доходит до верхнего края, а под часы
+        отступает уже содержимое: шапка переписки, заголовок ленты, шапка
+        профиля и настроек. Каждая из них и так непрозрачна — им отступ идёт
+        на пользу, фону он мешал.
+      */}
       <View style={styles.tabBody}>
         {mountedTabs.has('feed') ? (
           <ScreenSlot active={tab === 'feed'}>
@@ -1235,6 +1265,20 @@ function MainTabs({
           </ScreenSlot>
         ) : tab === 'settings' && mountingTab === 'settings' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_settings" /></View> : null}
       </View>
+      {/*
+        v4.32.540: водяной знак в полосе статуса. Полоса освободилась (см. выше),
+        и вместо пустой заливки в ней стоит само название — контурами, тем же
+        градиентом, что на приветствии. Высота 11 pt и нижняя привязка выбраны
+        по «острову»: он кончается примерно за 11 pt до нижней кромки полосы,
+        поэтому знак читается ПОД ним, а не из-под него. На аппаратах без
+        выреза (Android, iPhone SE) полоса короче 44 pt — там знаку не хватает
+        места, и он не рисуется вовсе, чтобы не лезть под часы.
+      */}
+      {insets.top >= 44 ? (
+        <View pointerEvents="none" style={[styles.islandMark, { height: insets.top }]}>
+          <AirChatWordmark height={11} style={styles.islandMarkGlyph} />
+        </View>
+      ) : null}
       {multiProfileEnabled ? (
         <ProfileSelector
           visible={profileSelOpen}
@@ -1426,7 +1470,7 @@ function MainTabs({
           </AppPressable>
         </Animated.View>
       ) : null}
-    </View>
+    </SwipeBackHost>
     </TabRefProvider>
   );
 }

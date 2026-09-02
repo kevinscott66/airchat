@@ -65,7 +65,7 @@ import {
 // v4.32.168: зеркалим mute в muteStore (источник правды для FCM gate).
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { showError, showSuccess } from '../components/userFeedback';
-import { useTheme } from '../ThemeContext';
+import { useTheme, useScaledFont } from '../ThemeContext';
 import { StoriesRow } from '../components/StoriesRow';
 import { GlassSurface } from '../components/GlassSurface';
 import { useIpfsGateway, useResolvedMediaUrl } from './chat-components/useResolvedMediaUrls';
@@ -164,6 +164,13 @@ function ConvRowImpl({
     [onSwipePinRaw, item],
   );
   const { colors } = useTheme();
+  // v4.32.540: строка списка чатов — вторая по частоте читальная поверхность
+  // после переписки, и настройка размера текста обязана доезжать сюда тоже.
+  const scaleFont = useScaledFont();
+  const rowFont = useMemo(
+    () => ({ name: { fontSize: scaleFont(font.md) }, preview: { fontSize: scaleFont(font.sm) } }),
+    [scaleFont],
+  );
   const presence = usePresence(item.contactPubB64 ?? '');
   const isOut = item.lastMessageDirection === 'out';
   /**
@@ -296,7 +303,7 @@ function ConvRowImpl({
             {item.pinned ? (
               <Ionicons name="pin" size={13} color={colors.textMuted} style={{ marginRight: 3 }} />
             ) : null}
-            <Text style={[rowStyles.name, { color: colors.text }]} numberOfLines={1}>
+            <Text style={[rowStyles.name, rowFont.name, { color: colors.text }]} numberOfLines={1}>
               {item.displayName}
             </Text>
           </View>
@@ -322,24 +329,24 @@ function ConvRowImpl({
             {isTyping ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}>
                 <AnimatedDots dotColor={colors.primary} dotSize={4} dotSpacing={5} stepDurationMs={200} />
-                <Text style={[rowStyles.preview, { color: colors.accent, fontStyle: 'italic' }]} numberOfLines={1}>
+                <Text style={[rowStyles.preview, rowFont.preview, { color: colors.accent, fontStyle: 'italic' }]} numberOfLines={1}>
                   набирает текст
                 </Text>
               </View>
             ) : draftReadable ? (
-              <Text style={[rowStyles.preview, { color: colors.error }]} numberOfLines={1}>
+              <Text style={[rowStyles.preview, rowFont.preview, { color: colors.error }]} numberOfLines={1}>
                 {`Черновик: ${item.draftText}`}
               </Text>
             ) : draftUnreadable ? (
-              <Text style={[rowStyles.preview, { color: colors.warning, fontStyle: 'italic' }]} numberOfLines={1}>
+              <Text style={[rowStyles.preview, rowFont.preview, { color: colors.warning, fontStyle: 'italic' }]} numberOfLines={1}>
                 {UNREADABLE_DRAFT_TEXT}
               </Text>
             ) : previewUnreadable ? (
-              <Text style={[rowStyles.preview, { color: colors.textMuted, fontStyle: 'italic' }]} numberOfLines={1}>
+              <Text style={[rowStyles.preview, rowFont.preview, { color: colors.textMuted, fontStyle: 'italic' }]} numberOfLines={1}>
                 {UNREADABLE_MESSAGE_TEXT}
               </Text>
             ) : (
-              <Text style={[rowStyles.preview, { color: colors.textSecondary }]} numberOfLines={1}>
+              <Text style={[rowStyles.preview, rowFont.preview, { color: colors.textSecondary }]} numberOfLines={1}>
                 {presence.bucket === 'online' && !preview ? 'в сети' : preview}
               </Text>
             )}
