@@ -10,10 +10,11 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 import * as SecureStore from '../storage/secureStoreQueued';
 import { BACKUP_TEXT_MAX } from './backupFormat';
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from 'bip39';
+import { generateMnemonic, validateMnemonic } from 'bip39';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { persistKeyPair } from '../crypto/keyManager';
 import { encryptSymmetric, decryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
+import { mnemonicSeedCached, clearMnemonicSeedCache } from '../crypto/mnemonicSeed';
 import { kvGet, kvSet } from '../storage/local';
 import { log } from '../logger';
 import { hasAccountVaultSnapshot, restoreAccountVault } from '../storage/accountVault';
@@ -62,7 +63,30 @@ export function getMnemonicGeneration(): number {
 
 export function invalidateMnemonicGeneration(): void {
   mnemonicGeneration += 1;
+  clearMnemonicSeedCache();
+  cachedMnemonic = null;
+  inflightMnemonic = null;
 }
+
+/**
+ * v4.32.542 (perf): распакованная фраза живёт до смены кошелька.
+ *
+ * `getStoredMnemonic()` — это чтение SecureStore (очередь `secureStoreQueued`,
+ * на этих устройствах десятки секунд при холодном старте) ПЛЮС
+ * PBKDF2-HMAC-SHA256 × {@link LOCAL_WRAP_ITERS} на чистом JS. Звали его на
+ * каждое вложение (`mediaBlob`), на каждую резервную копию диалогов (через 4 с
+ * после каждой записи в чат) и из четырёх мест экрана настроек — то есть в
+ * самом горячем месте приложения. Кэш v4.32.226 в `dialogBackup` убрал оттуда
+ * только bip39, а эта, более дорогая половина осталась.
+ *
+ * Секрета в памяти это не добавляет: расшифрованная фраза и так живёт в
+ * замыканиях `App.tsx` и уходит в `syncApi` на каждый запрос. Поэтому важно
+ * только одно — забывать её ровно там, где меняется кошелёк, то есть в
+ * {@link invalidateMnemonicGeneration} (выход, генерация, восстановление) и в
+ * конце {@link wipeMnemonicAndSessionFlags}.
+ */
+let cachedMnemonic: { gen: number; value: string | null } | null = null;
+let inflightMnemonic: { gen: number; p: Promise<string | null> } | null = null;
 
 type LocalMnemonicPayloadV2 = {
   v: 2;
@@ -130,7 +154,7 @@ export function deriveKeyPairFromMnemonicForProfile(
   if (derivationIndex < 0 || !Number.isInteger(derivationIndex)) {
     throw new Error('Invalid profile index');
   }
-  const bipSeed = mnemonicToSeedSync(normalized);
+  const bipSeed = mnemonicSeedCached(normalized);
   const info =
     derivationIndex === 0
       ? HKDF_INFO_PRIMARY
@@ -210,6 +234,11 @@ export async function persistEncryptedMnemonic(plain: string): Promise<void> {
   await SecureStore.setItemAsync(MNEMONIC_ENC_PAYLOAD_KEY, JSON.stringify(payload));
   await SecureStore.deleteItemAsync(MNEMONIC_KEY);
   await SecureStore.deleteItemAsync(LEGACY_SEED_KEY);
+  // Запись — единственное место, где открытая фраза уже на руках: обновить кэш
+  // здесь обязательно, иначе восстановление чужой фразы (invalidate → чтение
+  // старой → запись новой) оставило бы в памяти предыдущий кошелёк.
+  cachedMnemonic = { gen: mnemonicGeneration, value: normalized };
+  inflightMnemonic = null;
   void kvSet(HAS_MNEMONIC_KV, '1').catch(() => { /* best-effort cache sync */ });
   log.info('seed_persisted_encrypted_local', { key: MNEMONIC_ENC_PAYLOAD_KEY, v: 3 });
 }
@@ -239,6 +268,11 @@ export async function wipeMnemonicAndSessionFlags(): Promise<void> {
   } catch {
     /* The database itself is wiped immediately afterwards. */
   }
+  // Ещё раз, уже после удаления: чтение, начатое до вызова, могло положить в
+  // кэш фразу, которой на устройстве больше нет.
+  clearMnemonicSeedCache();
+  cachedMnemonic = null;
+  inflightMnemonic = null;
 }
 
 /**
@@ -345,7 +379,25 @@ export async function hasStoredMnemonic(): Promise<boolean> {
 }
 
 export async function getStoredMnemonic(): Promise<string | null> {
-  return readOrMigrateMnemonic();
+  const gen = mnemonicGeneration;
+  if (cachedMnemonic && cachedMnemonic.gen === gen) return cachedMnemonic.value;
+  // Склейка параллельных вызовов: `secureStoreQueued` выполняет чтения по
+  // одному, поэтому пять одновременных вложений превращались в пять
+  // последовательных распаковок, а не в пять ожиданий одной.
+  if (inflightMnemonic && inflightMnemonic.gen === gen) return inflightMnemonic.p;
+  const p = readOrMigrateMnemonic().then(
+    (value) => {
+      // Кошелёк мог смениться, пока шло чтение, — тогда результат уже чужой.
+      if (mnemonicGeneration === gen) cachedMnemonic = { gen, value };
+      return value;
+    },
+    (err) => {
+      if (inflightMnemonic?.p === p) inflightMnemonic = null;
+      throw err;
+    },
+  );
+  inflightMnemonic = { gen, p };
+  return p;
 }
 
 type EncryptedBackupV1 = {

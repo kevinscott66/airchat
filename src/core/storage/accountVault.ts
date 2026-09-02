@@ -7,9 +7,10 @@
  * followed by a restore of the same account without mixing identities.
  */
 import * as FileSystem from 'expo-file-system/legacy';
-import { mnemonicToSeedSync, validateMnemonic } from 'bip39';
+import { validateMnemonic } from 'bip39';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { deriveLocalDekFromMnemonic } from './dekDerivation';
+import { mnemonicSeedCached } from '../crypto/mnemonicSeed';
 import { ED25519_PUBLIC_KEY_BYTES } from '../crypto/pubKeyFormat';
 import { encryptSymmetric, decryptSymmetric } from '../crypto/encrypt';
 import * as SecureStore from './secureStoreQueued';
@@ -54,7 +55,7 @@ function normalizeMnemonic(mnemonic: string): string {
 export function accountVaultIdFromMnemonic(mnemonic: string): string {
   const normalized = normalizeMnemonic(mnemonic);
   if (!validateMnemonic(normalized)) throw new Error('Invalid seed phrase');
-  return Buffer.from(sha256(mnemonicToSeedSync(normalized))).toString('hex').slice(0, 32);
+  return Buffer.from(sha256(mnemonicSeedCached(normalized))).toString('hex').slice(0, 32);
 }
 
 /**

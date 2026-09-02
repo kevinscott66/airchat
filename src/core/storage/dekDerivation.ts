@@ -1,6 +1,7 @@
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { mnemonicToSeedSync, validateMnemonic } from 'bip39';
+import { validateMnemonic } from 'bip39';
+import { mnemonicSeedCached } from '../crypto/mnemonicSeed';
 
 const DEK_INFO = new TextEncoder().encode('airchat-local-dek-v1');
 
@@ -10,7 +11,7 @@ export function deriveLocalDekFromMnemonic(mnemonic: string): Uint8Array {
   if (!validateMnemonic(normalized)) {
     throw new Error('Invalid mnemonic for DEK derivation');
   }
-  const bipSeed = mnemonicToSeedSync(normalized);
+  const bipSeed = mnemonicSeedCached(normalized);
   return hkdf(sha256, bipSeed, new Uint8Array(0), DEK_INFO, 32);
 }
 
