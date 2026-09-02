@@ -960,7 +960,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   const s = makeStyles(colors);
 
   return (
-    <View style={[s.root, { paddingTop: insets.top }]}>
+    <View style={s.root}>
       <Modal visible={!!colorPickerItem} transparent animationType="fade" onRequestClose={() => setColorPickerItem(null)}>
         <AppPressable
           style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 24 }}
@@ -1162,7 +1162,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
 
       {/* Header */}
       <View
-        style={s.topOverlay}
+        style={[s.topOverlay, { paddingTop: insets.top }]}
         onLayout={(e) => setTopInset(e.nativeEvent.layout.height)}
       >
       {isOffline ? (() => {
@@ -1484,6 +1484,14 @@ function makeStyles(colors: ReturnType<typeof import('../theme').resolveColors>)
     // v4.32.532: шапка снова плавающая капсула со стеклом. В 4.32.530 её
     // распластали по ширине ради «прибора»; направление сменилось — список
     // должен проезжать ПОД шапкой, иначе размывать нечего и стекло врёт.
+    // v4.32.544: полоса статуса отодвигает саму шапку, а не корень. Корень
+    // отодвигал только то, что лежит В ПОТОКЕ, а капсула вынута из потока
+    // абсолютом — `top: 0` у неё отсчитывается от кромки окна, мимо padding'а
+    // родителя. Пока список ехал под шапкой, этого никто не видел; после 543-й,
+    // когда фон пустили на весь экран, капсула оказалась под часами: заголовок
+    // «Чаты» лез на время, а водяной знак — на заголовок. Отступ отдан шапке,
+    // и `topInset` (её измеренная высота) теперь сам включает полосу — поэтому
+    // из корня padding убран, иначе полосу отсчитали бы дважды.
     topOverlay: {
       position: 'absolute',
       top: 0,

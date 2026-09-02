@@ -194,6 +194,10 @@ function useMainTabsStyles() {
     tabBody: { flex: 1, backgroundColor: c.background },
     // Знак в полосе статуса: прижат к её нижней кромке и не ловит касания —
     // полоса принадлежит системе, кликать в ней нечего.
+    // v4.32.544: отступ снизу убран. «Остров» кончается за 11 pt до нижней
+    // кромки полосы, знак ровно 11 pt высотой — значит просвет он занимает
+    // целиком, и любой отступ снизу загонял верхушку букв под сам остров.
+    // Прежние 2 pt именно это и делали: A и C срезало кромкой выреза.
     islandMark: {
       position: 'absolute' as const,
       top: 0,
@@ -201,7 +205,6 @@ function useMainTabsStyles() {
       right: 0,
       alignItems: 'center' as const,
       justifyContent: 'flex-end' as const,
-      paddingBottom: 2,
     },
     islandMarkGlyph: { opacity: 0.72 },
     tabBar: { backgroundColor: 'transparent' },
