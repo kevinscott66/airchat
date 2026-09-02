@@ -39,7 +39,7 @@
       "package": "tech.dobropalm.airchat",
       "allowBackup": false,
       "googleServicesFile": "./google-services.json",
-      "versionCode": 526,
+      "versionCode": 527,
       "adaptiveIcon": {
         "backgroundColor": "#0B0B12",
         "foregroundImage": "./assets/android-icon-foreground.png",
