@@ -11,5 +11,8 @@
     "@noble/curves": "^2.0.1",
     "cors": "^2.8.5",
     "express": "^4.21.0"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }
