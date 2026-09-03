@@ -79,6 +79,7 @@ import { broadcastLastSeenPref } from '../../core/social/presencePrefSync';
 import { broadcastMyProfile } from '../../core/social/profileSync';
 import { LINK_PREVIEW_INCOMING_KEY, parseIncomingLinkPreviewPref } from '../../core/social/linkPreviewPolicy';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
+import { KEEPALIVE_KEY, setBackgroundKeepaliveEnabled } from '../../core/social/backgroundKeepalive';
 import { getLanTransportSingleton } from '../../core/transport/lan/lanTransport';
 import { listMuted, unmute, type MuteEntry } from '../../core/notifications/muteStore';
 import { formatByteSize } from '../../core/media/byteSize';
@@ -246,6 +247,7 @@ function SettingsScreenImpl({
   // v4.32.573: у звонков свой выключатель. Отключённые сообщения их больше не
   // глушат — см. notifications/backgroundNotifyPrefs.
   const [notifyCalls, setNotifyCalls] = useState(true);
+  const [bgKeepalive, setBgKeepalive] = useState(true);
   const [notifyPreview, setNotifyPreview] = useState(true);
   const [notifyMentions, setNotifyMentions] = useState(true);
   const [notifyVibrate, setNotifyVibrate] = useState(true);
@@ -309,7 +311,8 @@ function SettingsScreenImpl({
       getDefaultDisappearMs(),
       kvGet(LINK_PREVIEW_INCOMING_KEY),
       kvGet('notify_calls'),
-    ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls]) => {
+      kvGet(KEEPALIVE_KEY),
+    ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls, keepAlive]) => {
       if (lsVis === 'everybody' || lsVis === 'contacts' || lsVis === 'nobody') setLastSeenVisibility(lsVis);
       setAvatarVisibilityState(parseAvatarVisibility(avVis));
       setOnlyContactsCanMsg(onlyContacts === 'true');
@@ -317,6 +320,7 @@ function SettingsScreenImpl({
       setNotifyFeed(nFeed !== 'false');
       setNotifyGroups(nGroups !== 'false');
       setNotifyCalls(nCalls !== 'false');
+      setBgKeepalive(keepAlive !== 'false');
       setNotifyPreview(nPreview !== 'false');
       setAutoLockEnabled(lockEnabled === 'true');
       // v4.32.196 (Round-26 #8): clamp/validate numeric kv values. Corrupt or
@@ -1157,6 +1161,22 @@ function SettingsScreenImpl({
           </View>
           <AppSwitch value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); void kvSet('notify_calls', String(v)); }} />
         </View>
+        {Platform.OS === 'ios' ? (
+          <View style={styles.switchRow}>
+            <View style={styles.rowBody}>
+              <Text style={styles.label}>Связь в фоне</Text>
+              <Text style={styles.desc}>Без неё звонок в свёрнутое приложение не придёт. Расходует батарею</Text>
+            </View>
+            <AppSwitch
+              value={bgKeepalive}
+              onValueChange={(v) => {
+                setBgKeepalive(v);
+                void kvSet(KEEPALIVE_KEY, String(v));
+                setBackgroundKeepaliveEnabled(v);
+              }}
+            />
+          </View>
+        ) : null}
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Лента</Text>

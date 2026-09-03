@@ -99,6 +99,7 @@ import { listContacts } from './core/social/contacts';
 import { startStoryInboxListener, stopStoryInboxListener } from './core/social/storyService';
 import { startScheduler, stopScheduler } from './core/social/scheduledMessages';
 import { initCallService } from './core/social/callService';
+import { initBackgroundKeepalive } from './core/social/backgroundKeepalive';
 import { CallOverlay } from './ui/components/CallOverlay';
 import { startJsThreadWatcher } from './core/utils/jsThreadWatcher';
 import { scheduleAfterFirstFrame } from './core/utils/firstFrameGate';
@@ -851,6 +852,17 @@ function MainTabs({
             await initCallService(did, pair, pid);
           } catch (e) {
             log.warn('init_call_service_failed', {
+              err: e instanceof Error ? e.message : String(e),
+            });
+          }
+          // v4.32.559: на iPhone пуша нет, и свёрнутое приложение слышит звонок
+          // только пока жив сокет. Тихая дорожка в фоне держит его живым —
+          // подписки поднимаем сразу за звонками, чтобы состояние разговора
+          // было видно с первой же секунды.
+          try {
+            await initBackgroundKeepalive();
+          } catch (e) {
+            log.warn('init_bg_keepalive_failed', {
               err: e instanceof Error ? e.message : String(e),
             });
           }
