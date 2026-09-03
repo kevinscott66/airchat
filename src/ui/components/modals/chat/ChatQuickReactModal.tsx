@@ -25,9 +25,10 @@ export interface ChatQuickReactModalProps {
   onReply: () => void;
   onCopy: () => void;
   /**
-   * v4.32.568: «Копировать» скрыт — по этой переписке включён запрет на
-   * копирование (core/social/copyGuard). Пункт именно убирается, а не
-   * отключается: серая строка обещала бы, что где-то её можно включить.
+   * v4.32.569: «Копировать» и «Переслать» скрыты — по этой переписке включён
+   * запрет на копирование и пересылку (core/social/copyGuard). Пункты именно
+   * убираются, а не отключаются: серая строка обещала бы, что где-то их можно
+   * включить.
    */
   copyBlocked?: boolean;
   onForward: () => void;
@@ -110,7 +111,7 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
                 {!isMedia && !copyBlocked ? (
                   <ActionRow icon="copy-outline" label={COPY_ACTION} onPress={onCopy} textColor={colors.text} borderColor={colors.border} />
                 ) : null}
-                {!isMedia ? (
+                {!isMedia && !copyBlocked ? (
                   <ActionRow icon="arrow-redo-outline" label="Переслать" onPress={onForward} textColor={colors.text} borderColor={colors.border} />
                 ) : null}
                 {isOut && !isMedia ? (

@@ -2732,9 +2732,11 @@ function ChatThreadView({
 
       if (row.direction === 'out') {
         if (Platform.OS === 'ios') {
-          // Пункт «Копировать» именно убирается: при запрете на копирование
-          // серая строка обещала бы, что где-то её можно вернуть.
-          const iosOutOpts = ['Ответить', 'Переслать', 'Реакция', 'Редактировать',
+          // Пункты «Копировать» и «Переслать» именно убираются: при запрете
+          // серая строка обещала бы, что где-то их можно вернуть.
+          const iosOutOpts = ['Ответить',
+            ...(copyBlockedRef.current ? [] : ['Переслать']),
+            'Реакция', 'Редактировать',
             ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
             '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', 'Подробнее', 'Выбрать'];
           if (isPollRow) iosOutOpts.push('Завершить опрос');
@@ -2746,9 +2748,9 @@ function ChatThreadView({
             (i) => {
               const idx = (s: string) => iosOutOpts.indexOf(s);
               if (i === 0) setReplyTo(row);
-              else if (i === 1) forwardMsg();
-              else if (i === 2) showReactions();
-              else if (i === 3) startEdit();
+              else if (i === idx('Переслать')) forwardMsg();
+              else if (i === idx('Реакция')) showReactions();
+              else if (i === idx('Редактировать')) startEdit();
               else if (i === idx(COPY_ACTION)) copyText();
               else if (i === idx('🌐 Перевести')) translateMsg();
               else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
@@ -2767,7 +2769,9 @@ function ChatThreadView({
         }
       } else if (Platform.OS === 'ios') {
         const markUnread = () => void import('../../core/storage/local').then((m) => m.markConversationUnread(peerB64, activeProfileId)).then(onBackRef.current);
-        const iosInOpts = ['Ответить', 'Переслать', 'Реакция',
+        const iosInOpts = ['Ответить',
+          ...(copyBlockedRef.current ? [] : ['Переслать']),
+          'Реакция',
           ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
           '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', '📩 Отметить непрочитанным', 'Выбрать', 'Удалить у себя', 'Отмена'];
         ActionSheetIOS.showActionSheetWithOptions(
@@ -2775,8 +2779,8 @@ function ChatThreadView({
           (i) => {
             const idx = (s: string) => iosInOpts.indexOf(s);
             if (i === 0) setReplyTo(row);
-            else if (i === 1) forwardMsg();
-            else if (i === 2) showReactions();
+            else if (i === idx('Переслать')) forwardMsg();
+            else if (i === idx('Реакция')) showReactions();
             else if (i === idx(COPY_ACTION)) copyText();
             else if (i === idx('🌐 Перевести')) translateMsg();
             else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
@@ -3370,33 +3374,38 @@ function ChatThreadView({
                       );
                     },
                   },
-                  {
-                    text: 'Экспорт чата',
-                    onPress: () => {
-                      void (async () => {
-                        try {
-                          const allMsgs = await listAllChatMessages({ contactPubB64: peerB64, ownerProfileId: activeProfileId });
-                          // v4.32.604: файл сохранят и на него сошлются, поэтому
-                          // выгружаем либо всё, либо ничего — как в группе с v4.32.532.
-                          if (!shouldApplyRows(allMsgs)) { showError('Не удалось прочитать переписку для экспорта'); return; }
-                          const lines2 = [...allMsgs].sort((a, b) => a.createdAt - b.createdAt);
-                          const text2 = lines2.map((m) => {
-                            const d = fullDateTime(m.createdAt);
-                            const who = m.direction === 'out' ? 'Вы' : localDisplayName;
-                            return `[${d}] ${who}: ${exportBody(m)}`;
-                          }).join('\n');
-                          // v4.32.310: имя даёт cacheFiles — он же за этим
-                          // файлом и убирает. Тут лежит расшифрованная
-                          // переписка, а до этой версии за ней не убирал никто.
-                          // v4.32.313: и отдача общая — три копии расходились.
-                          const shared = await shareTextExport('chat', text2, `Чат с ${localDisplayName}`, Date.now());
-                          if (!shared) Alert.alert('Экспорт', 'Системное «Поделиться» недоступно на этом устройстве');
-                        } catch (e) {
-                          showError(userErrorText(e, 'Не удалось выгрузить переписку'));
-                        }
-                      })();
+                  // v4.32.569: при запрете копирования и пересылки выгрузка
+                  // тоже уходит: она вынесла бы всю переписку одним файлом,
+                  // и обещание в карточке профиля стало бы ложным.
+                  ...(copyBlocked ? [] : [
+                    {
+                      text: 'Экспорт чата',
+                      onPress: () => {
+                        void (async () => {
+                          try {
+                            const allMsgs = await listAllChatMessages({ contactPubB64: peerB64, ownerProfileId: activeProfileId });
+                            // v4.32.604: файл сохранят и на него сошлются, поэтому
+                            // выгружаем либо всё, либо ничего — как в группе с v4.32.532.
+                            if (!shouldApplyRows(allMsgs)) { showError('Не удалось прочитать переписку для экспорта'); return; }
+                            const lines2 = [...allMsgs].sort((a, b) => a.createdAt - b.createdAt);
+                            const text2 = lines2.map((m) => {
+                              const d = fullDateTime(m.createdAt);
+                              const who = m.direction === 'out' ? 'Вы' : localDisplayName;
+                              return `[${d}] ${who}: ${exportBody(m)}`;
+                            }).join('\n');
+                            // v4.32.310: имя даёт cacheFiles — он же за этим
+                            // файлом и убирает. Тут лежит расшифрованная
+                            // переписка, а до этой версии за ней не убирал никто.
+                            // v4.32.313: и отдача общая — три копии расходились.
+                            const shared = await shareTextExport('chat', text2, `Чат с ${localDisplayName}`, Date.now());
+                            if (!shared) Alert.alert('Экспорт', 'Системное «Поделиться» недоступно на этом устройстве');
+                          } catch (e) {
+                            showError(userErrorText(e, 'Не удалось выгрузить переписку'));
+                          }
+                        })();
+                      },
                     },
-                  },
+                  ]),
                   {
                     text: 'Фон чата',
                     onPress: () => setWallpaperPickerVisible(true),
@@ -3682,6 +3691,7 @@ function ChatThreadView({
                 <Ionicons name="trash-outline" size={22} color={colors.error} />
                 <Text style={[s.selToolbarLabel, { color: colors.error }]}>Удалить</Text>
               </AppPressable>
+              {copyBlocked ? null : (
               <AppPressable
                 style={s.selToolbarBtn}
                 onPress={() => {
@@ -3707,6 +3717,7 @@ function ChatThreadView({
                 <Ionicons name="arrow-redo-outline" size={22} color={colors.accent} />
                 <Text style={[s.selToolbarLabel, { color: colors.accent }]}>Переслать</Text>
               </AppPressable>
+              )}
               {copyBlocked ? null : (
               <AppPressable
                 style={s.selToolbarBtn}

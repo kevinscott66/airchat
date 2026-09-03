@@ -113,6 +113,14 @@ describe('настройки переписки', () => {
     expect(on.find((x) => x.id === 'copy_guard')?.value).toBe('Вкл');
     expect(on.find((x) => x.id === 'disappear')?.value).toBe('1 ч');
   });
+
+  // v4.32.569: запрет закрывает и пересылку, поэтому слово «копирование» в
+  // подписи в одиночку врало бы — пункт обещал бы меньше, чем делает.
+  it('подпись запрета говорит и про пересылку', () => {
+    const label = hubSettings({ ...base, copyGuard: false })
+      .find((x) => x.id === 'copy_guard')?.label ?? '';
+    expect(label).toMatch(/пересыл/i);
+  });
 });
 
 describe('disappearLabel', () => {

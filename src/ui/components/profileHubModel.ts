@@ -104,7 +104,7 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
   out.push({ id: 'share_contact', label: 'Поделиться этим контактом' });
   if (!f.isSelf) {
     out.push({ id: 'disappear', label: 'Автоудаление', value: disappearLabel(f.disappearMs) });
-    out.push({ id: 'copy_guard', label: 'Запрет на копирование', value: f.copyGuard ? 'Вкл' : 'Выкл' });
+    out.push({ id: 'copy_guard', label: 'Запрет копирования и пересылки', value: f.copyGuard ? 'Вкл' : 'Выкл' });
   }
   out.push({ id: 'clear_history', label: 'Удалить переписку', danger: true });
   if (!f.isSelf) {
