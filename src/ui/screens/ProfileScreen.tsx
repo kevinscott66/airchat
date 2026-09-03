@@ -31,8 +31,7 @@ import {
   getStoredMnemonic,
   hasStoredMnemonic,
 } from '../../core/backup/seedPhrase';
-import { listStarredMessages, setMessageStarred, setGroupMessageStarred, getProfileStats, type StarredMessageEntry, type ProfileStats } from '../../core/storage/local';
-import { approxCountLabel, approxCountNotice } from '../../core/storage/approxCount';
+import { listStarredMessages, setMessageStarred, setGroupMessageStarred, type StarredMessageEntry } from '../../core/storage/local';
 import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage/unreadableText';
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
 import { profileManager } from '../../core/identity/profileManager';
@@ -165,7 +164,6 @@ function ProfileScreenImpl({
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [postCount, setPostCount] = useState(0);
   const [contactCount, setContactCount] = useState(0);
-  const [stats, setStats] = useState<ProfileStats | null>(null);
   // Custom status
   const [customStatus, setCustomStatus] = useState('');
   const [callLogVisible, setCallLogVisible] = useState(false);
@@ -284,11 +282,9 @@ function ProfileScreenImpl({
         await ownFieldSet('account_created_at', createdAt);
       }
       if (alive) setAccountCreatedAt(parseInt(createdAt, 10));
-      const pid = profileManager.getActiveProfile()?.id ?? 1;
-      const [posts, contacts, profileStats] = await Promise.all([
+      const [posts, contacts] = await Promise.all([
         loadFeedPosts(200, 0),
         listContacts(),
-        getProfileStats(pid),
       ]);
       if (alive) {
         // v4.32.528: чтение не удалось — счётчик публикаций не трогаем. Ноль
@@ -303,7 +299,6 @@ function ProfileScreenImpl({
         }
         const realContacts = mine ? contacts.filter((c) => c.peerPublicKey !== mine) : contacts;
         setContactCount(realContacts.length);
-        setStats(profileStats);
       }
     })();
     return () => {
@@ -768,57 +763,6 @@ function ProfileScreenImpl({
             </Text>
           </AppPressable>
         </View>
-
-        <View style={styles.statsRow}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{postCount}</Text>
-            <Text style={styles.statLabel}>публикаций</Text>
-          </View>
-          <View style={styles.statDivider} />
-          {/* v4.32.30: статистика «N контактов» тоже открывает список — удобно тапнуть
-               по цифре, которую ты только что увидел. */}
-          <AppPressable
-            style={styles.statItem}
-            onPress={() => setContactsVisible(true)}
-            testID="btn_profile_contacts_stat"
-          >
-            <Text style={styles.statValue}>{contactCount}</Text>
-            <Text style={styles.statLabel}>контактов</Text>
-          </AppPressable>
-          {stats ? (
-            <>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>{stats.messagesSent}</Text>
-                <Text style={styles.statLabel}>отправлено</Text>
-              </View>
-            </>
-          ) : null}
-        </View>
-        {stats && (stats.messagesReceived > 0 || stats.voicesSent.value > 0 || stats.groupCount > 0) ? (
-          <View style={[styles.statsRow, { marginTop: 8 }]}>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{stats.messagesReceived}</Text>
-              <Text style={styles.statLabel}>получено</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{stats.groupCount}</Text>
-              <Text style={styles.statLabel}>групп</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{approxCountLabel(stats.voicesSent)}</Text>
-              <Text style={styles.statLabel}>голосовых</Text>
-            </View>
-          </View>
-        ) : null}
-        {/* v4.32.585: почему число голосовых может быть занижено. */}
-        {stats && approxCountNotice(stats.voicesSent) ? (
-          <Text style={{ color: colors.warning, fontSize: scaleFont(12), fontStyle: 'italic', textAlign: 'center', marginBottom: 8, paddingHorizontal: 16 }}>
-            {approxCountNotice(stats.voicesSent)}
-          </Text>
-        ) : null}
 
         {accountAgeLabel ? (
           <View style={{ alignItems: 'center', marginBottom: 8 }}>
@@ -1483,35 +1427,6 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
   btnText: { color: primaryInk(c).text, fontWeight: '600' },
   linkBtn: { alignItems: 'center', padding: 8 },
   linkText: { color: c.accent },
-  statsRow: {
-    flexDirection: 'row',
-    backgroundColor: c.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: c.border,
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 14,
-  },
-  statValue: {
-    color: c.text,
-    fontSize: sf(22),
-    fontWeight: '700',
-  },
-  statLabel: {
-    color: c.textMuted,
-    fontSize: sf(12),
-    marginTop: 2,
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: c.border,
-    marginVertical: 10,
-  },
 }); }
 
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.

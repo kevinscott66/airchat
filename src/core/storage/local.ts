@@ -46,7 +46,6 @@ import {
 } from '../utils/lookupResult';
 import type { ChatPageCursor } from './chatPageCursor';
 import type { DbRead } from './readResult';
-import { exactCount, type ApproxCount } from './approxCount';
 import {
   INLINE_BLOB_PREFIX,
   decodeInlineBlob,
@@ -7582,81 +7581,6 @@ export async function clearAllMessageHistory(ownerProfileId: number): Promise<bo
   } catch (e) {
     log.warn('clear_all_message_history_failed', { err: e instanceof Error ? e.message : String(e) });
     return false;
-  }
-}
-
-// ─── Profile Stats ────────────────────────────────────────────────────────────
-
-export type ProfileStats = {
-  messagesSent: number;
-  messagesReceived: number;
-  groupCount: number;
-  /**
-   * v4.32.585: голосовые считаются расшифровкой последних строк, поэтому у
-   * числа два повода быть заниженным — непрочитанные строки и потолок
-   * обхода. Оба едут вместе с числом (см. approxCount).
-   */
-  voicesSent: ApproxCount;
-  mediaSent: number;
-};
-
-export async function getProfileStats(ownerProfileId: number): Promise<ProfileStats> {
-  try {
-    const d = await db();
-    const VOICE_SCAN_CAP = 10000;
-    const dek = await getOrCreateDataEncryptionKey();
-    const [sentRow, recvRow, groupRow, voiceCandidateRows, mediaRow] = await Promise.all([
-      d.getFirstAsync<{ n: number }>(
-        "SELECT COUNT(*) as n FROM chat_messages WHERE direction='out' AND owner_profile_id=?",
-        [ownerProfileId]
-      ),
-      d.getFirstAsync<{ n: number }>(
-        "SELECT COUNT(*) as n FROM chat_messages WHERE direction='in' AND owner_profile_id=?",
-        [ownerProfileId]
-      ),
-      d.getFirstAsync<{ n: number }>(
-        'SELECT COUNT(*) as n FROM groups WHERE owner_profile_id=?',
-        [ownerProfileId]
-      ),
-      // voice marker '\x01voice:' is added to plaintext BEFORE encryption, so
-      // SQL LIKE on ciphertext never matches. Best-effort scan over the last
-      // VOICE_SCAN_CAP outgoing messages, decrypt + prefix-check in JS.
-      d.getAllAsync<{ text: string }>(
-        `SELECT text FROM chat_messages
-         WHERE direction='out' AND owner_profile_id=?
-         ORDER BY created_at DESC LIMIT ?`,
-        [ownerProfileId, VOICE_SCAN_CAP]
-      ),
-      d.getFirstAsync<{ n: number }>(
-        "SELECT COUNT(*) as n FROM chat_messages WHERE media_cids IS NOT NULL AND media_cids != '' AND direction='out' AND owner_profile_id=?",
-        [ownerProfileId]
-      ),
-    ]);
-    // v4.32.585: строка, которую не открыл ключ, больше не объявляется
-    // не-голосовой. Про неё неизвестно ничего, и это едет на экран вместе с
-    // числом — как и упёршийся потолок обхода.
-    let voices = 0;
-    let unreadable = 0;
-    for (const r of voiceCandidateRows) {
-      const cell = readAtRestCell(r.text, dek);
-      if (cell.state === 'unreadable') { unreadable++; continue; }
-      if ((cellTextOrNull(cell) ?? '').startsWith('\x01voice:')) voices++;
-    }
-    const capped = voiceCandidateRows.length >= VOICE_SCAN_CAP;
-    if (capped) {
-      log.warn('profile_stats_voices_scan_capped', { cap: VOICE_SCAN_CAP });
-    }
-    const voicesSent: ApproxCount = { value: voices, unreadable, capped };
-    return {
-      messagesSent: sentRow?.n ?? 0,
-      messagesReceived: recvRow?.n ?? 0,
-      groupCount: groupRow?.n ?? 0,
-      voicesSent,
-      mediaSent: mediaRow?.n ?? 0,
-    };
-  } catch (e) {
-    log.warn('get_profile_stats_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { messagesSent: 0, messagesReceived: 0, groupCount: 0, voicesSent: exactCount(0), mediaSent: 0 };
   }
 }
 
