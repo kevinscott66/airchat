@@ -127,6 +127,7 @@ import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedM
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
 import { ProfilePostsModal } from './modals/profile/ProfilePostsModal';
 import { ProfileEditModal } from './modals/profile/ProfileEditModal';
+import { ProfileQrModal } from './modals/profile/ProfileQrModal';
 import { defaultWallpaper, type Wallpaper } from '../wallpapers';
 import { useTheme } from '../ThemeContext';
 import { loadConfig } from '../../core/config';
@@ -277,6 +278,7 @@ export function UserProfilePeek({
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   // Своё изменили в редакторе — карточку надо перечитать: имя и «О себе» она
   // держит у себя, а не подписана на хранилище.
   const [ownReload, setOwnReload] = useState(0);
@@ -975,6 +977,17 @@ export function UserProfilePeek({
                     {shortDid(resolved.did, 10)}
                   </Text>
                 </AppPressable>
+                {/* v4.32.573: код — для случая «второй телефон рядом»,
+                    когда пересылать некуда и остаётся диктовать строку. */}
+                <AppPressable
+                  style={styles.didShare}
+                  onPress={() => setQrOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Показать QR-код"
+                  testID="profile_qr_open"
+                >
+                  <Ionicons name="qr-code-outline" size={20} color={colors.accent} />
+                </AppPressable>
                 <AppPressable
                   style={styles.didShare}
                   onPress={() => void handleShareId()}
@@ -1072,6 +1085,13 @@ export function UserProfilePeek({
       </SheetShell>
       {/* Своё «Изменить» — тот же отдельный раздел, что и со вкладки
           «Профиль». Открывается только у себя: у чужого профиля кнопки нет. */}
+      <ProfileQrModal
+        visible={qrOpen}
+        onClose={() => setQrOpen(false)}
+        title={displayName}
+        value={resolved.did}
+      />
+
       {isSelf ? (
         <ProfileEditModal
           visible={editOpen}

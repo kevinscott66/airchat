@@ -37,6 +37,7 @@ import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
 import { profileManager } from '../../core/identity/profileManager';
 import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
+import { readLinkProofRecord } from '../../core/identity/linkProof';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../core/identity/verification';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
@@ -177,6 +178,13 @@ function ProfileScreenImpl({
   const [website, setWebsite] = useState('');
   const [twitterHandle, setTwitterHandle] = useState('');
   const [githubHandle, setGithubHandle] = useState('');
+  /**
+   * Подтверждены ли имена на площадках (v4.32.573). Галочка ставится не за
+   * то, что имя вписано, а за то, что проверена публикация с подписью этого
+   * аккаунта: иначе галочка означала бы «человек это набрал».
+   */
+  const [twitterVerified, setTwitterVerified] = useState(false);
+  const [githubVerified, setGithubVerified] = useState(false);
   // Account age
   const [accountCreatedAt, setAccountCreatedAt] = useState<number | null>(null);
   /**
@@ -260,10 +268,14 @@ function ProfileScreenImpl({
       const savedWebsite = await ownFieldGet('user_website');
       const savedTwitter = await ownFieldGet('user_twitter');
       const savedGithub = await ownFieldGet('user_github');
+      const savedTwitterProof = readLinkProofRecord(await ownFieldGet('user_twitter_proof'));
+      const savedGithubProof = readLinkProofRecord(await ownFieldGet('user_github_proof'));
       if (alive) {
         setWebsite(savedWebsite ?? '');
         setTwitterHandle(savedTwitter ?? '');
         setGithubHandle(savedGithub ?? '');
+        setTwitterVerified(!!savedTwitterProof);
+        setGithubVerified(!!savedGithubProof);
       }
       // Account creation date — store on first launch
       let createdAt = await ownFieldGet('account_created_at');
@@ -621,13 +633,25 @@ function ProfileScreenImpl({
               {twitterHandle && /^[A-Za-z0-9_]{1,15}$/.test(twitterHandle) ? (
                 // v4.32.183 (Round-13 #10): enforce Twitter handle charset to avoid
                 // open-redirect via `foo/../../evil`.
-                <AppPressable onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}>
+                <AppPressable
+                  onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                >
                   <Text style={{ color: accentOnFill(BRAND_X, colors.background, colors.accent), fontSize: scaleFont(13) }}>𝕏 @{twitterHandle}</Text>
+                  {twitterVerified ? (
+                    <Ionicons name="checkmark-circle" size={13} color={colors.success} />
+                  ) : null}
                 </AppPressable>
               ) : null}
               {githubHandle && /^[A-Za-z0-9-]{1,39}$/.test(githubHandle) ? (
-                <AppPressable onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}>
+                <AppPressable
+                  onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                >
                   <Text style={{ color: colors.text, fontSize: scaleFont(13) }}>⌥ {githubHandle}</Text>
+                  {githubVerified ? (
+                    <Ionicons name="checkmark-circle" size={13} color={colors.success} />
+                  ) : null}
                 </AppPressable>
               ) : null}
             </View>

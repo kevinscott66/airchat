@@ -41,6 +41,12 @@ export const OWN_PROFILE_KEYS = [
   'user_website',
   'user_twitter',
   'user_github',
+  // v4.32.573: доказательство привязки — адрес публикации и когда она
+  // сошлась. Само имя учётной записи по-прежнему в `user_twitter`/`user_github`:
+  // имя без доказательства — по-прежнему допустимое состояние, оно просто
+  // показывается как заявленное. Что проверяется — см. identity/linkProof.
+  'user_twitter_proof',
+  'user_github_proof',
   'user_custom_status',
   'user_profile_cid',
   'account_created_at',

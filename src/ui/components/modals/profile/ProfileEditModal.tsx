@@ -68,6 +68,15 @@ import { loadKeyPair } from '../../../../core/crypto/keyManager';
 import { sanitizeDisplayName } from '../../../../core/social/sysLineGuard';
 import { normalizeOwnBio, OWN_BIO_MAX } from '../../../../core/social/profileEnvelope';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../../../core/social/peerStatus';
+import { LinkProofSheet } from './LinkProofSheet';
+import {
+  PLATFORM_LABEL,
+  encodeLinkProofRecord,
+  linkState,
+  readLinkProofRecord,
+  type LinkPlatform,
+  type LinkRecord,
+} from '../../../../core/identity/linkProof';
 
 const cleanPronouns = (v: unknown): string => sanitizeDisplayName(v, PRONOUNS_MAX) ?? '';
 const cleanLink = (s: string): string => (sanitizeDisplayName(s, 256) ?? '').trim();
@@ -105,6 +114,14 @@ export function ProfileEditModal({
   const [avatar, setAvatar] = useState<string | null>(null);
   const [badge, setBadge] = useState<VerificationClaim | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * Бумаги на имена: у X и GitHub имя без бумаги — это «заявлено», с бумагой —
+   * «подтверждено». Держатся отдельно от `draft`, потому что подтверждение не
+   * правится в поле: оно либо получено проверкой публикации, либо нет.
+   */
+  const [proofs, setProofs] = useState<{ x: LinkRecord | null; github: LinkRecord | null }>({ x: null, github: null });
+  const [sheet, setSheet] = useState<LinkPlatform | null>(null);
+  const [pubB64, setPubB64] = useState('');
 
   // Читается на каждое открытие: между открытиями профиль мог измениться и с
   // другого устройства, и из другого профиля этого же телефона.
@@ -125,6 +142,11 @@ export function ProfileEditModal({
           ownAvatarUri(),
           ownBadgeClaim(),
         ]);
+      const [xProof, ghProof, kp] = await Promise.all([
+        ownFieldGet('user_twitter_proof'),
+        ownFieldGet('user_github_proof'),
+        loadKeyPair(),
+      ]);
       if (!alive) return;
       const next: Loaded = {
         name: name ?? '',
@@ -140,6 +162,8 @@ export function ProfileEditModal({
       setDraft(next);
       setAvatar(face ?? null);
       setBadge(claim);
+      setProofs({ x: readLinkProofRecord(xProof), github: readLinkProofRecord(ghProof) });
+      setPubB64(kp ? Buffer.from(kp.publicKey).toString('base64') : '');
     })();
     return () => { alive = false; };
   }, [visible]);
@@ -285,12 +309,18 @@ export function ProfileEditModal({
       const twitter = cleanLink(draft.twitter).replace(/^@/, '');
       const github = cleanLink(draft.github).replace(/^@/, '');
       if (website !== saved.website || twitter !== saved.twitter || github !== saved.github) {
+        // Бумага пишется тем же заходом, что и имя: имя без своей бумаги —
+        // это заявка, и разъехаться они не должны даже на один запуск.
         await Promise.all([
           ownFieldSet('user_website', website),
           ownFieldSet('user_twitter', twitter),
           ownFieldSet('user_github', github),
         ]);
       }
+      await Promise.all([
+        ownFieldSet('user_twitter_proof', twitter && proofs.x ? encodeLinkProofRecord(proofs.x) : ''),
+        ownFieldSet('user_github_proof', github && proofs.github ? encodeLinkProofRecord(proofs.github) : ''),
+      ]);
 
       let handle = saved.handle;
       const wanted = draft.handle.trim().replace(/^@/, '').toLowerCase();
@@ -328,7 +358,7 @@ export function ProfileEditModal({
     } finally {
       setBusy(false);
     }
-  }, [draft, saved, badge, publish, onSaved, onClose]);
+  }, [draft, saved, badge, proofs, publish, onSaved, onClose]);
 
   if (!visible) return null;
 
@@ -477,26 +507,47 @@ export function ProfileEditModal({
               keyboardType="url"
               testID="profile_edit_website"
             />
-            <TextInput
-              style={[...fieldStyle, styles.stacked]}
-              value={draft.twitter}
-              onChangeText={(v) => set({ twitter: v })}
-              placeholder="@username в X"
-              placeholderTextColor={colors.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              testID="profile_edit_twitter"
-            />
-            <TextInput
-              style={[...fieldStyle, styles.stacked]}
-              value={draft.github}
-              onChangeText={(v) => set({ github: v })}
-              placeholder="username на GitHub"
-              placeholderTextColor={colors.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              testID="profile_edit_github"
-            />
+
+            {/* v4.32.573: X и GitHub больше не набираются руками. Набранное
+                имя сообщает лишь то, что человек его набрал; привязка через
+                публикацию сообщает, что имя действительно его. Поэтому здесь
+                строка состояния, а не поле ввода: «привязать», «заявлено без
+                подтверждения» или имя с галочкой. */}
+            {(['x', 'github'] as const).map((pf) => {
+              const handle = pf === 'x' ? draft.twitter : draft.github;
+              const state = linkState(handle, proofs[pf]);
+              return (
+                <AppPressable
+                  key={pf}
+                  style={[styles.linkRow, styles.stacked, { borderColor: colors.border }]}
+                  onPress={() => setSheet(pf)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${PLATFORM_LABEL[pf]}: ${state === 'verified' ? 'подтверждено' : state === 'claimed' ? 'без подтверждения' : 'не привязано'}`}
+                  testID={pf === 'x' ? 'profile_edit_twitter' : 'profile_edit_github'}
+                >
+                  <Ionicons
+                    name={pf === 'x' ? 'logo-twitter' : 'logo-github'}
+                    size={18}
+                    color={colors.textSecondary}
+                  />
+                  <View style={styles.linkTextBox}>
+                    <Text style={[styles.linkTitle, { color: colors.text }]} numberOfLines={1}>
+                      {state === 'empty' ? `Привязать ${PLATFORM_LABEL[pf]}` : handle}
+                    </Text>
+                    {state === 'empty' ? null : (
+                      <Text style={[styles.linkState, { color: state === 'verified' ? colors.success : colors.textSecondary }]}>
+                        {state === 'verified' ? 'Подтверждено публикацией' : 'Без подтверждения'}
+                      </Text>
+                    )}
+                  </View>
+                  {state === 'verified' ? (
+                    <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                  ) : (
+                    <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                  )}
+                </AppPressable>
+              );
+            })}
 
             {/* v4.32.547: бумага на галочку принимается из буфера — строка
                 длинная, руками её никто не набирает. Показывается, только
@@ -515,6 +566,24 @@ export function ProfileEditModal({
               </AppPressable>
             )}
           </ScrollView>
+          {sheet ? (
+            <LinkProofSheet
+              visible
+              platform={sheet}
+              publicKeyB64={pubB64}
+              initialHandle={sheet === 'x' ? draft.twitter : draft.github}
+              linked={!!proofs[sheet]}
+              onClose={() => setSheet(null)}
+              onLinked={(h, rec) => {
+                set(sheet === 'x' ? { twitter: h } : { github: h });
+                setProofs((prev) => ({ ...prev, [sheet]: rec }));
+              }}
+              onUnlinked={() => {
+                set(sheet === 'x' ? { twitter: '' } : { github: '' });
+                setProofs((prev) => ({ ...prev, [sheet]: null }));
+              }}
+            />
+          ) : null}
         </SafeScreen>
       </KeyboardHost>
     </AppModal>
@@ -565,6 +634,18 @@ const styles = StyleSheet.create({
     fontSize: font.md,
   },
   stacked: { marginTop: spacing.xs },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  linkTextBox: { flex: 1 },
+  linkTitle: { fontSize: font.md },
+  linkState: { fontSize: font.xs, marginTop: 2 },
   bio: { minHeight: 96, textAlignVertical: 'top' },
   handleBox: {
     flexDirection: 'row',
