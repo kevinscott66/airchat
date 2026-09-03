@@ -130,15 +130,17 @@ describe('форма исходников', () => {
     }
   });
 
-  it('все пять показов берут рисунок у общего модуля', () => {
+  it('все шесть показов берут рисунок у общего модуля', () => {
     const push = PUSH();
     const bg = BG();
     const calls = (s: string) => (s.match(/vibrationPattern: vibrationFor\(/g) ?? []).length;
-    expect(calls(push)).toBe(3);
+    // v4.32.558: показов на переднем плане стало четыре — к группе, личному
+    // сообщению и ленте добавилось «вам звонили» из журнала непринятых.
+    expect(calls(push)).toBe(4);
     // v4.32.573: показов в фоне стало два — сообщение и входящий звонок.
     expect(calls(bg)).toBe(2);
     // И общее число мест не выросло мимо модуля.
-    expect((push.match(/vibrationPattern:/g) ?? []).length).toBe(3);
+    expect((push.match(/vibrationPattern:/g) ?? []).length).toBe(4);
     expect((bg.match(/vibrationPattern:/g) ?? []).length).toBe(2);
   });
 

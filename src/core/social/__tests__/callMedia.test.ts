@@ -90,6 +90,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     onIceCandidate = jest.fn();
     onHangup = (handler: typeof mockHangupHandler.current): void => { mockHangupHandler.current = handler; };
     onPeerUnavailable = jest.fn();
+    onMissedCalls = jest.fn();
   },
 }));
 

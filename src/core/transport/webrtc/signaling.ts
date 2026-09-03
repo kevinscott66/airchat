@@ -41,6 +41,15 @@ export type IcePayload = { fromPeerId?: string; candidate: Record<string, unknow
 export type HangupPayload = { fromPeerId?: string };
 
 /**
+ * Звонки, которых не было видно, пока телефон был не в сети (v4.32.558).
+ *
+ * Сервер отдаёт их первым же событием после регистрации — по одному на
+ * звонившего, с временем последней попытки и числом попыток.
+ */
+export type MissedCall = { fromPeerId: string; at: number; attempts: number };
+export type MissedCallsPayload = { calls: MissedCall[] };
+
+/**
  * Socket.IO signaling aligned with `signaling-server/index.js`.
  * Register with `roomId` (e.g. sorted DIDs) and your `peerId` (e.g. did:key).
  */
@@ -272,6 +281,11 @@ export class WebRTCSignaling {
   onPeerUnavailable(handler: (msg: { targetPeerId: string; roomId: string }) => void): void {
     this.socket?.off('peer_unavailable');
     this.socket?.on('peer_unavailable', handler);
+  }
+
+  onMissedCalls(handler: (msg: MissedCallsPayload) => void): void {
+    this.socket?.off('missed_calls');
+    this.socket?.on('missed_calls', handler);
   }
 
   /** @deprecated use register(roomId, peerId) */

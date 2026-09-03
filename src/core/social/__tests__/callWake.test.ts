@@ -15,6 +15,7 @@
 import { OUTGOING_RINGING_TIMEOUT_MS } from '../callTeardown';
 import {
   disposeCallService,
+  getCallLog,
   getCurrentCall,
   initCallService,
   initiateCall,
@@ -22,9 +23,11 @@ import {
 
 type OfferMsg = { fromPeerId: string; sdp: string };
 type UnavailableMsg = { targetPeerId: string; roomId: string };
+type MissedMsg = { calls: Array<{ fromPeerId: string; at: number; attempts: number }> };
 
 const mockOfferHandler: { current: ((msg: OfferMsg) => void) | null } = { current: null };
 const mockUnavailableHandler: { current: ((msg: UnavailableMsg) => void) | null } = { current: null };
+const mockMissedHandler: { current: ((msg: MissedMsg) => void) | null } = { current: null };
 const mockPeerConnections: MockPeerConnection[] = [];
 const mockSendHangup = jest.fn();
 const mockSendIceCandidate = jest.fn();
@@ -32,6 +35,7 @@ const mockSendAnswer = jest.fn();
 const mockSendOffer = jest.fn();
 const mockSendCallPush = jest.fn(async () => undefined);
 const mockCancelNotification = jest.fn(async () => undefined);
+const mockNotifyMissedCall = jest.fn(async () => undefined);
 
 const mockAudioTrack = { enabled: true, stop: jest.fn() };
 const mockLocalStream = {
@@ -101,6 +105,9 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     onPeerUnavailable = (handler: typeof mockUnavailableHandler.current): void => {
       mockUnavailableHandler.current = handler;
     };
+    onMissedCalls = (handler: typeof mockMissedHandler.current): void => {
+      mockMissedHandler.current = handler;
+    };
   },
 }));
 
@@ -119,6 +126,7 @@ jest.mock('../../security/rateLimiter', () => ({
 
 jest.mock('../../../notifications/pushNotifications', () => ({
   pushNotificationService: { sendCallPush: mockSendCallPush },
+  notifyMissedCall: mockNotifyMissedCall,
 }));
 
 jest.mock('@notifee/react-native', () => ({
@@ -166,6 +174,7 @@ describe('дозвон до телефона, которого нет в сет�
     mockSendOffer.mockClear();
     mockSendCallPush.mockClear();
     mockCancelNotification.mockClear();
+    mockNotifyMissedCall.mockClear();
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
@@ -282,5 +291,51 @@ describe('дозвон до телефона, которого нет в сет�
     await settle();
 
     expect(mockSendAnswer).toHaveBeenCalledWith(OTHER, 'busy');
+  });
+
+  it('звонок, случившийся без нас, приезжает в журнал при следующем входе', async () => {
+    const at = Date.now() - 60_000;
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 4 }] });
+    await settle();
+    await settle();
+
+    const [entry] = getCallLog();
+    expect(entry).toMatchObject({
+      peerPubB64: PEER,
+      direction: 'incoming',
+      outcome: 'missed',
+      startedAt: at,
+      durationMs: null,
+    });
+    // Четыре повтора одного звонка — одна запись, а не четыре.
+    expect(getCallLog()).toHaveLength(1);
+    expect(mockNotifyMissedCall).toHaveBeenCalledWith({ count: 1 });
+  });
+
+  it('повторная доставка того же журнала не раздваивает звонок', async () => {
+    const at = Date.now() - 60_000;
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1 }] });
+    await settle();
+    mockNotifyMissedCall.mockClear();
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1 }] });
+    await settle();
+
+    expect(getCallLog()).toHaveLength(1);
+    expect(mockNotifyMissedCall).not.toHaveBeenCalled();
+  });
+
+  it('о звонке, который идёт прямо сейчас, «вам звонили» не пишется', async () => {
+    mockOfferHandler.current?.({
+      fromPeerId: PEER,
+      sdp: JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false }),
+    });
+    await settle();
+    expect(getCurrentCall()?.state).toBe('incoming');
+
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at: Date.now(), attempts: 1 }] });
+    await settle();
+
+    expect(getCallLog()).toHaveLength(0);
+    expect(mockNotifyMissedCall).not.toHaveBeenCalled();
   });
 });

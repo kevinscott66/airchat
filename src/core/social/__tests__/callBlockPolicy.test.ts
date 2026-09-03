@@ -29,6 +29,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     onAnswer = jest.fn();
     onIceCandidate = jest.fn();
     onPeerUnavailable = jest.fn();
+    onMissedCalls = jest.fn();
   },
 }));
 

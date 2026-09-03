@@ -200,3 +200,130 @@ test('события push уходят в лог сервера, а не в пу
     await server.close();
   }
 });
+
+test('звонок в пустоту ждёт получателя и уезжает ему при регистрации', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+
+  // Боба нет в сети: звонящий получает peer_unavailable и повторяет предложение.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const unavailable = waitForEvent(alice, 'peer_unavailable');
+    alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+    await unavailable;
+  }
+
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  const missed = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  const payload = await missed;
+  assert.equal(payload.calls.length, 1);
+  assert.equal(payload.calls[0].fromPeerId, aliceId.peerId);
+  // Три повтора одного звонка — один пропущенный звонок, а не три.
+  assert.equal(payload.calls[0].attempts, 3);
+  assert.equal(typeof payload.calls[0].at, 'number');
+});
+
+test('журнал непринятых отдаётся один раз и не переживает доставку предложения', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  const missed = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  assert.equal((await missed).calls.length, 1);
+
+  // Второй вход — журнал пуст: он уже доставлен.
+  bob.close();
+  const bobAgain = await connectedClient(port);
+  t.after(() => bobAgain.close());
+  let secondDelivery = null;
+  bobAgain.on('missed_calls', (value) => { secondDelivery = value; });
+  await registerClient(bobAgain, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(secondDelivery, null);
+});
+
+test('дозвонившийся звонок из журнала непринятых исчезает', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  // Боб появился и повтор предложения доехал — звонок состоялся.
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  const missed = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  await missed;
+  const delivered = waitForEvent(bob, 'offer');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await delivered;
+
+  bob.close();
+  const bobAgain = await connectedClient(port);
+  t.after(() => bobAgain.close());
+  let afterAnswered = null;
+  bobAgain.on('missed_calls', (value) => { afterAnswered = value; });
+  await registerClient(bobAgain, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(afterAnswered, null);
+});
+
+test('запись о непринятом звонке живёт не дольше своего срока', async (t) => {
+  const server = createSignalingServer({ port: 0, missedCallTtlMs: 10 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  let expired = null;
+  bob.on('missed_calls', (value) => { expired = value; });
+  await registerClient(bob, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(expired, null);
+});

@@ -205,6 +205,52 @@ function recordCallEnd(info: CallInfo, endedAt: number, cause: CallEndCause): vo
 }
 
 /**
+ * Звонки, которых человек не видел, потому что телефона не было в сети
+ * (v4.32.558).
+ *
+ * Повтор предложения (OFFER_RETRY_INTERVAL_MS) выручает только того, кто успел
+ * появиться за 45 секунд звонка. Кто не успел — не узнавал о звонке ничего:
+ * сокета нет, push на iOS нет тоже. Теперь сервер придерживает несостоявшийся
+ * звонок и отдаёт его первым событием после регистрации, а здесь он ложится
+ * в журнал звонков — ровно там же, где лежат все остальные пропущенные.
+ *
+ * Имени в записи нет: с сервера приезжает только открытый ключ, и подписью
+ * ему служит тот же обрезок ключа, что и у входящего звонка, — имя подставит
+ * экран истории из контактов.
+ */
+export function recordMissedCalls(calls: Array<{ fromPeerId: string; at: number; attempts: number }>): number {
+  let added = 0;
+  for (const call of calls) {
+    if (!isPubKeyB64(call.fromPeerId)) continue;
+    const at = Number.isFinite(call.at) ? Math.min(Number(call.at), Date.now()) : Date.now();
+    // Разговор с этим человеком идёт прямо сейчас — «вам звонили» о нём было
+    // бы неправдой.
+    if (currentCall && currentCall.peerPubB64 === call.fromPeerId
+      && currentCall.state !== 'idle' && currentCall.state !== 'ended') continue;
+    // Сервер стирает запись при доставке, но повторная доставка не должна
+    // раздваивать звонок в истории.
+    if (callLog.some((e) => e.peerPubB64 === call.fromPeerId && e.startedAt === at)) continue;
+    const entry: CallLogEntry = {
+      id: `${at}_${Math.random().toString(36).slice(2, 10)}`,
+      peerPubB64: call.fromPeerId,
+      peerName: call.fromPeerId.slice(0, 12),
+      isVideo: false,
+      direction: 'incoming',
+      outcome: 'missed',
+      startedAt: at,
+      durationMs: null,
+    };
+    callLog = [entry, ...callLog].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_LOG);
+    added += 1;
+  }
+  if (added === 0) return 0;
+  emitCallLog();
+  const profileId = callProfileId;
+  if (profileId !== null) void persistCallLog(profileId, callLog);
+  return added;
+}
+
+/**
  * v4.32.277: журнал звонков лежал в kv открытым текстом — кому звонил, когда и
  * чем кончилось. Это метаданные переписки, и защищены они должны быть так же,
  * как её текст: тот же общий DEK через kvSetSecret.
@@ -677,6 +723,22 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     callSig.socket.off?.('hangup');
     callSig.socket.on('hangup', handleRemoteHangup);
   }
+
+  sig.onMissedCalls((msg) => {
+    const calls = Array.isArray(msg?.calls) ? msg.calls.slice(0, 50) : [];
+    const added = recordMissedCalls(calls);
+    if (added === 0) return;
+    log.info('call_missed_delivered', { count: added });
+    try {
+      // Тот же приём, что и у dismissCallBanner: модуль уведомлений тянется
+      // по требованию, чтобы звонки не зависели от него на старте.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const notifications = require('../../notifications/pushNotifications') as {
+        notifyMissedCall(opts: { count: number }): Promise<void>;
+      };
+      void notifications.notifyMissedCall({ count: added }).catch(() => { /* журнал уже пополнен */ });
+    } catch { /* notifee не подключён (тесты, Expo Go) */ }
+  });
 
   sig.onPeerUnavailable((msg) => {
     if (!currentCall || currentCall.peerPubB64 !== msg.targetPeerId) return;

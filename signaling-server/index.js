@@ -25,6 +25,25 @@ const MAX_CONNECTIONS = 256;
 const MAX_CONNECTIONS_PER_IP = 16;
 const REGISTRATION_TIMEOUT_MS = 15 * 1000;
 const REGISTRATION_CHALLENGE_BYTES = 32;
+/**
+ * Журнал непринятых звонков (v4.32.558).
+ *
+ * Повтор предложения (см. callService, OFFER_RETRY_INTERVAL_MS) спасает только
+ * того, кто успел появиться в сети за 45 секунд звонка. Кто не успел — не
+ * узнавал о звонке вообще ничего: сокета не было, push на iOS нет, а сервер
+ * ничего не помнил. Теперь несостоявшийся звонок остаётся здесь и уезжает
+ * получателю первым же событием после регистрации.
+ *
+ * Что здесь лежит: пара идентификаторов и время. Сервер и так видит обе
+ * стороны, когда передаёт им предложение, — новым знанием это его не делает,
+ * но знание перестало быть мгновенным, и потому у него есть срок. Ни sdp, ни
+ * адресов устройства тут нет и быть не должно.
+ */
+const MISSED_CALL_TTL_MS = 24 * 60 * 60 * 1000;
+/** Сколько разных звонивших помним одному получателю. */
+const MISSED_CALLS_PER_PEER = 20;
+/** Скольким получателям сразу. Выше — вытесняем тех, чья запись старше всех. */
+const MISSED_CALL_PEERS = 10_000;
 
 function validRegister(payload) {
   return hasExactKeys(payload, ['peerId', 'roomId', 'signature'])
@@ -111,6 +130,71 @@ function createSignalingServer(options = {}) {
   });
   const peers = new Map();
   const connectionsByIp = new Map();
+  /** targetPeerId -> Map(fromPeerId -> { at, attempts }) */
+  const missedCalls = new Map();
+  const missedCallTtlMs = options.missedCallTtlMs ?? MISSED_CALL_TTL_MS;
+
+  function newestMissedAt(byCaller) {
+    let newest = 0;
+    for (const entry of byCaller.values()) if (entry.at > newest) newest = entry.at;
+    return newest;
+  }
+
+  function rememberMissedCall(targetPeerId, fromPeerId, now = Date.now()) {
+    let byCaller = missedCalls.get(targetPeerId);
+    if (!byCaller) {
+      byCaller = new Map();
+      missedCalls.set(targetPeerId, byCaller);
+    }
+    const existing = byCaller.get(fromPeerId);
+    // Повторы одного и того же звонка идут каждые 3 секунды. Записью считаем
+    // звонок, а не попытку: иначе один неотвеченный звонок вытеснил бы из
+    // журнала все предыдущие.
+    if (existing) {
+      existing.at = now;
+      existing.attempts += 1;
+    } else {
+      byCaller.set(fromPeerId, { at: now, attempts: 1 });
+    }
+    while (byCaller.size > MISSED_CALLS_PER_PEER) {
+      byCaller.delete(byCaller.keys().next().value);
+    }
+    if (missedCalls.size > MISSED_CALL_PEERS) {
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [key, value] of missedCalls) {
+        const at = newestMissedAt(value);
+        if (at < oldestAt) { oldestAt = at; oldestKey = key; }
+      }
+      if (oldestKey !== null) missedCalls.delete(oldestKey);
+    }
+  }
+
+  /**
+   * Дозвонились — записи быть не должно. Иначе человек, взявший трубку,
+   * увидел бы при следующем входе «вам звонили» о разговоре, который у него
+   * только что состоялся.
+   */
+  function forgetMissedCall(targetPeerId, fromPeerId) {
+    const byCaller = missedCalls.get(targetPeerId);
+    if (!byCaller) return;
+    byCaller.delete(fromPeerId);
+    if (byCaller.size === 0) missedCalls.delete(targetPeerId);
+  }
+
+  function takeMissedCalls(peerId, now = Date.now()) {
+    const byCaller = missedCalls.get(peerId);
+    if (!byCaller) return [];
+    missedCalls.delete(peerId);
+    const calls = [];
+    for (const [fromPeerId, entry] of byCaller) {
+      if (now - entry.at > missedCallTtlMs) continue;
+      calls.push({ fromPeerId, at: entry.at, attempts: entry.attempts });
+    }
+    calls.sort((a, b) => a.at - b.at);
+    return calls;
+  }
+
 
   function remoteAddress(socket) {
     return socket.handshake.address || socket.conn.remoteAddress || 'unknown';
@@ -209,6 +293,10 @@ function createSignalingServer(options = {}) {
         peers.set(value.peerId, registration);
         socket.emit('registered', { roomId: value.roomId, peerId: value.peerId });
         if (typeof ack === 'function') ack({ ok: true, roomId: value.roomId, peerId: value.peerId });
+        // Первым делом после регистрации — то, что человек пропустил, пока
+        // его не было. Отправляем и уносим: журнал живёт до доставки.
+        const missed = takeMissedCalls(value.peerId);
+        if (missed.length > 0) socket.emit('missed_calls', { calls: missed });
       }, false, ack);
     });
 
@@ -220,9 +308,11 @@ function createSignalingServer(options = {}) {
         }
         const target = peerFor(value.targetPeerId);
         if (!target || target.socket === socket) {
+          rememberMissedCall(value.targetPeerId, registration.peerId);
           sendUnavailable(socket, value.targetPeerId, value.roomId);
           return;
         }
+        forgetMissedCall(value.targetPeerId, registration.peerId);
         target.socket.emit('offer', { roomId: value.roomId, fromPeerId: registration.peerId, sdp: value.sdp });
       });
     });
@@ -344,5 +434,8 @@ module.exports = {
     MAX_CONNECTIONS,
     MAX_CONNECTIONS_PER_IP,
     REGISTRATION_TIMEOUT_MS,
+    MISSED_CALL_TTL_MS,
+    MISSED_CALLS_PER_PEER,
+    MISSED_CALL_PEERS,
   },
 };

@@ -711,6 +711,44 @@ export async function notifyFeedEvent(opts: {
 }
 
 /**
+ * «Вам звонили», пока телефона не было в сети (v4.32.558).
+ *
+ * Звонок живёт в сокете, и у выключенного или свёрнутого iPhone его нет. Push
+ * там тоже нет — APNs принадлежит чужой команде разработчика, чьим
+ * сертификатом подписана сборка. Поэтому сервер придерживает несостоявшийся
+ * звонок и отдаёт его при следующем входе, а показать его человеку — здесь.
+ *
+ * Имени звонившего в баннере нет: сюда приходит только открытый ключ, а имя
+ * знает журнал звонков на устройстве. Показ содержимого («notify_preview»)
+ * это уведомление и так не нарушает.
+ */
+export async function notifyMissedCall(opts: { count: number }): Promise<void> {
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
+  if (opts.count <= 0) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const notifee = require('@notifee/react-native').default;
+    if ((await kvGet('notify_calls')) === 'false') return;
+    const vibrate = (await kvGet('notify_vibrate')) !== 'false';
+    const sound = (await kvGet('notify_sound')) !== 'false';
+    await notifee.displayNotification({
+      id: 'airchat_missed_calls',
+      title: 'AirChat',
+      body: opts.count === 1 ? 'Вам звонили' : `Вам звонили: ${opts.count}`,
+      android: {
+        channelId: CHANNEL_CALLS,
+        smallIcon: NOTIFICATION_SMALL_ICON,
+        pressAction: { id: 'default' },
+        vibrationPattern: vibrationFor(vibrate, 'message'),
+        sound: sound ? 'default' : undefined,
+      },
+    });
+  } catch (e) {
+    log.warn('missed_call_notify_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
  * v4.32.143 (AUDIT P1 T3): call from App.tsx identity-change teardown so push
  * listeners get detached before the next init() runs for the new identity.
  */
