@@ -7,12 +7,14 @@
  */
 import { ed25519 } from '@noble/curves/ed25519.js';
 import type { KeyPairBytes } from '../../crypto/keyManager';
-import { signJson } from '../../crypto/signature';
+import { signBytes, signJson } from '../../crypto/signature';
 import {
   decodeProofToken,
   encodeLinkProofRecord,
   encodeProofToken,
+  encodeProofTokenV2,
   linkState,
+  proofBodyFor,
   proofFailureText,
   readLinkProofRecord,
   findProofTokens,
@@ -41,6 +43,25 @@ async function proofFor(k: KeyPairBytes, platform: LinkPlatform, handle: string)
 
 const expectFor = (k: KeyPairBytes, platform: LinkPlatform, handle: string): ProofExpectation =>
   ({ platform, handle, publicKeyB64: pubB64(k) });
+
+/** То же доказательство в формате v2 — том, что публикуют начиная с 4.32.575. */
+async function proofV2For(
+  k: KeyPairBytes,
+  platform: LinkPlatform,
+  handle: string,
+  now = 1_700_000_000_000
+): Promise<string> {
+  const built = proofBodyFor(platform, handle, pubB64(k), now);
+  if (!built) throw new Error('тело токена не собралось');
+  const sig = await signBytes(k.secretKey, new TextEncoder().encode(built.body));
+  return encodeProofTokenV2(built.body, Buffer.from(sig).toString('base64'));
+}
+
+/**
+ * Длина записи так, как её считает X: символы, а не байты. Кириллица и латиница
+ * весят по единице, поэтому обычный length здесь честен.
+ */
+const X_LIMIT = 280;
 
 describe('имя учётной записи', () => {
   it('принимается и с собакой, и без неё, и целым адресом', () => {
@@ -234,5 +255,96 @@ describe('текст отказа', () => {
   it('подсказывает адрес той площадки, о которой речь', () => {
     expect(proofFailureText('bad_url', 'github')).toMatch(/gist\.github\.com/);
     expect(proofFailureText('bad_url', 'x')).toMatch(/x\.com/);
+  });
+});
+
+describe('формат v2: то же доказательство, но помещается в запись X', () => {
+  it('строка подтверждения влезает в 280 символов', async () => {
+    const k = keys();
+    // Самое длинное имя, какое X вообще выдаёт, — 15 символов.
+    const token = await proofV2For(k, 'x', 'a_very_long_han');
+    const text = proofStatementText(token, 'AC-ABCDE-FGHIJ', 'x');
+    expect(text.length).toBeLessThanOrEqual(X_LIMIT);
+    // Ради этого всё и затевалось: старый формат не влезал.
+    const old = proofStatementText(await proofFor(k, 'x', 'a_very_long_han'), 'AC-ABCDE-FGHIJ', 'x');
+    expect(old.length).toBeGreaterThan(X_LIMIT);
+  });
+
+  it('проверяется так же, как v1', async () => {
+    const k = keys();
+    const token = await proofV2For(k, 'x', 'jack');
+    await expect(verifyProofToken(token, expectFor(k, 'x', 'jack'))).resolves.toMatchObject({
+      ok: true,
+      payload: { v: 2, p: 'x', h: 'jack' },
+    });
+  });
+
+  it('чужой ключ и чужое имя не проходят', async () => {
+    const k = keys();
+    const token = await proofV2For(k, 'x', 'jack');
+    await expect(verifyProofToken(token, expectFor(keys(), 'x', 'jack'))).resolves.toEqual({
+      ok: false,
+      reason: 'bad_signature',
+    });
+    await expect(verifyProofToken(token, expectFor(k, 'x', 'other'))).resolves.toEqual({
+      ok: false,
+      reason: 'wrong_handle',
+    });
+    await expect(verifyProofToken(token, expectFor(k, 'github', 'jack'))).resolves.toEqual({
+      ok: false,
+      reason: 'wrong_handle',
+    });
+  });
+
+  it('правка внутри строки ломает подпись — имя подписано вместе со всем', async () => {
+    const k = keys();
+    const token = await proofV2For(k, 'x', 'jack');
+    const swapped = token.replace(':jack:', ':mallory:');
+    expect(swapped).not.toBe(token);
+    await expect(verifyProofToken(swapped, expectFor(k, 'x', 'mallory'))).resolves.toEqual({
+      ok: false,
+      reason: 'bad_signature',
+    });
+  });
+
+  it('обрезанная строка — это «повреждено», а не «подпись не сошлась»', async () => {
+    const k = keys();
+    const token = await proofV2For(k, 'x', 'jack');
+    await expect(verifyProofToken(token.slice(0, 60), expectFor(k, 'x', 'jack'))).resolves.toEqual({
+      ok: false,
+      reason: 'bad_token',
+    });
+  });
+
+  it('старые публикации продолжают проверяться', async () => {
+    const k = keys();
+    const v1 = await proofFor(k, 'github', 'octocat');
+    await expect(verifyProofToken(v1, expectFor(k, 'github', 'octocat'))).resolves.toMatchObject({
+      ok: true,
+      payload: { v: 1, h: 'octocat' },
+    });
+  });
+
+  it('в тексте публикации находятся строки обоих форматов', async () => {
+    const k = keys();
+    const v1 = await proofFor(k, 'x', 'jack');
+    const v2 = await proofV2For(k, 'x', 'jack');
+    expect(findProofTokens(`было: ${v1}\nстало: ${v2}`)).toEqual([v1, v2]);
+    await expect(verifyProofInText(`шум ${v2} шум`, expectFor(k, 'x', 'jack'))).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('время в строке — минуты, и восстанавливается обратно', () => {
+    const k = keys();
+    const built = proofBodyFor('x', 'jack', pubB64(k), 1_700_000_045_678);
+    expect(built?.payload.t).toBe(Math.floor(1_700_000_045_678 / 60_000) * 60_000);
+    expect(built?.body.startsWith('airchat-proof:v2:x:jack:')).toBe(true);
+  });
+
+  it('негодное имя строкой не становится', () => {
+    expect(proofBodyFor('github', 'foo/../evil', 'AAAA', 1_700_000_000_000)).toBeNull();
+    const k = keys();
+    expect(proofBodyFor('x', 'слишкомдлинноеимя', pubB64(k), 1_700_000_000_000)).toBeNull();
   });
 });

@@ -35,12 +35,13 @@ import { openExternal } from '../../../utils/openExternal';
 import { useColors } from '../../../ThemeContext';
 import { font, glass, radius, spacing, withAlpha } from '../../../theme';
 import { loadKeyPair } from '../../../../core/crypto/keyManager';
-import { signJson } from '../../../../core/crypto/signature';
+import { signBytes } from '../../../../core/crypto/signature';
 import { ownAccountRef } from '../../../../core/identity/accountRef';
 import {
   PLATFORM_LABEL,
-  encodeProofToken,
+  encodeProofTokenV2,
   normalizeHandle,
+  proofBodyFor,
   proofFailureText,
   proofStatementText,
   type LinkPlatform,
@@ -115,9 +116,23 @@ export function LinkProofSheet({
         setError('Ключ аккаунта недоступен — перезапустите приложение.');
         return;
       }
-      const signed = await signJson(pair, { v: 1, p: platform, h, k: publicKeyB64, t: Date.now() });
+      // v4.32.575: формат v2. Подписывается сама строка токена — короткая,
+      // без JSON и base64 поверх него: в запись X старая не влезала вовсе
+      // (313 символов при потолке 280), то есть подтвердить X было нельзя.
+      const built = proofBodyFor(platform, h, publicKeyB64, Date.now());
+      if (!built) {
+        setError('Не удалось подготовить строку подтверждения.');
+        return;
+      }
+      const sig = await signBytes(pair.secretKey, new TextEncoder().encode(built.body));
       setHandle(h);
-      setStatement(proofStatementText(encodeProofToken(signed.payload, signed.signature), ownAccountRef(), platform));
+      setStatement(
+        proofStatementText(
+          encodeProofTokenV2(built.body, Buffer.from(sig).toString('base64')),
+          ownAccountRef(),
+          platform
+        )
+      );
     } catch {
       setError('Не удалось подготовить строку подтверждения.');
     } finally {
