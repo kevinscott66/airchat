@@ -99,7 +99,19 @@ export class MultiTransportRouter {
     },
   ];
 
-  async send(data: Uint8Array, targetDid: string): Promise<boolean> {
+  /**
+   * Отправить и сказать, каким транспортом ушло (v4.32.563).
+   *
+   * Раньше маршрутизатор отвечал только «да/нет». Сообщение, доставленное по
+   * локальной сети без интернета, и сообщение, ушедшее через реле, выглядели
+   * для отправителя одинаково — а разница между ними в том, кто в принципе
+   * мог его увидеть по дороге. Теперь путь известен вызывающему, и в
+   * «Сведениях о сообщении» стоит не догадка, а тот транспорт, который
+   * подтвердил доставку.
+   *
+   * `null` — не доставил никто.
+   */
+  async sendVia(data: Uint8Array, targetDid: string): Promise<TransportId | null> {
     const sorted = [...this.transports].sort((a, b) => {
       const aScore = a.priority - this.getSuccessRate(a.id) * 10;
       const bScore = b.priority - this.getSuccessRate(b.id) * 10;
@@ -143,7 +155,7 @@ export class MultiTransportRouter {
 
         if (success) {
           log.info('transport_success', { transport: transport.id, targetDid: shortDid(targetDid) });
-          return true;
+          return transport.id;
         }
       } catch (error) {
         log.error('transport_failed', {
@@ -156,7 +168,12 @@ export class MultiTransportRouter {
     }
 
     log.warn('transport_all_failed', { targetDid: shortDid(targetDid) });
-    return false;
+    return null;
+  }
+
+  /** Прежний ответ «да/нет» — для мест, которым маршрут не нужен. */
+  async send(data: Uint8Array, targetDid: string): Promise<boolean> {
+    return (await this.sendVia(data, targetDid)) !== null;
   }
 
   /**

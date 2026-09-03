@@ -4,9 +4,24 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import type { ChatMessageRow } from '../../../../core/storage/local';
+import type { ChatMessageRow, MessageRoute } from '../../../../core/storage/local';
 import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
+
+/**
+ * Как назвать маршрут человеку (v4.32.563).
+ *
+ * Названия транспортов — внутренние; человеку важно другое: понадобился ли
+ * для этого сообщения интернет и кто мог его увидеть по дороге. Поэтому
+ * `lan` — это «по локальной сети», а не «LAN», и подпись прямо говорит, что
+ * наружу оно не выходило.
+ */
+const ROUTE_LABELS: Record<MessageRoute, { title: string; hint: string; icon: 'globe-outline' | 'wifi-outline' | 'swap-horizontal-outline' | 'radio-outline' }> = {
+  ipfs: { title: 'Через сеть', hint: 'Опубликовано и подтверждено', icon: 'globe-outline' },
+  lan: { title: 'По локальной сети', hint: 'Напрямую, без интернета', icon: 'wifi-outline' },
+  internet: { title: 'Через реле', hint: 'Интернет, сервер пересылки', icon: 'swap-horizontal-outline' },
+  wifi_direct: { title: 'Wi-Fi Direct', hint: 'Напрямую между устройствами', icon: 'radio-outline' },
+};
 
 // ─── Message Info Modal ───────────────────────────────────────────────────────
 export function MessageInfoModal({
@@ -49,6 +64,15 @@ export function MessageInfoModal({
               <View>
                 <Text style={{ color: colors.textMuted, fontSize: 12 }}>Изменено</Text>
                 <Text style={{ color: colors.text, fontSize: 14 }}>{fmtTime(msg.editedAt)}</Text>
+              </View>
+            </View>
+          ) : null}
+          {msg.transport && ROUTE_LABELS[msg.transport] ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name={ROUTE_LABELS[msg.transport].icon} size={18} color={colors.textMuted} style={{ marginRight: 10 }} />
+              <View>
+                <Text style={{ color: colors.textMuted, fontSize: font.xs }}>{ROUTE_LABELS[msg.transport].title}</Text>
+                <Text style={{ color: colors.text, fontSize: font.sm }}>{ROUTE_LABELS[msg.transport].hint}</Text>
               </View>
             </View>
           ) : null}

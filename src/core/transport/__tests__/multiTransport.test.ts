@@ -192,3 +192,45 @@ describe('лог не строит список «кто с кем»', () => {
     expect(trying[0].level).toBe('debug');
   });
 });
+
+/**
+ * Маршрут доставки (v4.32.563).
+ *
+ * `send` отвечает «да/нет» и этого хватало, пока путь никого не интересовал.
+ * Но «доставлено по локальной сети» и «доставлено через чужой сервер
+ * пересылки» — разные вещи для того, кто сообщение отправил, и разница
+ * должна дойти до строки сообщения неискажённой.
+ */
+describe('какой транспорт довёз', () => {
+  it('LAN довёз — назван LAN, а не «просто отправлено»', async () => {
+    await expect(new MultiTransportRouter().sendVia(DATA, DID)).resolves.toBe('lan');
+  });
+
+  it('LAN не добивает — назван тот, кто добил', async () => {
+    mockLan.canReach.mockResolvedValue(false);
+    await expect(new MultiTransportRouter().sendVia(DATA, DID)).resolves.toBe('internet');
+  });
+
+  it('никто не довёз — null, и это не путается с транспортом', async () => {
+    mockLan.canReach.mockResolvedValue(false);
+    mockInternet.canReach.mockResolvedValue(false);
+    await expect(new MultiTransportRouter().sendVia(DATA, DID)).resolves.toBeNull();
+  });
+
+  it('назван тот, кто ответил успехом, а не тот, кого спросили первым', async () => {
+    mockLan.send.mockResolvedValue(false);
+    await expect(new MultiTransportRouter().sendVia(DATA, DID)).resolves.toBe('internet');
+  });
+
+  it('прежний ответ «да/нет» продолжает работать поверх маршрута', async () => {
+    await expect(new MultiTransportRouter().send(DATA, DID)).resolves.toBe(true);
+    mockLan.canReach.mockResolvedValue(false);
+    mockInternet.canReach.mockResolvedValue(false);
+    await expect(new MultiTransportRouter().send(DATA, DID)).resolves.toBe(false);
+  });
+
+  it('DID не попадает в лог целиком и на этом пути тоже', async () => {
+    await new MultiTransportRouter().sendVia(DATA, DID);
+    expect(JSON.stringify(logCalls)).not.toContain(DID);
+  });
+});

@@ -458,6 +458,25 @@ async function ensureStarredColumns(database: SQLite.SQLiteDatabase): Promise<vo
   }
 }
 
+/**
+ * transport — каким путём сообщение реально ушло (v4.32.563).
+ *
+ * Столбец пуст у всего, что записано до этой версии, и у всего входящего:
+ * чужой маршрут нам не виден. Пустое значение и означает «путь неизвестен» —
+ * в «Сведениях о сообщении» строка маршрута тогда просто не рисуется, вместо
+ * того чтобы называть наугад самый вероятный транспорт.
+ */
+async function ensureMessageTransportColumn(database: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    const cols = await database.getAllAsync<{ name: string }>('PRAGMA table_info(chat_messages)');
+    if (!cols.some((c) => c.name === 'transport')) {
+      await database.execAsync('ALTER TABLE chat_messages ADD COLUMN transport TEXT');
+    }
+  } catch (e) {
+    log.warn('transport_column_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 /** last_message_sender_name — имя отправителя последнего сообщения в группе. */
 async function ensureGroupSenderNameColumn(database: SQLite.SQLiteDatabase): Promise<void> {
   try {
@@ -1557,6 +1576,7 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
       await ensureGroupMessageViewCountColumn(database);
       await ensureMutedUntilColumn(database);
       await ensureStarredColumns(database);
+      await ensureMessageTransportColumn(database);
       await migrateDekRandomToDeterministic(database);
       await ensureLocalCryptoMigration(database);
       await ensureStoryMediaTypeColumn(database);
@@ -2530,6 +2550,16 @@ export async function outboxPurgeDead(ttlMs: number): Promise<number> {
   }
 }
 
+/**
+ * Путь, которым сообщение ушло к собеседнику (v4.32.563).
+ *
+ * `ipfs` — опубликовано в сеть и подтверждено CID; `lan` — напрямую по
+ * локальной сети, интернет не потребовался; `internet` — через реле;
+ * `wifi_direct` — P2P без общей сети. Известен только для своих отправленных
+ * сообщений: как до нас добиралось входящее, знает лишь его отправитель.
+ */
+export type MessageRoute = 'ipfs' | 'lan' | 'internet' | 'wifi_direct';
+
 export type ChatMessageRow = {
   id: string;
   contactPubB64: string;
@@ -2583,6 +2613,8 @@ export type ChatMessageRow = {
    * не оставалось ничего — пустой пузырь. См. unreadableText.
    */
   mediaUnreadable?: boolean;
+  /** Каким транспортом сообщение ушло; null — путь неизвестен. См. MessageRoute. */
+  transport?: MessageRoute | null;
 };
 
 export type ConversationRow = {
@@ -2741,8 +2773,8 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
     await d.execAsync('BEGIN IMMEDIATE');
     try {
       await d.runAsync(
-        `INSERT OR REPLACE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview, transport)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           row.id,
           row.contactPubB64,
@@ -2755,6 +2787,10 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
           ownerPid,
           row.replyToId ?? null,
           replyEnc,
+          // v4.32.563: INSERT OR REPLACE переписывает строку целиком. Не
+          // перечислить маршрут здесь — значит стирать его при первом же
+          // сохранении нового статуса, то есть всегда.
+          row.transport ?? null,
         ]
       );
       await d.execAsync('COMMIT');
@@ -3543,6 +3579,7 @@ async function listChatMessagesPage(
       edited_at: number | null;
       reactions: string | null;
       starred: number;
+      transport: string | null;
     }>(
       before
         ? 'SELECT * FROM chat_messages WHERE contact_pub_b64 = ? AND owner_profile_id = ?'
@@ -3574,6 +3611,7 @@ async function listChatMessagesPage(
       editedAt: r.edited_at ?? null,
       ...readReactionsCell(r.reactions ?? null, dek),
       starred: Boolean(r.starred),
+      transport: (r.transport as MessageRoute | null) ?? null,
       };
     });
   } catch (e) {

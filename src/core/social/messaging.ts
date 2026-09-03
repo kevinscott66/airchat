@@ -1577,17 +1577,21 @@ export class MessagingService {
       // v4.32.213 (Audit-42 H3): try direct multiTransport FIRST, then fall
       // back to gossip fan-out only if direct failed — avoids 64× amplification
       // on every DM when direct LAN/WebRTC already reaches the recipient.
-      const fallbackOk = await multiTransportRouter.send(payload, peerDid);
-      if (!fallbackOk) {
+      // v4.32.563: спрашиваем не «ушло ли», а «чем ушло» — этот транспорт и
+      // ложится в строку сообщения, чтобы «Сведения» показывали настоящий
+      // путь, а не самый вероятный.
+      const fallbackVia = await multiTransportRouter.sendVia(payload, peerDid);
+      if (!fallbackVia) {
         void this.gossipDmToContacts(payload, peerDid, myDid);
       }
-      if (fallbackOk) {
-        log.info('message_sent_via_fallback', { peerDid, messageId });
+      if (fallbackVia) {
+        log.info('message_sent_via_fallback', { peerDid, messageId, transport: fallbackVia });
         const fallbackRef = `fallback:${messageId}`;
         await saveRow({
           ...pending,
           cid: fallbackRef,
           status: 'delivered',
+          transport: fallbackVia,
         });
         // v4.32.128 (AUDIT): NEVER write fallback:/lan: refs to conversation
         // tip. Receive-side has been guarded since v120 (#6) — send-side was
@@ -1611,6 +1615,7 @@ export class MessagingService {
       ...pending,
       cid,
       status: 'sent',
+      transport: 'ipfs',
     });
     await this.store.announceCid(myDid, peerDid, cid);
     // v4.32.118 Stage 2: also publish the wire envelope to recipient's
@@ -1653,6 +1658,7 @@ export class MessagingService {
       ...pending,
       cid,
       status: 'delivered',
+      transport: 'ipfs',
     });
     await setLocalConversationTip(pairKey, cid);
     touchConv();
