@@ -100,23 +100,31 @@ describe('штамп под «островом»', () => {
     expect(ISLAND_H - num('CAPSULE_H')).toBeGreaterThanOrEqual(4);
   });
 
-  it('хвост пузыря нарисован внутрь габарита, а не свешен вниз', () => {
-    // Свешенный хвост торчал бы из-под маски — то есть был бы виден в работе.
-    expect(num('BODY_H')).toBeLessThan(num('CAPSULE_H'));
+  it('овал и ничего кроме: ни плашки под буквами, ни хвоста наружу', () => {
     const source = STAMP();
-    expect(source).toContain('const tip = CAPSULE_H - half;');
+    expect(source).toContain('fill="none"');
+    // Свешенный хвост торчал бы из-под маски — то есть был бы виден в работе.
+    expect(source).not.toContain('tail');
     // Контур считается из тех же чисел, что и габарит: вписанный руками путь
     // разъезжается с рамкой на полтолщины обводки, и на снимке это видно.
     expect(source).not.toMatch(/d="M/);
   });
 
-  it('текст помещается внутрь пузыря и не заходит в скругления', () => {
+  it('обводка той же гаммой, что и буквы: accent → primary', () => {
+    const source = STAMP();
+    expect(source).toContain('stopColor={colors.accent}');
+    expect(source).toContain('stopColor={colors.primary}');
+    // Свой id на экземпляр — общий отобрал бы заливку у отрисованного позже.
+    expect(source).toContain('useId()');
+  });
+
+  it('текст помещается внутрь овала и не заходит в скругления', () => {
     expect(ASPECT).toBeGreaterThan(0);
     const markW = num('WORDMARK') * ASPECT;
-    expect(num('WORDMARK')).toBeLessThan(num('BODY_H'));
-    // Скругления съедают по BODY_H / 2 с каждой стороны — прямой участок это
+    expect(num('WORDMARK')).toBeLessThan(num('CAPSULE_H'));
+    // Скругления съедают по CAPSULE_H / 2 с каждой стороны — прямой участок это
     // всё, что остаётся; в него знак и должен войти.
-    expect(markW).toBeLessThan(num('CAPSULE_W') - num('BODY_H'));
+    expect(markW).toBeLessThan(num('CAPSULE_W') - num('CAPSULE_H'));
   });
 
   it('не ловит касаний: полоса статуса принадлежит системе', () => {

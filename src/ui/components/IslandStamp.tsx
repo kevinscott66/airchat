@@ -1,28 +1,25 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import { AirChatWordmark } from './AirChatWordmark';
 import { useColors } from '../ThemeContext';
-import { withAlpha } from '../theme';
 
 /**
- * Штамп под «островом» (v4.32.553).
+ * Штамп под «островом» (v4.32.554).
  *
  * Видно его только на снимке экрана. «Остров» — чёрная маска, которую система
  * рисует поверх окна и в снимок не отдаёт: на устройстве штамп закрыт ею
- * целиком, а на скриншоте оказывается на её месте. Поэтому здесь можно то, чего
- * в работающем интерфейсе быть не должно, — рамка, заливка, полная
- * непрозрачность: помешать они физически не могут.
+ * целиком, а на скриншоте оказывается на её месте.
  *
- * Форма — пузырь переписки по контуру самой маски: капсула с полным
- * скруглением и хвостом. На снимке это читается как фирменный знак ровно там,
- * где у аппарата вырез, — а не как надпись, случайно попавшая под часы.
+ * Форма — один овал по контуру самой маски. Ни заливки, ни хвоста: заливка
+ * читалась плашкой и спорила с буквами, а свешенный хвост торчал бы из-под
+ * маски, то есть был бы виден в работе, — а этого штамп делать не должен.
+ * Остаётся обводка и слово внутри неё.
  *
- * Хвост нарисован ВНУТРЬ габарита, а не свешен вниз, как у обычного пузыря.
- * Свешенный хвост торчал бы из-под маски — то есть был бы виден в работе, а это
- * ровно то, чего штамп не должен делать. Отсюда и разделение высоты: тело
- * пузыря BODY_H, под хвост остаётся CAPSULE_H - BODY_H, и наружу не выходит
- * ничего.
+ * Цвет — тот же градиент accent → primary, которым набрано само слово: обводка
+ * и буквы идут одной гаммой и следом за темой, а не живут отдельными
+ * шестнадцатеричными. Обводка светлее букв (стёкла у неё за спиной нет, и в
+ * полную силу она била бы по глазам на снимке).
  *
  * Числа здесь, а не в теме: они не про оформление, а про габариты чужой маски.
  * «Остров» около 125×37 точек (iPhone 14 Pro и новее), капсула взята с запасом
@@ -31,36 +28,29 @@ import { withAlpha } from '../theme';
  */
 const CAPSULE_W = 115;
 const CAPSULE_H = 31;
-/** Высота тела пузыря; остаток габарита занимает хвост. */
-const BODY_H = 24;
 const STROKE = 1.5;
-/** Высота букв внутри пузыря. */
-const WORDMARK = 12;
+/** Высота букв внутри овала. */
+const WORDMARK = 13;
+/** Прозрачность обводки: слово впереди, овал за ним. */
+const STROKE_ALPHA = 0.7;
 
 /**
- * Контур пузыря одним путём: капсула плюс хвост, вписанные в CAPSULE_W×CAPSULE_H.
+ * Овал одним путём: два полукруга и две прямые между ними.
  *
- * Считается из тех же чисел, что и размеры контейнера, — иначе рамка и рамка на
- * SVG разъезжаются на полтолщины обводки, и на скриншоте это видно.
+ * Считается из тех же чисел, что и размеры контейнера, — иначе рамка на SVG и
+ * рамка контейнера разъезжаются на полтолщины обводки, и на скриншоте это видно.
  */
-function bubblePath(): string {
+function capsulePath(): string {
   const half = STROKE / 2;
-  const r = (BODY_H - STROKE) / 2;
+  const r = (CAPSULE_H - STROKE) / 2;
   const top = half;
-  const bottom = BODY_H - half;
+  const bottom = CAPSULE_H - half;
   const xL = half + r;
   const xR = CAPSULE_W - half - r;
-  // Хвост: основание на нижней кромке тела, остриё — в оставшемся запасе.
-  const tailTo = xL + 10;
-  const tailFrom = xL + 19;
-  const tip = CAPSULE_H - half;
   return [
     `M ${xL} ${top}`,
     `H ${xR}`,
     `A ${r} ${r} 0 0 1 ${xR} ${bottom}`,
-    `H ${tailFrom}`,
-    `L ${xL + 6} ${tip}`,
-    `L ${tailTo} ${bottom}`,
     `H ${xL}`,
     `A ${r} ${r} 0 0 1 ${xL} ${top}`,
     'Z',
@@ -69,19 +59,26 @@ function bubblePath(): string {
 
 export function IslandStamp(): React.ReactElement {
   const colors = useColors();
+  // Свой идентификатор градиента на экземпляр: общий отобрал бы заливку
+  // у того знака, что отрисован позже.
+  const gradientId = `island-stamp-${useId()}`;
   return (
     <View pointerEvents="none" style={styles.stamp}>
       <Svg width={CAPSULE_W} height={CAPSULE_H} style={StyleSheet.absoluteFill}>
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor={colors.accent} stopOpacity={STROKE_ALPHA} />
+            <Stop offset="1" stopColor={colors.primary} stopOpacity={STROKE_ALPHA} />
+          </LinearGradient>
+        </Defs>
         <Path
-          d={bubblePath()}
-          fill={withAlpha(colors.surface, 0.55)}
-          stroke={withAlpha(colors.primary, 0.55)}
+          d={capsulePath()}
+          fill="none"
+          stroke={`url(#${gradientId})`}
           strokeWidth={STROKE}
           strokeLinejoin="round"
         />
       </Svg>
-      {/* Буквы центруются по ТЕЛУ пузыря, а не по габариту: габарит выше на
-          хвост, и центр по нему увёл бы надпись вниз, к самому хвосту. */}
       <View style={styles.body}>
         <AirChatWordmark height={WORDMARK} />
       </View>
@@ -90,14 +87,11 @@ export function IslandStamp(): React.ReactElement {
 }
 
 const styles = StyleSheet.create({
-  stamp: { width: CAPSULE_W, height: CAPSULE_H },
-  body: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: BODY_H,
+  stamp: {
+    width: CAPSULE_W,
+    height: CAPSULE_H,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  body: { alignItems: 'center', justifyContent: 'center' },
 });
