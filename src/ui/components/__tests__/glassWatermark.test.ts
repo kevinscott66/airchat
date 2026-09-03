@@ -9,12 +9,12 @@
  *    подкрас — он и задумывался фоном;
  *  - подкрас идёт РАНЬШЕ `BlurView`: подложка размытия — это то, что нарисовано
  *    раньше него в том же родителе, и мягкость у пятна оттуда, а не из чисел;
- *  - знак лежит под «островом», по центру полосы статуса. «Остров» — маска
- *    системы поверх окна, в снимок экрана она не попадает: на устройстве знака
+ *  - штамп лежит под «островом», по центру полосы статуса. «Остров» — маска
+ *    системы поверх окна, в снимок экрана она не попадает: на устройстве штампа
  *    не видно, на скриншоте он есть. Отсюда два условия — центр (это и есть
  *    центр «острова», полоса симметрична) и размер меньше самой маски. Больше
- *    маски — и из-под неё выглядывают буквы, то есть знак снова становится
- *    надписью рядом с часами.
+ *    маски — и из-под неё выглядывает край рамки, то есть штамп снова
+ *    становится надписью рядом с часами.
  *
  * Ни типов, ни линтера на это нет: всё держится на порядке детей и на трёх
  * числах. Отсюда тест по исходнику.
@@ -26,6 +26,10 @@ const SRC = path.join(__dirname, '..', '..', '..');
 const read = (...p: string[]): string => fs.readFileSync(path.join(SRC, ...p), 'utf8');
 const GLASS = (): string => read('ui', 'components', 'GlassSurface.tsx');
 const APP = (): string => read('App.tsx');
+const STAMP = (): string => read('ui', 'components', 'IslandStamp.tsx');
+/** Число из объявления вида `const NAME = 12;` в исходнике штампа. */
+const num = (name: string): number =>
+  Number(new RegExp(`const ${name} = ([\\d.]+);`).exec(STAMP())?.[1]);
 
 /** Габариты «острова» в точках (iPhone 14 Pro и новее). Знак обязан войти внутрь. */
 const ISLAND_W = 125;
@@ -76,9 +80,9 @@ describe('подкрас стекла в GlassSurface', () => {
   });
 });
 
-describe('знак под «островом»', () => {
+describe('штамп под «островом»', () => {
   it('стоит в оболочке, а не на экране: полоса одна на все вкладки', () => {
-    expect(APP()).toContain('<AirChatWordmark');
+    expect(APP()).toContain('<IslandStamp />');
   });
 
   it('по центру полосы статуса — то есть по центру самого «острова»', () => {
@@ -88,27 +92,49 @@ describe('знак под «островом»', () => {
     expect(source).toContain('style={[styles.islandMark, { height: insets.top }]}');
   });
 
-  it('целиком помещается под маску: иначе из-под неё выглядывают буквы', () => {
-    const m = /<AirChatWordmark height=\{(\d+)\}/.exec(APP());
-    expect(m).not.toBeNull();
-    const height = Number(m?.[1]);
+  it('капсула целиком помещается под маску: иначе видно её край', () => {
+    expect(num('CAPSULE_W')).toBeLessThan(ISLAND_W);
+    expect(num('CAPSULE_H')).toBeLessThan(ISLAND_H);
+    // Запас, а не впритык: на разных аппаратах маска отличается на пару точек.
+    expect(ISLAND_W - num('CAPSULE_W')).toBeGreaterThanOrEqual(6);
+    expect(ISLAND_H - num('CAPSULE_H')).toBeGreaterThanOrEqual(4);
+  });
+
+  it('хвост пузыря нарисован внутрь габарита, а не свешен вниз', () => {
+    // Свешенный хвост торчал бы из-под маски — то есть был бы виден в работе.
+    expect(num('BODY_H')).toBeLessThan(num('CAPSULE_H'));
+    const source = STAMP();
+    expect(source).toContain('const tip = CAPSULE_H - half;');
+    // Контур считается из тех же чисел, что и габарит: вписанный руками путь
+    // разъезжается с рамкой на полтолщины обводки, и на снимке это видно.
+    expect(source).not.toMatch(/d="M/);
+  });
+
+  it('текст помещается внутрь пузыря и не заходит в скругления', () => {
     expect(ASPECT).toBeGreaterThan(0);
-    expect(height).toBeLessThan(ISLAND_H);
-    expect(height * ASPECT).toBeLessThan(ISLAND_W);
+    const markW = num('WORDMARK') * ASPECT;
+    expect(num('WORDMARK')).toBeLessThan(num('BODY_H'));
+    // Скругления съедают по BODY_H / 2 с каждой стороны — прямой участок это
+    // всё, что остаётся; в него знак и должен войти.
+    expect(markW).toBeLessThan(num('CAPSULE_W') - num('BODY_H'));
   });
 
   it('не ловит касаний: полоса статуса принадлежит системе', () => {
     const source = APP();
-    const block = source.slice(source.indexOf('styles.islandMark'));
     expect(source.slice(0, source.indexOf('styles.islandMark'))).toMatch(/pointerEvents="none"[^<]*$/);
-    expect(block.indexOf('<AirChatWordmark')).toBeGreaterThan(-1);
+    // И сам штамп тоже: он лежит поверх содержимого вкладки.
+    expect(STAMP()).toContain('pointerEvents="none"');
   });
 
-  it('только там, где есть «остров»: прятать знак больше не за что', () => {
+  it('только там, где есть «остров»: прятать штамп больше не за что', () => {
     const m = /insets\.top >= (\d+) \?/.exec(APP());
     expect(m).not.toBeNull();
     // Полоса с вырезом — 47 точек (iPhone 12–14), с «островом» — 59 и выше.
     expect(Number(m?.[1])).toBeGreaterThan(47);
     expect(Number(m?.[1])).toBeLessThanOrEqual(59);
+  });
+
+  it('цвета из палитры, а не свои: штамп ложится на любую тему', () => {
+    expect(STAMP()).not.toMatch(/#[0-9a-fA-F]{3,8}/);
   });
 });

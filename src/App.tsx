@@ -111,7 +111,7 @@ import type { AppColors, ColorScheme } from './ui/theme';
 import { contactLabel } from './core/social/contactLabel';
 import { shortIdentity } from './ui/identity/shortId';
 import { GlassSurface } from './ui/components/GlassSurface';
-import { AirChatWordmark } from './ui/components/AirChatWordmark';
+import { IslandStamp } from './ui/components/IslandStamp';
 import { TabGlyph } from './ui/components/TabGlyph';
 import { ScreenSlot } from './ui/components/ScreenSlot';
 
@@ -192,7 +192,7 @@ function useMainTabsStyles() {
   return useThemedStyles((c) => ({
     main: { flex: 1, backgroundColor: c.background },
     tabBody: { flex: 1, backgroundColor: c.background },
-    // Знак ПОД самим «островом», по центру полосы статуса, и не ловит касаний —
+    // Штамп ПОД самим «островом», по центру полосы статуса, и не ловит касаний —
     // полоса принадлежит системе, кликать в ней нечего.
     islandMark: {
       position: 'absolute' as const,
@@ -202,7 +202,6 @@ function useMainTabsStyles() {
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
-    islandMarkGlyph: { opacity: 0.8 },
     tabBar: { backgroundColor: 'transparent' },
     // v4.32.532: плавающая капсула возвращена. Довод 530-й («таббар — край
     // окна, а не предмет») верен для плоской полосы, но неверен для стекла:
@@ -1294,7 +1293,7 @@ function MainTabs({
         ) : tab === 'settings' && mountingTab === 'settings' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_settings" /></View> : null}
       </View>
       {/*
-        v4.32.552: знак лежит ПОД «островом» — и в этом весь его смысл.
+        v4.32.553: штамп лежит ПОД «островом» — и в этом весь его смысл.
 
         «Остров» не принадлежит приложению: это чёрная маска, которую рисует
         система поверх окна. В работе она закрывает собой всё, что оказалось под
@@ -1306,11 +1305,10 @@ function MainTabs({
         Отсюда и середина полосы вместо нижней кромки. Полоса safe-area на
         аппаратах с «островом» устроена симметрично: одиннадцать точек сверху,
         сам «остров», одиннадцать точек снизу, — значит её центр это центр
-        «острова», и считать геометрию выреза не нужно. Высота 16 при высоте
-        «острова» около 37 и ширине 125 оставляет запас с каждой стороны: знак
-        должен прятаться целиком, иначе из-под маски выглядывают верхушки букв.
-        При развёрнутом «острове» (музыка, таймер, звонок) маска только больше,
-        и запас растёт.
+        «острова», и считать геометрию выреза не нужно. Габариты и содержимое
+        штампа — в самом `IslandStamp`: прятаться он должен целиком, иначе из-под
+        маски выглядывает край рамки. При развёрнутом «острове» (музыка, таймер,
+        звонок) маска только больше, и запас растёт.
 
         Порог по высоте полосы отсекает всё, кроме аппаратов с «островом», и
         здесь он уже не про красоту: прятать знак не за что. У выреза (iPhone
@@ -1320,7 +1318,7 @@ function MainTabs({
       */}
       {insets.top >= 54 ? (
         <View pointerEvents="none" style={[styles.islandMark, { height: insets.top }]}>
-          <AirChatWordmark height={16} style={styles.islandMarkGlyph} />
+          <IslandStamp />
         </View>
       ) : null}
       {multiProfileEnabled ? (

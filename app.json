@@ -3,7 +3,7 @@
     "name": "airchat",
     "slug": "airchat",
     "owner": "dobropalm",
-    "version": "4.32.552",
+    "version": "4.32.553",
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders"
