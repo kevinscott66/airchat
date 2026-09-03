@@ -25,7 +25,14 @@ jest.mock('react-native', () => ({
   },
 }));
 
-type FakePlayer = { loop: boolean; playing: boolean; removed: boolean };
+type FakePlayer = {
+  loop: boolean;
+  playing: boolean;
+  removed: boolean;
+  play(): void;
+  pause(): void;
+  remove(): void;
+};
 const mockPlayers: FakePlayer[] = [];
 const mockAudioModes: Array<Record<string, unknown>> = [];
 let mockCreateThrows = false;
@@ -37,10 +44,10 @@ jest.mock('expo-audio', () => ({
       loop: false,
       playing: false,
       removed: false,
-      play() { this.playing = true; },
-      pause() { this.playing = false; },
-      remove() { this.removed = true; this.playing = false; },
-    } as unknown as FakePlayer;
+      play() { p.playing = true; },
+      pause() { p.playing = false; },
+      remove() { p.removed = true; p.playing = false; },
+    };
     mockPlayers.push(p);
     return p;
   }),

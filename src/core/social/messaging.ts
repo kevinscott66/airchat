@@ -1228,6 +1228,104 @@ export class MessagingService {
     return uploadMediaToCid(uri, { targetDid });
   }
 
+  /**
+   * Свой ли это ключ — то есть «Сохранённые сообщения» (v4.32.560).
+   *
+   * Сравниваем не строки, а did: один и тот же ключ приходит на вход в разной
+   * записи (с дополняющими знаками и без, из QR и из базы), и сравнение строк
+   * отвечало бы «разные» на один и тот же ключ. Ровно так же отличает себя от
+   * собеседника весь остальной модуль (`peerDid === myDid`).
+   */
+  private isMyOwnKey(contactPubB64: string): boolean {
+    const peerDid = didFromPubB64(contactPubB64);
+    return !!peerDid && peerDid === publicKeyToDidKey(this.pair.publicKey);
+  }
+
+  /**
+   * Записать сообщение в свою же переписку — без сети (v4.32.560).
+   *
+   * «Заметки для себя» — переписка без собеседника: договариваться о ключе не
+   * с кем, отправлять некому. Экран переписки знал это про текст, голос и GIF
+   * и сохранял их сам, а всё остальное — снимок, документ, точку на карте,
+   * визитку, опрос, пересылку — отдавал обычной отправке. Та искала общий ключ
+   * с «собеседником», не находила (своей строки в контактах нет с v4.32.31) и
+   * показывала «Нет защищённого канала с этим контактом. Добавьте его заново
+   * по QR-коду». Совет неисполним: себя по QR не добавить.
+   *
+   * Всплывало это и просто при входе в «Избранное»: открытие переписки шлёт
+   * собеседнику свой профиль и решение о времени последнего входа, и оба
+   * конверта упирались в тот же отказ.
+   *
+   * Поэтому своя переписка обрабатывается здесь целиком: строка ложится в базу
+   * доставленной, вложения проходят обычную загрузку (иначе их нечем будет
+   * показать — локальный путь в списке вложений не рисуется), а конверт,
+   * шифрование и транспорт не участвуют вовсе.
+   */
+  private async saveToSelfChat(
+    contactPubB64: string,
+    text: string,
+    mediaUris?: string[],
+    replyToId?: string,
+    replyToPreview?: string
+  ): Promise<string | null> {
+    // Служебный конверт сам себе не нужен: профиль, отметка о прочтении,
+    // реакция, закрепление — всё это рассказывают собеседнику, а он тут я.
+    // Живую геолокацию ведёт экран (см. callerOwnsRow в sendMessageWork).
+    if (isControlOnlyText(text) || isLiveLocMessage(text)) {
+      log.debug('dm_self_envelope_skipped');
+      return null;
+    }
+    const ownerPid = await this.ownerProfileId();
+    const myDid = publicKeyToDidKey(this.pair.publicKey);
+    const mediaCids: string[] = [];
+    if (mediaUris?.length) {
+      const DM_MEDIA_CONCURRENCY = 3;
+      const results = await runWithConcurrency(
+        mediaUris,
+        DM_MEDIA_CONCURRENCY,
+        (uri) => this.uploadMediaFromUri(uri, myDid),
+      );
+      for (const r of results) {
+        if (r.ok) mediaCids.push(r.cid);
+      }
+      const verdict = decideMediaSend(tallyMediaUploads(results));
+      if (verdict.kind === 'abort') {
+        log.warn('dm_self_media_all_failed', { total: mediaUris.length });
+        // Исключение, а не null: экран по нему вернёт подпись в поле ввода и
+        // уберёт предварительный пузырь.
+        throw new Error(verdict.text);
+      }
+      if (verdict.warn) {
+        log.warn('dm_self_media_partial', { sent: mediaCids.length, total: mediaUris.length });
+        void ErrorHandler.getInstance().handle({
+          code: 'MEDIA_PARTIAL',
+          message: verdict.warn,
+          severity: ErrorSeverity.WARNING,
+          retryable: false,
+        });
+      }
+    }
+    const ts = Date.now();
+    const messageId = uuidv4();
+    await upsertChatMessage({
+      id: messageId,
+      contactPubB64,
+      // Тот же вид ссылки, что у заметок, сохранённых экраном переписки:
+      // строка никуда не отправлялась, и настоящего CID у неё нет.
+      cid: `local:${ts}`,
+      text,
+      direction: 'out',
+      status: 'delivered',
+      mediaCids: mediaCids.length ? JSON.stringify(mediaCids) : null,
+      createdAt: ts,
+      ownerProfileId: ownerPid,
+      replyToId: replyToId ?? null,
+      replyToPreview: truncateReplyPreview(replyToPreview),
+    });
+    void touchConversation(contactPubB64, ownerPid, previewLabelForText(text).slice(0, 120), 'out', false);
+    return messageId;
+  }
+
   async sendMessage(
     contactPubB64: string,
     text: string,
@@ -1235,6 +1333,12 @@ export class MessagingService {
     replyToId?: string,
     replyToPreview?: string
   ): Promise<string | null> {
+    // v4.32.560: своя переписка не проходит ни одной проверки ниже — себя не
+    // блокируют, себе не считают часовой лимит и с собой не договариваются о
+    // ключе. См. saveToSelfChat.
+    if (this.isMyOwnKey(contactPubB64)) {
+      return this.saveToSelfChat(contactPubB64, text, mediaUris, replyToId, replyToPreview);
+    }
     // v4.32.318: блок-лист поднят с диска — иначе на первых секундах после
     // запуска обе проверки ниже отвечали бы «не заблокирован» кому угодно.
     await rateLimiter.whenReady();
