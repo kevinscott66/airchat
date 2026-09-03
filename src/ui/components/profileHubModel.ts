@@ -63,6 +63,13 @@ export type HubFacts = {
    * не ведёт, честнее не рисовать вовсе.
    */
   canOpenChat: boolean;
+  /**
+   * Карточка открыта из самой переписки (v4.32.574). Профиль собеседника
+   * теперь один — и его же открывает шапка диалога. Оттуда «Сообщение» ведёт
+   * ровно туда, откуда карточку и открыли, а нужен там поиск по этой
+   * переписке; он и занимает освободившееся место в ряду.
+   */
+  inChat: boolean;
 };
 
 export type QuickActionId =
@@ -104,13 +111,19 @@ export function disappearLabel(ms: number | null): string {
 
 export function hubQuickActions(f: HubFacts): Array<HubItem<QuickActionId>> {
   const out: Array<HubItem<QuickActionId>> = [];
-  // Своя карточка ведёт в «Заметки для себя»: это настоящая переписка с самим
-  // собой, и подписать её «Написать сообщение» было бы враньём про адресата.
-  out.push({
-    id: 'message',
-    label: f.isSelf ? 'Заметки' : 'Сообщение',
-    disabled: !f.canOpenChat,
-  });
+  if (f.inChat && !f.isSelf) {
+    // Из переписки первой кнопкой стоит поиск: см. HubFacts.inChat.
+    out.push({ id: 'search', label: 'Поиск', disabled: !f.canOpenChat });
+  } else {
+    // Своя карточка ведёт в «Заметки для себя»: это настоящая переписка с
+    // самим собой, и подписать её «Написать сообщение» было бы враньём про
+    // адресата.
+    out.push({
+      id: 'message',
+      label: f.isSelf ? 'Заметки' : 'Сообщение',
+      disabled: !f.canOpenChat,
+    });
+  }
   if (f.isSelf) {
     // v4.32.572: своё имя, юзернейм, «О себе» и ссылки правятся в одном месте
     // — отдельным разделом, а не карандашами вдоль каждой строки.
@@ -185,8 +198,11 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
  */
 export function hubMore(f: HubFacts): Array<HubItem<MoreId>> {
   const out: Array<HubItem<MoreId>> = [];
-  // У себя поиск остался кнопкой в ряду: там для него хватило места.
-  if (!f.isSelf) out.push({ id: 'search', label: 'Поиск по переписке', disabled: !f.canOpenChat });
+  // У себя — и в карточке, открытой из переписки, — поиск остался кнопкой в
+  // ряду: там для него хватило места, и второй раз он тут не нужен.
+  if (!f.isSelf && !f.inChat) {
+    out.push({ id: 'search', label: 'Поиск по переписке', disabled: !f.canOpenChat });
+  }
   for (const s of hubSettings(f)) out.push(s as HubItem<MoreId>);
   if (!f.isSelf) {
     if (!f.inContacts) out.push({ id: 'add_contact', label: 'Добавить в контакты' });

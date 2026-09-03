@@ -80,9 +80,9 @@ describe('страницы сообщений — только объектом'
       .sort();
     expect(users).toEqual([
       path.join('core', 'social', 'messaging.ts'),
-      path.join('ui', 'components', 'modals', 'chat', 'ChatContactInfoModal.tsx'),
       path.join('ui', 'components', 'modals', 'chat', 'ChatSharedMediaModal.tsx'),
       path.join('ui', 'components', 'modals', 'groups', 'GroupSharedMediaModal.tsx'),
+      path.join('ui', 'components', 'modals', 'profile', 'ProfileChatBlock.tsx'),
       path.join('ui', 'screens', 'ChatScreen.tsx'),
       path.join('ui', 'screens', 'GroupsScreen.tsx'),
     ]);

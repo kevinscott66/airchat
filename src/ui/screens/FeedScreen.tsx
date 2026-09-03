@@ -1077,6 +1077,28 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
   // ─── Full-screen image viewer ─────────────────────────────────────────────
   const { open: openFeedMedia, element: feedMediaViewerElement } = useMediaViewer();
 
+  /**
+   * Карточка автора. Держится отдельным элементом, потому что показывать её
+   * нужно из двух мест: из ленты и из полноэкранного треда комментариев.
+   * Окно поверх другого окна iOS показывает только тогда, когда оно заведено
+   * внутри него: карточка, оставленная снаружи, просто не появлялась —
+   * нажатие на имя в комментарии не делало ничего.
+   */
+  const authorPeek = (
+    <UserProfilePeek
+      visible={peekAuthorDid !== null}
+      onClose={() => { setPeekAuthorDid(null); setPeekAuthorName(null); }}
+      peerDid={peekAuthorDid}
+      fallbackName={peekAuthorName}
+      pair={pair}
+      onOpenChat={
+        onOpenChatWithPeer
+          ? (peer, _name, intent) => onOpenChatWithPeer(peer, intent)
+          : undefined
+      }
+    />
+  );
+
   // v4.32.48: открыть документ поста — пишем base64 из kvStore в cacheDirectory,
   //            затем expo-sharing.shareAsync → пользователь выбирает «Сохранить»/«Открыть в…».
   const openFeedDocument = useCallback(
@@ -2512,13 +2534,41 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
   // новым JSX-элементом на каждый рендер FeedScreenImpl (каждый setCommentText,
   // каждый new message и т.д.), FlatList видит смену header ref и перерисовывает
   // pinned post + separator, вызывая мерцание в длинном треде.
+  /**
+   * Снимки закреплённой публикации — из той же карты, что и лента. Через
+   * `useMemo`, иначе новый пустой массив на каждый рендер перестраивал бы всю
+   * шапку обсуждения.
+   */
+  const pinnedMediaUrls = useMemo(
+    () => (commentPost ? (mediaUrlsMap[commentPost.id] ?? []) : []),
+    [commentPost, mediaUrlsMap],
+  );
+
   const commentsListHeader = useMemo(() => {
     if (!commentPost) return null;
     return (
       <View>
         <View style={cmStyles.pinnedPost}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-            <Ionicons name="person-circle" size={36} color={colors.accent} />
+          {/* v4.32.573: здесь стоял общий значок «человек», и нажать на него
+              было нельзя — в шапке обсуждения автор публикации выглядел
+              безымянным кружком, хотя в ленте у него есть снимок и профиль. */}
+          <AppPressable
+            style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+            onPress={() => {
+              if (commentPost.authorDid !== did) {
+                openPeekAuthor(commentPost.authorDid, commentPost.nameUnreadable ? null : commentPost.authorName);
+              }
+            }}
+            hitSlop={4}
+            accessibilityRole={commentPost.authorDid === did ? undefined : 'button'}
+          >
+            <PersonAvatar
+              did={commentPost.authorDid}
+              name={commentPost.authorDid === did
+                ? t('common.you')
+                : shownName(commentPost.authorName, commentPost.nameUnreadable, t('common.contact'))}
+              size={36}
+            />
             <View style={{ marginLeft: 8, flex: 1, minWidth: 0 }}>
               <Text style={cmStyles.pinnedAuthor} numberOfLines={1}>
                 {commentPost.authorDid === did
@@ -2527,9 +2577,28 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
               </Text>
               <Text style={cmStyles.pinnedTime}>{formatTime(commentPost.timestamp)}</Text>
             </View>
-          </View>
+          </AppPressable>
           {commentPost.text ? (
             <Text style={cmStyles.pinnedBody}>{commentPost.text}</Text>
+          ) : null}
+          {/* v4.32.573: снимков публикации в шапке обсуждения не было вовсе.
+              Открыв комментарии к фотографии, человек видел подпись и пустое
+              место — то есть обсуждение без предмета обсуждения. Ссылки берутся
+              из той же карты, что и в ленте, и открываются тем же просмотром. */}
+          {pinnedMediaUrls.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+              {pinnedMediaUrls.map((url, idx) => (
+                <AppPressable
+                  key={`${commentPost.id}_pin_${idx}`}
+                  onPress={() => openFeedMedia(pinnedMediaUrls, idx)}
+                  hitSlop={4}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel={t('feed.a11yImageN', { n: idx + 1, total: pinnedMediaUrls.length })}
+                >
+                  <Image source={{ uri: url }} style={cmStyles.pinnedThumb} />
+                </AppPressable>
+              ))}
+            </ScrollView>
           ) : null}
           {commentPost.reactions && Object.keys(commentPost.reactions).length > 0 ? (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -2551,7 +2620,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
         </View>
       </View>
     );
-  }, [commentPost, did, colors.accent, cmStyles, t]);
+  }, [commentPost, did, cmStyles, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor]);
 
   useEffect(() => {
     if (bookmarkFilter) {
@@ -3618,7 +3687,26 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                       accessible
                       accessibilityLabel={t('feed.a11yCommentFrom', { name: isOwn ? t('common.you') : shownName(c.authorName, c.nameUnreadable, t('common.anonymous')), text: feedCommentIsUnreadable(c) ? UNREADABLE_COMMENT_TEXT : c.text })}
                     >
-                      <Ionicons name="person-circle" size={30} color={isOwn ? colors.accent : colors.textSecondary} style={{ marginRight: 8, marginTop: 2 }} />
+                      {/* v4.32.573: в комментарии стоял серый значок
+                          «человек» — один и тот же у всех. Автор публикации
+                          показывался снимком, автор ответа под ней — нет, и
+                          тред выглядел разговором безликих. Кружок здесь тот
+                          же, что в ленте и в списке чатов: он читает тот же
+                          реестр снимков, поэтому «есть фото» и «видно фото»
+                          не могут разойтись. Нажатие открывает профиль — то
+                          же, что и нажатие на имя рядом. */}
+                      <AppPressable
+                        onPress={() => { if (!isOwn) openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName); }}
+                        hitSlop={4}
+                        accessibilityRole={isOwn ? undefined : 'button'}
+                      >
+                        <PersonAvatar
+                          did={c.authorDid}
+                          name={isOwn ? t('common.you') : shownName(c.authorName, c.nameUnreadable, t('common.anonymous'))}
+                          size={30}
+                          style={{ marginRight: 8, marginTop: 2 }}
+                        />
+                      </AppPressable>
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           {/* v4.32.50: тап по имени автора комментария → профиль */}
@@ -3739,6 +3827,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                 </AppPressable>
               </View>
             </KeyboardAvoidingView>
+            {/* Карточка автора комментария — внутри треда, иначе iOS её не
+                покажет: она открывалась бы поверх уже открытого окна. */}
+            {authorPeek}
           </SafeAreaView>
         </GestureHandlerRootView>
       </Modal>
@@ -4101,19 +4192,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
         </GestureHandlerRootView>
       </Modal>
       {feedMediaViewerElement}
-      {/* v4.32.50: профиль автора поста/комментария при тапе по имени/аватару */}
-      <UserProfilePeek
-        visible={peekAuthorDid !== null}
-        onClose={() => { setPeekAuthorDid(null); setPeekAuthorName(null); }}
-        peerDid={peekAuthorDid}
-        fallbackName={peekAuthorName}
-        pair={pair}
-        onOpenChat={
-          onOpenChatWithPeer
-            ? (peer, _name, intent) => onOpenChatWithPeer(peer, intent)
-            : undefined
-        }
-      />
+      {/* v4.32.50: профиль автора поста/комментария при тапе по имени/аватару.
+          v4.32.573: пока открыт полноэкранный тред, карточка живёт внутри
+          него — см. `authorPeek`. Здесь она нужна для самой ленты. */}
+      {commentPostId ? null : authorPeek}
       </KeyboardHost>
     </SafeScreen>
   );
@@ -4138,6 +4220,7 @@ function makeCmStyles(c: AppColors) { return StyleSheet.create({
   pinnedAuthor: { color: c.text, fontWeight: '600', fontSize: 14 },
   pinnedTime: { color: c.textMuted, fontSize: font.xs, marginTop: 1 },
   pinnedBody: { color: c.text, fontSize: 15, lineHeight: 21 },
+  pinnedThumb: { width: 140, height: 140, borderRadius: radius.md, marginRight: 8 },
   pinnedReactionPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.surfaceHigh, borderRadius: radius.lg, paddingHorizontal: 8, paddingVertical: 3 },
   pinnedReactionCount: { fontSize: 12, color: c.textSecondary, fontWeight: '500' },
   separatorRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 10, paddingHorizontal: 16, gap: 10 },

@@ -99,8 +99,8 @@ const CHAT = fs.readFileSync(
 const GROUPS = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'GroupsScreen.tsx'), 'utf8');
 const NOTE = fs.readFileSync(
-  path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'chat',
-    'ChatContactInfoModal.tsx'), 'utf8');
+  path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'profile',
+    'ProfileChatBlock.tsx'), 'utf8');
 
 beforeEach(() => {
   mockRows.clear();

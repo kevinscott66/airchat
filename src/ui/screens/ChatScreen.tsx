@@ -49,7 +49,7 @@ import { ChatReactionsPickerModal } from '../components/modals/chat/ChatReaction
 import { ChatQuickReactModal } from '../components/modals/chat/ChatQuickReactModal';
 import { DmPollCreatorModal } from '../components/modals/chat/ChatPollCreatorModal';
 import { SharedMediaModal } from '../components/modals/chat/ChatSharedMediaModal';
-import { ContactInfoModal } from '../components/modals/chat/ChatContactInfoModal';
+import { UserProfilePeek } from '../components/UserProfilePeek';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -4199,19 +4199,36 @@ function ChatThreadView({
         onDelete={deleteScheduledFromModal}
       />
 
+      {/* v4.32.574: шапка диалога открывает тот же самый профиль, что и
+          лента, поиск и список чатов. Отдельной «информации о контакте» с
+          собственным лицом, именем и вёрсткой больше нет: два профиля одного
+          человека расходились с каждой правкой. Всё, что было только в ней —
+          ключ безопасности, заметка, «первое сообщение», выгрузка — переехало
+          в карточку блоком про переписку. */}
       {peerB64 && !isSavedMessages ? (
-        <ContactInfoModal
+        <UserProfilePeek
           visible={contactInfoVisible}
-          peerB64={peerB64}
-          myPubB64={myPubB64}
-          displayName={localDisplayName}
+          peerPubB64={peerB64}
+          fallbackName={localDisplayName}
+          pair={pair}
+          inChat
           onClose={() => setContactInfoVisible(false)}
-          onRename={(n) => setLocalDisplayName(n)}
-          activeProfileId={activeProfileId}
-          gateway={gateway}
-          isMuted={isMuted}
-          mutedUntil={mutedUntil}
+          onRenamed={(n) => setLocalDisplayName(n)}
           onMuteChanged={(muted, until) => { setIsMuted(muted); setMutedUntil(until); }}
+          onOpenChat={(_pub, _name, intent) => {
+            // Переписка уже открыта — это она и есть. Карточке остаётся
+            // попросить поднять поверх неё поиск или избранное.
+            if (intent === 'search') { setSearchVisible(true); return; }
+            if (intent !== 'starred') return;
+            void listStarredMessages(activeProfileId)
+              .then((entries) => {
+                setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
+                setStarredVisible(true);
+              })
+              .catch((e: unknown) => {
+                log.warn('ui_chat_starred_peek_failed', { err: rawErrorText(e) });
+              });
+          }}
         />
       ) : null}
 

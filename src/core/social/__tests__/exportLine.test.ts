@@ -27,7 +27,7 @@ const LOCAL = path.join(__dirname, '..', '..', 'storage', 'local.ts');
 const CHAT = path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'ChatScreen.tsx');
 const GROUPS = path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'GroupsScreen.tsx');
 const CONTACT = path.join(
-  __dirname, '..', '..', '..', 'ui', 'components', 'modals', 'chat', 'ChatContactInfoModal.tsx'
+  __dirname, '..', '..', '..', 'ui', 'components', 'modals', 'profile', 'ProfileChatBlock.tsx'
 );
 const SHARED = path.join(
   __dirname, '..', '..', '..', 'ui', 'components', 'modals', 'chat', 'ChatSharedMediaModal.tsx'

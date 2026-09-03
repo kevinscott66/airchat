@@ -51,6 +51,18 @@
 // со вкладки «Профиль». Второго редактора рядом нет: разошлись бы в первый же
 // день.
 //
+// v4.32.574: профилей у собеседника было два. Этот — и шторка из шапки
+// диалога, со своим лицом, своим именем и своей вёрсткой. Остался этот:
+// шапка диалога открывает теперь его же. Всё, что было только в шторке —
+// ключ безопасности, «первое сообщение», заметка, «уведомить когда онлайн»,
+// выгрузка переписки, общие группы — переехало в блок modals/profile/
+// ProfileChatBlock и рисуется у чужой карточки под полосой плашек. Пропы
+// прибавили три НЕОБЯЗАТЕЛЬНЫХ: inChat (карточку открыли из самой переписки —
+// тогда первая кнопка ряда не «Сообщение» в ту же переписку, а поиск по ней),
+// onRenamed и onMuteChanged — экрану под карточкой надо узнать, что имя или
+// звук переписки поменяли здесь. Старые вызывающие места их не передают и
+// работают как раньше.
+//
 // Про два пункта сказано честно и здесь, и на экране: «Пожаловаться» никуда
 // не отправляется — модерации в сети без сервера нет, жалоба остаётся местной
 // записью и блокировкой (core/social/contactReport); «Запрет копирования и
@@ -62,6 +74,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import { Buffer } from 'buffer';
 
 import { AppModal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
@@ -124,6 +137,7 @@ import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
 import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
 import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
+import { ProfileChatBlock } from './modals/profile/ProfileChatBlock';
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
 import { ProfilePostsModal } from './modals/profile/ProfilePostsModal';
 import { ProfileEditModal } from './modals/profile/ProfileEditModal';
@@ -229,6 +243,17 @@ export interface UserProfilePeekProps {
     displayName: string,
     intent?: 'chat' | 'search' | 'starred'
   ) => void;
+  /**
+   * Карточка открыта из самой переписки (v4.32.574): её открывает шапка
+   * диалога, и второго профиля собеседника больше нет. Меняет верхний ряд
+   * (вместо «Сообщение» — поиск по этой переписке) и добавляет блок про саму
+   * переписку: ключ безопасности, заметку, выгрузку.
+   */
+  inChat?: boolean;
+  /** Имя переименовали здесь — экран под карточкой должен узнать. */
+  onRenamed?: (name: string) => void;
+  /** Звук переписки переключили здесь — то же самое. */
+  onMuteChanged?: (muted: boolean, untilMs: number | null) => void;
 }
 
 export function UserProfilePeek({
@@ -239,6 +264,9 @@ export function UserProfilePeek({
   fallbackName,
   pair,
   onOpenChat,
+  inChat,
+  onRenamed,
+  onMuteChanged,
 }: UserProfilePeekProps): React.ReactElement | null {
   const colors = useColors();
   const { scheme } = useTheme();
@@ -401,6 +429,12 @@ export function UserProfilePeek({
   // Имя для действий: у безымянного это заглушка из DID, а не слово «Контакт»
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
   const displayName = identity.contactName;
+  // Свой ключ — из pair: из него и ключа собеседника собирается код, который
+  // сверяют голосом. Без pair кода нет, и блок его не покажет.
+  const myPubB64 = useMemo(
+    () => (pair ? Buffer.from(pair.publicKey).toString('base64') : null),
+    [pair]
+  );
 
   const facts: HubFacts = useMemo(() => ({
     isSelf,
@@ -413,7 +447,8 @@ export function UserProfilePeek({
     disappearMs,
     reported,
     canOpenChat: !!onOpenChat,
-  }), [isSelf, identity.inContacts, contact, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat]);
+    inChat: !!inChat,
+  }), [isSelf, identity.inContacts, contact, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
@@ -481,11 +516,12 @@ export function UserProfilePeek({
       await renameContact(resolved.pubB64, next);
       setContact((prev) => (prev ? { ...prev, displayName: next } : prev));
       setRenaming(false);
+      onRenamed?.(next);
       showSuccess('Имя обновлено');
     } catch (e) {
       showError(userErrorText(e, 'Не удалось переименовать'));
     }
-  }, [resolved, renameDraft]);
+  }, [resolved, renameDraft, onRenamed]);
 
   const handleDeleteContact = useCallback(() => {
     if (!resolved) return;
@@ -533,6 +569,7 @@ export function UserProfilePeek({
           await setConversationMutedUntil(pub, activeProfileId, untilMs);
           await muteSet('chat', pub, untilMs !== null ? { untilMs } : undefined);
           setMuted(true);
+          onMuteChanged?.(true, untilMs);
           showSuccess(untilMs === null ? 'Уведомления выключены' : 'Уведомления временно выключены');
         } catch (e) {
           showError(userErrorText(e, 'Не удалось выключить уведомления'));
@@ -545,6 +582,7 @@ export function UserProfilePeek({
           await setConversationMuted(pub, activeProfileId, false);
           await muteUnset('chat', pub);
           setMuted(false);
+          onMuteChanged?.(false, null);
           showSuccess('Уведомления включены');
         } catch (e) {
           showError(userErrorText(e, 'Не удалось включить уведомления'));
@@ -552,13 +590,17 @@ export function UserProfilePeek({
       })();
       return;
     }
+    // v4.32.574: сроки те же, что были в шторке из шапки диалога, — она
+    // сюда и переехала, и терять по дороге «на день» и «на неделю» незачем.
     Alert.alert('Выключить уведомления', 'На сколько выключить звук по этой переписке?', [
       { text: 'На час', onPress: () => apply(Date.now() + 3_600_000) },
       { text: 'На 8 часов', onPress: () => apply(Date.now() + 8 * 3_600_000) },
+      { text: 'На день', onPress: () => apply(Date.now() + 24 * 3_600_000) },
+      { text: 'На неделю', onPress: () => apply(Date.now() + 7 * 24 * 3_600_000) },
       { text: 'Навсегда', onPress: () => apply(null) },
       { text: 'Отмена', style: 'cancel' },
     ]);
-  }, [resolved, muted, activeProfileId]);
+  }, [resolved, muted, activeProfileId, onMuteChanged]);
 
   const onQuickAction = useCallback((id: QuickActionId) => {
     if (!resolved) return;
@@ -1030,6 +1072,20 @@ export function UserProfilePeek({
                   </AppPressable>
                 ))}
               </ScrollView>
+
+              {/* Всё, что относится к переписке именно с этим человеком:
+                  счёт, ключ безопасности, заметка, выгрузка. Раньше это был
+                  отдельный второй профиль из шапки диалога — теперь часть
+                  этого же. У себя блока нет: сверять ключ не с кем. */}
+              {!isSelf ? (
+                <ProfileChatBlock
+                  peerB64={resolved.pubB64}
+                  myPubB64={myPubB64}
+                  displayName={displayName}
+                  activeProfileId={activeProfileId}
+                  onOpenMedia={() => setMediaTab('media')}
+                />
+              ) : null}
               </View>
           </ScrollView>
         </GlassSurface>

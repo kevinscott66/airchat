@@ -22,7 +22,7 @@ import {
 const LOCAL = () => fs.readFileSync(path.join(__dirname, '..', '..', 'storage', 'local.ts'), 'utf8');
 const CHAT_MEDIA = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'chat', 'ChatSharedMediaModal.tsx'), 'utf8');
 const GROUP_MEDIA = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'groups', 'GroupSharedMediaModal.tsx'), 'utf8');
-const CONTACT_INFO = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'chat', 'ChatContactInfoModal.tsx'), 'utf8');
+const CONTACT_INFO = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'profile', 'ProfileChatBlock.tsx'), 'utf8');
 
 /** Тело одной функции: утверждение не должно ловить совпадение из соседней. */
 function slice(src: string, from: string, to: string): string {
@@ -138,10 +138,16 @@ describe('окна галереи говорят про непрочитанны
     expect(src.indexOf('{mediaNotice}')).toBeLessThan(src.indexOf('data={mediaItems}'));
   });
 
-  it('карточка контакта считает только показываемое и объясняет разницу', () => {
+  // v4.32.574: профиль собеседника стал один, и своей галереи у него больше
+  // нет — «Медиа» открывает то же окно переписки, что и всё остальное, а оно
+  // про пропущенные уже говорит (проверка выше). От карточки требуется, чтобы
+  // число над этим окном совпадало с тем, что в нём покажут, и чтобы второго
+  // списка она не заводила: разошлись бы именно на непрочитанных.
+  it('карточка профиля считает только показываемое и открывает общую галерею', () => {
     const src = CONTACT_INFO();
     expect(src).toContain('setMediaCount(readableMediaCount(m));');
-    expect(src).toContain('{mediaSkippedNotice(mediaGallery)}');
     expect(src).not.toContain('setMediaCount(m.length);');
+    expect(src).toContain('onPress={onOpenMedia}');
+    expect(src).not.toContain('FlatList');
   });
 });

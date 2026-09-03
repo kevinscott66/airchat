@@ -162,7 +162,6 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/screens/FeedScreen.tsx': 72,
   'ui/screens/GroupsScreen.tsx': 60,
   'ui/screens/ChatScreen.tsx': 31,
-  'ui/components/modals/chat/ChatContactInfoModal.tsx': 37,
   'ui/screens/ChatListScreen.tsx': 29,
   'ui/screens/ContactsScreen.tsx': 20,
   'ui/components/StoriesRow.tsx': 14,

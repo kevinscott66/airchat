@@ -27,6 +27,7 @@ const base: HubFacts = {
   disappearMs: null,
   reported: false,
   canOpenChat: true,
+  inChat: false,
 };
 
 const ids = <T extends string>(items: ReadonlyArray<{ id: T }>): T[] => items.map((i) => i.id);
@@ -49,6 +50,25 @@ describe('быстрые действия', () => {
       expect(row[row.length - 1]).toBe('more');
       expect(row.length).toBeLessThanOrEqual(5);
     }
+  });
+
+  // v4.32.574: профиль собеседника стал один, и шапка диалога открывает его
+  // же. Кнопка «Сообщение» там вела бы в ту переписку, из которой карточку и
+  // открыли, — вместо неё поиск по этой переписке, и второй раз в «Ещё» он
+  // уже не повторяется.
+  it('из переписки первая кнопка — поиск, а не «Сообщение» в ту же переписку', () => {
+    expect(ids(hubQuickActions({ ...base, inChat: true })))
+      .toEqual(['search', 'call', 'video', 'mute', 'more']);
+  });
+
+  it('поиск не дублируется: он либо кнопкой, либо в «Ещё»', () => {
+    expect(ids(hubMore({ ...base, inChat: true }))).not.toContain('search');
+    expect(ids(hubMore(base))).toContain('search');
+  });
+
+  it('у своего профиля inChat ничего не меняет: «Заметки» и есть та переписка', () => {
+    expect(ids(hubQuickActions({ ...base, isSelf: true, inChat: true })))
+      .toEqual(['message', 'edit', 'search', 'more']);
   });
 
   it('«Изменить» — только у владельца аккаунта: чужое имя правят не здесь', () => {
