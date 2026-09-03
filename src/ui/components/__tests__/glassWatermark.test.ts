@@ -34,8 +34,8 @@ const num = (name: string): number =>
 /** Габариты «острова» в точках (iPhone 14 Pro и новее). Знак обязан войти внутрь. */
 const ISLAND_W = 125;
 const ISLAND_H = 37;
-/** Ширина знака = высота × ASPECT; берётся из самого знака, а не переписывается. */
-const ASPECT = Number(/const ASPECT = ([\d.]+);/.exec(read('ui', 'components', 'AirChatWordmark.tsx'))?.[1]);
+/** Ширина подписи = высота × ASPECT; берётся из неё самой, а не переписывается. */
+const ASPECT = Number(/const ASPECT = ([\d.]+);/.exec(read('ui', 'components', 'AirChatSignature.tsx'))?.[1]);
 
 describe('подкрас стекла в GlassSurface', () => {
   it('рисуется раньше BlurView — то есть попадает ему в подложку', () => {
@@ -110,18 +110,21 @@ describe('штамп под «островом»', () => {
     expect(source).not.toMatch(/d="M/);
   });
 
-  it('обводка той же гаммой, что и буквы: accent → primary', () => {
+  it('перелив из цветов темы, и одинаковый у кольца и у букв', () => {
     const source = STAMP();
-    expect(source).toContain('stopColor={colors.accent}');
-    expect(source).toContain('stopColor={colors.primary}');
+    expect(source).toContain('i % 2 === 0 ? colors.accent : colors.primary');
+    // Больше одного прохода пары — иначе это обычный градиент, гаснущий к краю.
+    expect(num('SHEEN_CYCLES')).toBeGreaterThan(1);
+    // Тот же набор идёт в подпись: кольцо и росчерк обязаны играть заодно.
+    expect(source).toContain('stops={sheen}');
     // Свой id на экземпляр — общий отобрал бы заливку у отрисованного позже.
     expect(source).toContain('useId()');
   });
 
-  it('текст помещается внутрь овала и не заходит в скругления', () => {
+  it('подпись помещается внутрь овала и не заходит в скругления', () => {
     expect(ASPECT).toBeGreaterThan(0);
-    const markW = num('WORDMARK') * ASPECT;
-    expect(num('WORDMARK')).toBeLessThan(num('CAPSULE_H'));
+    const markW = num('SIGNATURE') * ASPECT;
+    expect(num('SIGNATURE')).toBeLessThan(num('CAPSULE_H'));
     // Скругления съедают по CAPSULE_H / 2 с каждой стороны — прямой участок это
     // всё, что остаётся; в него знак и должен войти.
     expect(markW).toBeLessThan(num('CAPSULE_W') - num('CAPSULE_H'));

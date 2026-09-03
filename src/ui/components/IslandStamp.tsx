@@ -1,11 +1,11 @@
 import React, { useId } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
-import { AirChatWordmark } from './AirChatWordmark';
+import { AirChatSignature } from './AirChatSignature';
 import { useColors } from '../ThemeContext';
 
 /**
- * Штамп под «островом» (v4.32.554).
+ * Штамп под «островом» (v4.32.555).
  *
  * Видно его только на снимке экрана. «Остров» — чёрная маска, которую система
  * рисует поверх окна и в снимок не отдаёт: на устройстве штамп закрыт ею
@@ -14,12 +14,21 @@ import { useColors } from '../ThemeContext';
  * Форма — один овал по контуру самой маски. Ни заливки, ни хвоста: заливка
  * читалась плашкой и спорила с буквами, а свешенный хвост торчал бы из-под
  * маски, то есть был бы виден в работе, — а этого штамп делать не должен.
- * Остаётся обводка и слово внутри неё.
+ * Остаётся обводка и подпись внутри неё.
  *
- * Цвет — тот же градиент accent → primary, которым набрано само слово: обводка
- * и буквы идут одной гаммой и следом за темой, а не живут отдельными
- * шестнадцатеричными. Обводка светлее букв (стёкла у неё за спиной нет, и в
- * полную силу она била бы по глазам на снимке).
+ * Название набрано рукописным росчерком (AirChatSignature), а не гротеском, как
+ * везде в интерфейсе: штамп попадает только в кадр, и подпись читается там
+ * автографом на снимке, а не надписью, случайно уехавшей под часы.
+ *
+ * Цвет — перелив по двум цветам темы: accent → primary → accent → primary по
+ * диагонали. Две брендовые краски, разложенные по длине дважды, дают отблеск —
+ * знак играет по всей капсуле, а не гаснет к правому краю, как при простой
+ * паре. Тот же набор идёт и в буквы, поэтому кольцо и слово переливаются
+ * заодно. Своих шестнадцатеричных здесь нет: перелив следует за темой и за
+ * акцентом, выбранным в настройках. Две эти краски — всё, что в палитре относится
+ * к бренду: остальные токены — семантика (success, error, star), и тянуть их
+ * в украшение значило бы сломать их роль. Обводка чуть прозрачнее подписи —
+ * подпись впереди, кольцо за ней.
  *
  * Числа здесь, а не в теме: они не про оформление, а про габариты чужой маски.
  * «Остров» около 125×37 точек (iPhone 14 Pro и новее), капсула взята с запасом
@@ -29,10 +38,15 @@ import { useColors } from '../ThemeContext';
 const CAPSULE_W = 115;
 const CAPSULE_H = 31;
 const STROKE = 1.5;
-/** Высота букв внутри овала. */
-const WORDMARK = 13;
+/** Высота росчерка внутри овала. */
+const SIGNATURE = 20;
 /** Прозрачность обводки: слово впереди, овал за ним. */
 const STROKE_ALPHA = 0.7;
+/**
+ * Сколько раз пара accent → primary укладывается по длине. Один проход — это
+ * обычный градиент, он темнеет к концу; два дают отблеск посередине.
+ */
+const SHEEN_CYCLES = 2;
 
 /**
  * Овал одним путём: два полукруга и две прямые между ними.
@@ -62,13 +76,26 @@ export function IslandStamp(): React.ReactElement {
   // Свой идентификатор градиента на экземпляр: общий отобрал бы заливку
   // у того знака, что отрисован позже.
   const gradientId = `island-stamp-${useId()}`;
+  const sheen = React.useMemo(
+    () =>
+      Array.from({ length: SHEEN_CYCLES * 2 }, (_, i) =>
+        i % 2 === 0 ? colors.accent : colors.primary,
+      ),
+    [colors.accent, colors.primary],
+  );
   return (
     <View pointerEvents="none" style={styles.stamp}>
       <Svg width={CAPSULE_W} height={CAPSULE_H} style={StyleSheet.absoluteFill}>
         <Defs>
           <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colors.accent} stopOpacity={STROKE_ALPHA} />
-            <Stop offset="1" stopColor={colors.primary} stopOpacity={STROKE_ALPHA} />
+            {sheen.map((color, i, all) => (
+              <Stop
+                key={`${i}-${color}`}
+                offset={i / (all.length - 1)}
+                stopColor={color}
+                stopOpacity={STROKE_ALPHA}
+              />
+            ))}
           </LinearGradient>
         </Defs>
         <Path
@@ -80,7 +107,7 @@ export function IslandStamp(): React.ReactElement {
         />
       </Svg>
       <View style={styles.body}>
-        <AirChatWordmark height={WORDMARK} />
+        <AirChatSignature height={SIGNATURE} stops={sheen} />
       </View>
     </View>
   );
