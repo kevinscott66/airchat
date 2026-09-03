@@ -327,3 +327,69 @@ test('запись о непринятом звонке живёт не доль
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(expired, null);
 });
+
+/**
+ * CORS обычных HTTP-маршрутов (v4.32.563).
+ *
+ * У socket.io свои заголовки, и они не распространяются на `/webpush-key` и
+ * `/register-token`. Веб-версия живёт на другом домене: без этих заголовков
+ * браузер отбрасывает ответ молча — на сервере при этом всё выглядит
+ * исправным, запрос дошёл и получил 200.
+ */
+test('веб-версии с другого домена отвечают с заголовками CORS', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`, {
+    headers: { origin: 'https://air.example.org' },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+});
+
+test('предполётный запрос браузера получает ответ, а не 404', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+
+  const res = await fetch(`http://127.0.0.1:${port}/register-token`, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'https://air.example.org',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type',
+    },
+  });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  assert.match(res.headers.get('access-control-allow-methods'), /POST/);
+  assert.match(res.headers.get('access-control-allow-headers'), /content-type/);
+});
+
+test('CORS_ORIGIN сужает список до одного домена', async (t) => {
+  const prev = process.env.CORS_ORIGIN;
+  process.env.CORS_ORIGIN = 'https://air.example.org';
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  t.after(async () => {
+    await server.close();
+    if (prev === undefined) delete process.env.CORS_ORIGIN;
+    else process.env.CORS_ORIGIN = prev;
+  });
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`);
+  assert.equal(res.headers.get('access-control-allow-origin'), 'https://air.example.org');
+});
+
+test('404 тоже отвечает с CORS — иначе ошибка не доходит до страницы', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+
+  const res = await fetch(`http://127.0.0.1:${port}/нет-такого`, {
+    headers: { origin: 'https://air.example.org' },
+  });
+  assert.equal(res.status, 404);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+});

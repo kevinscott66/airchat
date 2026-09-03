@@ -114,7 +114,35 @@ function createSignalingServer(options = {}) {
   const registrationTimeoutMs = options.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS;
   const push = options.push
     ?? createPushRoutes({ env: options.env, log: options.log ?? logEvent });
+  /**
+   * Заголовки CORS для обычных HTTP-маршрутов (v4.32.563).
+   *
+   * У socket.io своя настройка (ниже), и до этой версии только она и была:
+   * `/webpush-key` и `/register-token` отвечали без единого
+   * Access-Control-заголовка. Из приложения на телефоне это незаметно — там
+   * нет источника и нет проверки. А веб-версия живёт на другом домене, и
+   * браузер молча отбрасывал ответ: подписаться на push со страницы было
+   * нельзя вообще, притом без ошибки на сервере.
+   *
+   * Политика та же, что у сокета, — CORS_ORIGIN или «любой»: ключ здесь
+   * открытый по назначению, а регистрация токена и так подписана.
+   */
+  const corsOrigin = process.env.CORS_ORIGIN || '*';
+  const corsHeaders = {
+    'access-control-allow-origin': corsOrigin,
+    'access-control-allow-headers': 'content-type',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-max-age': '86400',
+  };
   const httpServer = http.createServer((request, response) => {
+    for (const [k, v] of Object.entries(corsHeaders)) response.setHeader(k, v);
+    // Предполётный запрос браузер шлёт перед POST с JSON. Отвечать на него
+    // должен сам сервер: до маршрутов он не доходит.
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204);
+      response.end();
+      return;
+    }
     if (push.handle(request, response)) return;
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
