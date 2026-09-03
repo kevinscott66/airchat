@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { randomBytes } = require('crypto');
+const { createHmac, randomBytes } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const ENTITY_KINDS = new Set([
@@ -13,6 +13,22 @@ const ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 const DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const MAX_CIPHERTEXT_BYTES = 512 * 1024;
 const DEFAULT_MAX_ACTIVE_DEVICES = 8;
+/**
+ * Подключение нового устройства — самая громкая операция в аккаунте: после неё
+ * у чужого телефона есть вся переписка. Подписывается она сид-ключом, то есть
+ * сид-фраза и есть пропуск, и это правильно — иначе потерянный телефон означал
+ * бы потерянный аккаунт. Но до v4.32.557 частота подключений не ограничивалась
+ * ничем, кроме потолка активных устройств: утёкшая фраза позволяла заводить
+ * устройства пачкой, отзывать и заводить снова, и всё это молча.
+ *
+ * Окно тормозит перебор и, что важнее, оставляет след: каждое подключение
+ * теперь ложится в sync_device_enrollments, и остальные устройства видят его
+ * в списке. Три штуки в час — это заметно больше, чем нужно человеку (даже
+ * переезд на новый телефон — одно подключение), и заметно меньше, чем нужно
+ * тому, кто разбирает чужой аккаунт.
+ */
+const DEFAULT_MAX_ENROLLMENTS_PER_WINDOW = 3;
+const DEFAULT_ENROLLMENT_WINDOW_MS = 60 * 60 * 1000;
 const DEFAULT_DEVICE_IDLE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const DEFAULT_SYNC_GC_MAX_ROWS = 5000;
 
@@ -170,8 +186,22 @@ class SyncDatabase {
       -- строке на всё приложение, а не в локальной базе каждого телефона.
       -- Обратной связи с личностью запись не даёт: рядом с именем лежит
       -- account_id, который сервер и так знает, и ничего сверх того.
+      --
+      -- v4.32.557: имя больше не лежит здесь как есть. Раньше строка читалась
+      -- глазами — @founder рядом с account_id, — и всякий, кому досталась
+      -- копия базы (бэкап, снимок диска, любопытный хостер), получал готовый
+      -- список всех имён приложения и того, какой аккаунт за каким стоит.
+      -- Остальное содержимое хранилища зашифровано на устройствах, и одна эта
+      -- таблица сводила усилия на нет.
+      --
+      -- Вместо имени лежит HMAC от него на секрете сервера. Серверу этого
+      -- хватает: он не показывает имена, он только сверяет — занято или нет,
+      -- а сверка точного совпадения через постоянный хеш работает так же.
+      -- Честно о границах: секрет знает сервер, и захват работающего сервера
+      -- позволяет перебрать имена по словарю — пространство имён маленькое.
+      -- Защита здесь ровно от утёкшей базы, не от захваченного сервера.
       CREATE TABLE IF NOT EXISTS sync_usernames (
-        username TEXT PRIMARY KEY NOT NULL,
+        username_key TEXT PRIMARY KEY NOT NULL,
         account_id TEXT NOT NULL,
         profile_id INTEGER NOT NULL,
         claimed_at INTEGER NOT NULL,
@@ -179,7 +209,36 @@ class SyncDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
         ON sync_usernames (account_id, profile_id);
+
+      -- v4.32.557: журнал подключений устройств. Нужен для двух вещей сразу.
+      -- Во-первых, по нему считается окно частоты: без него подключения
+      -- ограничивал только потолок активных устройств, а отзыв устройства
+      -- освобождал место мгновенно. Во-вторых и в главных — это единственный
+      -- способ для владельца узнать, что его сид-фразой воспользовались:
+      -- строка остаётся даже после того, как устройство отозвали или удалили,
+      -- поэтому «зашли и убрали за собой» не работает.
+      --
+      -- Ключей и содержимого здесь нет: только когда, откуда и чем.
+      CREATE TABLE IF NOT EXISTS sync_device_enrollments (
+        account_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        enrolled_at INTEGER NOT NULL,
+        platform TEXT,
+        device_model TEXT,
+        app_version TEXT,
+        country_code TEXT,
+        city TEXT,
+        PRIMARY KEY (account_id, device_id, enrolled_at),
+        -- Отзыв устройства журнал не трогает — в этом и смысл. А вот удаление
+        -- всего аккаунта уносит и его: следы нужны владельцу, и когда владельца
+        -- больше нет, хранить их не за чем и не для кого.
+        FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_device_enrollments_recent
+        ON sync_device_enrollments (account_id, enrolled_at DESC);
     `);
+    this.ensureUsernamePepper();
+    this.ensureBlindedUsernames();
     this.ensureDeviceMetadataColumns();
     this.ensureAccountMutationSequenceColumn();
     this.ensureProfileScopedCursors();
@@ -196,6 +255,93 @@ class SyncDatabase {
       );
     }
     this.serverEpoch = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('server_epoch').value;
+  }
+
+  /**
+   * Секрет, на котором строится слепой индекс имён.
+   *
+   * Берётся из USERNAME_REGISTRY_PEPPER — тогда он живёт в секретах площадки,
+   * отдельно от файла базы, и утечка базы не даёт ничего. Если переменной нет,
+   * секрет заводится сам и ложится в sync_meta: это слабее (украли базу —
+   * украли и секрет), но всё же лучше открытых имён, и главное — не роняет
+   * сервер, у которого переменную забыли поставить. Разница между двумя
+   * случаями видна в логе при старте.
+   */
+  ensureUsernamePepper() {
+    const fromEnv = String(process.env.USERNAME_REGISTRY_PEPPER || '').trim();
+    if (fromEnv.length >= 32) {
+      this.usernamePepper = Buffer.from(fromEnv, 'utf8');
+      this.usernamePepperFromEnv = true;
+      return;
+    }
+    if (fromEnv) {
+      throw new Error('USERNAME_REGISTRY_PEPPER is set but shorter than 32 characters');
+    }
+    let row = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('username_pepper');
+    if (!row) {
+      this.db.prepare('INSERT INTO sync_meta (key, value) VALUES (?, ?)')
+        .run('username_pepper', randomBytes(32).toString('hex'));
+      row = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('username_pepper');
+    }
+    this.usernamePepper = Buffer.from(row.value, 'hex');
+    this.usernamePepperFromEnv = false;
+  }
+
+  /** Слепой индекс имени: постоянный, несопоставимый без секрета сервера. */
+  usernameKey(username) {
+    return createHmac('sha256', this.usernamePepper).update(String(username), 'utf8').digest('base64url');
+  }
+
+  /**
+   * Перевод уже существующих записей на слепой индекс.
+   *
+   * Разовая операция: старая таблица держала имя в открытом виде, и просто
+   * добавить колонку нельзя — открытое имя должно исчезнуть, а не лечь рядом.
+   * Поэтому строки переносятся и старая таблица удаляется целиком, вместе со
+   * своими страницами. Перед этим — копия файла, как и в остальных миграциях
+   * здесь: имена восстановлению из хеша не подлежат, и права на ошибку нет.
+   */
+  ensureBlindedUsernames() {
+    const columns = this.db.prepare('PRAGMA table_info(sync_usernames)').all().map((column) => column.name);
+    if (!columns.includes('username')) return;
+    const backup = `${this.filename}.pre-blinded-usernames-${Date.now()}.bak`;
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      fs.copyFileSync(this.filename, backup, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(backup, 0o600);
+    } catch (error) {
+      throw new Error(`Cannot create username registry migration backup: ${error.message}`);
+    }
+    const rows = this.db.prepare(
+      'SELECT username, account_id AS accountId, profile_id AS profileId, claimed_at AS claimedAt FROM sync_usernames',
+    ).all();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('DROP TABLE sync_usernames');
+      this.db.exec(`
+        CREATE TABLE sync_usernames (
+          username_key TEXT PRIMARY KEY NOT NULL,
+          account_id TEXT NOT NULL,
+          profile_id INTEGER NOT NULL,
+          claimed_at INTEGER NOT NULL,
+          FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
+          ON sync_usernames (account_id, profile_id);
+      `);
+      const insert = this.db.prepare(`
+        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT (username_key) DO NOTHING
+      `);
+      for (const row of rows) {
+        insert.run(this.usernameKey(row.username), row.accountId, row.profileId, row.claimedAt);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    this.db.exec('VACUUM;');
   }
 
   ensureDeviceMetadataColumns() {
@@ -349,23 +495,24 @@ class SyncDatabase {
    */
   claimUsername(accountId, profileId, username) {
     const now = Date.now();
+    const key = this.usernameKey(username);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db.prepare(
-        'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username = ?',
-      ).get(username);
+        'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username_key = ?',
+      ).get(key);
       if (row && (row.accountId !== accountId || row.profileId !== profileId)) {
         this.db.exec('COMMIT');
         return { ok: false, reason: 'username_taken' };
       }
       this.db.prepare(
-        'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username <> ?',
-      ).run(accountId, profileId, username);
+        'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username_key <> ?',
+      ).run(accountId, profileId, key);
       this.db.prepare(`
-        INSERT INTO sync_usernames (username, account_id, profile_id, claimed_at)
+        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT (username) DO UPDATE SET claimed_at = excluded.claimed_at
-      `).run(username, accountId, profileId, now);
+        ON CONFLICT (username_key) DO UPDATE SET claimed_at = excluded.claimed_at
+      `).run(key, accountId, profileId, now);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -389,8 +536,8 @@ class SyncDatabase {
    */
   lookupUsername(username) {
     const row = this.db.prepare(
-      'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username = ?',
-    ).get(username);
+      'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username_key = ?',
+    ).get(this.usernameKey(username));
     return row || null;
   }
 
@@ -411,6 +558,10 @@ class SyncDatabase {
     const idleTtlMs = Number.isSafeInteger(policy.idleTtlMs) && policy.idleTtlMs > 0
       ? policy.idleTtlMs : DEFAULT_DEVICE_IDLE_TTL_MS;
     const activeCutoff = now - idleTtlMs;
+    const maxEnrollments = Number.isSafeInteger(policy.maxEnrollmentsPerWindow) && policy.maxEnrollmentsPerWindow > 0
+      ? policy.maxEnrollmentsPerWindow : DEFAULT_MAX_ENROLLMENTS_PER_WINDOW;
+    const enrollmentWindowMs = Number.isSafeInteger(policy.enrollmentWindowMs) && policy.enrollmentWindowMs > 0
+      ? policy.enrollmentWindowMs : DEFAULT_ENROLLMENT_WINDOW_MS;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       let row = this.db.prepare(`
@@ -458,6 +609,18 @@ class SyncDatabase {
           this.db.exec('COMMIT');
           return { ok: false, reason: 'device_limit_exceeded' };
         }
+        // Потолок активных устройств считает то, что стоит сейчас, и потому
+        // обнуляется отзывом. Окно считает то, что происходило, и отзывом не
+        // обнуляется — иначе «отозвал своё же и завёл ещё» снимало бы любой
+        // предел. Подробности в DEFAULT_MAX_ENROLLMENTS_PER_WINDOW.
+        const recent = this.db.prepare(`
+          SELECT COUNT(*) AS count FROM sync_device_enrollments
+          WHERE account_id = ? AND enrolled_at >= ?
+        `).get(accountId, now - enrollmentWindowMs);
+        if (Number(recent?.count || 0) >= maxEnrollments) {
+          this.db.exec('COMMIT');
+          return { ok: false, reason: 'enrollment_rate_limited' };
+        }
         this.db.prepare(`
           INSERT INTO sync_devices
             (account_id, device_id, device_public_key_b64, label, platform, device_model,
@@ -477,6 +640,16 @@ class SyncDatabase {
           this.db.exec('COMMIT');
           return { ok: false, reason: row?.revoked_at ? 'device_revoked' : 'device_enrollment_required' };
         }
+        this.db.prepare(`
+          INSERT INTO sync_device_enrollments
+            (account_id, device_id, enrolled_at, platform, device_model, app_version, country_code, city)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT DO NOTHING
+        `).run(
+          accountId, deviceId, now,
+          metadata?.platform || null, metadata?.model || null, metadata?.appVersion || null,
+          geo?.countryCode || null, geo?.city || null,
+        );
       }
       this.db.prepare(`
         UPDATE sync_devices
@@ -857,6 +1030,25 @@ class SyncDatabase {
       ...device,
       active: device.active === 1,
     }));
+  }
+
+  /**
+   * Журнал подключений — то, что владелец должен увидеть, если его сид-фразой
+   * воспользовались. Отдаётся вместе со списком устройств, потому что смысл
+   * имеет только рядом с ним: строка без устройства означает, что подключение
+   * было и следы за собой убрали.
+   */
+  listEnrollments(accountId, options = {}) {
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 20;
+    const since = Number.isSafeInteger(options.since) ? options.since : 0;
+    return this.db.prepare(`
+      SELECT device_id AS deviceId, enrolled_at AS enrolledAt, platform,
+             device_model AS deviceModel, app_version AS appVersion,
+             country_code AS countryCode, city
+      FROM sync_device_enrollments
+      WHERE account_id = ? AND enrolled_at >= ?
+      ORDER BY enrolled_at DESC LIMIT ?
+    `).all(accountId, since, limit);
   }
 
   revokeDevice(accountId, deviceId) {

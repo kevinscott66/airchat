@@ -438,3 +438,164 @@ test('re-uploading a media id cancels a pending delete', (t) => {
   assert.equal(media.deletedAt, null);
   assert.deepEqual(db.mediaGcCandidates(account, 5000), []);
 });
+
+test('окно частоты тормозит подключение устройств пачкой', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'k'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-k'), { ok: true });
+  const policy = { now: 10_000, maxEnrollmentsPerWindow: 2, enrollmentWindowMs: 5_000 };
+
+  assert.deepEqual(db.ensureDevice(account, 'd-1', 'key-k-1', null, null, null, true, policy), { ok: true });
+  assert.deepEqual(db.ensureDevice(account, 'd-2', 'key-k-2', null, null, null, true, policy), { ok: true });
+  assert.deepEqual(
+    db.ensureDevice(account, 'd-3', 'key-k-3', null, null, null, true, policy),
+    { ok: false, reason: 'enrollment_rate_limited' },
+  );
+
+  // Уже подключённое устройство ходит как ходило: окно считает только новые.
+  assert.deepEqual(db.ensureDevice(account, 'd-1', 'key-k-1', null, null, null, false, policy), { ok: true });
+
+  // За окном счётчик отпускает.
+  assert.deepEqual(
+    db.ensureDevice(account, 'd-3', 'key-k-3', null, null, null, true, { ...policy, now: 20_000 }),
+    { ok: true },
+  );
+});
+
+test('отзыв устройства не стирает след подключения', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'm'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-m'), { ok: true });
+  assert.deepEqual(
+    db.ensureDevice(account, 'stranger', 'key-m-1', 'Чужой', { platform: 'ios', model: 'iPhone' }, { countryCode: 'NL' }, true, { now: 7_000 }),
+    { ok: true },
+  );
+  assert.equal(db.revokeDevice(account, 'stranger'), true);
+
+  // Устройство отозвано — а строка о том, что оно тут было, осталась. Ровно
+  // ради этого случая журнал и заведён.
+  const trail = db.listEnrollments(account);
+  assert.equal(trail.length, 1);
+  assert.equal(trail[0].deviceId, 'stranger');
+  assert.equal(trail[0].enrolledAt, 7_000);
+  assert.equal(trail[0].platform, 'ios');
+  assert.equal(trail[0].countryCode, 'NL');
+});
+
+test('окно частоты не тратится на отказ по потолку устройств', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'n'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-n'), { ok: true });
+  const policy = { now: 1_000, maxActiveDevices: 1, idleTtlMs: 100_000 };
+  assert.deepEqual(db.ensureDevice(account, 'd-1', 'key-n-1', null, null, null, true, policy), { ok: true });
+  assert.deepEqual(
+    db.ensureDevice(account, 'd-2', 'key-n-2', null, null, null, true, policy),
+    { ok: false, reason: 'device_limit_exceeded' },
+  );
+  // Отказ — не подключение: в журнале одна строка, а не две.
+  assert.equal(db.listEnrollments(account).length, 1);
+});
+
+test('удаление аккаунта уносит журнал подключений', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'p'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-p'), { ok: true });
+  assert.deepEqual(db.ensureDevice(account, 'd-1', 'key-p-1', null, null, null, true, { now: 5_000 }), { ok: true });
+  assert.equal(db.listEnrollments(account).length, 1);
+
+  db.db.prepare('DELETE FROM sync_accounts WHERE account_id = ?').run(account);
+  assert.equal(db.listEnrollments(account).length, 0);
+});
+
+test('имя в реестре не хранится открытым текстом', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'q'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-q'), { ok: true });
+  assert.deepEqual(db.claimUsername(account, 1, 'founder'), { ok: true, username: 'founder' });
+
+  // Сверка занятости работает как раньше — она и есть единственное, что серверу
+  // от имени нужно.
+  assert.deepEqual({ ...db.lookupUsername('founder') }, { accountId: account, profileId: 1 });
+  assert.equal(db.lookupUsername('somebody-else'), null);
+
+  // А самого имени в базе нет ни в одной строке: тот, кому досталась копия
+  // файла, не получает списка имён.
+  const stored = db.db.prepare('SELECT username_key AS key FROM sync_usernames').all();
+  assert.equal(stored.length, 1);
+  assert.notEqual(stored[0].key, 'founder');
+  assert.equal(fs.readFileSync(path.join(dir, 'sync.sqlite')).includes(Buffer.from('founder')), false);
+});
+
+test('старый реестр с открытыми именами переезжает на слепой индекс', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-sync-'));
+  const file = path.join(dir, 'sync.sqlite');
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  // База в том виде, в каком она жила до v4.32.557.
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE sync_accounts (
+      account_id TEXT PRIMARY KEY NOT NULL,
+      owner_public_key_b64 TEXT,
+      created_at INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE sync_usernames (
+      username TEXT PRIMARY KEY NOT NULL,
+      account_id TEXT NOT NULL,
+      profile_id INTEGER NOT NULL,
+      claimed_at INTEGER NOT NULL
+    );
+    INSERT INTO sync_accounts (account_id, owner_public_key_b64) VALUES ('${'r'.repeat(32)}', 'owner-r');
+    INSERT INTO sync_usernames (username, account_id, profile_id, claimed_at)
+      VALUES ('founder', '${'r'.repeat(32)}', 1, 4242);
+  `);
+  legacy.close();
+
+  const db = new SyncDatabase(file);
+  t.after(() => db.close());
+
+  // Имя по-прежнему занято тем же профилем — переезд ничего не потерял.
+  assert.deepEqual({ ...db.lookupUsername('founder') }, { accountId: 'r'.repeat(32), profileId: 1 });
+  assert.deepEqual(db.claimUsername('s'.repeat(32), 1, 'founder'), { ok: false, reason: 'username_taken' });
+  assert.equal(
+    db.db.prepare('SELECT claimed_at AS at FROM sync_usernames').get().at,
+    4242,
+  );
+  // Колонки с открытым именем больше нет.
+  const columns = db.db.prepare('PRAGMA table_info(sync_usernames)').all().map((c) => c.name);
+  assert.equal(columns.includes('username'), false);
+  assert.equal(columns.includes('username_key'), true);
+  // И рядом лежит копия файла на случай, если переезд был неверным.
+  assert.equal(fs.readdirSync(dir).some((f) => f.includes('pre-blinded-usernames')), true);
+});
+
+test('секрет реестра берётся из окружения, когда он там есть', (t) => {
+  const previous = process.env.USERNAME_REGISTRY_PEPPER;
+  t.after(() => {
+    if (previous === undefined) delete process.env.USERNAME_REGISTRY_PEPPER;
+    else process.env.USERNAME_REGISTRY_PEPPER = previous;
+  });
+
+  process.env.USERNAME_REGISTRY_PEPPER = 'x'.repeat(48);
+  const a = makeDb();
+  t.after(() => { a.db.close(); fs.rmSync(a.dir, { recursive: true, force: true }); });
+  assert.equal(a.db.usernamePepperFromEnv, true);
+  const withEnv = a.db.usernameKey('founder');
+  // Секрет вне базы — значит в самой базе его нет.
+  assert.equal(a.db.db.prepare("SELECT value FROM sync_meta WHERE key = 'username_pepper'").get(), undefined);
+
+  // Два сервера с одним секретом дают один индекс; иначе имя «занято» на одном
+  // и свободно на другом.
+  const b = makeDb();
+  t.after(() => { b.db.close(); fs.rmSync(b.dir, { recursive: true, force: true }); });
+  assert.equal(b.db.usernameKey('founder'), withEnv);
+
+  // Слишком короткий секрет — это не «сойдёт», это остановка на старте.
+  process.env.USERNAME_REGISTRY_PEPPER = 'short';
+  assert.throws(() => makeDb(), /shorter than 32/);
+});

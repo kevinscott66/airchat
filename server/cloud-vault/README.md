@@ -116,3 +116,33 @@ per-account quota and an 8.1 MB per-blob limit; override the account quota with
 `MEDIA_MAX_ACCOUNT_BYTES`. Legacy relay-only references remain supported. The
 service has no password reset path by design: a lost cloud password means the
 encrypted cloud copy cannot be decrypted.
+
+## Environment
+
+`USERNAME_REGISTRY_PEPPER` — secret behind the username registry's blind index
+(v4.32.557). Usernames are stored as `HMAC(pepper, name)`, never in the clear,
+so a leaked database file yields no list of who is who. Set it to at least 32
+characters and keep it in the platform's secret store, outside the database
+file:
+
+```
+fly secrets set USERNAME_REGISTRY_PEPPER="$(openssl rand -hex 32)" -a airchat-cloud-vault
+```
+
+Without the variable the server generates a pepper on first start and keeps it
+in `sync_meta`. That still removes plaintext names, but the secret then travels
+with the database — a full dump allows an offline dictionary attack over the
+(small) username space. The startup path records which of the two is in effect.
+
+**The pepper is not rotatable in place.** Changing it orphans every existing
+claim: the server would report every taken name as free, and two people could
+end up holding the same one. Rotating means re-deriving the whole table from
+names the server does not have. Set it once, before the registry has rows.
+
+`SYNC_MAX_ACTIVE_DEVICES` — ceiling on simultaneously active devices per
+account (default 8). Independent of it, enrolling a *new* device is capped at 3
+per hour per account and every enrollment is written to `sync_device_enrollments`,
+which survives revoking the device. `POST /v1/sync/:accountId/devices` returns
+that trail next to the device list: an enrollment with no matching device is how
+the owner learns that someone used their seed phrase and cleaned up after
+themselves.

@@ -25,7 +25,6 @@
     "preview": {
       "extends": "base",
       "distribution": "internal",
-      "channel": "preview",
       "android": {
         "buildType": "apk"
       },
@@ -37,7 +36,6 @@
     "production": {
       "extends": "base",
       "distribution": "store",
-      "channel": "production",
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
@@ -48,7 +46,6 @@
     "production-apk": {
       "extends": "production",
       "distribution": "internal",
-      "channel": "production",
       "android": {
         "buildType": "apk"
       }

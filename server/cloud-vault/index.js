@@ -827,7 +827,13 @@ app.post('/v1/sync/:accountId/devices', (req, res) => {
   const accountId = req.params.accountId;
   const auth = authenticateSyncRequest(req, accountId, 'list_devices');
   if (auth.error) return res.status(auth.status || 401).json({ error: auth.error });
-  return res.json({ devices: syncDb.listDevices(auth.accountId, { idleTtlMs: SYNC_DEVICE_IDLE_TTL_MS }) });
+  // Журнал едет вместе со списком: подключение, после которого устройство
+  // отозвали или удалили, из списка исчезает, а из журнала — нет. Именно такая
+  // пара строк и означает, что сид-фразой воспользовался не владелец.
+  return res.json({
+    devices: syncDb.listDevices(auth.accountId, { idleTtlMs: SYNC_DEVICE_IDLE_TTL_MS }),
+    enrollments: syncDb.listEnrollments(auth.accountId),
+  });
 });
 
 app.post('/v1/sync/:accountId/devices/enroll', (req, res) => {
