@@ -31,20 +31,52 @@ export function newAvatarUri(stampMs: number): string {
 }
 
 /**
+ * Имя файла из того, что записано про аватар, — путь это или уже имя
+ * (v4.32.556).
+ *
+ * До этой версии наружу отдавался и запоминался абсолютный путь, а он живёт
+ * ровно до следующего обновления приложения: каталог данных лежит в
+ * контейнере, имя которого — UUID, и новая версия получает новый контейнер.
+ * Файлы система переносит, путь становится несуществующим. Отсюда две
+ * поломки: фотография профиля пропадала после каждого обновления, а уборка
+ * ниже сверяла свежие файлы со вчерашними путями, не находила совпадений и
+ * сносила аватары ЖИВЫХ профилей.
+ *
+ * Устойчиво здесь только имя файла. Путь можно собрать (avatarUriFromName),
+ * но не запомнить.
+ */
+export function avatarFileName(stored: string | null | undefined): string {
+  if (!stored) return '';
+  const name = stored.slice(stored.lastIndexOf('/') + 1);
+  return isAvatarFileName(name) ? name : '';
+}
+
+/** Путь к файлу аватара в ТЕКУЩЕМ каталоге приложения. */
+export function avatarUriFromName(name: string): string {
+  const dir = FileSystem.documentDirectory;
+  if (!dir || !isAvatarFileName(name)) return '';
+  return `${dir}${name}`;
+}
+
+/**
  * Удалить файлы аватаров, на которые никто не ссылается.
  *
- * `keepUris` — пути аватаров живых профилей; пустой список означает «не осталось
- * никого», то есть полный сброс устройства.
+ * `keep` — аватары живых профилей: путь или имя файла, что записано, то и
+ * годится. Сверяются ИМЕНА (см. avatarFileName): путь, записанный прошлой
+ * установкой, указывает в исчезнувший контейнер и не совпал бы ни с одним
+ * файлом на диске — то есть весь список «оставить» оказался бы пустым, и
+ * уборка снесла бы всё живое. Пустой список означает «не осталось никого», то
+ * есть полный сброс устройства.
  *
  * Собрать список — забота вызывающего, и собрать его надо ДО удаления. Если у
  * него это не вышло, он обязан не вызывать эту функцию вовсе: неполный список
  * здесь неотличим от «этих аватаров больше нет», и сборка мусора снесёт живое
  * лицо. Поэтому у аргумента и нет значения по умолчанию.
  */
-export async function sweepAvatarFiles(keepUris: readonly (string | null | undefined)[]): Promise<number> {
+export async function sweepAvatarFiles(keep: readonly (string | null | undefined)[]): Promise<number> {
   const dir = FileSystem.documentDirectory;
   if (!dir) return 0;
-  const keep = new Set(keepUris.filter((u): u is string => typeof u === 'string' && u.length > 0));
+  const keepNames = new Set(keep.map(avatarFileName).filter((n) => n !== ''));
   let names: string[];
   try {
     names = await FileSystem.readDirectoryAsync(dir);
@@ -56,8 +88,8 @@ export async function sweepAvatarFiles(keepUris: readonly (string | null | undef
   let removed = 0;
   for (const name of names) {
     if (!isAvatarFileName(name)) continue;
+    if (keepNames.has(name)) continue;
     const uri = `${dir}${name}`;
-    if (keep.has(uri)) continue;
     try {
       await FileSystem.deleteAsync(uri, { idempotent: true });
       removed++;

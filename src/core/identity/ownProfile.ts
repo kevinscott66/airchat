@@ -122,7 +122,15 @@ export async function ownFieldGetFor(pid: number, key: OwnProfileKey): Promise<s
  * волен промолчать, но соврать человеку «сохранено» не должен.
  */
 export async function ownFieldSet(key: OwnProfileKey, value: string): Promise<boolean> {
-  const pid = activeProfileId();
+  return await ownFieldSetFor(activeProfileId(), key, value);
+}
+
+/**
+ * Запись поля карточки ЗАДАННОГО профиля — по той же причине, по какой рядом
+ * стоит ownFieldGetFor: фоновые пути знают своего владельца и не вправе
+ * спрашивать, что человек открыл на экране. `false` — не записалось.
+ */
+export async function ownFieldSetFor(pid: number, key: OwnProfileKey, value: string): Promise<boolean> {
   if (!(await kvSetSecretScoped(pid, key, value))) {
     log.warn('own_field_set_failed', { key });
     return false;

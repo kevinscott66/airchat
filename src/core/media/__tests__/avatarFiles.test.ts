@@ -27,7 +27,7 @@ jest.mock('../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-import { isAvatarFileName, newAvatarUri, sweepAvatarFiles } from '../avatarFiles';
+import { avatarFileName, avatarUriFromName, isAvatarFileName, newAvatarUri, sweepAvatarFiles } from '../avatarFiles';
 
 beforeEach(() => {
   mockDirFiles = [];
@@ -59,6 +59,29 @@ describe('шаблон имени', () => {
   });
 });
 
+describe('имя против пути', () => {
+  it('имя достаётся и из пути прошлой установки, и из уже записанного имени', () => {
+    // Каталог данных лежит в контейнере, имя которого UUID, и каждая установка
+    // получает новый. Устойчиво здесь только имя файла.
+    expect(avatarFileName('/doc/avatar_17.jpg')).toBe('avatar_17.jpg');
+    expect(avatarFileName('file:///var/mobile/Containers/Data/Application/A-B/Documents/avatar_17.jpg'))
+      .toBe('avatar_17.jpg');
+    expect(avatarFileName('avatar_17.jpg')).toBe('avatar_17.jpg');
+  });
+
+  it('чужое именем аватара не становится', () => {
+    for (const stored of [null, undefined, '', '/doc/', '/doc/airchat-config.json', '/doc/avatar_x.jpg']) {
+      expect(avatarFileName(stored)).toBe('');
+    }
+  });
+
+  it('путь собирается от ТЕКУЩЕГО каталога и только для своих имён', () => {
+    expect(avatarUriFromName('avatar_17.jpg')).toBe('/doc/avatar_17.jpg');
+    expect(avatarUriFromName('airchat-config.json')).toBe('');
+    expect(avatarUriFromName('')).toBe('');
+  });
+});
+
 describe('sweepAvatarFiles', () => {
   it('сносит осиротевшие и не трогает живые', async () => {
     mockDirFiles = ['avatar_1.jpg', 'avatar_2.jpg', 'avatar_3.jpg'];
@@ -85,6 +108,21 @@ describe('sweepAvatarFiles', () => {
     mockDirFiles = ['avatar_1.jpg'];
     expect(await sweepAvatarFiles([null, undefined, ''])).toBe(1);
     expect(deleted).toEqual(['/doc/avatar_1.jpg']);
+  });
+
+  it('путь прошлой установки сохраняет живой аватар — сверка по имени', async () => {
+    // До v4.32.556 сверялись пути: после обновления приложения ни один путь из
+    // базы не совпадал с файлом на диске, весь список «оставить» оказывался
+    // пустым, и уборка сносила аватары живых профилей.
+    mockDirFiles = ['avatar_1.jpg', 'avatar_2.jpg'];
+    expect(await sweepAvatarFiles(['/doc-прошлой-установки/avatar_2.jpg'])).toBe(1);
+    expect(deleted).toEqual(['/doc/avatar_1.jpg']);
+  });
+
+  it('в списке живых годится и голое имя файла', async () => {
+    mockDirFiles = ['avatar_1.jpg', 'avatar_2.jpg'];
+    expect(await sweepAvatarFiles(['avatar_1.jpg'])).toBe(1);
+    expect(deleted).toEqual(['/doc/avatar_2.jpg']);
   });
 
   it('каталог не прочитался — не удаляется ничего', async () => {

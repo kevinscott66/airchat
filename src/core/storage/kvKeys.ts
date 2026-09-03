@@ -33,7 +33,10 @@ export const OWN_PROFILE_KEYS = [
   'user_bio',
   'user_handle',
   'user_pronouns',
+  // v4.32.556: в `user_avatar_uri` теперь лежит ИМЯ файла, а не путь к нему, а
+  // сами байты снимка — в `user_avatar_img`. Почему так — в identity/ownAvatar.
   'user_avatar_uri',
+  'user_avatar_img',
   'user_avatar_cid',
   'user_website',
   'user_twitter',

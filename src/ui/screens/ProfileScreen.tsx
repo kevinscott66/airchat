@@ -46,7 +46,7 @@ import { saveOwnUsernameGlobally } from '../../core/identity/usernameRegistry';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
 import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope';
-import { newAvatarUri } from '../../core/media/avatarFiles';
+import { ownAvatarUri, saveOwnAvatar } from '../../core/identity/ownAvatar';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
 import { authGuard } from '../../core/security/authGuard';
 import {
@@ -244,7 +244,7 @@ function ProfileScreenImpl({
       await runSyncIfOnline();
       setHasSeed(await hasStoredMnemonic());
       await loadDisplayName();
-      const savedAvatar = await ownFieldGet('user_avatar_uri');
+      const savedAvatar = await ownAvatarUri();
       if (alive && savedAvatar) setAvatarUri(savedAvatar);
       // v4.32.378: и на чтении — «О себе», набранное до этой версии, лежит в
       // базе без всякой чистки, а показывается оно здесь как есть.
@@ -601,32 +601,16 @@ function ProfileScreenImpl({
       Alert.alert('AirChat', 'Не удалось обработать изображение (неподдерживаемый формат?)');
       return;
     }
-    // v4.32.185 (Round-15 #8): delete prior avatar file (prevents unbounded
-    // disk growth); surface copy error instead of falling through with
-    // volatile cacheDirectory URI.
-    let finalUri = '';
-    const FileSystem = await import('expo-file-system/legacy');
-    try {
-      const prev = await ownFieldGet('user_avatar_uri');
-      if (prev && prev.startsWith(FileSystem.documentDirectory ?? '_')) {
-        try { await FileSystem.deleteAsync(prev, { idempotent: true }); } catch { /* ignore */ }
-      }
-      // v4.32.309: имя файла собирает avatarFiles — тот же модуль, который эти
-      // файлы потом и убирает. Разъехаться шаблону имени тут нельзя: уборка
-      // сносит всё, что под шаблон подошло, и не трогает то, что не подошло.
-      const dst = newAvatarUri(Date.now());
-      await FileSystem.copyAsync({ from: resizedUri, to: dst });
-      finalUri = dst;
-    } catch (e) {
-      console.warn('avatar_copy_failed', e);
-      Alert.alert('AirChat', 'Не удалось сохранить фото (возможно, недостаточно места)');
-      return;
-    }
-    // v4.32.309: запись могла не лечь (нет ключа шифрования, нет места), а
+    // v4.32.556: копия файла, удаление прежнего и запись в базу — в
+    // identity/ownAvatar одним куском. Экран этого знать не должен: правило
+    // «что именно считается сохранённой фотографией» одно и на показ, и на
+    // рассылку карточки, и на уборку осиротевших файлов.
+    //
+    // v4.32.309: сохранение могло не лечь (нет ключа шифрования, нет места), а
     // экран отвечал «Фото профиля обновлено» — и при следующем открытии
     // возвращался прежний кружок с буквой, будто человеку показалось.
-    if (!(await ownFieldSet('user_avatar_uri', finalUri))) {
-      try { await FileSystem.deleteAsync(finalUri, { idempotent: true }); } catch { /* ignore */ }
+    const finalUri = await saveOwnAvatar(resizedUri);
+    if (!finalUri) {
       Alert.alert('AirChat', 'Не удалось сохранить фото профиля');
       return;
     }

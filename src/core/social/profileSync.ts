@@ -15,6 +15,7 @@
  */
 import { scopedKvGetFor, scopedKvSet, scopedKvSetFor } from '../storage/profileScopedKv';
 import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
+import { ownAvatarNameFor, ownAvatarUriFor } from '../identity/ownAvatar';
 import { listContactsFor, setPeerProfileFor } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
@@ -45,7 +46,7 @@ export { PROFILE_PREFIX };
  */
 const SENT_KEY = 'profile:sent';
 const SENT_MAX = 1000;
-/** Что уже загружено вложением: { uri, cid, at }. */
+/** Что уже загружено вложением: { name, cid, at } — см. currentAvatarCid. */
 const UPLOAD_KEY = 'profile:avatar_upload';
 /** Когда профиль последний раз меняли — отметка версии, см. buildEnvelope. */
 const CHANGED_AT_KEY = 'profile:changed_at';
@@ -95,14 +96,21 @@ async function recordSent(pid: number, patch: SentMap): Promise<void> {
 /**
  * Локальный файл фото → `nb:`-дескриптор. В пределах двух часов используется
  * прошлая загрузка: без кэша каждое изменение имени перезаливало бы и фото.
+ *
+ * v4.32.556: «какая это фотография» помечается ИМЕНЕМ файла, а не путём к
+ * нему. Путь у одного и того же снимка меняется при каждом обновлении
+ * приложения (см. identity/ownAvatar), и по нему загрузка считалась чужой:
+ * фотография перезаливалась заново, хотя лежала та же самая. Запись прежнего
+ * образца (с полем `uri`) под это условие не подходит и просто считается
+ * промахом — один лишний перезалив на устройство.
  */
-async function currentAvatarCid(pid: number, uri: string, now: number): Promise<string | null> {
+async function currentAvatarCid(pid: number, name: string, now: number): Promise<string | null> {
   try {
     const raw = await scopedKvGetFor(pid, UPLOAD_KEY);
     if (raw) {
-      const c = JSON.parse(raw) as { uri?: unknown; cid?: unknown; at?: unknown };
+      const c = JSON.parse(raw) as { name?: unknown; cid?: unknown; at?: unknown };
       if (
-        c.uri === uri &&
+        c.name === name &&
         typeof c.cid === 'string' && c.cid &&
         typeof c.at === 'number' && now - c.at < AVATAR_FRESH_MS
       ) {
@@ -112,6 +120,9 @@ async function currentAvatarCid(pid: number, uri: string, now: number): Promise<
   } catch { /* кэш испорчен — просто зальём заново */ }
 
   try {
+    // Путь собирается здесь и сейчас: он годен ровно до следующей установки.
+    const uri = await ownAvatarUriFor(pid);
+    if (!uri) return null;
     const { uploadEncryptedBlob, makeNbCid } = await import('../media/mediaBlob');
     const { guessImageMime } = await import('../media/blobRef');
     // Тип берётся по расширению файла: у PNG с подписью image/jpeg получатель
@@ -119,7 +130,7 @@ async function currentAvatarCid(pid: number, uri: string, now: number): Promise<
     const ref = await uploadEncryptedBlob(uri, guessImageMime(uri));
     if (!ref) return null;
     const cid = makeNbCid(ref);
-    await scopedKvSetFor(pid, UPLOAD_KEY, JSON.stringify({ uri, cid, at: now }));
+    await scopedKvSetFor(pid, UPLOAD_KEY, JSON.stringify({ name, cid, at: now }));
     return cid;
   } catch (e) {
     log.warn('profile_avatar_upload_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -173,8 +184,12 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   // символов заполненным полем, и всем контактам уходил конверт, в котором
   // после чистки не оставалось ничего, кроме отметки времени.
   const bio = normalizeOwnBio(await ownFieldGetFor(pid, 'user_bio')) || null;
-  const avatarUri = (await ownFieldGetFor(pid, 'user_avatar_uri'))?.trim() || '';
-  if (!name && !username && !bio && !avatarUri) return null;
+  // v4.32.556: имя файла, а не путь к нему. Путь входил в свёртку версии ниже
+  // и менялся при каждом обновлении приложения — то есть после каждого
+  // обновления карточка заново уезжала всем контактам, не сообщая им ничего
+  // нового.
+  const avatarName = await ownAvatarNameFor(pid);
+  if (!name && !username && !bio && !avatarName) return null;
   const now = Date.now();
   let stamp = Number(await scopedKvGetFor(pid, CHANGED_AT_KEY)) || 0;
   if (!stamp) {
@@ -185,7 +200,7 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
     await scopedKvSetFor(pid, CHANGED_AT_KEY, String(stamp));
   }
   const shareAvatar = avatarAllowed(await avatarVisibilityFor(pid), audience);
-  const avatarCid = avatarUri && shareAvatar ? await currentAvatarCid(pid, avatarUri, now) : null;
+  const avatarCid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
   // v4.32.547: бумага на галочку едет тем же конвертом, что и имя, — иначе ей
   // понадобился бы свой транспорт, а она нужна ровно там же и ровно тогда же.
   // Настройке «кто видит фото» она не подчиняется: галочка не про личное, она
@@ -194,7 +209,7 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   const badge = await ownBadgeGrantFor(pid);
   return {
     env: { name, username, bio, avatarCid, badge, ts: stamp },
-    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarUri : '', avatarCid != null, badge),
+    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarName : '', avatarCid != null, badge),
   };
 }
 
@@ -209,9 +224,12 @@ export async function markProfileChanged(): Promise<void> {
 /**
  * Ключ версии: свёртка содержимого профиля, а не одно время правки.
  *
- * Считается по ФАЙЛУ фотографии, а не по `nb:`-дескриптору: дескриптор меняется
- * при каждом перезаливе (раз в два часа), и по нему рассылка уходила бы всем
- * контактам заново несколько раз в день, ничего нового им не сообщая. По одной
+ * Считается по ИМЕНИ файла фотографии, а не по `nb:`-дескриптору: дескриптор
+ * меняется при каждом перезаливе (раз в два часа), и по нему рассылка уходила
+ * бы всем контактам заново несколько раз в день, ничего нового им не сообщая.
+ * И не по пути к файлу (v4.32.556): путь у того же снимка новый после каждого
+ * обновления приложения, то есть рассылка расходилась бы по кругу ещё и там.
+ * По одной
  * же отметке правки версия была бы слишком грубой: неудачная загрузка фото
  * считалась бы отправленной версией, и фотография не дошла бы никогда —
  * поэтому в свёртку входит и признак «фото удалось загрузить».
@@ -221,14 +239,14 @@ function versionOf(
   name: string | null,
   username: string | null,
   bio: string | null,
-  avatarUri: string,
+  avatarName: string,
   avatarOk: boolean,
   badge: string | null
 ): number {
   // v4.32.547: бумага входит в свёртку. Без неё выданная галочка не уехала бы
   // никому: отметка правки профиля не менялась, версия совпадала с уже
   // отправленной, и рассылка честно пропускала каждый контакт.
-  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarUri}|${avatarOk ? '1' : '0'}|${badge ?? ''}`;
+  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarName}|${avatarOk ? '1' : '0'}|${badge ?? ''}`;
   // FNV-1a: нужен не криптостойкий хэш, а стабильное число для сравнения
   // «то же самое или уже другое» — обе стороны сравнения свои.
   let h = 0x811c9dc5;
