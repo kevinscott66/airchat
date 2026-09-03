@@ -101,7 +101,18 @@ export async function scopedKvSetFor(pid: number, key: string, value: string): P
 
 /** Удалить запись активного профиля — вместе с общей, если профиль первый. */
 export async function scopedKvDelete(key: string): Promise<void> {
-  const pid = activeProfileId();
+  await scopedKvDeleteFor(activeProfileId(), key);
+}
+
+/**
+ * То же удаление, но для названного профиля (v4.32.571).
+ *
+ * Нужно по той же причине, что и `scopedKvGetFor`: снять запись просит и
+ * фоновый приём сообщений, у которого свой номер профиля — тот, чьим ключом
+ * расшифрован конверт. Спрашивать номер у экрана он не может: пока конверт
+ * шёл, активным мог стать другой аккаунт, и стёрлась бы чужая запись.
+ */
+export async function scopedKvDeleteFor(pid: number, key: string): Promise<void> {
   await kvDelete(profileScopedKey(pid, key));
   if (pid === 1) await kvDelete(key);
 }

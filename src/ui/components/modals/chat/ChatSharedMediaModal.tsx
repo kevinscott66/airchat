@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ExpoClipboardModule from 'expo-clipboard';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
+import { SafeScreen } from '../../SafeScreen';
 import { useTheme } from '../../../ThemeContext';
 import { badgeTint, font, radius } from '../../../theme';
 import { listConversationMedia, type SharedMediaRow } from '../../../../core/storage/local';
@@ -188,7 +189,11 @@ export function SharedMediaModal({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={[smStyles.container, { backgroundColor: colors.background }]}>
+      {/* v4.32.571: safe-area сверху. Без неё шапка со стрелкой «назад» и
+          заголовком уезжала под системную строку — часы и батарею, — и нажать
+          «назад» на телефоне с вырезом было нечем. Обёртка та же, что у
+          полноэкранных модалок контактов (v4.32.42). */}
+      <SafeScreen edges={['top', 'left', 'right']} backgroundColor={colors.background} style={smStyles.container}>
         <View style={[smStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
           <AppPressable style={smStyles.closeBtn} onPress={onClose}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
@@ -290,7 +295,7 @@ export function SharedMediaModal({
             ))}
           </ScrollView>
         )}
-      </View>
+      </SafeScreen>
     </Modal>
   );
 }

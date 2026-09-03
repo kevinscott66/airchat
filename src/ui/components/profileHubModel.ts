@@ -21,8 +21,14 @@ export type HubFacts = {
   inContacts: boolean;
   blocked: boolean;
   muted: boolean;
-  /** Запрет на копирование в этой переписке. */
+  /** Запрет на копирование в этой переписке включён мной. */
   copyGuard: boolean;
+  /**
+   * …а этот — включён собеседником (v4.32.571). Два поля, а не одно, потому
+   * что строка обязана называть, чьё это решение: снять чужое своей рукой
+   * нельзя, и «Вкл» без объяснения читалось бы как заевший переключатель.
+   */
+  copyGuardByPeer: boolean;
   /** Таймер самоуничтожения, мс. null / 0 — выключен. */
   disappearMs: number | null;
   /** Жалоба на этого человека уже записана. */
@@ -104,7 +110,11 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
   out.push({ id: 'share_contact', label: 'Поделиться этим контактом' });
   if (!f.isSelf) {
     out.push({ id: 'disappear', label: 'Автоудаление', value: disappearLabel(f.disappearMs) });
-    out.push({ id: 'copy_guard', label: 'Запрет копирования и пересылки', value: f.copyGuard ? 'Вкл' : 'Выкл' });
+    out.push({
+      id: 'copy_guard',
+      label: 'Запрет копирования и пересылки',
+      value: f.copyGuard ? 'Вкл' : f.copyGuardByPeer ? 'Вкл собеседником' : 'Выкл',
+    });
   }
   out.push({ id: 'clear_history', label: 'Удалить переписку', danger: true });
   if (!f.isSelf) {

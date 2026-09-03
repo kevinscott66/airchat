@@ -39,6 +39,7 @@ import { isPollMessage } from './pollEnvelope';
 import { STORY_PREFIX } from './storyEnvelope';
 import { DM_PIN_PREFIX } from './dmPinEnvelope';
 import { DISAPPEAR_PREFIX } from './disappearEnvelope';
+import { COPY_GUARD_PREFIX } from './copyGuardEnvelope';
 import { PRESENCE_PREF_PREFIX } from './presenceEnvelope';
 import { PROFILE_PREFIX } from './profileEnvelope';
 import { stripSpoofedSysPrefix } from './sysLineGuard';
@@ -1047,6 +1048,17 @@ export class MessagingService {
       if (inbound) {
         const { handleIncomingDisappear } = await import('./disappearSync');
         await handleIncomingDisappear(textPayload.text, peerPubKeyB64, ownerPid);
+      }
+      return;
+    }
+
+    // v4.32.571: запрет копирования и пересылки, включённый собеседником.
+    // Пузырём не становится — в переписке появляется системная строка, иначе
+    // у получателя молча пропадут «Копировать» и «Переслать».
+    if (textPayload.text?.startsWith(COPY_GUARD_PREFIX)) {
+      if (inbound) {
+        const { handleIncomingCopyGuard } = await import('./copyGuardSync');
+        await handleIncomingCopyGuard(textPayload.text, peerPubKeyB64, ownerPid);
       }
       return;
     }

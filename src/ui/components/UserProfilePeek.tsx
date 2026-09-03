@@ -99,7 +99,8 @@ import { setMuted as muteSet, unmute as muteUnset } from '../../core/notificatio
 import { setDisappearAndSync } from '../../core/social/disappearSync';
 import { rateLimiter } from '../../core/security/rateLimiter';
 import { getCurrentCall, initiateCall } from '../../core/social/callService';
-import { isCopyGuarded, setCopyGuard } from '../../core/social/copyGuard';
+import { copyGuardState } from '../../core/social/copyGuard';
+import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
 import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
 import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
@@ -226,6 +227,9 @@ export function UserProfilePeek({
   const [muted, setMuted] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [copyGuard, setCopyGuardState] = useState(false);
+  // v4.32.571: запрет, включённый собеседником. Отдельно от своего — снять его
+  // своей рукой нельзя, и в карточке это должно быть написано, а не молчать.
+  const [copyGuardByPeer, setCopyGuardByPeer] = useState(false);
   const [disappearMs, setDisappearMs] = useState<number | null>(null);
   const [reported, setReported] = useState(false);
   const [gateway, setGateway] = useState('');
@@ -248,6 +252,7 @@ export function UserProfilePeek({
     setMuted(false);
     setBlocked(false);
     setCopyGuardState(false);
+    setCopyGuardByPeer(false);
     setDisappearMs(null);
     setReported(false);
     setWallpaper(null);
@@ -316,11 +321,12 @@ export function UserProfilePeek({
         if (!cancelled) setBlocked(rateLimiter.isBlocked(pub));
       } catch { /* блокировка неизвестна — покажем «Заблокировать» */ }
       const [guard, wasReported] = await Promise.all([
-        isCopyGuarded(pub),
+        copyGuardState(pub),
         hasReported(resolved.did),
       ]);
       if (cancelled) return;
-      setCopyGuardState(guard);
+      setCopyGuardState(guard.mine);
+      setCopyGuardByPeer(guard.theirs);
       setReported(wasReported);
     })();
     void loadConfig()
@@ -360,10 +366,11 @@ export function UserProfilePeek({
     blocked,
     muted,
     copyGuard,
+    copyGuardByPeer,
     disappearMs,
     reported,
     canOpenChat: !!onOpenChat,
-  }), [isSelf, identity.inContacts, blocked, muted, copyGuard, disappearMs, reported, onOpenChat]);
+  }), [isSelf, identity.inContacts, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
@@ -588,28 +595,38 @@ export function UserProfilePeek({
   const toggleCopyGuard = useCallback(() => {
     if (!resolved) return;
     const pub = resolved.pubB64;
+    // Чужое решение своей рукой не снимается (v4.32.571). Строка настройки при
+    // этом остаётся нажимаемой — молчаливое нажатие «ни во что» человек читает
+    // как поломку, поэтому вместо тишины объясняем, чей это запрет.
+    if (!copyGuard && copyGuardByPeer) {
+      Alert.alert(
+        'Запрет включил собеседник',
+        'Копирование и пересылку в этой переписке закрыл он. Снять его решение со своей стороны нельзя — как и он не может снять ваше.'
+      );
+      return;
+    }
     const next = !copyGuard;
     const commit = (): void => {
-      void setCopyGuard(pub, next)
-        .then(() => {
+      void setCopyGuardAndSync({ peerPubB64: pub, on: next })
+        .then((res) => {
           setCopyGuardState(next);
-          showSuccess(next ? 'Копирование и пересылка выключены' : 'Копирование и пересылка разрешены');
+          if (!res.synced) { showError(res.warning); return; }
+          showSuccess(next ? 'Копирование и пересылка выключены у обоих' : 'Копирование и пересылка разрешены');
         })
         .catch((e: unknown) => showError(userErrorText(e, 'Не удалось изменить запрет')));
     };
     if (!next) { commit(); return; }
-    // Обещание даётся ровно то, которое выполняется. Про снимок экрана —
-    // прямо, а не мелким шрифтом: иначе человек решит, что переписку нельзя
-    // вынести вовсе.
+    // Обещание даётся ровно то, которое выполняется: что закрывается, где это
+    // держится и где не держится — прямо, а не мелким шрифтом.
     Alert.alert(
       'Запрет копирования и пересылки',
-      `Вынести сообщения этой переписки внутри приложения будет нельзя: пункты «${COPY_ACTION}» и «Переслать» в меню сообщения и в панели выделения пропадут, выгрузка переписки тоже.\n\n${screenshotLine()}\n\nНастройка местная: она закрывает ваш экран, а не экран собеседника — ему запретить снимок нельзя.`,
+      `Вынести сообщения этой переписки внутри приложения будет нельзя ни вам, ни собеседнику: пункты «${COPY_ACTION}» и «Переслать» в меню сообщения и в панели выделения пропадут, выгрузка переписки тоже.\n\n${screenshotLine()}\n\nУ собеседника запрет держится его приложением: изменённый клиент волен его не послушать, а снимок вторым телефоном не остановит ничто — от этого работает водяной знак.`,
       [
         { text: 'Отмена', style: 'cancel' },
         { text: 'Включить', onPress: commit },
       ]
     );
-  }, [resolved, copyGuard]);
+  }, [resolved, copyGuard, copyGuardByPeer]);
 
   const clearHistory = useCallback(() => {
     if (!resolved) return;

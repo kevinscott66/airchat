@@ -21,6 +21,7 @@ const base: HubFacts = {
   blocked: false,
   muted: false,
   copyGuard: false,
+  copyGuardByPeer: false,
   disappearMs: null,
   reported: false,
   canOpenChat: true,
