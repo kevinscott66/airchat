@@ -36,71 +36,21 @@
  */
 import { publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import { verifySignedJson } from '../crypto/signature';
+// v4.32.575: правила имён и адресов площадок переехали в linkPlatform —
+// они нужны и разбору конверта профиля, куда криптографии ходу нет. Здесь
+// они по-прежнему видны наружу: этот модуль остаётся дверью в привязку, и
+// вызывающим местам незачем знать, что правило лежит этажом ниже.
+import {
+  PLATFORM_LABEL,
+  normalizeHandle,
+  normalizeProofUrl,
+  profileUrl,
+  sameHandle,
+  type LinkPlatform,
+} from './linkPlatform';
 
-/** Площадки, для которых у публикации есть проверяемый автор. */
-export type LinkPlatform = 'github' | 'x';
-
-export const PLATFORM_LABEL: Record<LinkPlatform, string> = { github: 'GitHub', x: 'X' };
-
-/**
- * Правила имён — те же, что у самих площадок.
- *
- * GitHub: буквы, цифры и дефис, не по краям, до 39 символов.
- * X: буквы, цифры и подчёркивание, до 15.
- *
- * Правило нужно не для красоты ввода. Имя подставляется в адрес
- * `https://github.com/<h>`, и `foo/../../evil` в этом месте — открытый
- * редирект; такую же проверку уже держит показ ссылок в профиле.
- */
-const HANDLE_RE: Record<LinkPlatform, RegExp> = {
-  github: /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/,
-  x: /^[A-Za-z0-9_]{1,15}$/,
-};
-
-/** Хосты, из адреса на которые можно вынуть имя. */
-const HANDLE_HOSTS: Record<LinkPlatform, string[]> = {
-  github: ['github.com', 'gist.github.com'],
-  x: ['x.com', 'twitter.com', 'mobile.twitter.com'],
-};
-
-/**
- * Имя учётной записи из того, что человек вставил.
- *
- * Принимается и `@octocat`, и `octocat`, и целый адрес профиля: люди копируют
- * адресную строку, и требовать от них выкусить оттуда имя — значит получать
- * `https://github.com/octocat` в поле имени и молча показывать ссылку на
- * `github.com/https://github.com/octocat`.
- *
- * Регистр сохраняется: он часть того, как человек себя пишет. Сверяются имена
- * без учёта регистра — на обеих площадках `Octocat` и `octocat` это одна
- * учётная запись (см. sameHandle).
- */
-export function normalizeHandle(platform: LinkPlatform, raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  let s = raw.trim();
-  if (!s) return null;
-  // Адрес профиля: берём первый сегмент пути и только у знакомых хостов.
-  const m = /^(?:https?:\/\/)?(?:www\.)?([A-Za-z0-9.-]+)\/([^/?#]+)/.exec(s);
-  if (m) {
-    const host = m[1].toLowerCase();
-    if (!HANDLE_HOSTS[platform].includes(host)) return null;
-    s = m[2];
-  }
-  s = s.replace(/^@/, '').trim();
-  return HANDLE_RE[platform].test(s) ? s : null;
-}
-
-/** Одна ли это учётная запись. Обе площадки регистр не различают. */
-export function sameHandle(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
-}
-
-/** Адрес профиля — собирается здесь, чтобы имя не склеивали руками в разметке. */
-export function profileUrl(platform: LinkPlatform, handle: string): string | null {
-  const h = normalizeHandle(platform, handle);
-  if (!h) return null;
-  return platform === 'github' ? `https://github.com/${h}` : `https://x.com/${h}`;
-}
+export { PLATFORM_LABEL, normalizeHandle, normalizeProofUrl, profileUrl, sameHandle };
+export type { LinkPlatform };
 
 /** Что подписывается. Короткое: запись публикуют вручную, её будут видеть. */
 export type ProofPayload = {

@@ -15,7 +15,7 @@ import { MAX_GRANT_LEN } from '../../identity/verificationGrant';
 const NOW = 1_700_000_000_000;
 
 function base(over: Partial<PeerProfileEnvelope> = {}): PeerProfileEnvelope {
-  return { name: 'Кир', bio: 'люблю горы', avatarCid: null, badge: null, ts: NOW, ...over };
+  return { name: 'Кир', bio: 'люблю горы', avatarCid: null, badge: null, links: null, ts: NOW, ...over };
 }
 
 describe('profileEnvelope', () => {
@@ -27,6 +27,34 @@ describe('profileEnvelope', () => {
   it('сохраняет один канонический username аккаунта', () => {
     const env = decodeProfileEnvelope(encodeProfileEnvelope(base({ username: '@DobroPalm_' })), NOW);
     expect(env?.username).toBe('dobropalm_');
+  });
+
+  it('привязки проезжают конверт и чистятся по дороге', () => {
+    const gist = 'https://gist.github.com/0123456789abcdef0123456789abcdef';
+    const env = decodeProfileEnvelope(
+      encodeProfileEnvelope(base({ links: [{ p: 'github', h: 'octocat', u: gist }] })),
+      NOW
+    );
+    expect(env?.links).toEqual([{ p: 'github', h: 'octocat', u: gist }]);
+    // Чужой адрес в поле доказательства — не доказательство, но имя остаётся.
+    const bad = decodeProfileEnvelope(
+      PROFILE_PREFIX + JSON.stringify({ ...base(), links: [{ p: 'x', h: 'jack', u: 'https://evil.com/x' }] }),
+      NOW
+    );
+    expect(bad?.links).toEqual([{ p: 'x', h: 'jack', u: null }]);
+  });
+
+  it('отвязка доезжает: пустое поле не отличается от отсутствующего', () => {
+    // links возвращается всегда, в отличие от username. Клиентов, которые
+    // умеют присылать привязки, но не умеют их стирать, не существует: поле
+    // появилось в 4.32.575 сразу в обе стороны. Молчание тут значило бы, что
+    // снятая привязка навсегда останется на чужом устройстве.
+    const gone = decodeProfileEnvelope(
+      PROFILE_PREFIX + JSON.stringify({ ...base(), links: [] }),
+      NOW
+    );
+    expect(gone).toHaveProperty('links', null);
+    expect(decodeProfileEnvelope(encodeProfileEnvelope(base()), NOW)).toHaveProperty('links', null);
   });
 
   it('старые конверты без username остаются совместимыми', () => {
@@ -48,7 +76,7 @@ describe('profileEnvelope', () => {
 
   it('пустые поля допустимы — так снимают фото и стирают «О себе»', () => {
     const env = decodeProfileEnvelope(encodeProfileEnvelope(base({ bio: null, avatarCid: null })), NOW);
-    expect(env).toEqual({ name: 'Кир', bio: null, avatarCid: null, badge: null, ts: NOW });
+    expect(env).toEqual({ name: 'Кир', bio: null, avatarCid: null, badge: null, links: null, ts: NOW });
     // Пустая строка — то же самое, что «не задано».
     const blank = decodeProfileEnvelope(PROFILE_PREFIX + JSON.stringify({ ...base(), bio: '   ' }), NOW);
     expect(blank?.bio).toBeNull();

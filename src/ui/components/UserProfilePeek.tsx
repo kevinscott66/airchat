@@ -117,6 +117,7 @@ import { publicIdFor } from '../../core/identity/publicId';
 import { PersonAvatar } from './PersonAvatar';
 import { VerifiedMark } from './VerifiedMark';
 import { getOwnDisplayName, getOwnUsername, ownFieldGet } from '../../core/identity/ownProfile';
+import { ownLinks } from '../../core/identity/ownLinks';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 // v4.32.568: всё, чем карточка теперь управляет, уже есть в ядре — она их
@@ -142,6 +143,7 @@ import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
 import { ProfilePostsModal } from './modals/profile/ProfilePostsModal';
 import { ProfileEditModal } from './modals/profile/ProfileEditModal';
 import { ProfileQrModal } from './modals/profile/ProfileQrModal';
+import { ProfileLinksRow } from './modals/profile/ProfileLinksRow';
 import { defaultWallpaper, type Wallpaper } from '../wallpapers';
 import { useTheme } from '../ThemeContext';
 import { loadConfig } from '../../core/config';
@@ -338,11 +340,12 @@ export function UserProfilePeek({
         if (mine) {
           // Своё читается по одному полю, как и на экране профиля: общей
           // «карточки одним куском» в хранилище нет.
-          const [name, username, bio, claim] = await Promise.all([
+          const [name, username, bio, claim, links] = await Promise.all([
             getOwnDisplayName(),
             getOwnUsername(),
             ownFieldGet('user_bio'),
             ownBadgeClaim(),
+            ownLinks(),
           ]);
           if (cancelled) return;
           // Галочка — только при совпадении имени с бумагой: переименовавшийся
@@ -352,6 +355,7 @@ export function UserProfilePeek({
             username,
             bio: normalizeOwnBio(bio) || null,
             verified: !!claim && !!username && claim.username === username,
+            links,
           });
         }
         const all = await listContacts();
@@ -959,6 +963,16 @@ export function UserProfilePeek({
                         {identity.bio}
                       </Text>
                     ) : null}
+                    {/* v4.32.575: GitHub и X. Раньше их видел только владелец —
+                        привязка доказывалась на одном устройстве и никуда не
+                        уезжала. Галочка у чужой привязки появляется только
+                        после проверки этим устройством: конверт сообщает, где
+                        лежит доказательство, а не то, что оно верное. */}
+                    <ProfileLinksRow
+                      links={identity.links}
+                      peerPubB64={resolved?.pubB64 ?? ''}
+                      isSelf={isSelf}
+                    />
                   </View>
                 )}
               </View>

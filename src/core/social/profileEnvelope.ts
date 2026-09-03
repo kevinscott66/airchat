@@ -20,6 +20,7 @@ import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { displayNameOrNull, sanitizeParagraphText } from './sysLineGuard';
 import { normalizeUsername } from '../identity/username';
 import { MAX_GRANT_LEN } from '../identity/verificationGrant';
+import { sanitizeProfileLinks, type ProfileLink } from '../identity/profileLinks';
 
 /**
  * Занятые байты: \x01…\x0c, \x0e…\x13 (см. storyEnvelope.ts).
@@ -61,6 +62,15 @@ export type PeerProfileEnvelope = {
    * ограничено только длиной. Отсутствует в конвертах до 4.32.547.
    */
   badge?: string | null;
+  /**
+   * v4.32.575: привязанные учётные записи — GitHub и X.
+   *
+   * Едут именем и адресом публикации, а не готовым «подтверждено»: признак,
+   * присланный отправителем, подтверждает лишь то, что отправитель его
+   * прислал. Проверяет получатель, сам, по адресу — см. identity/profileLinks
+   * и identity/peerLinkVerify. Отсутствует в конвертах до 4.32.575.
+   */
+  links?: ProfileLink[] | null;
   /** Когда профиль был изменён — по часам отправителя. */
   ts: number;
 };
@@ -76,12 +86,17 @@ export type PeerProfileEnvelope = {
  * остановка перед отправкой, поэтому чистка стоит здесь.
  */
 export function encodeProfileEnvelope(env: PeerProfileEnvelope): string {
+  // Чистка на отправке та же, что на приёме: имя и адрес, не прошедшие
+  // правила площадки, не должны уезжать и от нас — иначе своё поле живёт по
+  // более мягким правилам, чем чужое.
+  const links = sanitizeProfileLinks(env.links);
   const clean: PeerProfileEnvelope = {
     name: displayNameOrNull(env.name, MAX_NAME_LEN),
     ...(env.username !== undefined ? { username: normalizeUsername(env.username) } : {}),
     bio: sanitizeParagraphText(env.bio, MAX_BIO_LEN),
     avatarCid: env.avatarCid,
     ...(env.badge ? { badge: env.badge } : {}),
+    ...(links ? { links } : {}),
     ts: env.ts,
   };
   return PROFILE_PREFIX + JSON.stringify(clean);
@@ -141,6 +156,17 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
   const badge = typeof env.badge === 'string' && env.badge.length <= MAX_GRANT_LEN
     ? env.badge
     : null;
+  // Ссылки чистятся тем же правилом, что и своё поле: имя — по правилам
+  // площадки, адрес — по правилам её публикаций. Кривое поле не роняет
+  // конверт: список просто окажется пустым.
+  //
+  // Поле возвращается ВСЕГДА, в отличие от username: пустое значит «привязок
+  // нет», и записать его получателю так же обязательно, как непустое. Иначе
+  // отвязанная учётная запись осталась бы у собеседника навсегда — конверт
+  // без ссылок неотличим от конверта, который их не касается. Для username
+  // такое различение нужно (его не слали клиенты до 4.32.4xx), а ссылок до
+  // этой версии не слал никто.
+  const links = sanitizeProfileLinks(env.links);
 
   let avatarCid: string | null = null;
   if (env.avatarCid != null) {
@@ -156,5 +182,13 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
   // все последующие обновления этого контакта.
   const ts = Math.min(env.ts, now + CLOCK_SKEW_MS);
 
-  return { name, ...(username !== undefined ? { username } : {}), bio, avatarCid, badge, ts };
+  return {
+    name,
+    ...(username !== undefined ? { username } : {}),
+    bio,
+    avatarCid,
+    badge,
+    links,
+    ts,
+  };
 }

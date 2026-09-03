@@ -7,6 +7,7 @@
  * модулей — только правила.
  */
 
+import type { ProfileLink } from '../../core/identity/profileLinks';
 import { publicKeyToDidKey, parseDidKey } from '../../core/identity/did';
 import { publicKeyFromB64, publicKeyToB64 } from '../../core/crypto/pubKeyFormat';
 import { nameInitials } from '../../core/social/contactLabel';
@@ -57,6 +58,8 @@ export type PeekContact = {
   bio?: string;
   /** Официальная галочка. Проверена при приёме конверта, здесь — только ответ. */
   verified?: boolean;
+  /** v4.32.575: привязанные учётные записи — как приехали в конверте. */
+  links?: ProfileLink[] | null;
 };
 
 /**
@@ -72,6 +75,8 @@ export type PeekOwn = {
   username?: string | null;
   bio?: string | null;
   verified?: boolean;
+  /** v4.32.575: свои привязки — из своих же полей профиля. */
+  links?: ProfileLink[] | null;
 };
 
 export type PeekIdentity = {
@@ -93,6 +98,14 @@ export type PeekIdentity = {
   bio: string | null;
   /** Показывать ли официальную галочку. */
   verified: boolean;
+  /**
+   * Привязанные учётные записи. Пустой массив — показывать нечего.
+   *
+   * Признака «подтверждено» здесь нет намеренно: у собеседника он берётся не
+   * из конверта, а из своей же проверки адреса публикации (peerLinkVerify).
+   * Иначе галочку рисовало бы чужое слово.
+   */
+  links: ProfileLink[];
 };
 
 /**
@@ -153,5 +166,6 @@ export function peekIdentity(input: {
     username: (own?.username || contact?.username || '').trim().replace(/^@/, '') || null,
     bio: (own?.bio || contact?.bio || '').trim() || null,
     verified: isSelf ? !!own?.verified : contact?.verified === true,
+    links: (isSelf ? own?.links : contact?.links) ?? [],
   };
 }

@@ -32,6 +32,10 @@ import {
   type ProofCheck,
   type ProofExpectation,
 } from './linkProof';
+// v4.32.575: разбор адресов — там же, где остальные правила площадок.
+import { parseGistId, parseTweetUrl } from './linkPlatform';
+
+export { parseGistId, parseTweetUrl } from './linkPlatform';
 
 /** Столько ждём ответа. Дальше человеку честнее сказать «не дозвонились». */
 const TIMEOUT_MS = 12_000;
@@ -66,21 +70,6 @@ async function getText(url: string, headers: Record<string, string>, deps?: Deps
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-/** Идентификатор gist из адреса, который человек вставил. */
-export function parseGistId(url: unknown): string | null {
-  if (typeof url !== 'string') return null;
-  const m = /^(?:https?:\/\/)?gist\.github\.com\/(?:[A-Za-z0-9-]{1,39}\/)?([0-9a-f]{20,32})(?:[/?#]|$)/i.exec(url.trim());
-  return m ? m[1].toLowerCase() : null;
-}
-
-/** Адрес записи X — вместе с именем автора, каким его показывает сама ссылка. */
-export function parseTweetUrl(url: unknown): { handle: string; id: string } | null {
-  if (typeof url !== 'string') return null;
-  const m = /^(?:https?:\/\/)?(?:www\.|mobile\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/status(?:es)?\/(\d{1,25})(?:[/?#]|$)/i
-    .exec(url.trim());
-  return m ? { handle: m[1], id: m[2] } : null;
 }
 
 /**

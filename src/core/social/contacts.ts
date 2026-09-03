@@ -3,6 +3,7 @@ import { ecdhSharedSecret } from '../crypto/keyManager';
 import { deriveSymmetricKey } from '../crypto/encrypt';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { displayNameOrNull, sanitizeDisplayName, sanitizeParagraphText } from './sysLineGuard';
+import { profileLinksKey, sanitizeProfileLinks, type ProfileLink } from '../identity/profileLinks';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import {
   kvGet,
@@ -186,6 +187,17 @@ export type Contact = {
    * собеседника, иначе она пережила бы то, что подтверждала.
    */
   verified?: 'official';
+  /**
+   * v4.32.575: привязанные учётные записи — имя на площадке и адрес
+   * публикации с доказательством (см. identity/profileLinks).
+   *
+   * Хранится не результатом проверки, в отличие от галочки рядом, а тем, из
+   * чего проверку можно провести. Причина та же, по которой галочка хранится
+   * результатом: галочку проверяет подпись, и это дёшево, а привязку —
+   * запрос к площадке, и делать его за человека при разборе входящего
+   * сообщения нельзя. Кто и когда его сделал, помнит peerLinkVerify.
+   */
+  links?: ProfileLink[];
   /**
    * v4.32.113 T1: true — контакт создан автоматически при переписке со странgerом
    * (implicit). Такие контакты показываются в списке чатов, но не в «Контакты».
@@ -424,6 +436,7 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
           displayName?: unknown; profileCid?: unknown; implicit?: unknown;
           peerName?: unknown; bio?: unknown; avatarCid?: unknown; profileTs?: unknown;
           peerVerified?: unknown;
+          peerLinks?: unknown;
         };
         // v4.32.197 (Round-27 #6): coerce/cap fields. Legacy rows + future
         // import paths may produce non-string / multi-MB values that bloat
@@ -440,6 +453,7 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
         // из разобранного конверта: строки лежат там с прошлых версий и с
         // импорта профиля (identity/profile), где чистки нет вовсе.
         const bio = sanitizeParagraphText(j.bio, 512);
+        const peerLinks = sanitizeProfileLinks(j.peerLinks);
         out.push({
           peerPublicKey: id,
           // Местная подпись важнее: её задал пользователь. Имя из конверта
@@ -458,6 +472,9 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
           // строка в базе могла приехать из резервной копии, и «что угодно
           // непустое» означало бы галочку по чужому файлу.
           ...(j.peerVerified === 'official' ? { verified: 'official' as const } : {}),
+          // Строка в базе — такой же недоверенный ввод, как конверт: она
+          // могла приехать из резервной копии или лежать с прошлой версии.
+          ...(peerLinks ? { links: peerLinks } : {}),
         });
       } catch (e) {
         log.warn('contact_row_parse_failed', { id, err: e instanceof Error ? e.message : String(e) });
@@ -602,6 +619,8 @@ export type PeerProfilePatch = {
   avatarCid: string | null;
   /** v4.32.547: результат проверки бумаги на галочку. Проверяет profileSync. */
   verified?: 'official' | null;
+  /** v4.32.575: привязанные учётные записи — как приехали, непроверенные. */
+  links?: ProfileLink[] | null;
   ts: number;
 };
 
@@ -628,6 +647,9 @@ export async function setPeerProfileFor(
         // как удалённое «О себе»: отсутствие поля в конверте не должно
         // оставлять в базе вчерашнее подтверждение.
         ...(profile.verified !== undefined ? { peerVerified: profile.verified ?? '' } : {}),
+        // Пустой список записывается так же обязательно, как пустая галочка:
+        // человек, отвязавший учётную запись, обязан потерять её и здесь.
+        ...(profile.links !== undefined ? { peerLinks: profile.links ?? [] } : {}),
         profileTs: profile.ts,
       };
       const same =
@@ -635,6 +657,8 @@ export async function setPeerProfileFor(
         (profile.username === undefined || (j.peerUsername ?? '') === next.peerUsername) &&
         (j.bio ?? '') === next.bio &&
         (profile.verified === undefined || (j.peerVerified ?? '') === (profile.verified ?? '')) &&
+        (profile.links === undefined ||
+          profileLinksKey(sanitizeProfileLinks(j.peerLinks)) === profileLinksKey(profile.links)) &&
         (j.avatarCid ?? '') === next.avatarCid;
       await contactRowSet(pid, peerPublicKeyB64, JSON.stringify({ ...j, ...next }));
       return !same;

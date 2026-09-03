@@ -30,6 +30,11 @@ import {
   type PeerProfileEnvelope,
 } from './profileEnvelope';
 import { ownBadgeGrantFor } from '../identity/ownBadge';
+// v4.32.575: привязки едут тем же конвертом, что и имя. Едут именем и адресом
+// публикации, а не признаком «подтверждено»: проверяет получатель — см.
+// identity/profileLinks.
+import { ownLinksFor } from '../identity/ownLinks';
+import { profileLinksKey, type ProfileLink } from '../identity/profileLinks';
 import { badgeFor } from '../identity/verification';
 import { didFromPubB64 } from '../identity/did';
 import { log } from '../logger';
@@ -189,7 +194,8 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   // обновления карточка заново уезжала всем контактам, не сообщая им ничего
   // нового.
   const avatarName = await ownAvatarNameFor(pid);
-  if (!name && !username && !bio && !avatarName) return null;
+  const links = await ownLinksFor(pid);
+  if (!name && !username && !bio && !avatarName && !links) return null;
   const now = Date.now();
   let stamp = Number(await scopedKvGetFor(pid, CHANGED_AT_KEY)) || 0;
   if (!stamp) {
@@ -208,8 +214,8 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   // и спрятанная она бесполезна.
   const badge = await ownBadgeGrantFor(pid);
   return {
-    env: { name, username, bio, avatarCid, badge, ts: stamp },
-    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarName : '', avatarCid != null, badge),
+    env: { name, username, bio, avatarCid, badge, links, ts: stamp },
+    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarName : '', avatarCid != null, badge, links),
   };
 }
 
@@ -241,12 +247,16 @@ function versionOf(
   bio: string | null,
   avatarName: string,
   avatarOk: boolean,
-  badge: string | null
+  badge: string | null,
+  links: ProfileLink[] | null
 ): number {
   // v4.32.547: бумага входит в свёртку. Без неё выданная галочка не уехала бы
   // никому: отметка правки профиля не менялась, версия совпадала с уже
   // отправленной, и рассылка честно пропускала каждый контакт.
-  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarName}|${avatarOk ? '1' : '0'}|${badge ?? ''}`;
+  // v4.32.575: привязки входят в свёртку по той же причине, что и бумага на
+  // галочку: подтверждённая учётная запись не меняет отметку правки профиля, и
+  // без неё в свёртке новая привязка не уехала бы ни одному контакту.
+  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarName}|${avatarOk ? '1' : '0'}|${badge ?? ''}|${profileLinksKey(links)}`;
   // FNV-1a: нужен не криптостойкий хэш, а стабильное число для сравнения
   // «то же самое или уже другое» — обе стороны сравнения свои.
   let h = 0x811c9dc5;
