@@ -134,8 +134,9 @@ export function UserProfilePeek({
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
   const displayName = identity.contactName;
 
-  // v4.32.540: постоянный идентификатор аккаунта — выводится из DID, то есть
-  // из ключа: переименование контакта у себя его не трогает.
+  // v4.32.573: идентификатор аккаунта с карточки убран — показывать его
+  // собеседнику незачем (см. core/identity/accountRef). Вычисляться он не
+  // перестал: от него берётся обложка, и она должна остаться той же самой.
   const peerPublicId = useMemo(() => publicIdFor('account', resolved?.did ?? ''), [resolved]);
   // Обложка — от идентификатора, а не от имени: переименовал контакт у себя,
   // а карточка осталась той же самой.
@@ -150,16 +151,6 @@ export function UserProfilePeek({
       showError('Не удалось скопировать');
     }
   }, [resolved]);
-
-  const handleCopyPublicId = useCallback(async () => {
-    if (!peerPublicId) return;
-    try {
-      await Clipboard.setStringAsync(peerPublicId);
-      showSuccess(COPIED_ID);
-    } catch {
-      showError('Не удалось скопировать');
-    }
-  }, [peerPublicId]);
 
   const handleShareId = useCallback(async () => {
     if (!resolved) return;
@@ -340,22 +331,6 @@ export function UserProfilePeek({
                 знаков. Он выводится из ключа: имя контакта человек меняет у
                 себя как хочет, идентификатор от этого не меняется.
               */}
-              {peerPublicId ? (
-                <AppPressable
-                  style={[styles.didBox, { borderColor: colors.border }]}
-                  onPress={() => void handleCopyPublicId()}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Постоянный идентификатор: ${peerPublicId}`}
-                  testID="peek_public_id"
-                >
-                  <Text style={[styles.didLabel, { color: colors.textSecondary }]}>
-                    Постоянный идентификатор
-                  </Text>
-                  <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1} selectable>
-                    {peerPublicId}
-                  </Text>
-                </AppPressable>
-              ) : null}
 
               <View style={styles.actions}>
                 {!isSelf && (

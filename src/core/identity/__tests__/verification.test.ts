@@ -2,6 +2,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import type { KeyPairBytes } from '../../crypto/keyManager';
 import { signJson } from '../../crypto/signature';
 import { publicKeyToDidKey } from '../did';
+import { publicIdFor } from '../publicId';
 import { badgeFor, encodeGrant, readGrant, MAX_GRANT_LEN } from '../verification';
 
 // v4.32.547: галочка — единственное место, где приложение верит бумаге, а не
@@ -66,6 +67,45 @@ describe('readGrant', () => {
 
     expect(await readGrant(paper, owner.did)).not.toBeNull();
     expect(await readGrant(paper, thief.did)).toBeNull();
+  });
+
+  it('ссылка на аккаунт в бумаге сверяется с ключом', async () => {
+    // v4.32.573: `ref` необязателен, но записанный — обязан совпасть. Выдающий,
+    // назвавший аккаунт дважды и по-разному, ошибся; предпочесть одну половину
+    // молча нельзя, иначе сверка не сверяет ничего.
+    const me = account();
+    const other = account();
+
+    const withRef = encodeGrant(
+      await signJson(issuer, {
+        v: 1,
+        kind: 'official',
+        did: me.did,
+        ref: publicIdFor('account', me.did),
+        username: 'founder',
+        issuedAt: 1_700_000_000_000,
+      })
+    );
+    expect(await readGrant(withRef, me.did)).not.toBeNull();
+
+    const wrongRef = encodeGrant(
+      await signJson(issuer, {
+        v: 1,
+        kind: 'official',
+        did: me.did,
+        ref: publicIdFor('account', other.did),
+        username: 'founder',
+        issuedAt: 1_700_000_000_000,
+      })
+    );
+    expect(await readGrant(wrongRef, me.did)).toBeNull();
+  });
+
+  it('бумага без ссылки на аккаунт остаётся действительной', async () => {
+    // Выданные до v4.32.573 бумаги поля `ref` не содержат: сверка есть, но
+    // требованием она не стала, иначе перевыпускать пришлось бы всё разом.
+    const me = account();
+    expect(await readGrant(await grantFor(me.did, 'founder'), me.did)).not.toBeNull();
   });
 
   it('подпись чужим ключом не считается', async () => {

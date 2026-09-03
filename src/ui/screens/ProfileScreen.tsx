@@ -43,7 +43,6 @@ import { checkUsernameClaim, USERNAME_MIN_SELF_SERVICE } from '../../core/identi
 import { applyOwnBadgeGrant, ownBadgeClaim } from '../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../core/identity/verification';
 import { saveOwnUsernameGlobally } from '../../core/identity/usernameRegistry';
-import { publicIdFor } from '../../core/identity/publicId';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
 import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope';
@@ -122,9 +121,10 @@ function ProfileScreenImpl({
   const { colors, scheme } = useTheme();
   // v4.32.540: отступ под часы — теперь дело экрана, а не оболочки (см. App.tsx).
   const insets = useSafeAreaInsets();
-  // v4.32.540: постоянный идентификатор аккаунта выводится из DID, то есть из
-  // ключа. Переименование, смена юзернейма и аватара его не трогают.
-  const accountPublicId = useMemo(() => publicIdFor('account', did), [did]);
+  // v4.32.573: постоянный идентификатор аккаунта с экрана убран. Он никуда не
+  // делся и по-прежнему выводится из ключа, но человеку показывать его незачем:
+  // сверяют собеседника по адресу для связи ниже, а ссылка на аккаунт нужна
+  // коду — она читается через core/identity/accountRef.
   // v4.32.540: у профиля появился фон. Это тот же слой, что под перепиской, и
   // тот же пресет по умолчанию — «aurora» в тёмной теме, «daylight» в светлой.
   // Своего выбора у профиля нет умышленно: обои настраиваются у разговора,
@@ -788,21 +788,6 @@ function ProfileScreenImpl({
             и фотографию тем более — а это выводится из ключа и не меняется
             никогда, поэтому по нему собеседник и сверяет, тот ли это человек.
           */}
-          {accountPublicId ? (
-            <AppPressable
-              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
-              onPress={() => {
-                void Clipboard.setStringAsync(accountPublicId).then(() => showSuccess(COPIED_ID));
-              }}
-              accessibilityLabel={`Постоянный идентификатор аккаунта ${accountPublicId}`}
-              testID="profile_public_id"
-            >
-              <Text style={{ color: colors.textMuted, fontSize: scaleFont(font.sm), letterSpacing: 0.5 }}>
-                {accountPublicId}
-              </Text>
-              <Ionicons name="copy-outline" size={13} color={colors.textMuted} style={{ marginLeft: 6 }} />
-            </AppPressable>
-          ) : null}
           {/* Pronouns */}
           {isEditingPronouns ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
