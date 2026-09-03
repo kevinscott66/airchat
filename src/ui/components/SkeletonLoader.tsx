@@ -81,6 +81,49 @@ export function FeedPostSkeleton(): React.ReactElement {
   );
 }
 
+/**
+ * Скелетон строки списка чатов (v4.32.561).
+ *
+ * Список приходит из базы не мгновенно, а до этого он пуст — и на месте чатов
+ * секунду висела надпись «Нет переписок» с советом добавить собеседника.
+ * Человеку с сотней чатов приложение при каждом открытии сообщало, что чатов у
+ * него нет. Размеры повторяют настоящую строку (аватар 48, отступы 16/12),
+ * чтобы список не дёргался, когда данные доедут.
+ */
+export function ChatRowSkeleton(): React.ReactElement {
+  const skStyles = useThemedStyles(() => ({
+    row: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      gap: 12,
+    },
+    body: { flex: 1, gap: 6 },
+  }));
+
+  return (
+    <View style={skStyles.row}>
+      <SkeletonBlock width={48} height={48} borderRadius={24} />
+      <View style={skStyles.body}>
+        <SkeletonBlock width="42%" height={15} />
+        <SkeletonBlock width="68%" height={12} />
+      </View>
+    </View>
+  );
+}
+
+/** Несколько строк подряд — заглушка всего списка, пока он читается. */
+export function ChatListSkeleton({ count = 7 }: { count?: number }): React.ReactElement {
+  return (
+    <View>
+      {Array.from({ length: count }, (_, i) => (
+        <ChatRowSkeleton key={i} />
+      ))}
+    </View>
+  );
+}
+
 /** Скелетон пузыря сообщения. */
 export function MessageSkeleton({ outgoing = false }: { outgoing?: boolean }): React.ReactElement {
   const skStyles = useThemedStyles((c) => ({

@@ -69,6 +69,7 @@ import { showError, showSuccess } from '../components/userFeedback';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { StoriesRow } from '../components/StoriesRow';
+import { ChatListSkeleton } from '../components/SkeletonLoader';
 import { GlassSurface } from '../components/GlassSurface';
 import { useIpfsGateway, useResolvedMediaUrl } from './chat-components/useResolvedMediaUrls';
 import { usePresence } from '../hooks/usePresence';
@@ -617,6 +618,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   const insets = useSafeAreaInsets();
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  // v4.32.561: список читается из базы, и до первого ответа он пуст — на этом
+  // месте секунду висело «Нет переписок» с советом добавить собеседника, даже у
+  // того, у кого чатов сотня. Пока не ответила база, показываем заглушку строк.
+  const [firstLoad, setFirstLoad] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchVisible, setSearchVisible] = useState(false);
@@ -722,7 +727,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   }, [activeProfileId, showArchived, pair]);
 
   useEffect(() => {
-    void loadData();
+    void loadData().finally(() => setFirstLoad(false));
   }, [loadData, refreshTick]);
 
   // Названия папок принадлежат профилю, поэтому перечитываются вместе со
@@ -1444,7 +1449,9 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           ) : null
         }
         ListEmptyComponent={
-          searchQuery ? (
+          firstLoad && !searchQuery ? (
+            <ChatListSkeleton />
+          ) : searchQuery ? (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: colors.textMuted }]}>
                 Ничего не найдено
