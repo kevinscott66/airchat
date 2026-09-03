@@ -137,12 +137,13 @@ export type SyncRequestError = Error & { status: number; code?: string };
  * добавились поля рядом с ним.
  */
 function responseError(status: number, code?: string): SyncRequestError {
-  const message = code === 'device_revoked' ? 'Это устройство отозвано. Войдите снова на этом устройстве.'
-    : status === 401 || status === 403 ? 'Синхронизация отклонена сервером.'
-      : status === 409 ? 'Устройство или версия данных устарели.'
-        : status === 429 ? 'Слишком много запросов синхронизации.'
-          : status === 413 ? 'Облачное хранилище переполнено.'
-            : `Сервер синхронизации недоступен (HTTP ${status}).`;
+  const message = code === 'bad_json' ? 'Сервер синхронизации ответил не по протоколу.'
+    : code === 'device_revoked' ? 'Это устройство отозвано. Войдите снова на этом устройстве.'
+      : status === 401 || status === 403 ? 'Синхронизация отклонена сервером.'
+        : status === 409 ? 'Устройство или версия данных устарели.'
+          : status === 429 ? 'Слишком много запросов синхронизации.'
+            : status === 413 ? 'Облачное хранилище переполнено.'
+              : `Сервер синхронизации недоступен (HTTP ${status}).`;
   return Object.assign(new Error(message), { status, code });
 }
 
@@ -170,10 +171,38 @@ async function fetchSigned<T>(url: string, signed: { payload: string; signature:
       } catch { /* non-JSON proxy error */ }
       throw responseError(response.status, code);
     }
-    return (await response.json()) as T;
+    // v4.32.565: тело успешного ответа разбирается в try — как и тело
+    // ошибки двумя строками выше. Раньше здесь ловить было нечем: ответ
+    // 200 не от нашего сервера (заглушка прокси, портал гостевого Wi-Fi,
+    // страница 404 хостинга) отдавал наружу английский SyntaxError, а
+    // английский текст не проходит проверку на кириллицу в userErrorText —
+    // и человек видел общий запасной текст, одинаковый для «нет сети» и
+    // «ответил не тот сервер». Это и был случай «Активные сессии».
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw responseError(response.status, 'bad_json');
+    }
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Куда сейчас указывает синхронизация — только имя узла, без пути и схемы.
+ *
+ * Нужно экрану: когда список сессий не грузится, первый вопрос — «а адрес
+ * вообще подставился при сборке?». В git на месте адреса лежит заглушка
+ * (см. bundledConfig), и отличить сборку с заглушкой от сборки с настоящим
+ * адресом иначе нельзя, не открывая журнал.
+ */
+export function syncServerHost(): string | null {
+  const base = syncBaseUrl();
+  if (!base) return null;
+  // Разбор вручную, а не `new URL`: в Hermes это неполная реализация, и
+  // падать на строке «куда мы стучались» — ровно тот случай, когда
+  // диагностика ломает то, что чинит.
+  return /^[a-z]+:\/\/([^/?#]+)/i.exec(base)?.[1] ?? base;
 }
 
 let enrollmentForDevice: { key: string; promise: Promise<void> } | null = null;

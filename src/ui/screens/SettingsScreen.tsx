@@ -86,9 +86,10 @@ import { pushNotificationService } from '../../notifications/pushNotifications';
 import { formatByteSize } from '../../core/media/byteSize';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
-import { userErrorText } from '../components/userErrorText';
+import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
-import { listSyncDevices, revokeSyncDevice, syncDeviceId, type SyncDevice } from '../../core/sync/syncApi';
+import { log } from '../../core/logger';
+import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
 
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -414,6 +415,11 @@ function SettingsScreenImpl({
         }));
       setCurrentSyncDeviceId(currentId);
     } catch (error) {
+      // v4.32.565: сырой текст уходит в журнал. Наружу его показывать нельзя
+      // (он английский и машинный), но и терять его нельзя: без него
+      // «Не удалось загрузить список сессий» — это единственное, что знают
+      // и человек, и разработчик, и оно одинаково для всех причин.
+      log.warn('sync_devices_load_failed', { host: syncServerHost() ?? 'не настроен', err: rawErrorText(error) });
       setSyncDevicesError(userErrorText(error, 'Не удалось загрузить список сессий.'));
       setSyncDevices([]);
     } finally {
@@ -442,6 +448,7 @@ function SettingsScreenImpl({
                 await loadSyncDevices();
                 showSuccess('Сессия завершена');
               } catch (error) {
+                log.warn('sync_device_revoke_failed', { err: rawErrorText(error) });
                 setSyncDevicesError(userErrorText(error, 'Не удалось завершить сессию.'));
               } finally {
                 setRevokingDeviceId(null);
@@ -1906,7 +1913,27 @@ function SettingsScreenImpl({
             {syncDevicesBusy && syncDevices.length === 0 ? (
               <ActivityIndicator color={colors.accent} style={{ padding: 24 }} />
             ) : syncDevicesError && syncDevices.length === 0 ? (
-              <Text style={[styles.desc, { textAlign: 'center', padding: 20, color: colors.error }]}>{syncDevicesError}</Text>
+              // v4.32.565: было только красное предложение и «Закрыть» — из
+              // тупика нельзя было ни повторить попытку, ни понять, куда
+              // приложение вообще стучалось. Адрес отвечает на первый вопрос
+              // («а он подставился при сборке?»), кнопка — на второй.
+              <View style={{ paddingVertical: 20, paddingHorizontal: 12, gap: 10 }}>
+                <Text style={[styles.desc, { textAlign: 'center', color: colors.error }]}>{syncDevicesError}</Text>
+                <Text style={[styles.desc, { textAlign: 'center' }]} numberOfLines={1}>
+                  Сервер: {syncServerHost() ?? 'не настроен'}
+                </Text>
+                <AppPressable
+                  onPress={() => { void loadSyncDevices(); }}
+                  disabled={syncDevicesBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Повторить загрузку списка сессий"
+                  style={{ alignSelf: 'center' }}
+                >
+                  <Text style={[styles.pwdCancel, { color: syncDevicesBusy ? colors.textMuted : colors.accent }]}>
+                    {syncDevicesBusy ? 'Загрузка…' : 'Повторить'}
+                  </Text>
+                </AppPressable>
+              </View>
             ) : syncDevices.length === 0 ? (
               <Text style={[styles.desc, { textAlign: 'center', padding: 20 }]}>Авторизованных устройств нет</Text>
             ) : (
