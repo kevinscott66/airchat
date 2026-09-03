@@ -111,10 +111,22 @@ describe('отправка личного сообщения сверяет чи
 
   it('сообщение без единого вложения не отправляется, и это исключение', () => {
     const s = MESSAGING();
-    const at = s.indexOf("if (verdict.kind === 'abort') {");
+    // v4.32.560: таких веток теперь две — у отправки собеседнику и у записи в
+    // «Избранное» (saveToSelfChat). Ищем именно первую, иначе проверка молча
+    // переезжает на соседнюю и перестаёт стеречь отправку.
+    const at = s.indexOf("if (verdict.kind === 'abort') {", s.indexOf('private async sendMessageWork'));
     expect(at).toBeGreaterThan(-1);
     const branch = s.slice(at, s.indexOf('\n      }\n', at));
     expect(branch).toContain("log.warn('dm_media_all_failed'");
+    expect(branch).toContain('throw new Error(verdict.text);');
+  });
+
+  it('в «Избранном» несложившееся вложение тоже не превращается в пустую запись', () => {
+    const s = MESSAGING();
+    const at = s.indexOf("if (verdict.kind === 'abort') {", s.indexOf('private async saveToSelfChat'));
+    expect(at).toBeGreaterThan(-1);
+    const branch = s.slice(at, s.indexOf('\n      }\n', at));
+    expect(branch).toContain("log.warn('dm_self_media_all_failed'");
     expect(branch).toContain('throw new Error(verdict.text);');
   });
 

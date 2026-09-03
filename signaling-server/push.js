@@ -23,6 +23,7 @@
 const crypto = require('crypto');
 
 const { hasExactKeys, isBoundedString, isPeerId, isSignature, verifyEd25519 } = require('./wire');
+const { createWebPushClient, parseSubscription } = require('./webpush');
 const {
   MAX_TOKENS,
   TOKEN_TTL_MS,
@@ -46,7 +47,9 @@ const SEND_RATE_WINDOW_MS = 60 * 1000;
 const SEND_RATE_LIMIT = 60;
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 60 * 1000;
-const PLATFORMS = new Set(['android', 'ios']);
+// v4.32.560: 'web' — установленная как PWA страница. Токеном ей служит не
+// строка FCM, а подписка Push API целиком (см. webpush.parseSubscription).
+const PLATFORMS = new Set(['android', 'ios', 'web']);
 /**
  * `call` добавлен в v4.32.573: звонок доезжал только до открытого приложения,
  * потому что жил в живом сокете сигнализации. Push его не заменяет — он лишь
@@ -79,6 +82,15 @@ function isTimestamp(value, nowMs) {
 /** Токен устройства FCM: печатные ASCII, длина ограничена. */
 function isDeviceToken(value) {
   return isBoundedString(value, MAX_DEVICE_TOKEN_LENGTH) && /^[A-Za-z0-9_:.~%+/=-]+$/.test(value);
+}
+
+/**
+ * У веба «токен» — это JSON подписки, и общее правило для токенов FCM его
+ * отвергает (фигурные скобки, кавычки). Проверяет его тот же разбор, что и
+ * отправка: подписка либо разбирается в https-адрес, либо не годится вовсе.
+ */
+function isRegistrationToken(value, platform) {
+  return platform === 'web' ? parseSubscription(value) !== null : isDeviceToken(value);
 }
 
 function isCid(value) {
@@ -331,11 +343,15 @@ function createPushRoutes(options = {}) {
     const account = options.serviceAccount ?? loadServiceAccount(options.env);
     fcm = account ? createFcmClient(account, { now, fetch: options.fetch }) : null;
   }
+  // v4.32.560: у веба своя доставка и свои ключи. Одного без другого достаточно:
+  // сервер без VAPID молча не шлёт web-push, сервер без FCM — нативных.
+  const webPush = options.webPush
+    ?? createWebPushClient({ env: options.env, now, fetch: options.fetch });
 
   async function handleRegister(request, response) {
     const body = await readJsonBody(request);
     const claim = openEnvelope(body, ['peerId', 'platform', 'token', 'ts'], 'peerId', now());
-    if (!claim || !PLATFORMS.has(claim.platform) || !isDeviceToken(claim.token)) {
+    if (!claim || !PLATFORMS.has(claim.platform) || !isRegistrationToken(claim.token, claim.platform)) {
       respond(response, 400, { error: 'bad_request' });
       return;
     }
@@ -371,13 +387,17 @@ function createPushRoutes(options = {}) {
       respond(response, 204);
       return;
     }
-    if (!fcm) {
-      log('push_not_configured', {});
+    const sender = entry.platform === 'web' ? webPush : fcm;
+    if (!sender) {
+      log('push_not_configured', { platform: entry.platform });
       respond(response, 204);
       return;
     }
     try {
-      const outcome = await fcm.send(entry, {
+      // Веб получает пустой push: cid и did остаются здесь. Через чужой
+      // push-сервис не проходит ничего — баннер собирает страница, когда её
+      // откроют (см. webpush).
+      const outcome = await sender.send(entry, {
         cid: claim.cid,
         contactDid: claim.senderDid,
         kind: claim.kind,
@@ -395,8 +415,21 @@ function createPushRoutes(options = {}) {
     get configured() {
       return fcm !== null;
     },
+    get webPushConfigured() {
+      return webPush !== null;
+    },
     /** @returns {boolean} взял ли обработчик запрос на себя */
     handle(request, response) {
+      // Открытый ключ VAPID — единственное, что браузеру нужно от нас до
+      // подписки, и он открытый по определению: отдаём без подписи и всем.
+      if (request.method === 'GET' && request.url === '/webpush-key') {
+        if (!webPush) {
+          respond(response, 404, { error: 'not_configured' });
+          return true;
+        }
+        respond(response, 200, { key: webPush.publicKey });
+        return true;
+      }
       if (request.method !== 'POST') return false;
       if (request.url === '/register-token') {
         void handleRegister(request, response);
@@ -413,6 +446,7 @@ function createPushRoutes(options = {}) {
 
 module.exports = {
   createPushRoutes,
+  isRegistrationToken,
   createTokenRegistry,
   createSendLimiter,
   createFcmClient,

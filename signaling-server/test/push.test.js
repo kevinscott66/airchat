@@ -31,6 +31,10 @@ async function withRoutes(overrides, run) {
   const routes = createPushRoutes({
     registry: createTokenRegistry(overrides.registryOptions),
     limiter: overrides.limiter,
+    // Пустое окружение: иначе набор ключей на машине, где идут тесты, менял бы
+    // их исход. Web-push подставляется явно тем тестом, которому он нужен.
+    env: overrides.env ?? {},
+    webPush: overrides.webPush,
     fcm: overrides.fcm ?? {
       async send(entry, data) {
         sent.push({ entry, data });
@@ -51,7 +55,7 @@ async function withRoutes(overrides, run) {
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
   try {
-    await run({ post, routes, sent });
+    await run({ post, routes, sent, base });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -389,4 +393,154 @@ test('push endpoints stay quiet without credentials', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// --- веб-подписки (v4.32.560) -------------------------------------------------
+
+const WEB_SUBSCRIPTION = JSON.stringify({
+  endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/fake-id',
+  expirationTime: null,
+  keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) },
+});
+
+/** Отправитель web-push с перехватом: настоящий проверяется в webpush.test.js. */
+function fakeWebPush(outcome = 'sent') {
+  const sent = [];
+  return {
+    sent,
+    publicKey: 'BFakePublicKeyForTests',
+    async send(entry, message) {
+      sent.push({ entry, message });
+      return outcome;
+    },
+  };
+}
+
+test('веб регистрируется подпиской, а не токеном устройства', async () => {
+  const me = makeIdentity();
+  await withRoutes({}, async ({ post, routes }) => {
+    const ok = await post('/register-token', me.sign({
+      peerId: me.peerId,
+      platform: 'web',
+      token: WEB_SUBSCRIPTION,
+      ts: Date.now(),
+    }));
+    assert.equal(ok.status, 204);
+    assert.equal(routes.registry.get(me.peerId).platform, 'web');
+    assert.equal(routes.registry.get(me.peerId).token, WEB_SUBSCRIPTION);
+  });
+});
+
+test('под видом веба не зарегистрировать что попало', async () => {
+  const me = makeIdentity();
+  const cases = [
+    ['web', ANDROID_TOKEN],
+    ['web', JSON.stringify({ endpoint: 'http://updates.push.services.mozilla.com/wpush/v2/x' })],
+    ['web', JSON.stringify({ endpoint: 'http://127.0.0.1:8787/internal' })],
+    // И наоборот: подписка — не токен устройства.
+    ['android', WEB_SUBSCRIPTION],
+  ];
+  for (const [platform, token] of cases) {
+    await withRoutes({}, async ({ post, routes }) => {
+      const response = await post('/register-token', me.sign({
+        peerId: me.peerId, platform, token, ts: Date.now(),
+      }));
+      assert.equal(response.status, 400, `${platform}: ${token.slice(0, 40)}`);
+      assert.equal(routes.registry.get(me.peerId), null);
+    });
+  }
+});
+
+test('веб уходит своей дорогой, мимо FCM', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  const webPush = fakeWebPush();
+  await withRoutes({ webPush }, async ({ post, routes, sent }) => {
+    routes.registry.set(peer.peerId, WEB_SUBSCRIPTION, 'web', Date.now());
+    const response = await post('/send-push', me.sign({
+      cid: 'bafyreiabc123',
+      kind: 'call',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: me.peerId,
+      targetPeerId: peer.peerId,
+      ts: Date.now(),
+    }));
+    assert.equal(response.status, 204);
+    assert.equal(sent.length, 0);
+    assert.equal(webPush.sent.length, 1);
+    assert.equal(webPush.sent[0].entry.token, WEB_SUBSCRIPTION);
+    assert.equal(webPush.sent[0].message.kind, 'call');
+  });
+});
+
+test('нативный получатель по-прежнему уходит в FCM', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  const webPush = fakeWebPush();
+  await withRoutes({ webPush }, async ({ post, routes, sent }) => {
+    routes.registry.set(peer.peerId, IOS_TOKEN, 'ios', Date.now());
+    await post('/send-push', me.sign({
+      cid: 'bafyreiabc123',
+      kind: 'dm',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: me.peerId,
+      targetPeerId: peer.peerId,
+      ts: Date.now(),
+    }));
+    assert.equal(webPush.sent.length, 0);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].entry.platform, 'ios');
+  });
+});
+
+test('пропавшая веб-подписка забывается', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  await withRoutes({ webPush: fakeWebPush('stale') }, async ({ post, routes }) => {
+    routes.registry.set(peer.peerId, WEB_SUBSCRIPTION, 'web', Date.now());
+    const response = await post('/send-push', me.sign({
+      cid: 'bafyreiabc123',
+      kind: 'dm',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: me.peerId,
+      targetPeerId: peer.peerId,
+      ts: Date.now(),
+    }));
+    // Ответ тот же 204: по коду нельзя узнать, есть ли у человека push.
+    assert.equal(response.status, 204);
+    assert.equal(routes.registry.get(peer.peerId), null);
+  });
+});
+
+test('веб без ключей VAPID молчит, а не падает', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  await withRoutes({}, async ({ post, routes }) => {
+    assert.equal(routes.webPushConfigured, false);
+    routes.registry.set(peer.peerId, WEB_SUBSCRIPTION, 'web', Date.now());
+    const response = await post('/send-push', me.sign({
+      cid: 'bafyreiabc123',
+      kind: 'dm',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: me.peerId,
+      targetPeerId: peer.peerId,
+      ts: Date.now(),
+    }));
+    assert.equal(response.status, 204);
+  });
+});
+
+test('открытый ключ VAPID отдаётся браузеру без подписи', async () => {
+  const webPush = fakeWebPush();
+  await withRoutes({ webPush }, async ({ base, routes }) => {
+    assert.equal(routes.webPushConfigured, true);
+    const response = await fetch(`${base}/webpush-key`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { key: 'BFakePublicKeyForTests' });
+  });
+  // Ключей нет — браузеру честно говорят, что подписываться не на что.
+  await withRoutes({}, async ({ base }) => {
+    const response = await fetch(`${base}/webpush-key`);
+    assert.equal(response.status, 404);
+  });
 });

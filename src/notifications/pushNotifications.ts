@@ -283,12 +283,34 @@ export class PushNotificationService {
         });
       });
 
-      await messaging().requestPermission();
-      const token = await messaging().getToken();
-      await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
-      log.info('push_fcm_token', { len: token?.length ?? 0 });
       this.currentPeerId = options.peerId;
-      await this.registerTokenWithSignaling(options.peerId, token);
+      // v4.32.561: токен push — не условие остальной подготовки. В браузере его
+      // не будет, пока человек не разрешит уведомления, а на телефоне без Play
+      // Services getToken бросает — и раньше на этом месте обрывался весь init:
+      // обработчики нажатий по баннеру не ставились вовсе.
+      try {
+        // Разрешение на вебе спрашивает сам человек нажатием (Настройки →
+        // «Уведомления в браузере», см. enableWebPush): Safari даёт Push API
+        // только по жесту, а прочие браузеры иначе показали бы запрос на
+        // пустом месте, при первом открытии страницы. Уже выданное — берём.
+        const authorized = messaging.AuthorizationStatus?.AUTHORIZED ?? 1;
+        let granted = true;
+        if (Platform.OS === 'web') {
+          granted = (await messaging().hasPermission()) === authorized;
+        } else {
+          await messaging().requestPermission();
+        }
+        if (granted) {
+          const token = await messaging().getToken();
+          await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
+          log.info('push_fcm_token', { len: token?.length ?? 0 });
+          await this.registerTokenWithSignaling(options.peerId, token);
+        } else {
+          log.info('push_permission_pending', { platform: Platform.OS });
+        }
+      } catch (e) {
+        log.warn('push_token_unavailable', { err: e instanceof Error ? e.message : String(e) });
+      }
 
       this.unsubOnMessage = messaging().onMessage(async (remoteMessage: { data?: Record<string, string> }) => {
         // v4.32.220 (Paranoid HIGH-4): ignore server-supplied senderName and
@@ -507,7 +529,10 @@ export class PushNotificationService {
     // Ретранслятор знает людей по сырому ключу в base64 — так же, как сокет
     // сигналинга. Разбирать did:key на сервере нечем; см. pushEnvelope.
     const signedPeerId = peerIdFromDid(peerId);
-    if (!signedPeerId || (Platform.OS !== 'android' && Platform.OS !== 'ios')) {
+    // v4.32.560: web сюда тоже доходит. «Токен» у него — JSON подписки
+    // браузера, и сервер отличает его по этому же полю platform: у веба своя
+    // доставка и свои ключи (см. web/shims/firebase-messaging).
+    if (!signedPeerId || (Platform.OS !== 'android' && Platform.OS !== 'ios' && Platform.OS !== 'web')) {
       log.warn('push_register_unsupported', { platform: Platform.OS });
       return;
     }
@@ -541,6 +566,73 @@ export class PushNotificationService {
       log.warn('push_register_error', { err: e instanceof Error ? e.message : String(e) });
     } finally {
       clearTimeout(to);
+    }
+  }
+
+  /**
+   * Включить уведомления в браузере — строго по нажатию человека (v4.32.561).
+   *
+   * Safari отдаёт Push API только в ответ на жест, поэтому при старте страницы
+   * мы ничего не спрашиваем: спрашивает переключатель в настройках. Дальше всё
+   * как на телефоне — разрешение, «токен» и запись его на сигналинге; у веба
+   * «токен» это JSON подписки браузера (см. web/shims/firebase-messaging и
+   * public/sw.js).
+   */
+  async enableWebPush(): Promise<'enabled' | 'denied' | 'unsupported' | 'failed'> {
+    if (Platform.OS !== 'web') return 'unsupported';
+    // Без личности писать подписку некуда: сигналинг хранит её на peerId.
+    const peerId = this.currentPeerId;
+    if (!peerId) return 'failed';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const messaging = require('@react-native-firebase/messaging').default;
+      const authorized = messaging.AuthorizationStatus?.AUTHORIZED ?? 1;
+      if ((await messaging().requestPermission()) !== authorized) return 'denied';
+      const token = await messaging().getToken();
+      await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
+      await this.registerTokenWithSignaling(peerId, token);
+      log.info('push_web_enabled');
+      return 'enabled';
+    } catch (e) {
+      log.warn('push_web_enable_failed', { err: e instanceof Error ? e.message : String(e) });
+      return 'failed';
+    }
+  }
+
+  /**
+   * Выключить уведомления в браузере (v4.32.561).
+   *
+   * Снять само разрешение страница не может — его отзывает человек в настройках
+   * браузера. Что мы можем — отписаться: адрес доставки после этого мёртв, и
+   * сервер выбрасывает запись при первой же попытке (410 Gone, см. push.js).
+   */
+  async disableWebPush(): Promise<void> {
+    if (Platform.OS !== 'web') return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const messaging = require('@react-native-firebase/messaging').default;
+      await messaging().deleteToken();
+      try { await SecureStore.deleteItemAsync(FCM_TOKEN_KEY); } catch { /* ignore */ }
+      log.info('push_web_disabled');
+    } catch (e) {
+      log.warn('push_web_disable_failed', { err: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /**
+   * Выдано ли уже разрешение на уведомления в браузере (v4.32.561).
+   *
+   * Нужно переключателю в настройках, чтобы показать положение, а не гадать.
+   */
+  async webPushGranted(): Promise<boolean> {
+    if (Platform.OS !== 'web') return false;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const messaging = require('@react-native-firebase/messaging').default;
+      const authorized = messaging.AuthorizationStatus?.AUTHORIZED ?? 1;
+      return (await messaging().hasPermission()) === authorized;
+    } catch {
+      return false;
     }
   }
 
@@ -678,7 +770,9 @@ export async function notifyFeedEvent(opts: {
   postId?: string;
   kind: 'post' | 'comment';
 }): Promise<void> {
-  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
+  // v4.32.561: и веб — баннер там показывает тот же notifee (web/shims/notifee),
+  // разрешение он спрашивает лениво, при первом показе.
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios' && Platform.OS !== 'web') return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const notifee = require('@notifee/react-native').default;
@@ -723,7 +817,9 @@ export async function notifyFeedEvent(opts: {
  * это уведомление и так не нарушает.
  */
 export async function notifyMissedCall(opts: { count: number }): Promise<void> {
-  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
+  // v4.32.561: и веб — баннер там показывает тот же notifee (web/shims/notifee),
+  // разрешение он спрашивает лениво, при первом показе.
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios' && Platform.OS !== 'web') return;
   if (opts.count <= 0) return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports

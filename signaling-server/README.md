@@ -78,6 +78,48 @@ It is read from the environment only and is never in the repository. Without
 it the endpoints still answer `204`, log once, and signaling keeps working:
 push is the part that degrades, not the call.
 
+## Web Push — 4.32.561
+
+The browser has background delivery and needs nobody's certificate for it:
+Service Worker + Push API + a VAPID signature. A page installed as a PWA is
+notified with the tab closed — which is exactly what an IPA signed with someone
+else's team certificate cannot do.
+
+The subscription arrives through the same signed `/register-token` with
+`platform: "web"`; its "token" is the JSON the browser hands out
+(`PushSubscription.toJSON()`), and it is accepted only if it parses into an
+`https` endpoint — an `http://` or internal address is refused, so the endpoint
+cannot be turned into a request generator against our own network.
+
+- `GET /webpush-key` — the public VAPID key, or `404 not_configured`. It is
+  public by definition: the browser needs it to tell our pushes from anyone
+  else's. No signature required.
+
+The push itself is **empty** (RFC 8030). That is not an economy: the payload
+would pass through Google, Mozilla or Apple, and the only way to tell them
+nothing is to send nothing. The Service Worker draws an impersonal banner, and
+what actually arrived the page finds out for itself once it is opened. This
+also removes the payload-encryption machinery of RFC 8291 — there is nothing to
+encrypt. A `404`/`410` from the push service means the subscription is gone and
+the entry is dropped.
+
+The page asks for the permission on a tap, in Settings → Notifications →
+«Уведомления в браузере», and never on load: Safari — the only route to
+notifications on an iPhone without the App Store — hands out the Push API in
+response to a gesture, and a browser remembers a refusal for the whole domain.
+Turning the switch off unsubscribes the browser; the entry here dies with the
+next push (`410 Gone`), because a page cannot withdraw its own permission.
+
+### Credentials
+
+`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (base64url raw scalar or a PKCS#8 PEM)
+and `VAPID_SUBJECT` (`mailto:` or `https:`). Generate the pair yourself with
+`npm run vapid` and put it into the server's secrets; nothing is written to
+disk. Without the three variables web-push is simply off — the endpoints still
+answer `204` and `/webpush-key` answers `404`. Changing the keys invalidates
+every existing browser subscription; people re-subscribe when they next open
+the page.
+
 ```sh
 fly secrets set FCM_SERVICE_ACCOUNT_JSON="$(base64 -i service-account.json)"
 ```

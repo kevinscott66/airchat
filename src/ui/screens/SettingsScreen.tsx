@@ -82,6 +82,7 @@ import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/pee
 import { KEEPALIVE_KEY, setBackgroundKeepaliveEnabled } from '../../core/social/backgroundKeepalive';
 import { getLanTransportSingleton } from '../../core/transport/lan/lanTransport';
 import { listMuted, unmute, type MuteEntry } from '../../core/notifications/muteStore';
+import { pushNotificationService } from '../../notifications/pushNotifications';
 import { formatByteSize } from '../../core/media/byteSize';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
@@ -248,6 +249,17 @@ function SettingsScreenImpl({
   // глушат — см. notifications/backgroundNotifyPrefs.
   const [notifyCalls, setNotifyCalls] = useState(true);
   const [bgKeepalive, setBgKeepalive] = useState(true);
+  // v4.32.561: уведомления в браузере. Разрешение здесь спрашивают нажатием, а
+  // не при запуске: Safari отдаёт Push API только в ответ на жест человека.
+  // Поэтому переключатель показывает уже выданное разрешение и сам просит
+  // недостающее, а результат пишет строкой под названием — Alert на вебе
+  // пустышка (react-native-web), показывать им нечего.
+  const [webPushOn, setWebPushOn] = useState(false);
+  const [webPushNote, setWebPushNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    void pushNotificationService.webPushGranted().then(setWebPushOn);
+  }, []);
   const [notifyPreview, setNotifyPreview] = useState(true);
   const [notifyMentions, setNotifyMentions] = useState(true);
   const [notifyVibrate, setNotifyVibrate] = useState(true);
@@ -1173,6 +1185,38 @@ function SettingsScreenImpl({
                 setBgKeepalive(v);
                 void kvSet(KEEPALIVE_KEY, String(v));
                 setBackgroundKeepaliveEnabled(v);
+              }}
+            />
+          </View>
+        ) : null}
+        {Platform.OS === 'web' ? (
+          <View style={styles.switchRow}>
+            <View style={styles.rowBody}>
+              <Text style={styles.label}>Уведомления в браузере</Text>
+              <Text style={styles.desc}>
+                {webPushNote
+                  ?? 'Приходят при закрытой вкладке. На iPhone — только если страница добавлена на домашний экран'}
+              </Text>
+            </View>
+            <AppSwitch
+              value={webPushOn}
+              onValueChange={(v) => {
+                if (!v) {
+                  setWebPushOn(false);
+                  setWebPushNote(null);
+                  void pushNotificationService.disableWebPush();
+                  return;
+                }
+                setWebPushNote('Спрашиваем разрешение…');
+                void pushNotificationService.enableWebPush().then((r) => {
+                  setWebPushOn(r === 'enabled');
+                  setWebPushNote(
+                    r === 'enabled' ? null
+                      : r === 'denied' ? 'Браузер отказал. Разрешите уведомления для этого сайта в его настройках'
+                      : r === 'unsupported' ? 'Этот браузер не умеет фоновые уведомления'
+                      : 'Не удалось подписаться. Проверьте соединение и попробуйте ещё раз'
+                  );
+                });
               }}
             />
           </View>

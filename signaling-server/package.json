@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "vapid": "node vapid-keys.js"
   },
   "dependencies": {
     "socket.io": "^4.8.3"

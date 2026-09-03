@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
+    <title>AirChat</title>
+
+    <!--
+      v4.32.560: без этих четырёх строк веб-версию нельзя поставить на
+      домашний экран, а на iPhone это единственный способ получать
+      уведомления при закрытой вкладке: Safari даёт Push API только
+      установленной как приложение странице. Экспорт Expo своего манифеста
+      не собирает, поэтому шаблон страницы — наш (см. public/sw.js).
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AirChat" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Сброс стилей react-native-web: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>Для работы AirChat нужен JavaScript.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
