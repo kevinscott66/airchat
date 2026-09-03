@@ -16,7 +16,8 @@ import { bannerIdForCid, bannerIdForGroup } from './bannerId';
 import { createSerialRunner } from './lifecycleQueue';
 import { NOTIFICATION_SMALL_ICON } from './notificationIcon';
 import { shouldSuppressDmBanner, shouldSuppressGroupBanner } from './activeChatSuppress';
-import { deliverOpenIntent, parseChatOpenIntent, parseOpenIntent } from './openIntent';
+import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenIntent } from './openIntent';
+import { CALL_PUSH_KIND } from './callPush';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
 import { peerIdFromDid, signPushPayload } from './pushEnvelope';
 import type { PushKind } from './pushKind';
@@ -300,6 +301,12 @@ export class PushNotificationService {
         // 256 знаков) переехала в openIntent — она была скопирована слово в
         // слово в трёх местах, и расходиться им нельзя: это единственный
         // барьер между полезной нагрузкой из сети и запросом к базе.
+        // v4.32.573: push о звонке при открытом приложении не значит ничего.
+        // Приложение открыто — значит сокет сигналинга жив, и само предложение
+        // звонка уже приехало по нему, а окно поднял CallOverlay. Разбирать
+        // такой push как сообщение нельзя: номер звонка ушёл бы в сеть как
+        // ключ несуществующего сообщения (см. notifications/callPush).
+        if (parseCallOpenIntent(remoteMessage.data)) return;
         const intent = parseChatOpenIntent(remoteMessage.data);
         if (!intent) {
           log.debug('push_bad_cid', { t: typeof remoteMessage.data?.cid });
@@ -558,11 +565,22 @@ export class PushNotificationService {
     await this.sendPushNotification(recipientDid, messageCid, senderDid, kind);
   }
 
+  /**
+   * Разбудить телефон того, кому звонят.
+   *
+   * v4.32.573: до этой версии звонок доезжал только до открытого приложения —
+   * см. notifications/callPush. Наружу уходит номер звонка и DID звонящего;
+   * ни sdp, ни адресов устройства в push нет и быть не должно.
+   */
+  async sendCallPush(recipientDid: string, callId: string, senderDid: string): Promise<void> {
+    await this.sendPushNotification(recipientDid, callId, senderDid, CALL_PUSH_KIND);
+  }
+
   private async sendPushNotification(
     targetPeerId: string,
     cid: string,
     senderDid: string,
-    kind: PushKind
+    kind: PushKind | typeof CALL_PUSH_KIND
   ): Promise<void> {
     const cfg = await loadConfig();
     const base = cfg.webrtc?.signalingUrl;

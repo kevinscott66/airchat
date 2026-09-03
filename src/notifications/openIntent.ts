@@ -86,8 +86,25 @@ export interface GroupOpenIntent {
   msgId?: string;
 }
 
+/**
+ * Поднять экран входящего звонка.
+ *
+ * v4.32.573: звонок доезжал только до открытого приложения — см.
+ * notifications/callPush. Само соединение поднимает не нажатие: оно лишь
+ * выводит приложение вперёд, а предложение звонка звонящий к этому времени уже
+ * повторяет по сокету. Поэтому здесь нет ни sdp, ни адресов — только номер
+ * звонка и, если он годной формы, DID звонящего.
+ */
+export interface CallOpenIntent {
+  kind: 'call';
+  /** Случайный номер звонка из полезной нагрузки уведомления. */
+  callId: string;
+  /** DID звонящего; нужен, чтобы показать, кто звонит. */
+  contactDid?: string;
+}
+
 /** Куда ведёт нажатие. Разные ветки открывают разные экраны. */
-export type OpenIntent = ChatOpenIntent | GroupOpenIntent;
+export type OpenIntent = ChatOpenIntent | GroupOpenIntent | CallOpenIntent;
 
 /** Каким путём пришло нажатие. Нужно только для журнала. */
 export type IntentSource = 'foreground-press' | 'background-press' | 'cold-start';
@@ -118,18 +135,33 @@ function rowId(value: unknown): string | undefined {
   return typeof value === 'string' && ROW_ID_SHAPE.test(value) ? value : undefined;
 }
 
+/** DID собеседника или звонящего, если он годной формы. */
+function contactDidOf(data: Record<string, unknown>): string | undefined {
+  const raw = data.contactDid ?? data.senderDid;
+  return typeof raw === 'string' && raw.length <= DID_MAX_LEN && DID_SHAPE.test(raw)
+    ? raw
+    : undefined;
+}
+
 /**
  * Разбирает `data` уведомления в намерение.
  *
  * Данные приходят из сети и недостоверны: всё, что попадёт в запрос к базе или
- * в навигацию, проверяется по форме. Группа решает первой: её баннер несёт
- * groupId и не несёт cid, а личный — наоборот, так что перепутать их нечем.
+ * в навигацию, проверяется по форме. Звонок решает первым — он один помечает
+ * себя полем kind, — затем группа: её баннер несёт groupId и не несёт cid, а
+ * личный — наоборот, так что перепутать их нечем.
  * Без cid личного намерения нет — открывать было бы нечего. Без DID намерение
  * есть: переписку по нему открыть нельзя, но сообщение подтянуть и вкладку
  * показать можно.
  */
 export function parseOpenIntent(data: Record<string, unknown> | null | undefined): OpenIntent | null {
   if (!data || typeof data !== 'object') return null;
+  // v4.32.573: звонок решает раньше всех. Его конверт неотличим от личного —
+  // тот же `cid`, тот же `senderDid`, — и без этой ветки push о звонке был бы
+  // разобран как сообщение, а приложение полезло бы тянуть из сети сообщение
+  // с номером звонка вместо ключа.
+  const call = parseCallOpenIntent(data);
+  if (call) return call;
   const groupId = rowId(data.groupId);
   if (groupId) {
     const msgId = rowId(data.msgId);
@@ -137,20 +169,33 @@ export function parseOpenIntent(data: Record<string, unknown> | null | undefined
   }
   const rawCid = data.cid;
   if (typeof rawCid !== 'string' || !CID_SHAPE.test(rawCid)) return null;
-  const rawDid = data.contactDid ?? data.senderDid;
-  const contactDid =
-    typeof rawDid === 'string' && rawDid.length <= DID_MAX_LEN && DID_SHAPE.test(rawDid)
-      ? rawDid
-      : undefined;
+  const contactDid = contactDidOf(data);
   return contactDid ? { kind: 'chat', cid: rawCid, contactDid } : { kind: 'chat', cid: rawCid };
+}
+
+/**
+ * Намерение поднять экран звонка.
+ *
+ * Отдельный разбор нужен фоновому обработчику: у него ветка звонка идёт до
+ * ветки сообщения и не должна зависеть от порядка проверок в parseOpenIntent.
+ */
+export function parseCallOpenIntent(
+  data: Record<string, unknown> | null | undefined,
+): CallOpenIntent | null {
+  if (!data || typeof data !== 'object' || data.kind !== 'call') return null;
+  const rawId = data.cid;
+  if (typeof rawId !== 'string' || !CID_SHAPE.test(rawId)) return null;
+  const did = contactDidOf(data);
+  return did ? { kind: 'call', callId: rawId, contactDid: did } : { kind: 'call', callId: rawId };
 }
 
 /**
  * Намерение открыть переписку — для путей, которым нужен именно cid.
  *
  * Входящее FCM-сообщение и фоновый обработчик push подтягивают сообщение по
- * cid; групповой полезной нагрузки там не бывает, и молча принять её за
- * личную нельзя — запрос ушёл бы с идентификатором группы вместо сообщения.
+ * cid; ни групповой полезной нагрузки, ни звонка там быть не должно, и молча
+ * принять их за личное сообщение нельзя — запрос ушёл бы с идентификатором
+ * группы или номером звонка вместо ключа сообщения.
  */
 export function parseChatOpenIntent(
   data: Record<string, unknown> | null | undefined,
@@ -161,9 +206,9 @@ export function parseChatOpenIntent(
 
 /** Чем одно нажатие отличается от другого. Только для отметки о повторе. */
 function intentKey(intent: OpenIntent): string {
-  return intent.kind === 'chat'
-    ? `chat:${intent.cid}`
-    : `group:${intent.groupId}:${intent.msgId ?? ''}`;
+  if (intent.kind === 'chat') return `chat:${intent.cid}`;
+  if (intent.kind === 'call') return `call:${intent.callId}`;
+  return `group:${intent.groupId}:${intent.msgId ?? ''}`;
 }
 
 let consumer: IntentConsumer | null = null;

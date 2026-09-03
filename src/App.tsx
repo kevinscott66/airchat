@@ -1147,6 +1147,15 @@ function MainTabs({
         setTab('groups');
         return;
       }
+      if (intent.kind === 'call') {
+        // v4.32.573: нажатие на баннер звонка только выводит приложение
+        // вперёд. Само окно звонка поднимет CallOverlay, когда по сокету
+        // приедет предложение: звонящий повторяет его, пока телефон не
+        // появится в сети (см. notifications/callPush). Открывать здесь
+        // нечего — соединение через уведомление не поднимешь.
+        log.info('notification_open_intent', { source, target: 'call' });
+        return;
+      }
       log.info('notification_open_intent', { source, target: 'chat', hasDid: !!intent.contactDid });
       // Собеседник известен — прыгаем прямо в его ветку; неизвестен (старое
       // уведомление без DID) — открываем хотя бы список переписок, это

@@ -159,6 +159,31 @@ test('sends a data-only message to Android', async () => {
   });
 });
 
+test('звонок проходит проверку вида и доезжает до устройства', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  await withRoutes({}, async ({ post, routes, sent }) => {
+    routes.registry.set(peer.peerId, ANDROID_TOKEN, 'android', Date.now());
+    // До v4.32.573 такой конверт отвергался как bad_request: видов было два,
+    // и звонок до закрытого приложения не доезжал вовсе.
+    const response = await post('/send-push', me.sign({
+      cid: 'a1b2c3d4e5f60718',
+      kind: 'call',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: me.peerId,
+      targetPeerId: peer.peerId,
+      ts: Date.now(),
+    }));
+    assert.equal(response.status, 204);
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].data, {
+      cid: 'a1b2c3d4e5f60718',
+      contactDid: 'did:key:z6MkExample',
+      kind: 'call',
+    });
+  });
+});
+
 test('answers the same way whether or not the recipient is known', async () => {
   const me = makeIdentity();
   const stranger = makeIdentity();
@@ -292,6 +317,30 @@ test('iOS message carries an impersonal alert', async () => {
   assert.equal(message.apns.headers['apns-push-type'], 'alert');
   assert.equal(message.apns.headers['apns-priority'], '10');
   assert.equal(message.apns.payload.aps['content-available'], 1);
+});
+
+test('звонок едет с коротким сроком жизни', async () => {
+  const { calls, fetchImpl } = captureFcm();
+  const { createFcmClient, constants } = require('../push');
+  const client = createFcmClient(fakeServiceAccount(), { fetch: fetchImpl });
+  await client.send({ token: ANDROID_TOKEN, platform: 'android' }, { cid: 'c1', kind: 'call' });
+  const message = JSON.parse(calls[calls.length - 1].body).message;
+  // Звонок живёт секунды: доставленный через час push разбудил бы телефон
+  // ради звонка, которого давно нет (звонящий вешает трубку через 45 с).
+  assert.equal(message.android.ttl, constants.CALL_TTL);
+  assert.notEqual(constants.CALL_TTL, constants.MESSAGE_TTL);
+  assert.deepEqual(message.data, { cid: 'c1', kind: 'call' });
+});
+
+test('на iOS у звонка свой безличный текст', async () => {
+  const { calls, fetchImpl } = captureFcm();
+  const { createFcmClient, constants } = require('../push');
+  const client = createFcmClient(fakeServiceAccount(), { fetch: fetchImpl });
+  await client.send({ token: IOS_TOKEN, platform: 'ios' }, { cid: 'c1', kind: 'call' });
+  const message = JSON.parse(calls[calls.length - 1].body).message;
+  assert.equal(message.apns.payload.aps.alert.body, constants.IOS_CALL_BODY);
+  // Имени звонящего сервер не знает и подписать им чужой экран не может.
+  assert.equal(message.apns.payload.aps.alert.title, constants.IOS_ALERT_TITLE);
 });
 
 test('reports a revoked token as stale', async () => {

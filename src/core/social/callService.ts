@@ -19,6 +19,9 @@ import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
 import { isPubKeyB64 } from '../crypto/pubKeyFormat';
+import { didFromPubB64 } from '../identity/did';
+import { callBannerId, newCallId } from '../../notifications/callPush';
+import { randomBytes } from '@noble/hashes/utils.js';
 import type { KeyPairBytes } from '../crypto/keyManager';
 
 /**
@@ -328,6 +331,25 @@ let pendingOffer: { fromPubB64: string; fromName: string; sdp: string; isVideo: 
 let endedResetTimer: ReturnType<typeof setTimeout> | null = null;
 let outgoingTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 /**
+ * Повтор предложения звонка, пока телефон не появится в сети (v4.32.573).
+ *
+ * Раньше сервер отвечал звонящему `peer_unavailable`, и звонок обрывался на
+ * первой же секунде словом «Недоступен» — дозвониться можно было только до
+ * человека, который и так смотрит в телефон. Теперь push будит устройство, а
+ * предложение повторяется по сокету, пока не доедет или пока не выйдет срок
+ * звонка (45 с). На сервере при этом не оседает ничего: sdp несёт адреса
+ * устройства, и оставлять его там на хранение нельзя (см. notifications/callPush).
+ */
+let outgoingRetryTimer: ReturnType<typeof setInterval> | null = null;
+let outgoingOffer: { myPub: string; peerPubB64: string; body: string } | null = null;
+/** Как часто повторять предложение звонка тому, кого не было в сети. */
+const OFFER_RETRY_INTERVAL_MS = 3000;
+
+function stopOfferRetry(): void {
+  if (outgoingRetryTimer) { clearInterval(outgoingRetryTimer); outgoingRetryTimer = null; }
+  outgoingOffer = null;
+}
+/**
  * Срок входящего звонка, которого не берут (v4.32.549).
  *
  * Раньше его не было вовсе: если звонивший исчез, не успев положить трубку,
@@ -517,6 +539,15 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       log.info('call_blocked_drop', { from: msg.fromPeerId.slice(0, 8) });
       return;
     }
+    // v4.32.573: повтор того же предложения — не «занято». Звонящий повторяет
+    // его, пока телефон не появится в сети, и первый же дошедший повтор ставит
+    // звонок в состояние «входящий». Ответить на следующий повтор «занято»
+    // значило бы обрывать ровно тот звонок, который только что зазвонил.
+    if (currentCall
+      && (currentCall.state === 'incoming' || currentCall.state === 'connected')
+      && currentCall.peerPubB64 === msg.fromPeerId) {
+      return;
+    }
     if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
       // Busy — decline automatically
       sig.sendAnswer(msg.fromPeerId, 'busy');
@@ -546,6 +577,9 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       }
       isVideo = (parsed as { isVideo?: unknown }).isVideo === true;
       pendingOffer = { fromPubB64, fromName: fromPubB64.slice(0, 12), isVideo, sdp: (parsed as { sdp: string }).sdp };
+      // v4.32.573: предложение доехало — баннер из шторки больше не нужен.
+      const wokenBy = (parsed as { callId?: unknown }).callId;
+      if (typeof wokenBy === 'string' && /^[a-f0-9]{16,128}$/i.test(wokenBy)) dismissCallBanner(wokenBy);
     } catch {
       pendingOffer = { fromPubB64, fromName: fromPubB64.slice(0, 12), isVideo: false, sdp: sdpStr };
     }
@@ -646,7 +680,28 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
 
   sig.onPeerUnavailable((msg) => {
     if (!currentCall || currentCall.peerPubB64 !== msg.targetPeerId) return;
-    if (currentCall.state === 'outgoing' || currentCall.state === 'incoming' || currentCall.state === 'connected') {
+    // v4.32.573: «нет в сети» больше не значит «недоступен». У закрытого
+    // приложения сокета нет по определению, и прежний обрыв означал, что
+    // дозвониться до свёрнутого телефона нельзя вовсе. Push уже отправлен —
+    // остаётся повторять предложение, пока телефон не появится; не появится
+    // за 45 секунд — звонок кончится обычным «Нет ответа».
+    if (currentCall.state === 'outgoing') {
+      if (!outgoingRetryTimer && outgoingOffer) {
+        log.info('call_awaiting_wake', { to: msg.targetPeerId.slice(0, 8) });
+        outgoingRetryTimer = setInterval(() => {
+          const pending = outgoingOffer;
+          if (!pending || currentCall?.state !== 'outgoing') { stopOfferRetry(); return; }
+          void (async () => {
+            try {
+              const s2 = await getSignaling();
+              s2?.sendOffer(pending.myPub, pending.peerPubB64, pending.body);
+            } catch { /* следующая попытка через интервал */ }
+          })();
+        }, OFFER_RETRY_INTERVAL_MS);
+      }
+      return;
+    }
+    if (currentCall.state === 'incoming' || currentCall.state === 'connected') {
       void _hangup('unanswered', 'Недоступен');
     }
   });
@@ -752,6 +807,7 @@ async function _hangup(
   // звонок, запущенный в пределах 45-секундного окна предыдущего.
   if (outgoingTimeoutTimer) { clearTimeout(outgoingTimeoutTimer); outgoingTimeoutTimer = null; }
   if (incomingTimeoutTimer) { clearTimeout(incomingTimeoutTimer); incomingTimeoutTimer = null; }
+  stopOfferRetry();
   // v4.32.124 (AUDIT P0 #5): guard against null currentCall. Reachable via
   // the catch in initiateCall after early abort, or if _hangup runs twice
   // (ICE watchdog + user hangup + 45s timeout all racing). Previously the
@@ -861,6 +917,7 @@ export async function disposeCallService(): Promise<void> {
     clearTimeout(incomingTimeoutTimer);
     incomingTimeoutTimer = null;
   }
+  stopOfferRetry();
   emitMedia();
   if (endedResetTimer) {
     clearTimeout(endedResetTimer);
@@ -922,6 +979,51 @@ export function hasLocalVideoTrack(): boolean {
  */
 export function getCurrentCall(): CallInfo | null {
   return currentCall;
+}
+
+/**
+ * Разбудить телефон того, кому звонят (v4.32.573).
+ *
+ * Импорт отложенный: слой уведомлений тянет за собой Firebase и notifee, и
+ * статическая связка звонков с ним замкнула бы модули друг на друга. Тот же
+ * приём, что и у отправки сообщений (см. social/messaging).
+ *
+ * Ошибка здесь ничего не отменяет: push — это только будильник, а сам звонок
+ * едет по сокету и повторяется, пока не доедет.
+ */
+async function sendCallWake(myPub: string, peerPubB64: string, callId: string): Promise<void> {
+  try {
+    const myDid = didFromPubB64(myPub);
+    const peerDid = didFromPubB64(peerPubB64);
+    if (!myDid || !peerDid) return;
+    // require, а не import(): слой уведомлений тянет за собой firebase и
+    // notifee, и держать его в статическом графе звонков незачем — но и
+    // асинхронный import здесь лишний, будить надо в тот же миг.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { pushNotificationService } =
+      require('../../notifications/pushNotifications') as typeof import('../../notifications/pushNotifications');
+    await pushNotificationService.sendCallPush(peerDid, callId, myDid);
+  } catch (e) {
+    log.info('call_wake_push_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
+ * Погасить баннер звонка, показанный фоновым обработчиком push (v4.32.573).
+ *
+ * Баннер живёт до минуты и не смахивается сам — иначе окно звонка исчезало бы
+ * с экрана блокировки от случайного касания. Когда предложение доехало и
+ * звонок зазвонил уже в приложении, баннер лишний: номер звонка приезжает
+ * вместе с предложением ровно ради этого.
+ */
+function dismissCallBanner(callId: string): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const notifee = require('@notifee/react-native').default as {
+      cancelNotification(id: string): Promise<void>;
+    };
+    void notifee.cancelNotification(callBannerId(callId)).catch(() => { /* уже погашен */ });
+  } catch { /* notifee не подключён (тесты, Expo Go) */ }
 }
 
 /**
@@ -1021,7 +1123,16 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
     // The signaling server authorizes offers against the sender's registered
     // room. Each peer is registered in its own room, so using the target's
     // room here makes the server reject every offer with room_mismatch.
-    sig.sendOffer(myPub, peerPubB64, JSON.stringify({ sdp: offer.sdp, isVideo }));
+    // v4.32.573: номер звонка. Он ничего не значит и ни с чем не связан — он
+    // нужен, чтобы push о звонке не склеился с прошлым баннером и чтобы
+    // разбудившийся телефон погасил баннер, когда предложение доедет.
+    const callId = newCallId(randomBytes(16));
+    const offerBody = JSON.stringify({ sdp: offer.sdp, isVideo, callId });
+    sig.sendOffer(myPub, peerPubB64, offerBody);
+    outgoingOffer = { myPub, peerPubB64, body: offerBody };
+    // Разбудить телефон, которого может не быть в сети. Уходят только номер
+    // звонка и DID звонящего: sdp несёт адреса устройства и в push не едет.
+    void sendCallWake(myPub, peerPubB64, callId);
 
     // Auto-timeout after 45s. v4.32.177: держим handle и очищаем при hangup
     // чтобы не срабатывал на новый звонок, запущенный в течение окна.

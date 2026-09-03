@@ -243,6 +243,9 @@ function SettingsScreenImpl({
   const [notifyDm, setNotifyDm] = useState(true);
   const [notifyFeed, setNotifyFeed] = useState(true);
   const [notifyGroups, setNotifyGroups] = useState(true);
+  // v4.32.573: у звонков свой выключатель. Отключённые сообщения их больше не
+  // глушат — см. notifications/backgroundNotifyPrefs.
+  const [notifyCalls, setNotifyCalls] = useState(true);
   const [notifyPreview, setNotifyPreview] = useState(true);
   const [notifyMentions, setNotifyMentions] = useState(true);
   const [notifyVibrate, setNotifyVibrate] = useState(true);
@@ -305,13 +308,15 @@ function SettingsScreenImpl({
       // разбор значения (границы, мусор) один на всё приложение.
       getDefaultDisappearMs(),
       kvGet(LINK_PREVIEW_INCOMING_KEY),
-    ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev]) => {
+      kvGet('notify_calls'),
+    ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls]) => {
       if (lsVis === 'everybody' || lsVis === 'contacts' || lsVis === 'nobody') setLastSeenVisibility(lsVis);
       setAvatarVisibilityState(parseAvatarVisibility(avVis));
       setOnlyContactsCanMsg(onlyContacts === 'true');
       setNotifyDm(nDm !== 'false');
       setNotifyFeed(nFeed !== 'false');
       setNotifyGroups(nGroups !== 'false');
+      setNotifyCalls(nCalls !== 'false');
       setNotifyPreview(nPreview !== 'false');
       setAutoLockEnabled(lockEnabled === 'true');
       // v4.32.196 (Round-26 #8): clamp/validate numeric kv values. Corrupt or
@@ -1144,6 +1149,13 @@ function SettingsScreenImpl({
             <Text style={styles.desc}>Уведомлять о новых сообщениях в группах</Text>
           </View>
           <AppSwitch value={notifyGroups} onValueChange={(v) => { setNotifyGroups(v); void kvSet('notify_groups', String(v)); }} />
+        </View>
+        <View style={styles.switchRow}>
+          <View style={styles.rowBody}>
+            <Text style={styles.label}>Звонки</Text>
+            <Text style={styles.desc}>Показывать входящий звонок при закрытом приложении</Text>
+          </View>
+          <AppSwitch value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); void kvSet('notify_calls', String(v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>

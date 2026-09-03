@@ -47,7 +47,14 @@ const SEND_RATE_LIMIT = 60;
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 60 * 1000;
 const PLATFORMS = new Set(['android', 'ios']);
-const PUSH_KINDS = new Set(['dm', 'group']);
+/**
+ * `call` добавлен в v4.32.573: звонок доезжал только до открытого приложения,
+ * потому что жил в живом сокете сигнализации. Push его не заменяет — он лишь
+ * будит устройство, чтобы сокет поднялся и предложение звонка доехало. Ни sdp,
+ * ни адресов устройства в push нет: они рассказали бы серверу больше, чем ему
+ * положено знать.
+ */
+const PUSH_KINDS = new Set(['dm', 'group', 'call']);
 /**
  * Текст, который видит человек на заблокированном экране iPhone, когда
  * приложение закрыто. Он обязан быть безличным: этот текст сочиняет сервер, а
@@ -55,6 +62,13 @@ const PUSH_KINDS = new Set(['dm', 'group']);
  */
 const IOS_ALERT_TITLE = 'AirChat';
 const IOS_ALERT_BODY = 'Новое сообщение — откройте приложение';
+const IOS_CALL_BODY = 'Входящий звонок — откройте приложение';
+/**
+ * Звонок живёт секунды, а не сутки. Доставленный через час push разбудил бы
+ * телефон ради звонка, которого давно нет: звонящий вешает трубку через 45 с.
+ */
+const CALL_TTL = '60s';
+const MESSAGE_TTL = '86400s';
 
 function isTimestamp(value, nowMs) {
   return typeof value === 'number'
@@ -216,6 +230,7 @@ function createFcmClient(serviceAccount, options = {}) {
    * когда оно живо.
    */
   function buildMessage(entry, data) {
+    const isCall = data.kind === 'call';
     if (entry.platform === 'ios') {
       return {
         token: entry.token,
@@ -224,7 +239,7 @@ function createFcmClient(serviceAccount, options = {}) {
           headers: { 'apns-priority': '10', 'apns-push-type': 'alert' },
           payload: {
             aps: {
-              alert: { title: IOS_ALERT_TITLE, body: IOS_ALERT_BODY },
+              alert: { title: IOS_ALERT_TITLE, body: isCall ? IOS_CALL_BODY : IOS_ALERT_BODY },
               sound: 'default',
               'mutable-content': 1,
               'content-available': 1,
@@ -236,7 +251,7 @@ function createFcmClient(serviceAccount, options = {}) {
     return {
       token: entry.token,
       data,
-      android: { priority: 'HIGH', ttl: '86400s' },
+      android: { priority: 'HIGH', ttl: isCall ? CALL_TTL : MESSAGE_TTL },
     };
   }
 
@@ -415,5 +430,8 @@ module.exports = {
     SEND_RATE_LIMIT,
     IOS_ALERT_TITLE,
     IOS_ALERT_BODY,
+    IOS_CALL_BODY,
+    CALL_TTL,
+    MESSAGE_TTL,
   },
 };

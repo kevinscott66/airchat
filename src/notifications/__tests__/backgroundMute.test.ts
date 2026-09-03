@@ -203,8 +203,12 @@ describe('форма кода', () => {
     // v4.32.572: та же проверка, но только для личного сообщения — общую
     // группу личное «без звука» не глушит.
     expect(BG).toContain("if (kind === 'dm' && (await isBackgroundMuted(contactDid))) return;");
-    expect(BG.indexOf('isBackgroundMuted(contactDid)')).toBeLessThan(BG.indexOf('displayNotification'));
-    expect(BG.indexOf('prefs.show')).toBeLessThan(BG.indexOf('isBackgroundMuted(contactDid)'));
+    // v4.32.573: порядок смотрим внутри самого обработчика сообщений. Выше по
+    // файлу теперь живёт показ входящего звонка — у него свои настройки, и
+    // «без звука» для переписки его не касается.
+    const handler = BG.slice(BG.indexOf('setBackgroundMessageHandler'));
+    expect(handler.indexOf('isBackgroundMuted(contactDid)')).toBeLessThan(handler.indexOf('displayNotification'));
+    expect(handler.indexOf('prefs.show')).toBeLessThan(handler.indexOf('isBackgroundMuted(contactDid)'));
   });
 
   it('оба пути показа зовут одно и то же имя баннера', () => {

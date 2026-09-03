@@ -98,7 +98,8 @@ describe('литерал не возвращается в вызовы', () => {
 describe('каждое уведомление получает small icon', () => {
   it('вызовов notifee, показывающих уведомление, ровно столько же, сколько заданных small icon', () => {
     const shown = countAll('displayNotification(') + countAll('createTriggerNotification(');
-    expect(shown).toBe(6);
+    // v4.32.573: седьмой показ — баннер входящего звонка при закрытом приложении.
+    expect(shown).toBe(7);
     expect(countAll('smallIcon: NOTIFICATION_SMALL_ICON')).toBe(shown);
   });
 

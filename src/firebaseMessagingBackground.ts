@@ -4,15 +4,93 @@
  */
 import './bootstrap-fusebox-global';
 import { NOTIFICATION_SMALL_ICON } from './notifications/notificationIcon';
-import { deliverOpenIntent, parseChatOpenIntent, parseOpenIntent } from './notifications/openIntent';
+import {
+  deliverOpenIntent,
+  parseCallOpenIntent,
+  parseChatOpenIntent,
+  parseOpenIntent,
+} from './notifications/openIntent';
 import { vibrationFor } from './notifications/vibrationPattern';
 import { parsePushKind } from './notifications/pushKind';
+import {
+  CALL_BANNER_BODY,
+  CALL_BANNER_TIMEOUT_MS,
+  CALL_BANNER_TITLE,
+  callBannerId,
+} from './notifications/callPush';
 import { log } from './core/logger';
+
+/**
+ * Окно входящего звонка при свёрнутом или закрытом приложении.
+ *
+ * v4.32.573. До этой версии звонок жил только в живом сокете сигналинга:
+ * закрытому приложению он не доезжал вовсе, а звонящий получал «Недоступен»
+ * на первой секунде (см. notifications/callPush). Здесь — тот самый баннер,
+ * ради которого push и посылается: полноэкранное намерение на канале звонков,
+ * которое Android поднимает поверх экрана блокировки.
+ *
+ * Имя звонящего сервером не присылается и здесь не показывается — то же
+ * правило, что и у сообщений: сервер не должен уметь написать чужим именем на
+ * экране блокировки. Кто звонит, приложение покажет само, когда поднимется.
+ */
+async function showIncomingCallBanner(callId: string, contactDid?: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { readBackgroundCallPrefs } = require('./notifications/backgroundNotifyPrefs') as typeof import('./notifications/backgroundNotifyPrefs');
+  const prefs = await readBackgroundCallPrefs();
+  if (!prefs.show) return;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const notifee = require('@notifee/react-native').default;
+  const { AndroidCategory, AndroidImportance } = require('@notifee/react-native');
+  const CHANNEL = 'airchat_calls_v2';
+  await notifee.createChannel({
+    id: CHANNEL,
+    name: 'Звонки',
+    description: 'Входящие голосовые и видеозвонки',
+    importance: AndroidImportance.HIGH,
+    vibration: true,
+  });
+  await notifee.displayNotification({
+    id: callBannerId(callId),
+    title: CALL_BANNER_TITLE,
+    body: CALL_BANNER_BODY,
+    data: { kind: 'call', cid: callId, contactDid: contactDid ?? '' },
+    android: {
+      channelId: CHANNEL,
+      smallIcon: NOTIFICATION_SMALL_ICON,
+      category: AndroidCategory.CALL,
+      importance: AndroidImportance.HIGH,
+      pressAction: { id: 'default' },
+      // Полноэкранное намерение — то, чем Android поднимает окно звонка поверх
+      // заблокированного экрана. На Android 14+ ему нужно разрешение
+      // USE_FULL_SCREEN_INTENT (объявлено в app.json); без разрешения система
+      // сама опускает уведомление до обычного баннера, а не отвергает его.
+      fullScreenAction: { id: 'default' },
+      // Звонок не смахивается сам: он либо принят, либо кончился по времени.
+      ongoing: true,
+      autoCancel: false,
+      timeoutAfter: CALL_BANNER_TIMEOUT_MS,
+      vibrationPattern: vibrationFor(prefs.vibrate, 'message'),
+      sound: prefs.sound ? 'default' : undefined,
+    },
+  });
+}
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const messaging = require('@react-native-firebase/messaging').default;
   messaging().setBackgroundMessageHandler(async (remoteMessage: { data?: Record<string, string> }) => {
+    // v4.32.573: звонок разбирается раньше сообщения. Его конверт неотличим от
+    // личного, и без этой ветки push о звонке уехал бы в ветку сообщений — а
+    // там его номер ушёл бы в сеть как ключ несуществующего сообщения.
+    const call = parseCallOpenIntent(remoteMessage.data);
+    if (call) {
+      try {
+        await showIncomingCallBanner(call.callId, call.contactDid);
+      } catch (e) {
+        log.warn('bg_call_notify_failed', { err: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     // v4.32.180 (Round-10): validate cid/contactDid shape same as foreground handler.
     // v4.32.558: одна проверка на все три пути — см. notifications/openIntent.
     const intent = parseChatOpenIntent(remoteMessage.data);

@@ -130,15 +130,16 @@ describe('форма исходников', () => {
     }
   });
 
-  it('все четыре показа берут рисунок у общего модуля', () => {
+  it('все пять показов берут рисунок у общего модуля', () => {
     const push = PUSH();
     const bg = BG();
     const calls = (s: string) => (s.match(/vibrationPattern: vibrationFor\(/g) ?? []).length;
     expect(calls(push)).toBe(3);
-    expect(calls(bg)).toBe(1);
+    // v4.32.573: показов в фоне стало два — сообщение и входящий звонок.
+    expect(calls(bg)).toBe(2);
     // И общее число мест не выросло мимо модуля.
     expect((push.match(/vibrationPattern:/g) ?? []).length).toBe(3);
-    expect((bg.match(/vibrationPattern:/g) ?? []).length).toBe(1);
+    expect((bg.match(/vibrationPattern:/g) ?? []).length).toBe(2);
   });
 
   it('отказ показа больше не пишется в debug и не глотается молча', () => {

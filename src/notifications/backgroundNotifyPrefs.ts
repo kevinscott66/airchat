@@ -81,6 +81,47 @@ export async function readBackgroundNotifyPrefs(
 }
 
 /**
+ * Настройки для баннера входящего звонка.
+ *
+ * v4.32.573. Звонок не сообщение, и общий выключатель сообщений его глушить не
+ * должен: человек, отключивший баннеры переписки, не отказывался от звонков.
+ * Свой выключатель у звонков — `notify_calls`, и отсутствие ключа означает
+ * согласие, как и везде здесь.
+ *
+ * «Не беспокоить» звонок не прячет, а лишь обеззвучивает. Спрятать его совсем
+ * значило бы съесть звонок молча: пропущенного звонка в AirChat нет, показать
+ * его потом будет нечем, и человек не узнает, что ему звонили. Экран
+ * поднимется без звука и вибрации — это честнее.
+ */
+export async function readBackgroundCallPrefs(
+  nowHour: number = new Date().getHours()
+): Promise<BackgroundNotifyPrefs> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const SQLite = require('expo-sqlite') as typeof import('expo-sqlite');
+    const db = await SQLite.openDatabaseAsync(LOCAL_DB_NAME);
+    const rows = await db.getAllAsync<{ k: string; v: string }>(
+      "SELECT k, v FROM kv WHERE k IN ('notify_calls','notify_sound','notify_vibrate','dnd_enabled','dnd_start','dnd_end')"
+    );
+    const kv = new Map(rows.map((r) => [r.k, r.v]));
+    if (kv.get('notify_calls') === 'false') return { show: false, sound: false, vibrate: false };
+    if (kv.get('dnd_enabled') === 'true') {
+      const start = parseDndHour(kv.get('dnd_start'), 22);
+      const end = parseDndHour(kv.get('dnd_end'), 8);
+      if (isWithinDndWindow(start, end, nowHour)) return { show: true, sound: false, vibrate: false };
+    }
+    return {
+      show: true,
+      sound: kv.get('notify_sound') !== 'false',
+      vibrate: kv.get('notify_vibrate') !== 'false',
+    };
+  } catch {
+    // База ещё не создана или недоступна из фона — звонок показываем.
+    return ALLOW_ALL;
+  }
+}
+
+/**
  * Заглушён ли этот собеседник — для баннера, пришедшего при закрытом приложении.
  *
  * v4.32.502. Фоновый путь про «без звука» не знал вовсе: настройка глушила

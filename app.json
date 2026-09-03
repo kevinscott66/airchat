@@ -41,6 +41,9 @@
     "android": {
       "package": "tech.dobropalm.airchat",
       "allowBackup": false,
+      "permissions": [
+        "android.permission.USE_FULL_SCREEN_INTENT"
+      ],
       "googleServicesFile": "./google-services.json",
       "versionCode": 533,
       "adaptiveIcon": {
