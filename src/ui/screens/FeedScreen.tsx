@@ -762,6 +762,12 @@ type Props = {
   did: string;
   /** Увеличивается при входящем посте (pubsub) — перезагрузка ленты. */
   feedTick?: number;
+  /**
+   * v4.32.568: открыть переписку с автором. Карточка профиля, которую лента
+   * показывает по тапу на имя, теперь умеет писать, звонить и искать по
+   * переписке — но переключать вкладки может только App.
+   */
+  onOpenChatWithPeer?: (peer: string, intent?: 'chat' | 'search' | 'starred') => void;
 };
 
 function formatTime(ts: number): string {
@@ -805,7 +811,7 @@ function runGuardedOp(op: () => Promise<unknown>, fallback: string): void {
   })();
 }
 
-function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement {
+function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props): React.ReactElement {
   const { t } = useTranslation();
   // v4.32.16: `isActive` больше НЕ prop — читаем `tabRef.current === 'feed'` из Context.
   // React.memo видит стабильные props при setTab → bail-out → нет re-render'а тяжёлого
@@ -2890,7 +2896,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
 
         {/* Stories row */}
         {!feedSearch && !activeHashtag ? (
-          <StoriesRow myPubB64={myPubB64} pair={pair} refreshTick={feedTick} />
+          <StoriesRow
+            myPubB64={myPubB64}
+            pair={pair}
+            refreshTick={feedTick}
+            onOpenChatWithPeer={onOpenChatWithPeer}
+          />
         ) : null}
 
         {unread > 0 ? (
@@ -4097,6 +4108,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         peerDid={peekAuthorDid}
         fallbackName={peekAuthorName}
         pair={pair}
+        onOpenChat={
+          onOpenChatWithPeer
+            ? (peer, _name, intent) => onOpenChatWithPeer(peer, intent)
+            : undefined
+        }
       />
       </KeyboardHost>
     </SafeScreen>

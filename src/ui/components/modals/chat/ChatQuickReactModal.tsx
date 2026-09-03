@@ -24,6 +24,12 @@ export interface ChatQuickReactModalProps {
   onOpenMore: () => void;
   onReply: () => void;
   onCopy: () => void;
+  /**
+   * v4.32.568: «Копировать» скрыт — по этой переписке включён запрет на
+   * копирование (core/social/copyGuard). Пункт именно убирается, а не
+   * отключается: серая строка обещала бы, что где-то её можно включить.
+   */
+  copyBlocked?: boolean;
   onForward: () => void;
   onEdit: () => void;
   onToggleStar: () => void;
@@ -51,7 +57,7 @@ const noop = () => {};
 function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
   const {
     target, onClose, recentReactions, reactionEmojis,
-    onPickReaction, onOpenMore, onReply, onCopy, onForward, onEdit,
+    onPickReaction, onOpenMore, onReply, onCopy, copyBlocked, onForward, onEdit,
     onToggleStar, onMarkUnread, onShowInfo, onRemind, onDelete,
     onTranslate, onCopyLink, onTogglePin, pinned, onSelect,
     canClosePoll, onClosePoll,
@@ -101,7 +107,7 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
               ) : null}
               <View style={styles.actions}>
                 <ActionRow icon="return-down-back-outline" label="Ответить" onPress={onReply} textColor={colors.text} borderColor={colors.border} />
-                {!isMedia ? (
+                {!isMedia && !copyBlocked ? (
                   <ActionRow icon="copy-outline" label={COPY_ACTION} onPress={onCopy} textColor={colors.text} borderColor={colors.border} />
                 ) : null}
                 {!isMedia ? (

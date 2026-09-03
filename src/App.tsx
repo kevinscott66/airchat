@@ -539,7 +539,9 @@ function MainTabs({
   }, [pair]);
   const [profileSelOpen, setProfileSelOpen] = useState(false);
   const [activeProfileLabel, setActiveProfileLabel] = useState<string | null>(null);
-  const [peerJump, setPeerJump] = useState<{ peer: string; token: number } | null>(null);
+  const [peerJump, setPeerJump] = useState<
+    { peer: string; token: number; intent?: 'chat' | 'search' | 'starred' } | null
+  >(null);
   const [groupJump, setGroupJump] = useState<{ groupId: string; token: number } | null>(null);
   // v4.32.228 (BUG-07): сигнал «вернуться к списку чатов из открытого диалога»
   // при повторном тапе по уже активному табу «Чаты» (поведение tap-active-tab→pop).
@@ -1217,8 +1219,14 @@ function MainTabs({
     setTab('chat');
     void name;
   }, [mountTab]);
-  const handleOpenChatWithPeer = useCallback((peer: string) => {
-    setPeerJump({ peer, token: Date.now() });
+  // v4.32.568: второй аргумент — чем открыть переписку. Карточка профиля
+  // умеет отправить сразу в поиск по ней или в избранное; остальные вызывающие
+  // места его не передают и открывают диалог, как раньше.
+  const handleOpenChatWithPeer = useCallback((
+    peer: string,
+    intent?: 'chat' | 'search' | 'starred'
+  ) => {
+    setPeerJump({ peer, token: Date.now(), intent });
     mountTab('chat');
     setTab('chat');
   }, [mountTab]);
@@ -1265,7 +1273,12 @@ function MainTabs({
       <View style={styles.tabBody}>
         {mountedTabs.has('feed') ? (
           <ScreenSlot active={tab === 'feed'}>
-            <FeedScreen pair={pair} did={did} feedTick={feedTick} />
+            <FeedScreen
+              pair={pair}
+              did={did}
+              feedTick={feedTick}
+              onOpenChatWithPeer={handleOpenChatWithPeer}
+            />
           </ScreenSlot>
         ) : tab === 'feed' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_feed" /></View> : null}
         {mountedTabs.has('chat') ? (

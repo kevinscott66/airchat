@@ -21,19 +21,33 @@ import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolv
 import { showSuccess } from '../../userFeedback';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
 import { isDocMessage } from '../../../../core/social/docEnvelope';
+import { isVoiceMessage, parseVoiceMeta } from '../../../../core/social/voiceEnvelope';
+import { isAudioFileName } from '../../../../core/media/audioName';
 import { parseDocMeta } from '../../../../core/social/docMeta';
 import { openExternal } from '../../../utils/openExternal';
 import { formatByteSize } from '../../../../core/media/byteSize';
+// Длительность голосового — общая арифметика на звонок, запись и видео:
+// своя копия «мм:сс» уже однажды разошлась с остальными (durationLabel).
+import { formatClockDuration } from '../../../time/durationLabel';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { COPIED_LINK } from '../../../clipboardText';
 
 // ─── SharedMediaModal ─────────────────────────────────────────────────────────
 const URL_REGEX_SM = /https?:\/\/[^\s<>"]+/g;
+
+/**
+ * v4.32.568: вкладок стало пять. Карточка профиля разводит «Файлы», «Музыку»
+ * и «Голосовые» по отдельным разделам, и каждый раздел открывает эту же
+ * модалку сразу на своей вкладке — отсюда `initialTab`.
+ */
+export type SharedMediaTab = 'media' | 'links' | 'docs' | 'music' | 'voice';
+
 export function SharedMediaModal({
   visible,
   contactPubB64,
   ownerProfileId,
   gateway,
+  initialTab = 'media',
   onClose,
   onImagePress,
 }: {
@@ -41,6 +55,8 @@ export function SharedMediaModal({
   contactPubB64: string;
   ownerProfileId: number;
   gateway: string;
+  /** С какой вкладки открыться. По умолчанию — «Медиа», как было. */
+  initialTab?: SharedMediaTab;
   onClose: () => void;
   onImagePress: (uris: string[], idx: number) => void;
 }): React.ReactElement {
@@ -50,7 +66,17 @@ export function SharedMediaModal({
   const [items, setItems] = useState<SharedMediaRow[]>([]);
   const [sharedLinks, setSharedLinks] = useState<Array<{ url: string; text: string; createdAt: number }>>([]);
   const [sharedDocs, setSharedDocs] = useState<Array<{ name: string; size: string; createdAt: number; text: string }>>([]);
-  const [activeTab, setActiveTab] = useState<'media' | 'links' | 'docs'>('media');
+  /** v4.32.568: музыка — те же вложения-документы, отобранные по имени файла. */
+  const [sharedMusic, setSharedMusic] = useState<Array<{ name: string; size: string; createdAt: number; text: string }>>([]);
+  /** v4.32.568: голосовые — свой конверт, поэтому и свой список. */
+  const [sharedVoice, setSharedVoice] = useState<Array<{ id: string; durationMs: number; createdAt: number; outgoing: boolean }>>([]);
+  const [activeTab, setActiveTab] = useState<SharedMediaTab>(initialTab);
+
+  // Открытие «на своей вкладке»: состояние живёт между открытиями модалки, и
+  // без этого второй заход из раздела «Музыка» показывал бы прошлую вкладку.
+  useEffect(() => {
+    if (visible) setActiveTab(initialTab);
+  }, [visible, initialTab]);
 
   useEffect(() => {
     if (!visible) return;
@@ -63,6 +89,8 @@ export function SharedMediaModal({
       if (!shouldApplyRows(msgs)) return;
       const links: Array<{ url: string; text: string; createdAt: number }> = [];
       const docs: Array<{ name: string; size: string; createdAt: number; text: string }> = [];
+      const music: Array<{ name: string; size: string; createdAt: number; text: string }> = [];
+      const voice: Array<{ id: string; durationMs: number; createdAt: number; outgoing: boolean }> = [];
       const seenUrls = new Set<string>();
       for (const msg of msgs) {
         if (!msg.text) continue;
@@ -77,11 +105,23 @@ export function SharedMediaModal({
         // Extract docs using local helpers (defined at bottom of ChatScreen)
         if (isDocMessage(msg.text)) {
           const meta = parseDocMeta(msg.text);
-          if (meta) docs.push({ name: meta.name, size: formatByteSize(meta.size), createdAt: msg.createdAt, text: msg.text });
+          if (meta) {
+            const row = { name: meta.name, size: formatByteSize(meta.size), createdAt: msg.createdAt, text: msg.text };
+            // Музыка уходит в свой раздел и во «Файлах» не дублируется:
+            // человек искал бы её дважды в двух списках одного и того же.
+            if (isAudioFileName(meta.name)) music.push(row);
+            else docs.push(row);
+          }
+        }
+        if (isVoiceMessage(msg.text)) {
+          const vm = parseVoiceMeta(msg.text);
+          if (vm) voice.push({ id: msg.id, durationMs: vm.durationMs, createdAt: msg.createdAt, outgoing: msg.direction === 'out' });
         }
       }
       setSharedLinks(links.reverse());
       setSharedDocs(docs.reverse());
+      setSharedMusic(music.reverse());
+      setSharedVoice(voice.reverse());
     }).catch(() => {});
   }, [visible, contactPubB64, ownerProfileId]);
 
@@ -142,6 +182,8 @@ export function SharedMediaModal({
     { id: 'media' as const, label: 'Медиа', icon: 'images-outline' as const },
     { id: 'links' as const, label: 'Ссылки', icon: 'link-outline' as const },
     { id: 'docs' as const, label: 'Файлы', icon: 'document-outline' as const },
+    { id: 'music' as const, label: 'Музыка', icon: 'musical-notes-outline' as const },
+    { id: 'voice' as const, label: 'Голос', icon: 'mic-outline' as const },
   ];
 
   return (
@@ -205,21 +247,44 @@ export function SharedMediaModal({
               </AppPressable>
             ))}
           </ScrollView>
-        ) : (
+        ) : activeTab === 'docs' || activeTab === 'music' ? (
           <ScrollView>
-            {sharedDocs.length === 0 ? (
+            {(activeTab === 'music' ? sharedMusic : sharedDocs).length === 0 ? (
               <View style={smStyles.empty}>
-                <Ionicons name="document-outline" size={48} color={colors.textMuted} />
-                <Text style={{ color: colors.textMuted, marginTop: 12 }}>Нет файлов</Text>
+                <Ionicons name={activeTab === 'music' ? 'musical-notes-outline' : 'document-outline'} size={48} color={colors.textMuted} />
+                <Text style={{ color: colors.textMuted, marginTop: 12 }}>
+                  {activeTab === 'music' ? 'Нет музыки' : 'Нет файлов'}
+                </Text>
               </View>
-            ) : sharedDocs.map((doc, i) => (
+            ) : (activeTab === 'music' ? sharedMusic : sharedDocs).map((doc, i) => (
               <View key={i} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                 <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="document-outline" size={20} color={docTint.ink} />
+                  <Ionicons name={activeTab === 'music' ? 'musical-notes-outline' : 'document-outline'} size={20} color={docTint.ink} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1}>{doc.name}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 12 }}>{doc.size} · {numericDate(doc.createdAt)}</Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        ) : (
+          <ScrollView>
+            {sharedVoice.length === 0 ? (
+              <View style={smStyles.empty}>
+                <Ionicons name="mic-outline" size={48} color={colors.textMuted} />
+                <Text style={{ color: colors.textMuted, marginTop: 12 }}>Нет голосовых</Text>
+              </View>
+            ) : sharedVoice.map((v) => (
+              <View key={v.id} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name={v.outgoing ? 'arrow-up-outline' : 'arrow-down-outline'} size={20} color={docTint.ink} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: font.sm, fontWeight: '600' }}>{formatClockDuration(v.durationMs)}</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: font.xs }}>
+                    {(v.outgoing ? 'Отправлено' : 'Получено')} · {numericDate(v.createdAt)}
+                  </Text>
                 </View>
               </View>
             ))}

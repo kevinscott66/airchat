@@ -119,7 +119,7 @@ describe('экран разговора пересоздаётся под каж
 
 describe('ключ нужен именно потому, что разговор меняется напрямую', () => {
   it('переход из «Контактов» ставит нового собеседника поверх старого', () => {
-    expect(SCREEN!.source).toContain('setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub) });');
+    expect(SCREEN!.source).toContain('setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent });');
   });
 
   it('плашка уведомления ставит другую группу поверх открытой', () => {

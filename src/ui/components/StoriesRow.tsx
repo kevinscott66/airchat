@@ -137,6 +137,7 @@ function StoryViewer({
   nameMap,
   pair,
   ownerProfileId,
+  onOpenChatWithPeer,
 }: {
   stories: StoryRow[];
   startIndex: number;
@@ -145,6 +146,8 @@ function StoryViewer({
   nameMap?: Record<string, string>;
   pair: KeyPairBytes | null;
   ownerProfileId: number;
+  /** v4.32.568: карточка автора сторис умеет открыть переписку — но не вкладку. */
+  onOpenChatWithPeer?: (peer: string, intent?: 'chat' | 'search' | 'starred') => void;
 }): React.ReactElement {
   const [index, setIndex] = useState(startIndex);
   const story = stories[index];
@@ -406,6 +409,11 @@ function StoryViewer({
           onClose={() => setPeekPubB64(null)}
           peerPubB64={peekPubB64}
           pair={pair}
+          onOpenChat={
+            onOpenChatWithPeer
+              ? (peer, _name, intent) => { onClose(); onOpenChatWithPeer(peer, intent); }
+              : undefined
+          }
         />
       </View>
     </Modal>
@@ -695,9 +703,16 @@ type Props = {
   pair?: KeyPairBytes;
   /** Trigger a refresh from outside */
   refreshTick?: number;
+  /** v4.32.568: открыть переписку с автором сторис из его карточки профиля. */
+  onOpenChatWithPeer?: (peer: string, intent?: 'chat' | 'search' | 'starred') => void;
 };
 
-export function StoriesRow({ myPubB64, pair, refreshTick }: Props): React.ReactElement {
+export function StoriesRow({
+  myPubB64,
+  pair,
+  refreshTick,
+  onOpenChatWithPeer,
+}: Props): React.ReactElement {
   const [groups, setGroups] = useState<StoryGroup[]>([]);
   const [viewerTarget, setViewerTarget] = useState<{ stories: StoryRow[]; index: number } | null>(null);
   const [composerUri, setComposerUri] = useState<string | null>(null);
@@ -972,6 +987,7 @@ export function StoriesRow({ myPubB64, pair, refreshTick }: Props): React.ReactE
           nameMap={storyNameMap}
           pair={pair ?? null}
           ownerProfileId={pid}
+          onOpenChatWithPeer={onOpenChatWithPeer}
         />
       ) : null}
       {composerUri ? (

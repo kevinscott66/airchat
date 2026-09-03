@@ -145,7 +145,7 @@ import { useBackHandler } from '../../core/hooks/useBackHandler';
 
 type Props = {
   pair: KeyPairBytes;
-  peerJump?: { peer: string; token: number } | null;
+  peerJump?: { peer: string; token: number; intent?: 'chat' | 'search' | 'starred' } | null;
   // v4.32.228 (BUG-07): монотонный счётчик. App.tsx инкрементит его при повторном
   // тапе по уже активному табу «Чаты» — это сигнал «вернись из открытого диалога к
   // списку чатов» (поведение «tap active tab → pop to root»). 0 = нет сигнала.
@@ -768,6 +768,7 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
 
 
 
@@ -779,12 +780,19 @@ function ChatThreadView({
   displayName,
   onBack,
   initialJumpMsgId,
+  initialIntent,
 }: {
   pair: KeyPairBytes;
   peerB64: string;
   displayName: string;
   onBack: () => void;
   initialJumpMsgId?: string;
+  /**
+   * v4.32.568: чем открыть переписку. Приходит из карточки профиля: там есть
+   * «Поиск» и «Избранное», и человек ждёт, что попадёт сразу в них, а не в
+   * диалог с обязанностью найти пункт меню.
+   */
+  initialIntent?: 'chat' | 'search' | 'starred';
 }): React.ReactElement {
   // v4.32.16: gate через tabRef — НЕ prop, чтобы setTab не вызывал re-render тяжёлого треда.
   const tabRef = useTabRef();
@@ -864,6 +872,13 @@ function ChatThreadView({
   const [pinnedMsgIdx, setPinnedMsgIdx] = useState(0);
   const [pinnedListVisible, setPinnedListVisible] = useState(false);
   const [disappearMs, setDisappearMs] = useState<number | null>(null);
+  // v4.32.568: запрет на копирование по этой переписке. Держим подпиской, а не
+  // одним чтением: переключить его можно из карточки профиля, которая
+  // открывается прямо поверх экрана диалога.
+  const [copyBlocked, setCopyBlocked] = useState(false);
+  // Меню сообщения и перевод собираются в колбэках, которые не пересоздаются
+  // на каждый рендер, — им нужно текущее значение, а не то, что было при сборке.
+  const copyBlockedRef = useRef(false);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchHitIdx, setSearchHitIdx] = useState(0);
@@ -942,6 +957,35 @@ function ChatThreadView({
     };
   }, []);
   const activeProfileId = profileManager.getActiveProfile()?.id ?? 1;
+  useEffect(() => {
+    let alive = true;
+    void isCopyGuarded(peerB64).then((on) => { if (alive) { copyBlockedRef.current = on; setCopyBlocked(on); } });
+    const unsub = subscribeCopyGuard((pub, on) => {
+      if (alive && pub === peerB64) { copyBlockedRef.current = on; setCopyBlocked(on); }
+    });
+    return () => { alive = false; unsub(); };
+  }, [peerB64]);
+  // v4.32.568: открытие «сразу поиском» или «сразу избранным». Экран
+  // пересоздаётся на каждого собеседника (key={openPeer.pubB64}), поэтому
+  // «один раз при открытии переписки» — это монтирование, и намерение не
+  // сработает повторно, когда человек закроет поиск руками.
+  useEffect(() => {
+    if (initialIntent === 'search') {
+      setSearchVisible(true);
+      return;
+    }
+    if (initialIntent !== 'starred') return;
+    void listStarredMessages(activeProfileId)
+      .then((entries) => {
+        setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
+        setStarredVisible(true);
+      })
+      .catch((e: unknown) => {
+        log.warn('ui_chat_starred_intent_failed', { err: rawErrorText(e) });
+      });
+    // Намеренно один раз: список избранного дальше живёт своей жизнью.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const flashListRef = useRef<any>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -2572,8 +2616,12 @@ function ChatThreadView({
         const out = parseTranslation(await res.json(), text);
         if (out.ok) {
           Alert.alert('Перевод', out.text, [
-            { text: COPY_ACTION, onPress: () => { Clipboard.setString(out.text); showSuccess(COPIED_TEXT); } },
-            { text: 'OK', style: 'cancel' },
+            // Перевод — тот же текст переписки, только другими словами: при
+            // запрете на копирование кнопки здесь тоже нет.
+            ...(copyBlockedRef.current
+              ? []
+              : [{ text: COPY_ACTION, onPress: () => { Clipboard.setString(out.text); showSuccess(COPIED_TEXT); } }]),
+            { text: 'OK', style: 'cancel' as const },
           ]);
         } else {
           showError(translateFailureMessage(out.reason));
@@ -2684,7 +2732,11 @@ function ChatThreadView({
 
       if (row.direction === 'out') {
         if (Platform.OS === 'ios') {
-          const iosOutOpts = ['Ответить', 'Переслать', 'Реакция', 'Редактировать', COPY_ACTION, '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', 'Подробнее', 'Выбрать'];
+          // Пункт «Копировать» именно убирается: при запрете на копирование
+          // серая строка обещала бы, что где-то её можно вернуть.
+          const iosOutOpts = ['Ответить', 'Переслать', 'Реакция', 'Редактировать',
+            ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
+            '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', 'Подробнее', 'Выбрать'];
           if (isPollRow) iosOutOpts.push('Завершить опрос');
           iosOutOpts.push('Удалить у себя', 'Удалить у всех', 'Отмена');
           const iosCancelIdx = iosOutOpts.length - 1;
@@ -2697,7 +2749,7 @@ function ChatThreadView({
               else if (i === 1) forwardMsg();
               else if (i === 2) showReactions();
               else if (i === 3) startEdit();
-              else if (i === 4) copyText();
+              else if (i === idx(COPY_ACTION)) copyText();
               else if (i === idx('🌐 Перевести')) translateMsg();
               else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
               else if (i === idx(starLabel)) toggleStar();
@@ -2715,7 +2767,9 @@ function ChatThreadView({
         }
       } else if (Platform.OS === 'ios') {
         const markUnread = () => void import('../../core/storage/local').then((m) => m.markConversationUnread(peerB64, activeProfileId)).then(onBackRef.current);
-        const iosInOpts = ['Ответить', 'Переслать', 'Реакция', COPY_ACTION, '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', '📩 Отметить непрочитанным', 'Выбрать', 'Удалить у себя', 'Отмена'];
+        const iosInOpts = ['Ответить', 'Переслать', 'Реакция',
+          ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
+          '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', '📩 Отметить непрочитанным', 'Выбрать', 'Удалить у себя', 'Отмена'];
         ActionSheetIOS.showActionSheetWithOptions(
           { options: iosInOpts, cancelButtonIndex: iosInOpts.indexOf('Отмена'), destructiveButtonIndex: iosInOpts.indexOf('Удалить у себя') },
           (i) => {
@@ -2723,7 +2777,7 @@ function ChatThreadView({
             if (i === 0) setReplyTo(row);
             else if (i === 1) forwardMsg();
             else if (i === 2) showReactions();
-            else if (i === 3) copyText();
+            else if (i === idx(COPY_ACTION)) copyText();
             else if (i === idx('🌐 Перевести')) translateMsg();
             else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
             else if (i === idx(starLabel)) toggleStar();
@@ -3653,6 +3707,7 @@ function ChatThreadView({
                 <Ionicons name="arrow-redo-outline" size={22} color={colors.accent} />
                 <Text style={[s.selToolbarLabel, { color: colors.accent }]}>Переслать</Text>
               </AppPressable>
+              {copyBlocked ? null : (
               <AppPressable
                 style={s.selToolbarBtn}
                 onPress={() => {
@@ -3666,6 +3721,7 @@ function ChatThreadView({
                 <Ionicons name="copy-outline" size={22} color={colors.accent} />
                 <Text style={[s.selToolbarLabel, { color: colors.accent }]}>{COPY_ACTION}</Text>
               </AppPressable>
+              )}
               <AppPressable
                 style={s.selToolbarBtn}
                 onPress={() => {
@@ -3978,6 +4034,7 @@ function ChatThreadView({
         onOpenMore={() => { setReactionsTarget(quickReactMsg); setQuickReactMsg(null); }}
         onReply={() => { if (quickReactMsg) setReplyTo(quickReactMsg); setQuickReactMsg(null); }}
         onCopy={() => { if (quickReactMsg) { Clipboard.setString(quickReactMsg.text); showSuccess(COPIED_TEXT); } setQuickReactMsg(null); }}
+        copyBlocked={copyBlocked}
         onForward={() => { if (quickReactMsg) setForwardTarget(quickReactMsg); setQuickReactMsg(null); }}
         onEdit={() => { if (quickReactMsg) { setEditTarget(quickReactMsg); setMsg(quickReactMsg.text); } setQuickReactMsg(null); }}
         onToggleStar={() => {
@@ -4210,7 +4267,9 @@ function ChatThreadView({
 // ─── Main ChatScreen export ───────────────────────────────────────────────────
 function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }: Props): React.ReactElement {
   // v4.32.16: активность читается внутри ChatThreadView через useTabRef() — здесь prop не нужен.
-  const [openPeer, setOpenPeer] = useState<{ pubB64: string; displayName: string; jumpMsgId?: string } | null>(null);
+  const [openPeer, setOpenPeer] = useState<
+    { pubB64: string; displayName: string; jumpMsgId?: string; intent?: 'chat' | 'search' | 'starred' } | null
+  >(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const tabRef = useTabRef();
 
@@ -4230,14 +4289,14 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
   useEffect(() => {
     if (!peerJump?.peer) return;
     const pub = peerJump.peer;
-    setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub) });
+    setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent });
     void listContacts().then((ctacts) => {
       const c = ctacts.find((x) => x.peerPublicKey === pub);
       if (c?.displayName) {
         setOpenPeer((prev) => (prev?.pubB64 === pub ? { ...prev, displayName: c.displayName } : prev));
       }
     });
-  }, [peerJump?.token, peerJump?.peer]);
+  }, [peerJump?.token, peerJump?.peer, peerJump?.intent]);
 
   // When any chat message is written, refresh the list
   useEffect(() => {
@@ -4264,6 +4323,7 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
           pair={pair}
           peerB64={openPeer.pubB64}
           displayName={openPeer.displayName}
+          initialIntent={openPeer.intent}
           onBack={() => {
             setOpenPeer(null);
             setRefreshTick((t) => t + 1);
