@@ -9,6 +9,7 @@
  */
 import {
   disappearLabel,
+  hubMore,
   hubQuickActions,
   hubSections,
   hubSettings,
@@ -18,6 +19,7 @@ import {
 const base: HubFacts = {
   isSelf: false,
   inContacts: true,
+  hasContactRecord: true,
   blocked: false,
   muted: false,
   copyGuard: false,
@@ -30,12 +32,28 @@ const base: HubFacts = {
 const ids = <T extends string>(items: ReadonlyArray<{ id: T }>): T[] => items.map((i) => i.id);
 
 describe('быстрые действия', () => {
-  it('у чужого профиля есть чем написать, позвонить и найти', () => {
-    expect(ids(hubQuickActions(base))).toEqual(['message', 'call', 'video', 'mute', 'search']);
+  // v4.32.572: ряд — ровно пять кнопок, и пятая всегда «Ещё». Шестая не
+  // помещается по ширине телефона: подписи начинают переноситься и обрезаться.
+  it('у чужого профиля пять кнопок, последняя — «Ещё»', () => {
+    expect(ids(hubQuickActions(base))).toEqual(['message', 'call', 'video', 'mute', 'more']);
   });
 
   it('у своего профиля звонка и звука нет: позвонить себе некому', () => {
-    expect(ids(hubQuickActions({ ...base, isSelf: true }))).toEqual(['message', 'search']);
+    expect(ids(hubQuickActions({ ...base, isSelf: true })))
+      .toEqual(['message', 'edit', 'search', 'more']);
+  });
+
+  it('«Ещё» стоит последним в любом профиле — это не действие, а вход в список', () => {
+    for (const f of [base, { ...base, isSelf: true }, { ...base, blocked: true }]) {
+      const row = ids(hubQuickActions(f));
+      expect(row[row.length - 1]).toBe('more');
+      expect(row.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it('«Изменить» — только у владельца аккаунта: чужое имя правят не здесь', () => {
+    expect(ids(hubQuickActions(base))).not.toContain('edit');
+    expect(ids(hubQuickActions({ ...base, isSelf: true }))).toContain('edit');
   });
 
   it('«Сообщение» у себя называется «Заметки» — это не переписка, а свой блокнот', () => {
@@ -56,7 +74,10 @@ describe('быстрые действия', () => {
   it('без способа открыть переписку письмо и поиск выключены, а не врут', () => {
     const noChat = hubQuickActions({ ...base, canOpenChat: false });
     expect(noChat.find((a) => a.id === 'message')?.disabled).toBe(true);
-    expect(noChat.find((a) => a.id === 'search')?.disabled).toBe(true);
+    expect(hubQuickActions({ ...base, isSelf: true, canOpenChat: false })
+      .find((a) => a.id === 'search')?.disabled).toBe(true);
+    expect(hubMore({ ...base, canOpenChat: false })
+      .find((a) => a.id === 'search')?.disabled).toBe(true);
   });
 
   it('звук подписан тем, что произойдёт при нажатии', () => {
@@ -75,6 +96,54 @@ describe('разделы содержимого', () => {
   it('состав разделов совпадает с тем, что карточка умеет открыть', () => {
     expect(ids(hubSections(base)))
       .toEqual(['posts', 'media', 'starred', 'files', 'music', 'voice', 'links']);
+  });
+
+  // v4.32.572: «плашки публикации, архив публикаций, избранное по
+  // горизонтали» — у хозяина аккаунта эти три идут первыми, потому что
+  // полосу листают слева направо, и дальше третьей плашки доходят не все.
+  it('у владельца аккаунта полоса начинается с публикаций, архива и избранного', () => {
+    expect(ids(hubSections({ ...base, isSelf: true })).slice(0, 3))
+      .toEqual(['posts', 'archive', 'starred']);
+  });
+});
+
+describe('лист «Ещё»', () => {
+  it('содержит все настройки переписки: из карточки они ушли только сюда', () => {
+    const more = ids(hubMore(base));
+    for (const s of ids(hubSettings(base))) expect(more).toContain(s);
+  });
+
+  it('поиск по переписке у чужого профиля живёт здесь, а не в ряду кнопок', () => {
+    expect(ids(hubMore(base))).toContain('search');
+    // У себя поиск остался кнопкой — место в ряду освободили звонок и звук.
+    expect(ids(hubMore({ ...base, isSelf: true }))).not.toContain('search');
+  });
+
+  it('в своём профиле нет действий с контактом: сам себе не контакт', () => {
+    const self = ids(hubMore({ ...base, isSelf: true }));
+    expect(self).not.toContain('add_contact');
+    expect(self).not.toContain('rename_contact');
+    expect(self).not.toContain('delete_contact');
+  });
+
+  it('«Добавить» показывается ровно тогда, когда человека в книге нет', () => {
+    expect(ids(hubMore({ ...base, inContacts: false }))).toContain('add_contact');
+    expect(ids(hubMore(base))).not.toContain('add_contact');
+  });
+
+  // Строка бывает неявной: переписка есть, а в адресную книгу человек не
+  // попадал. Переименовать такую можно, удалить — нельзя: со строкой ушёл бы
+  // ключ переписки.
+  it('переименование — по наличию строки, удаление — по добавлению руками', () => {
+    const implicit = ids(hubMore({ ...base, inContacts: false, hasContactRecord: true }));
+    expect(implicit).toContain('rename_contact');
+    expect(implicit).not.toContain('delete_contact');
+    const none = ids(hubMore({ ...base, inContacts: false, hasContactRecord: false }));
+    expect(none).not.toContain('rename_contact');
+  });
+
+  it('удаление контакта помечено опасным', () => {
+    expect(hubMore(base).find((x) => x.id === 'delete_contact')?.danger).toBe(true);
   });
 });
 

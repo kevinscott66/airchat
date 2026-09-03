@@ -34,6 +34,23 @@
 // разговором или поиском по ней. Старые вызывающие места его не передают и
 // работают как раньше.
 //
+// v4.32.572: пропы не тронуты и в этот раз. Карточка перестала быть колонкой
+// из трёх списков. Наверху пять кнопок в ряд, и пятая — «Ещё»: за ней уехало
+// всё, чем пользуются раз в месяц (настройки переписки, добавить, переименовать,
+// удалить контакт, поиск по переписке). Разделы — «Публикации», «Медиа»,
+// «Избранное» и остальные — стали полосой плашек, которую листают вбок прямо в
+// профиле, вместо восьми строк со стрелочками. Сама карточка и лист «Ещё» —
+// стекло (GlassSurface): под карточкой лежит экран, с которого её открыли, и
+// он должен просвечивать, а не исчезать под глухой панелью.
+//
+// Плашки внутри карточки — заливка и волосяная рамка, а НЕ вложенные
+// GlassSurface: каждый blur-контейнер стоит кадров, а десяток размытий друг на
+// друге ещё и разъедает читаемость (см. предупреждение в GlassSurface.tsx).
+//
+// Своё «Изменить» открывает ProfileEditModal — тот же отдельный раздел, что и
+// со вкладки «Профиль». Второго редактора рядом нет: разошлись бы в первый же
+// день.
+//
 // Про два пункта сказано честно и здесь, и на экране: «Пожаловаться» никуда
 // не отправляется — модерации в сети без сервера нет, жалоба остаётся местной
 // записью и блокировкой (core/social/contactReport); «Запрет копирования и
@@ -49,8 +66,10 @@ import * as Clipboard from 'expo-clipboard';
 import { AppModal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
 import { AppPressable } from './AppPressable';
+import { GlassSurface } from './GlassSurface';
+import { SheetShell } from './SheetShell';
 import { useColors } from '../ThemeContext';
-import { font, mono, radius, scrim, spacing } from '../theme';
+import { font, glass, mono, radius, scrim, spacing, withAlpha } from '../theme';
 import { showSuccess, showError } from './userFeedback';
 import {
   addContact,
@@ -64,10 +83,11 @@ import { publicKeyFromB64 } from '../../core/crypto/pubKeyFormat';
 import { BAD_PUBLIC_KEY_MESSAGE } from '../../core/social/contacts';
 import { peekIdentity, resolvePeer, shortDid, type PeekOwn } from './profilePeekModel';
 import {
+  hubMore,
   hubQuickActions,
   hubSections,
-  hubSettings,
   type HubFacts,
+  type MoreId,
   type QuickActionId,
   type SectionId,
   type SettingId,
@@ -106,6 +126,7 @@ import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/soc
 import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
 import { ProfilePostsModal } from './modals/profile/ProfilePostsModal';
+import { ProfileEditModal } from './modals/profile/ProfileEditModal';
 import { defaultWallpaper, type Wallpaper } from '../wallpapers';
 import { useTheme } from '../ThemeContext';
 import { loadConfig } from '../../core/config';
@@ -133,6 +154,8 @@ const QUICK_ICON: Record<QuickActionId, React.ComponentProps<typeof Ionicons>['n
   video: 'videocam-outline',
   mute: 'notifications-off-outline',
   search: 'search-outline',
+  edit: 'create-outline',
+  more: 'ellipsis-horizontal',
 };
 
 const SECTION_ICON: Record<SectionId, React.ComponentProps<typeof Ionicons>['name']> = {
@@ -154,6 +177,18 @@ const SETTING_ICON: Record<SettingId, React.ComponentProps<typeof Ionicons>['nam
   clear_history: 'trash-outline',
   block: 'ban-outline',
   report: 'flag-outline',
+};
+
+/**
+ * Значки листа «Ещё». Настройки переписки берут свои, остальное — своё: это
+ * один список на экране, и одинаковых кружков в нём быть не должно.
+ */
+const MORE_ICON: Record<MoreId, React.ComponentProps<typeof Ionicons>['name']> = {
+  ...SETTING_ICON,
+  search: 'search-outline',
+  add_contact: 'person-add-outline',
+  rename_contact: 'create-outline',
+  delete_contact: 'trash-outline',
 };
 
 /** Разделы, которые открываются общей галереей переписки, — и её вкладка. */
@@ -240,6 +275,11 @@ export function UserProfilePeek({
   const [mediaTab, setMediaTab] = useState<SharedMediaTab | null>(null);
   const [postsMode, setPostsMode] = useState<'posts' | 'archive' | null>(null);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  // Своё изменили в редакторе — карточку надо перечитать: имя и «О себе» она
+  // держит у себя, а не подписана на хранилище.
+  const [ownReload, setOwnReload] = useState(0);
 
   useEffect(() => {
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока
@@ -296,7 +336,7 @@ export function UserProfilePeek({
     return () => {
       cancelled = true;
     };
-  }, [visible, resolved, pair, fallbackName]);
+  }, [visible, resolved, pair, fallbackName, ownReload]);
 
   // Состояние переписки читается отдельным эффектом: оно не зависит от
   // адресной книги и не должно теряться из-за сбоя её чтения.
@@ -363,6 +403,7 @@ export function UserProfilePeek({
   const facts: HubFacts = useMemo(() => ({
     isSelf,
     inContacts: identity.inContacts,
+    hasContactRecord: !!contact,
     blocked,
     muted,
     copyGuard,
@@ -370,11 +411,11 @@ export function UserProfilePeek({
     disappearMs,
     reported,
     canOpenChat: !!onOpenChat,
-  }), [isSelf, identity.inContacts, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat]);
+  }), [isSelf, identity.inContacts, contact, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
-  const settings = useMemo(() => hubSettings(facts), [facts]);
+  const moreItems = useMemo(() => hubMore(facts), [facts]);
 
   // v4.32.573: идентификатор аккаунта с карточки убран — показывать его
   // собеседнику незачем (см. core/identity/accountRef). Вычисляться он не
@@ -536,6 +577,12 @@ export function UserProfilePeek({
         return;
       case 'mute':
         toggleMute();
+        return;
+      case 'edit':
+        setEditOpen(true);
+        return;
+      case 'more':
+        setMoreOpen(true);
         return;
     }
   }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute]);
@@ -722,6 +769,37 @@ export function UserProfilePeek({
     }
   }, [shareContact, editDisappear, toggleCopyGuard, clearHistory, toggleBlock, report]);
 
+  /**
+   * Пункт листа «Ещё». Лист закрывается ПЕРЕД действием: почти каждое из них
+   * поднимает системное окно подтверждения, а системное окно поверх листа на
+   * iOS показывается под ним — человек нажимает и не видит ничего.
+   */
+  const onMore = useCallback((id: MoreId) => {
+    setMoreOpen(false);
+    switch (id) {
+      case 'search':
+        if (!resolved) return;
+        onOpenChat?.(resolved.pubB64, displayName, 'search');
+        onClose();
+        return;
+      case 'add_contact':
+        void handleAddContact();
+        return;
+      case 'rename_contact':
+        setRenameDraft(contactLabel(contact?.displayName, fallbackName ?? ''));
+        setRenaming(true);
+        return;
+      case 'delete_contact':
+        handleDeleteContact();
+        return;
+      default:
+        onSetting(id);
+    }
+  }, [
+    resolved, displayName, onOpenChat, onClose, handleAddContact,
+    contact, fallbackName, handleDeleteContact, onSetting,
+  ]);
+
   if (!resolved) return null;
 
   return (
@@ -739,8 +817,12 @@ export function UserProfilePeek({
           onPress={onClose}
           accessibilityLabel="Закрыть"
         />
-        {/* Card поверх backdrop; inner-тапы не закрывают модалку. */}
-        <View style={[styles.card, { backgroundColor: colors.surface }]}>
+        {/* Card поверх backdrop; inner-тапы не закрывают модалку.
+            v4.32.572: стекло вместо глухой поверхности — под карточкой лежит
+            экран, с которого её открыли, и он должен просвечивать. Читаемость
+            держит заливка `prominent`, а не размытие: при выключенной
+            прозрачности системы GlassSurface сам заменит её сплошной. */}
+        <GlassSurface variant="prominent" style={styles.card}>
           <ScrollView
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -837,15 +919,21 @@ export function UserProfilePeek({
                 )}
               </View>
 
-              {/* Быстрые действия. Ряд, а не список: это то, ради чего карточку
-                  чаще всего и открывают. */}
+              {/* Быстрые действия: пять плашек в ряд, последняя — «Ещё».
+                  Ряд, а не список: это то, ради чего карточку чаще всего и
+                  открывают. Заливка и волосяная рамка вместо вложенного
+                  стекла — размытие внутри размытия стоит кадров и мутит
+                  надписи. */}
               <View style={styles.quickRow}>
                 {quickActions.map((a) => (
                   <AppPressable
                     key={a.id}
                     style={[
                       styles.quickBtn,
-                      { backgroundColor: colors.background, borderColor: colors.border },
+                      {
+                        backgroundColor: withAlpha(colors.text, 0.06),
+                        borderColor: withAlpha(colors.text, glass.rim),
+                      },
                       a.disabled ? styles.quickDisabled : null,
                     ]}
                     disabled={a.disabled}
@@ -897,107 +985,41 @@ export function UserProfilePeek({
                 </AppPressable>
               </View>
 
+              {/* v4.32.572: разделы — полоса плашек, которую листают вбок
+                  прямо в профиле. Своему хозяину первыми идут «Публикации»,
+                  «Архив публикаций» и «Избранное» — порядок задаёт модель, а
+                  не разметка. */}
               <Text style={[styles.groupLabel, { color: colors.textSecondary }]}>Содержимое</Text>
-              <View style={styles.actions}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.strip}
+                style={styles.stripBox}
+              >
                 {sections.map((sct) => (
                   <AppPressable
                     key={sct.id}
-                    style={[styles.actionRow, { borderTopColor: colors.border }]}
+                    style={[
+                      styles.plaque,
+                      {
+                        backgroundColor: withAlpha(colors.text, 0.06),
+                        borderColor: withAlpha(colors.text, glass.rim),
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={sct.label}
                     onPress={() => onSection(sct.id)}
                   >
-                    <Ionicons name={SECTION_ICON[sct.id]} size={20} color={colors.text} />
-                    <Text style={[styles.actionText, { color: colors.text }]}>{sct.label}</Text>
-                    <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                    <Ionicons name={SECTION_ICON[sct.id]} size={22} color={colors.accent} />
+                    <Text style={[styles.plaqueLabel, { color: colors.text }]} numberOfLines={2}>
+                      {sct.label}
+                    </Text>
                   </AppPressable>
                 ))}
-              </View>
-
-              <Text style={[styles.groupLabel, { color: colors.textSecondary }]}>Переписка</Text>
-              <View style={styles.actions}>
-                {settings.map((st) => (
-                  <AppPressable
-                    key={st.id}
-                    style={[styles.actionRow, { borderTopColor: colors.border }]}
-                    onPress={() => onSetting(st.id)}
-                  >
-                    <Ionicons
-                      name={SETTING_ICON[st.id]}
-                      size={20}
-                      color={st.danger ? colors.error : colors.text}
-                    />
-                    <Text
-                      style={[styles.actionText, { color: st.danger ? colors.error : colors.text }]}
-                    >
-                      {st.label}
-                    </Text>
-                    {st.value ? (
-                      <Text style={[styles.actionValue, { color: colors.textSecondary }]}>
-                        {st.value}
-                      </Text>
-                    ) : null}
-                  </AppPressable>
-                ))}
-              </View>
-
-              <Text style={[styles.groupLabel, { color: colors.textSecondary }]}>Профиль</Text>
-              <View style={styles.actions}>
-                {/* Implicit-строка контактом не считается: именно тут человеку
-                    и нужно «Добавить», а кнопка пряталась. */}
-                {!isSelf && !identity.inContacts && (
-                  <AppPressable
-                    style={[styles.actionRow, { borderTopColor: colors.border }]}
-                    onPress={() => void handleAddContact()}
-                  >
-                    <Ionicons name="person-add-outline" size={20} color={colors.accent} />
-                    <Text style={[styles.actionText, { color: colors.text }]}>
-                      Добавить в контакты
-                    </Text>
-                  </AppPressable>
-                )}
-
-                {!isSelf && contact && !renaming && (
-                  <AppPressable
-                    style={[styles.actionRow, { borderTopColor: colors.border }]}
-                    onPress={() => {
-                      setRenameDraft(contact.displayName);
-                      setRenaming(true);
-                    }}
-                  >
-                    <Ionicons name="create-outline" size={20} color={colors.text} />
-                    <Text style={[styles.actionText, { color: colors.text }]}>
-                      Переименовать
-                    </Text>
-                  </AppPressable>
-                )}
-
-                {/* Удаление — только для добавленного руками. У implicit-строки
-                    удалять нечего: человек в адресную книгу не попадал, а
-                    вместе со строкой ушёл бы ключ переписки с ним. */}
-                {!isSelf && identity.inContacts && !renaming && (
-                  <AppPressable
-                    style={[styles.actionRow, { borderTopColor: colors.border }]}
-                    onPress={handleDeleteContact}
-                  >
-                    <Ionicons name="trash-outline" size={20} color={colors.error} />
-                    <Text style={[styles.actionText, { color: colors.error }]}>
-                      Удалить контакт
-                    </Text>
-                  </AppPressable>
-                )}
-
-                <AppPressable
-                  style={[styles.actionRow, { borderTopColor: colors.border }]}
-                  onPress={onClose}
-                >
-                  <Ionicons name="close-outline" size={20} color={colors.textSecondary} />
-                  <Text style={[styles.actionText, { color: colors.textSecondary }]}>
-                    Закрыть
-                  </Text>
-                </AppPressable>
-              </View>
+              </ScrollView>
               </View>
           </ScrollView>
-        </View>
+        </GlassSurface>
       </View>
       </KeyboardHost>
 
@@ -1021,6 +1043,42 @@ export function UserProfilePeek({
         ownerProfileId={activeProfileId}
         onClose={() => setPostsMode(null)}
       />
+      {/* «Ещё»: настройки переписки и действия с контактом. Здесь, а не в
+          карточке: ими пользуются редко, а места они занимали больше, чем всё
+          остальное вместе. */}
+      <SheetShell visible={moreOpen} onClose={() => setMoreOpen(false)} testID="profile_more_sheet">
+        <Text style={[styles.sheetTitle, { color: colors.text }]}>{identity.title}</Text>
+        {moreItems.map((m) => (
+          <AppPressable
+            key={m.id}
+            style={[styles.actionRow, { borderTopColor: withAlpha(colors.text, glass.rim) }]}
+            accessibilityRole="button"
+            accessibilityLabel={m.label}
+            onPress={() => onMore(m.id)}
+          >
+            <Ionicons
+              name={MORE_ICON[m.id]}
+              size={20}
+              color={m.danger ? colors.error : colors.text}
+            />
+            <Text style={[styles.actionText, { color: m.danger ? colors.error : colors.text }]}>
+              {m.label}
+            </Text>
+            {m.value ? (
+              <Text style={[styles.actionValue, { color: colors.textSecondary }]}>{m.value}</Text>
+            ) : null}
+          </AppPressable>
+        ))}
+      </SheetShell>
+      {/* Своё «Изменить» — тот же отдельный раздел, что и со вкладки
+          «Профиль». Открывается только у себя: у чужого профиля кнопки нет. */}
+      {isSelf ? (
+        <ProfileEditModal
+          visible={editOpen}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => setOwnReload((n) => n + 1)}
+        />
+      ) : null}
       <WallpaperPickerModal
         visible={wallpaperOpen}
         peerB64={resolved.pubB64}
@@ -1116,6 +1174,37 @@ const styles = StyleSheet.create({
   },
   quickLabel: {
     fontSize: font.xs,
+    textAlign: 'center',
+  },
+  stripBox: {
+    // Полоса выходит за отступ карточки: обрезанная плашка у правого края —
+    // это и есть подсказка, что полосу листают.
+    marginHorizontal: -spacing.md,
+  },
+  strip: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  plaque: {
+    width: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  plaqueLabel: {
+    fontSize: font.xs,
+    textAlign: 'center',
+  },
+  sheetTitle: {
+    fontSize: font.md,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
   },
   didBox: {
     flexDirection: 'row',

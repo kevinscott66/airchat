@@ -35,17 +35,13 @@ import { listStarredMessages, setMessageStarred, setGroupMessageStarred, getProf
 import { approxCountLabel, approxCountNotice } from '../../core/storage/approxCount';
 import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage/unreadableText';
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
-import { loadKeyPair } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
-import { republishProfileFromKv } from '../../core/identity/profile';
-import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, sanitizeOwnDisplayName } from '../../core/identity/ownProfile';
-import { checkUsernameClaim, USERNAME_MIN_SELF_SERVICE } from '../../core/identity/reservedUsernames';
-import { applyOwnBadgeGrant, ownBadgeClaim } from '../../core/identity/ownBadge';
+import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
+import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../core/identity/verification';
-import { saveOwnUsernameGlobally } from '../../core/identity/usernameRegistry';
 import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
-import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
-import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope';
+import { normalizeOwnStatus } from '../../core/social/peerStatus';
+import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { ownAvatarUri, saveOwnAvatar } from '../../core/identity/ownAvatar';
 import { refreshAvatarTable } from '../../core/social/avatarRegistry';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
@@ -55,13 +51,16 @@ import {
   unlockSensitiveAccess,
 } from '../../core/security/sensitiveAccess';
 import { VerifiedMark } from '../components/VerifiedMark';
+import { GlassSurface } from '../components/GlassSurface';
+import { ProfileEditModal } from '../components/modals/profile/ProfileEditModal';
+import { ProfilePostsModal } from '../components/modals/profile/ProfilePostsModal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WallpaperBackground } from '../components/WallpaperBackground';
 import { defaultWallpaper, feedGround } from '../wallpapers';
 import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
-import { accentOnFill, avatarShape, BRAND_X, font, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, type AppColors } from '../theme';
+import { accentOnFill, avatarShape, BRAND_X, font, glass, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, withAlpha, type AppColors } from '../theme';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { safeExternalUrl } from '../../core/net/externalLink';
@@ -140,11 +139,7 @@ function ProfileScreenImpl({
   const tabInset = useTabBarInset();
   const styles = useMemo(() => makeStyles(colors, scaleFont), [colors, scaleFont]);
   const [displayName, setDisplayName] = useState('');
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [editNameDraft, setEditNameDraft] = useState('');
   const [bio, setBio] = useState('');
-  const [isEditingBio, setIsEditingBio] = useState(false);
-  const [editBioDraft, setEditBioDraft] = useState('');
   const [handle, setHandle] = useState('');
   /**
    * v4.32.547: своя бумага на официальную галочку — уже проверенная на
@@ -153,8 +148,6 @@ function ProfileScreenImpl({
    * зарезервированное имя, на которое бумага и выдана.
    */
   const [badge, setBadge] = useState<VerificationClaim | null>(null);
-  const [isEditingHandle, setIsEditingHandle] = useState(false);
-  const [editHandleDraft, setEditHandleDraft] = useState('');
   const [peer, setPeer] = useState<string | null>(null);
   const [seedModal, setSeedModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -174,26 +167,29 @@ function ProfileScreenImpl({
   const [stats, setStats] = useState<ProfileStats | null>(null);
   // Custom status
   const [customStatus, setCustomStatus] = useState('');
-  const [editStatusVisible, setEditStatusVisible] = useState(false);
-  const [editStatusDraft, setEditStatusDraft] = useState('');
   const [callLogVisible, setCallLogVisible] = useState(false);
   const [callLogEntries, setCallLogEntries] = useState<CallLogEntry[]>(() => getCallLog());
   /** v4.32.30: список контактов открывается из Профиля в модалке (VK-style «Друзья»). */
   const [contactsVisible, setContactsVisible] = useState(false);
   // Pronouns
   const [pronouns, setPronouns] = useState('');
-  const [isEditingPronouns, setIsEditingPronouns] = useState(false);
-  const [editPronounsDraft, setEditPronounsDraft] = useState('');
   // Social links
   const [website, setWebsite] = useState('');
   const [twitterHandle, setTwitterHandle] = useState('');
   const [githubHandle, setGithubHandle] = useState('');
-  const [socialLinksVisible, setSocialLinksVisible] = useState(false);
-  const [websiteDraft, setWebsiteDraft] = useState('');
-  const [twitterDraft, setTwitterDraft] = useState('');
-  const [githubDraft, setGithubDraft] = useState('');
   // Account age
   const [accountCreatedAt, setAccountCreatedAt] = useState<number | null>(null);
+  /**
+   * v4.32.572: «всю информацию в своём профиле можно корректировать в
+   * отдельном разделе». Шесть редакторов, живших прямо на карточке, заменил
+   * один — ProfileEditModal. Он же открывается из карточки своего профиля, и
+   * второго набора полей рядом нет.
+   */
+  const [editProfileVisible, setEditProfileVisible] = useState(false);
+  /** Счётчик перечитывания: редактор сохранил — экран показывает новое. */
+  const [profileReload, setProfileReload] = useState(0);
+  /** Свои публикации и их архив — те же окна, что и в карточке профиля. */
+  const [postsMode, setPostsMode] = useState<'posts' | 'archive' | null>(null);
 
   const shortDid = shortIdentity(did);
 
@@ -234,7 +230,6 @@ function ProfileScreenImpl({
       ? profileName || kvName || ''
       : kvName || profileName || '';
     setDisplayName(initial);
-    setEditNameDraft(initial);
   }, [multiProfileEnabled]);
 
   useEffect(() => {
@@ -250,17 +245,17 @@ function ProfileScreenImpl({
       // v4.32.378: и на чтении — «О себе», набранное до этой версии, лежит в
       // базе без всякой чистки, а показывается оно здесь как есть.
       const savedBio = normalizeOwnBio(await ownFieldGet('user_bio'));
-      if (alive && savedBio) { setBio(savedBio); setEditBioDraft(savedBio); }
+      if (alive) setBio(savedBio);
       // v4.32.375: чистится и на чтении — в базе лежат строки, набранные
       // прежним редактором в настройках: многострочные и до ста символов.
       const savedStatus = normalizeOwnStatus(await ownFieldGet('user_custom_status'));
-      if (alive && savedStatus) setCustomStatus(savedStatus);
+      if (alive) setCustomStatus(savedStatus);
       const savedHandle = await getOwnUsername();
-      if (alive && savedHandle) { setHandle(savedHandle); setEditHandleDraft(savedHandle); }
+      if (alive) setHandle(savedHandle ?? '');
       const claim = await ownBadgeClaim();
       if (alive) setBadge(claim);
       const savedPronouns = cleanPronouns(await ownFieldGet('user_pronouns'));
-      if (alive && savedPronouns) { setPronouns(savedPronouns); setEditPronounsDraft(savedPronouns); }
+      if (alive) setPronouns(savedPronouns);
       // Social links
       const savedWebsite = await ownFieldGet('user_website');
       const savedTwitter = await ownFieldGet('user_twitter');
@@ -269,9 +264,6 @@ function ProfileScreenImpl({
         setWebsite(savedWebsite ?? '');
         setTwitterHandle(savedTwitter ?? '');
         setGithubHandle(savedGithub ?? '');
-        setWebsiteDraft(savedWebsite ?? '');
-        setTwitterDraft(savedTwitter ?? '');
-        setGithubDraft(savedGithub ?? '');
       }
       // Account creation date — store on first launch
       let createdAt = await ownFieldGet('account_created_at');
@@ -305,7 +297,10 @@ function ProfileScreenImpl({
     return () => {
       alive = false;
     };
-  }, [loadDisplayName, pair, did]);
+    // `profileReload` в списке умышленно: редактор профиля — отдельное окно,
+    // и после его «Сохранить» экран обязан перечитать поля, а не показывать
+    // то, что прочитал при открытии вкладки.
+  }, [loadDisplayName, pair, did, profileReload]);
 
   useEffect(() => {
     void loadDisplayName();
@@ -366,154 +361,11 @@ function ProfileScreenImpl({
     }
   };
 
-  const saveDisplayName = async (): Promise<void> => {
-    // v4.32.175: без очистки можно было записать имя в 10 КБ и RTL-override,
-    // которые расходились контактам. v4.32.287: правило переехало в
-    // core/identity/ownProfile — в LoginScreen стояла лишь проверка длины,
-    // хотя здесь было написано, что правила совпадают. Теперь совпадают.
-    const trimmed = sanitizeOwnDisplayName(editNameDraft);
-    if (!trimmed) {
-      showError('Имя не может быть пустым');
-      return;
-    }
-    try {
-      await ownFieldSet(OWN_DISPLAY_NAME_KEY, trimmed);
-      await profileManager.init();
-      const ap = profileManager.getActiveProfile();
-      if (ap) {
-        await profileManager.renameProfile(ap.id, trimmed);
-      }
-      const kp = await loadKeyPair();
-      if (kp) {
-        void republishProfileFromKv(kp).catch(() => {
-          /* офлайн: облако необязательно */
-        });
-      }
-      // v4.32.247: рабочий путь до контактов — личное сообщение. republish
-      // выше кладёт профиль в IPFS, который на телефоне выключен, поэтому
-      // раньше новое имя не узнавал никто.
-      void publishProfileToContacts();
-      setDisplayName(trimmed);
-      setIsEditingName(false);
-      onDisplayNameChanged?.(trimmed);
-      showSuccess('Имя сохранено');
-    } catch (e) {
-      showError(userErrorText(e, 'Не удалось сохранить имя'));
-    }
-  };
-
   /**
-   * v4.32.547: принять бумагу из буфера обмена.
-   *
-   * Проверка идёт целиком в ownBadge и на собственный DID: чужую бумагу сюда
-   * вставить можно, но записана она не будет — галочка привязана к аккаунту, и
-   * именно это отличает её от поля, которое каждый ставит себе сам.
+   * v4.32.572: сохранение имени, юзернейма, «О себе», местоимений, статуса и
+   * ссылок отсюда ушло целиком — в ProfileEditModal. Держать те же шесть
+   * функций и здесь значило бы держать два набора правил на одни и те же поля.
    */
-  const applyBadgeFromClipboard = async (): Promise<void> => {
-    try {
-      const raw = (await Clipboard.getStringAsync())?.trim();
-      if (!raw) { showError('Буфер обмена пуст'); return; }
-      const claim = await applyOwnBadgeGrant(raw);
-      if (!claim) {
-        showError('Это подтверждение выдано не вашему аккаунту или испорчено');
-        return;
-      }
-      setBadge(claim);
-      await markProfileChanged();
-      void broadcastMyProfile();
-      showSuccess(claim.username === handle
-        ? 'Аккаунт подтверждён'
-        : `Подтверждение принято на @${claim.username} — займите этот юзернейм, чтобы галочка появилась`);
-    } catch (e) {
-      showError(userErrorText(e, 'Не удалось прочитать буфер обмена'));
-    }
-  };
-
-  const saveHandle = async (): Promise<void> => {
-    // v4.32.540: причина отказа называется вслух. Раньше на все случаи была
-    // одна строка про занятость, и человек, набравший имя из двух букв, шёл
-    // подбирать варианты — получая на каждый тот же ответ.
-    // v4.32.547: второй аргумент — имя из своей бумаги. Только оно проходит
-    // мимо списка зарезервированных: иначе выданная галочка на `@founder`
-    // упиралась бы в тот самый список, который её и охраняет.
-    const claim = checkUsernameClaim(editHandleDraft, badge?.username);
-    if (!claim.ok) {
-      showError(
-        claim.reason === 'empty' ? 'Введите юзернейм'
-          : claim.reason === 'charset' ? 'Только латиница, цифры и «_» — без пробелов и знаков'
-            : claim.reason === 'too_long' ? 'Юзернейм длиннее 32 символов'
-              : claim.reason === 'too_short'
-                ? `Юзернейм короче ${USERNAME_MIN_SELF_SERVICE} символов — короткие имена оставлены приложению`
-                : 'Это имя оставлено приложению: выберите другое',
-      );
-      return;
-    }
-    const raw = claim.username;
-    // v4.32.543: имя занимается в общем реестре, а не только среди профилей
-    // этого телефона. Раньше два незнакомых человека занимали одно `@name`, и
-    // получатель конверта не мог сказать, от кого он.
-    const saved = await saveOwnUsernameGlobally(raw);
-    if (!saved.ok) {
-      showError(
-        saved.reason === 'taken' ? 'Этот юзернейм уже занят другим человеком'
-          : saved.reason === 'rejected' ? 'Реестр не принял это имя: выберите другое'
-            : 'Юзернейм уже используется другим аккаунтом или не сохранён',
-      );
-      return;
-    }
-    setHandle(raw);
-    setIsEditingHandle(false);
-    await markProfileChanged();
-    void broadcastMyProfile();
-    showSuccess(saved.scope === 'global'
-      ? 'Юзернейм закреплён за вами'
-      : 'Юзернейм сохранён, но реестр недоступен — закрепим при следующем выходе в сеть');
-  };
-
-  const saveBio = async (): Promise<void> => {
-    // v4.32.378: чистка та же, что на приёме чужого профиля. Без неё хранилось
-    // одно, а контактам уезжало другое: вставленная из буфера метка U+202E
-    // переворачивала строку у автора на экране и вычищалась у всех остальных.
-    const trimmed = normalizeOwnBio(editBioDraft);
-    await ownFieldSet('user_bio', trimmed);
-    setBio(trimmed);
-    setIsEditingBio(false);
-    const kp = await loadKeyPair();
-    if (kp) void republishProfileFromKv(kp).catch(() => { /* offline ok */ });
-    void publishProfileToContacts();
-    showSuccess('О себе сохранено');
-  };
-
-  const savePronouns = async (): Promise<void> => {
-    const trimmed = cleanPronouns(editPronounsDraft);
-    await ownFieldSet('user_pronouns', trimmed);
-    setPronouns(trimmed);
-    setIsEditingPronouns(false);
-    showSuccess(trimmed ? 'Местоимения сохранены' : 'Местоимения удалены');
-  };
-
-  const saveSocialLinks = async (): Promise<void> => {
-    // v4.32.191 (Round-21 #7): cap length 256 + strip C0 control chars so
-    // paste of a novel into the field doesn't bloat kvStore or let a \r\n
-    // sneak into a rendered link.
-    // v4.32.369: чистка общая. Ссылка показывается как текст, и U+202E в ней
-    // переворачивает адрес на экране — домен виден один, открывается другой.
-    const clean = (s: string): string => (sanitizeDisplayName(s, 256) ?? '').trim();
-    const web = clean(websiteDraft);
-    const tw = clean(twitterDraft).replace(/^@/, '');
-    const gh = clean(githubDraft).replace(/^@/, '');
-    await Promise.all([
-      ownFieldSet('user_website', web),
-      ownFieldSet('user_twitter', tw),
-      ownFieldSet('user_github', gh),
-    ]);
-    setWebsite(web);
-    setTwitterHandle(tw);
-    setGithubHandle(gh);
-    setSocialLinksVisible(false);
-    showSuccess('Ссылки сохранены');
-  };
-
   const copyDid = async (): Promise<void> => {
     await Clipboard.setStringAsync(did);
     showSuccess(COPIED_ID);
@@ -642,7 +494,6 @@ function ProfileScreenImpl({
   };
 
   // ── useAsyncButton wrappers — prevent double-tap on async actions ────────────
-  const saveNameBtn = useAsyncButton(saveDisplayName, { throttleMs: 300 });
   const copyDidBtn = useAsyncButton(copyDid, { throttleMs: 300 });
   const pickAvatarBtn = useAsyncButton(pickAvatar, { throttleMs: 300 });
   const openSeedBtn = useAsyncButton(openSeed, { throttleMs: 300 });
@@ -689,146 +540,30 @@ function ProfileScreenImpl({
               <Ionicons name="camera" size={14} color={primaryInk(colors).text} />
             </View>
           </AppPressable>
-          {isEditingName ? (
-            <View style={styles.nameEditBlock}>
-              <TextInput
-                style={styles.nameInput}
-                value={editNameDraft}
-                onChangeText={setEditNameDraft}
-                autoFocus
-                placeholder="Ваше имя"
-                placeholderTextColor={colors.textMuted}
-                testID="profile_display_name_input"
-              />
-              <View style={styles.nameEditActions}>
-                <AppPressable
-                  onPress={() => {
-                    setEditNameDraft(displayName);
-                    setIsEditingName(false);
-                  }}
-                >
-                  <Text style={styles.nameEditCancel}>Отмена</Text>
-                </AppPressable>
-                <AppPressable onPress={saveNameBtn.onPress} testID="profile_save_display_name">
-                  <Text style={styles.nameEditSave}>Сохранить</Text>
-                </AppPressable>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.nameRow}>
-              <Text style={styles.username} testID="profile_display_name">
-                {displayName || 'Без имени'}
-              </Text>
-              <AppPressable
-                onPress={() => {
-                  setEditNameDraft(displayName);
-                  setIsEditingName(true);
-                }}
-                hitSlop={8}
-                testID="profile_edit_display_name"
-              >
-                <Ionicons name="create-outline" size={22} color={colors.accent} />
-              </AppPressable>
-            </View>
-          )}
-          {/* One canonical username per account */}
-          {isEditingHandle ? (
-            <View style={styles.handleEditBlock}>
-              <Text style={styles.handleAt}>@</Text>
-              <TextInput
-                style={styles.handleInput}
-                value={editHandleDraft.replace(/^@/, '')}
-                onChangeText={(t) => setEditHandleDraft(t.replace(/^@/, '').toLowerCase())}
-                autoFocus
-                placeholder="username"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                maxLength={32}
-                testID="profile_handle_input"
-              />
-              <AppPressable onPress={() => void saveHandle()} hitSlop={8}>
-                <Ionicons name="checkmark" size={20} color={colors.accent} />
-              </AppPressable>
-              <AppPressable onPress={() => { setEditHandleDraft(handle); setIsEditingHandle(false); }} hitSlop={8}>
-                <Ionicons name="close" size={20} color={colors.textMuted} />
-              </AppPressable>
-            </View>
-          ) : (
-            <AppPressable
-              style={styles.handleRow}
-              onPress={() => { setEditHandleDraft(handle); setIsEditingHandle(true); }}
-              testID="profile_handle"
-            >
-              <Text style={handle ? styles.handleText : styles.handlePlaceholder}>
-                {handle ? `@${handle}` : 'Добавить @юзернейм'}
-              </Text>
-              {/* Галочка показывается только при совпадении имени с бумагой:
-                  переименовавшийся аккаунт контакты видят без неё, и он должен
-                  видеть себя так же — иначе он об этом не узнает. */}
-              {badge && badge.username === handle ? (
-                <VerifiedMark size={15} label="Официальный аккаунт" />
-              ) : null}
-              <Ionicons name="create-outline" size={16} color={colors.textMuted} style={{ marginLeft: 6 }} />
-            </AppPressable>
-          )}
-          {/*
-            v4.32.540: постоянный идентификатор аккаунта. Юзернейм меняют, имя
-            и фотографию тем более — а это выводится из ключа и не меняется
-            никогда, поэтому по нему собеседник и сверяет, тот ли это человек.
-          */}
-          {/* Pronouns */}
-          {isEditingPronouns ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-              <TextInput
-                style={[styles.handleInput, { flex: 1 }]}
-                value={editPronounsDraft}
-                onChangeText={setEditPronounsDraft}
-                autoFocus
-                placeholder="он/его, она/её, они/их…"
-                placeholderTextColor={colors.textMuted}
-                maxLength={PRONOUNS_MAX}
-              />
-              <AppPressable onPress={() => void savePronouns()} hitSlop={8}>
-                <Ionicons name="checkmark" size={20} color={colors.accent} />
-              </AppPressable>
-              <AppPressable onPress={() => { setEditPronounsDraft(pronouns); setIsEditingPronouns(false); }} hitSlop={8}>
-                <Ionicons name="close" size={20} color={colors.textMuted} />
-              </AppPressable>
-            </View>
-          ) : (
-            <AppPressable
-              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}
-              onPress={() => { setEditPronounsDraft(pronouns); setIsEditingPronouns(true); }}
-            >
-              <Text style={{ color: pronouns ? colors.textSecondary : colors.textMuted, fontSize: scaleFont(13) }}>
-                {pronouns || 'Добавить местоимения'}
-              </Text>
-              <Ionicons name="create-outline" size={14} color={colors.textMuted} />
-            </AppPressable>
-          )}
-
-          {/*
-            v4.32.547: приём бумаги на галочку. Из буфера, а не отдельным окном
-            ввода: строка длинная, набирать её руками никто не станет, а
-            приходит она всегда откуда-то, откуда её копируют.
-
-            Строка показывается, только когда бумаги ещё нет: у аккаунта с
-            галочкой она превратилась бы в приглашение сменить подтверждение —
-            действие, которого не бывает.
-          */}
-          {badge ? null : (
-            <AppPressable
-              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}
-              onPress={() => void applyBadgeFromClipboard()}
-              testID="profile_badge_paste"
-            >
-              <Ionicons name="shield-checkmark-outline" size={14} color={colors.textMuted} />
-              <Text style={{ color: colors.textMuted, fontSize: scaleFont(13) }}>
-                Вставить подтверждение аккаунта
-              </Text>
-            </AppPressable>
-          )}
+          {/* v4.32.572: карандашей на карточке больше нет. Всё, что тут
+              видно, правится в одном месте — кнопкой «Редактировать профиль»
+              ниже. Раньше имя, юзернейм, местоимения, «О себе», статус и
+              ссылки правились шестью разными способами, и человек, зашедший
+              «поправить профиль», правил то, на что случайно нажал. */}
+          <Text style={styles.username} testID="profile_display_name">
+            {displayName || 'Без имени'}
+          </Text>
+          <View style={styles.handleRow}>
+            <Text style={handle ? styles.handleText : styles.handlePlaceholder}>
+              {handle ? `@${handle}` : 'Юзернейм не занят'}
+            </Text>
+            {/* Галочка показывается только при совпадении имени с бумагой:
+                переименовавшийся аккаунт контакты видят без неё, и он должен
+                видеть себя так же — иначе он об этом не узнает. */}
+            {badge && badge.username === handle ? (
+              <VerifiedMark size={15} label="Официальный аккаунт" />
+            ) : null}
+          </View>
+          {pronouns ? (
+            <Text style={{ color: colors.textSecondary, fontSize: scaleFont(13), marginTop: 4 }}>
+              {pronouns}
+            </Text>
+          ) : null}
 
           <Text style={styles.userIdLabel}>Ваш адрес для связи</Text>
           <AppPressable style={styles.userIdBox} onPress={copyDidBtn.onPress} testID="user_did">
@@ -840,76 +575,79 @@ function ProfileScreenImpl({
           <Text style={styles.userIdHint}>Нажмите, чтобы скопировать. Нужен для добавления вручную.</Text>
         </View>
 
-        {/* Bio section */}
-        <View style={styles.bioSection}>
-          {isEditingBio ? (
-            <>
-              <TextInput
-                style={styles.bioInput}
-                value={editBioDraft}
-                onChangeText={setEditBioDraft}
-                multiline
-                maxLength={OWN_BIO_MAX}
-                placeholder="Расскажите о себе…"
-                placeholderTextColor={colors.textMuted}
-                autoFocus
-                testID="profile_bio_input"
-              />
-              <View style={styles.bioEditActions}>
-                <AppPressable onPress={() => { setEditBioDraft(bio); setIsEditingBio(false); }}>
-                  <Text style={styles.nameEditCancel}>Отмена</Text>
-                </AppPressable>
-                <AppPressable onPress={() => void saveBio()} testID="profile_save_bio">
-                  <Text style={styles.nameEditSave}>Сохранить</Text>
-                </AppPressable>
-              </View>
-            </>
-          ) : (
-            <AppPressable
-              style={styles.bioRow}
-              onPress={() => { setEditBioDraft(bio); setIsEditingBio(true); }}
-              testID="profile_bio"
-            >
-              {bio ? (
-                <Text style={styles.bioText} numberOfLines={3}>
-                  {/* Подчёркнутым рисуется РОВНО то, что дверь согласна
-                      открыть: решение одно и принимается один раз, иначе
-                      можно подчеркнуть ссылку, по которой ничего не будет
-                      (v4.32.420). */}
-                  {splitBioParts(bio).map((part, idx) => {
-                    const href = safeExternalUrl(part);
-                    return href ? (
-                      <Text
-                        key={idx}
-                        style={{ color: colors.accent, textDecorationLine: 'underline' }}
-                        onPress={() => openExternal(href, 'profile_bio')}
-                      >
-                        {part}
-                      </Text>
-                    ) : (
-                      <Text key={idx}>{part}</Text>
-                    );
-                  })}
-                </Text>
-              ) : (
-                <Text style={styles.bioPlaceholder}>Добавить описание…</Text>
-              )}
-              <Ionicons name="create-outline" size={18} color={colors.textMuted} style={{ marginLeft: 8 }} />
-            </AppPressable>
-          )}
-        </View>
+        {/* «О себе»: подчёркнутым рисуется РОВНО то, что дверь согласна
+            открыть — решение одно и принимается один раз, иначе можно
+            подчеркнуть ссылку, по которой ничего не будет (v4.32.420). */}
+        {bio ? (
+          <View style={styles.bioSection}>
+            <Text style={styles.bioText}>
+              {splitBioParts(bio).map((part, idx) => {
+                const href = safeExternalUrl(part);
+                return href ? (
+                  <Text
+                    key={idx}
+                    style={{ color: colors.accent, textDecorationLine: 'underline' }}
+                    onPress={() => openExternal(href, 'profile_bio')}
+                  >
+                    {part}
+                  </Text>
+                ) : (
+                  <Text key={idx}>{part}</Text>
+                );
+              })}
+            </Text>
+          </View>
+        ) : null}
 
-        {/* Custom status */}
-        <AppPressable
-          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 10, gap: 10 }}
-          onPress={() => { setEditStatusDraft(customStatus); setEditStatusVisible(true); }}
-        >
-          <Text style={{ fontSize: scaleFont(20) }}>{customStatus ? customStatus.match(/^\p{Emoji}/u)?.[0] ?? '💬' : '💬'}</Text>
-          <Text style={{ color: customStatus ? colors.text : colors.textMuted, fontSize: scaleFont(14), flex: 1 }}>
-            {customStatus || 'Установить статус…'}
-          </Text>
-          <Ionicons name="create-outline" size={16} color={colors.textMuted} />
-        </AppPressable>
+        {customStatus ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 10, gap: 10 }}>
+            <Text style={{ fontSize: scaleFont(20) }}>{customStatus.match(/^\p{Emoji}/u)?.[0] ?? '💬'}</Text>
+            <Text style={{ color: colors.text, fontSize: scaleFont(14), flex: 1 }}>{customStatus}</Text>
+          </View>
+        ) : null}
+
+        {website || twitterHandle || githubHandle ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 8, gap: 10 }}>
+            <Ionicons name="link-outline" size={18} color={colors.textMuted} />
+            <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {/* Поле сайта заполняет сам владелец профиля, поэтому здесь
+                  допускается адрес без схемы — «example.com». Всё остальное
+                  правило то же, что и для чужих ссылок (v4.32.420). */}
+              {website ? (
+                <AppPressable onPress={() => openTypedExternal(website, 'profile_site')}>
+                  <Text style={{ color: colors.accent, fontSize: scaleFont(13) }} numberOfLines={1}>{website.replace(/^https?:\/\//, '')}</Text>
+                </AppPressable>
+              ) : null}
+              {twitterHandle && /^[A-Za-z0-9_]{1,15}$/.test(twitterHandle) ? (
+                // v4.32.183 (Round-13 #10): enforce Twitter handle charset to avoid
+                // open-redirect via `foo/../../evil`.
+                <AppPressable onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}>
+                  <Text style={{ color: accentOnFill(BRAND_X, colors.background, colors.accent), fontSize: scaleFont(13) }}>𝕏 @{twitterHandle}</Text>
+                </AppPressable>
+              ) : null}
+              {githubHandle && /^[A-Za-z0-9-]{1,39}$/.test(githubHandle) ? (
+                <AppPressable onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}>
+                  <Text style={{ color: colors.text, fontSize: scaleFont(13) }}>⌥ {githubHandle}</Text>
+                </AppPressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {/* Отдельный раздел, о котором просили: одна дверь ко всем полям. */}
+        <GlassSurface variant="regular" style={styles.editProfileGlass} wash>
+          <AppPressable
+            style={styles.editProfileRow}
+            onPress={() => setEditProfileVisible(true)}
+            testID="btn_edit_profile"
+            accessibilityRole="button"
+            accessibilityLabel="Редактировать профиль"
+          >
+            <Ionicons name="create-outline" size={20} color={colors.accent} />
+            <Text style={styles.editProfileText}>Редактировать профиль</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </AppPressable>
+        </GlassSurface>
 
         {/* Profile completion bar */}
         {completionPct < 100 ? (
@@ -924,44 +662,48 @@ function ProfileScreenImpl({
           </View>
         ) : null}
 
-        {/* Social links */}
-        <AppPressable
-          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 8, gap: 10 }}
-          onPress={() => {
-            setWebsiteDraft(website);
-            setTwitterDraft(twitterHandle ? `@${twitterHandle}` : '');
-            setGithubDraft(githubHandle ? `@${githubHandle}` : '');
-            setSocialLinksVisible(true);
-          }}
+        {/* v4.32.572: «плашки публикации, архив публикаций, избранное по
+            горизонтали». Полоса, а не три строки списка: это то, ради чего на
+            свой профиль и заходят, и вбок они занимают один экран вместо трёх
+            прокруток. Плашки — заливка и волосяная рамка, не вложенное стекло:
+            десяток размытий друг на друге стоит кадров и мутит надписи. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.stripBox}
+          contentContainerStyle={styles.strip}
         >
-          <Ionicons name="link-outline" size={18} color={colors.textMuted} />
-          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {/* Поле сайта заполняет сам владелец профиля, поэтому здесь
-                допускается адрес без схемы — «example.com». Всё остальное
-                правило то же, что и для чужих ссылок (v4.32.420). */}
-            {website ? (
-              <AppPressable onPress={() => openTypedExternal(website, 'profile_site')}>
-                <Text style={{ color: colors.accent, fontSize: scaleFont(13) }} numberOfLines={1}>{website.replace(/^https?:\/\//, '')}</Text>
-              </AppPressable>
-            ) : null}
-            {twitterHandle && /^[A-Za-z0-9_]{1,15}$/.test(twitterHandle) ? (
-              // v4.32.183 (Round-13 #10): enforce Twitter handle charset to avoid
-              // open-redirect via `foo/../../evil`.
-              <AppPressable onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}>
-                <Text style={{ color: accentOnFill(BRAND_X, colors.background, colors.accent), fontSize: scaleFont(13) }}>𝕏 @{twitterHandle}</Text>
-              </AppPressable>
-            ) : null}
-            {githubHandle && /^[A-Za-z0-9-]{1,39}$/.test(githubHandle) ? (
-              <AppPressable onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}>
-                <Text style={{ color: colors.text, fontSize: scaleFont(13) }}>⌥ {githubHandle}</Text>
-              </AppPressable>
-            ) : null}
-            {!website && !twitterHandle && !githubHandle ? (
-              <Text style={{ color: colors.textMuted, fontSize: scaleFont(13) }}>Добавить ссылки…</Text>
-            ) : null}
-          </View>
-          <Ionicons name="create-outline" size={16} color={colors.textMuted} />
-        </AppPressable>
+          {([
+            { id: 'posts', label: 'Публикации', icon: 'albums-outline', hint: postCount > 0 ? String(postCount) : null, onPress: () => setPostsMode('posts') },
+            { id: 'archive', label: 'Архив публикаций', icon: 'archive-outline', hint: null, onPress: () => setPostsMode('archive') },
+            {
+              id: 'starred',
+              label: 'Избранное',
+              icon: 'star-outline',
+              hint: null,
+              onPress: () => {
+                const pid = profileManager.getActiveProfile()?.id ?? 1;
+                void listStarredMessages(pid).then((entries) => {
+                  setStarredEntries(entries);
+                  setStarredVisible(true);
+                });
+              },
+            },
+          ] as const).map((pl) => (
+            <AppPressable
+              key={pl.id}
+              style={styles.plaque}
+              onPress={pl.onPress}
+              testID={`profile_plaque_${pl.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={pl.label}
+            >
+              <Ionicons name={pl.icon} size={24} color={colors.accent} />
+              <Text style={styles.plaqueLabel} numberOfLines={2}>{pl.label}</Text>
+              {pl.hint ? <Text style={styles.plaqueHint}>{pl.hint}</Text> : null}
+            </AppPressable>
+          ))}
+        </ScrollView>
 
         <View style={styles.actionsGrid}>
           <AppPressable style={styles.actionCard} onPress={() => setShowQrModal(true)}>
@@ -980,19 +722,6 @@ function ProfileScreenImpl({
             <Text style={styles.actionDesc}>Для восстановления аккаунта</Text>
           </AppPressable>
 
-          <AppPressable style={styles.actionCard} onPress={() => {
-            const pid = profileManager.getActiveProfile()?.id ?? 1;
-            void listStarredMessages(pid).then((entries) => {
-              setStarredEntries(entries);
-              setStarredVisible(true);
-            });
-          }}>
-            <View style={styles.actionIcon}>
-              <Ionicons name="star" size={28} color={colors.star} />
-            </View>
-            <Text style={styles.actionTitle}>Избранные</Text>
-            <Text style={styles.actionDesc}>Отмеченные сообщения</Text>
-          </AppPressable>
           <AppPressable style={styles.actionCard} onPress={() => setCallLogVisible(true)}>
             <View style={styles.actionIcon}>
               <Ionicons name="call" size={28} color={colors.accent} />
@@ -1154,58 +883,6 @@ function ProfileScreenImpl({
                     setSeedPwd('');
                   }}
                 >
-                  <Text style={styles.linkText}>Отмена</Text>
-                </AppPressable>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </Modal>
-
-        {/* Social links edit modal */}
-        <Modal visible={socialLinksVisible} transparent animationType="fade" onRequestClose={() => setSocialLinksVisible(false)}>
-          {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
-          <KeyboardAvoidingView style={styles.exportKav} behavior="padding" keyboardVerticalOffset={0}>
-            <View style={styles.modalBg}>
-              <View style={styles.modalBox}>
-                <Text style={styles.modalTitle}>Ссылки профиля</Text>
-                <Text style={styles.modalHint}>Сайт</Text>
-                <TextInput
-                  style={styles.input}
-                  value={websiteDraft}
-                  onChangeText={setWebsiteDraft}
-                  placeholder="https://example.com"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  maxLength={256}
-                />
-                <Text style={styles.modalHint}>Twitter / X</Text>
-                <TextInput
-                  style={styles.input}
-                  value={twitterDraft}
-                  onChangeText={setTwitterDraft}
-                  placeholder="@username"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  maxLength={256}
-                />
-                <Text style={styles.modalHint}>GitHub</Text>
-                <TextInput
-                  style={styles.input}
-                  value={githubDraft}
-                  onChangeText={setGithubDraft}
-                  placeholder="@username"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  maxLength={256}
-                />
-                <AppPressable style={styles.btn} onPress={() => void saveSocialLinks()}>
-                  <Text style={styles.btnText}>Сохранить</Text>
-                </AppPressable>
-                <AppPressable style={styles.linkBtn} onPress={() => setSocialLinksVisible(false)}>
                   <Text style={styles.linkText}>Отмена</Text>
                 </AppPressable>
               </View>
@@ -1466,52 +1143,26 @@ function ProfileScreenImpl({
           </KeyboardAvoidingView>
         </Modal>
 
-        {/* Custom status edit modal */}
-        <Modal visible={editStatusVisible} transparent animationType="fade" onRequestClose={() => setEditStatusVisible(false)}>
-          <AppPressable style={styles.modalBg} onPress={() => setEditStatusVisible(false)}>
-            <AppPressable style={styles.modalBox} onPress={() => {}}>
-              <Text style={styles.modalTitle}>Мой статус</Text>
-              <TextInput
-                style={styles.input}
-                value={editStatusDraft}
-                onChangeText={setEditStatusDraft}
-                placeholder="💬 Что у вас нового?"
-                placeholderTextColor={colors.textMuted}
-                maxLength={MAX_CUSTOM_STATUS_LEN}
-                autoFocus
-              />
-              <Text style={{ color: colors.textMuted, fontSize: scaleFont(12), marginBottom: 8 }}>
-                {editStatusDraft.length}/{MAX_CUSTOM_STATUS_LEN} · Статус виден контактам под вашим именем
-              </Text>
-              <AppPressable
-                style={styles.btn}
-                onPress={() => {
-                  // v4.32.375: тем же правилом, что и на приёме у собеседника, —
-                  // иначе в базе лежит одно, а до контактов доезжает другое.
-                  const s = normalizeOwnStatus(editStatusDraft);
-                  setCustomStatus(s);
-                  void ownFieldSet('user_custom_status', s);
-                  setEditStatusVisible(false);
-                  showSuccess(s ? 'Статус обновлён' : 'Статус удалён');
-                }}
-              >
-                <Text style={styles.btnText}>Сохранить</Text>
-              </AppPressable>
-              {customStatus ? (
-                <AppPressable style={styles.linkBtn} onPress={() => {
-                  setCustomStatus('');
-                  void ownFieldSet('user_custom_status', '');
-                  setEditStatusVisible(false);
-                }}>
-                  <Text style={[styles.linkText, { color: colors.error }]}>Удалить статус</Text>
-                </AppPressable>
-              ) : null}
-              <AppPressable style={styles.linkBtn} onPress={() => setEditStatusVisible(false)}>
-                <Text style={styles.linkText}>Отмена</Text>
-              </AppPressable>
-            </AppPressable>
-          </AppPressable>
-        </Modal>
+        {/* v4.32.572: отдельный раздел со всеми полями профиля. Окна
+            «Мой статус» и «Ссылки профиля» ушли внутрь него — держать их ещё и
+            здесь значило бы держать два редактора одного поля. */}
+        <ProfileEditModal
+          visible={editProfileVisible}
+          onClose={() => setEditProfileVisible(false)}
+          onSaved={(name) => {
+            setProfileReload((n) => n + 1);
+            onDisplayNameChanged?.(name);
+          }}
+        />
+        <ProfilePostsModal
+          visible={postsMode !== null}
+          mode={postsMode ?? 'posts'}
+          authorDid={did}
+          authorPubB64={pair ? Buffer.from(pair.publicKey).toString('base64') : ''}
+          authorName={displayName || 'профиль'}
+          ownerProfileId={profileManager.getActiveProfile()?.id ?? 1}
+          onClose={() => setPostsMode(null)}
+        />
       </ScrollView>
     </SafeScreen>
   );
@@ -1542,6 +1193,45 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
   profileSwitchName: { color: c.text, fontSize: sf(font.lg), fontWeight: '700', marginTop: 2 },
   profileSwitchHint: { color: c.textSecondary, fontSize: sf(font.xs), marginTop: 4 },
   avatarSection: { alignItems: 'center', marginBottom: 20 },
+  editProfileGlass: {
+    borderRadius: radius.lg,
+    marginHorizontal: 20,
+    marginBottom: spacing.md,
+  },
+  editProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  editProfileText: { color: c.text, fontSize: sf(font.md), fontWeight: '600', flex: 1 },
+  stripBox: {
+    // Полоса выходит за отступ ленты: обрезанная плашка у правого края — это и
+    // есть подсказка, что её листают.
+    marginHorizontal: -16,
+    marginBottom: spacing.md,
+  },
+  strip: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: 16,
+    paddingVertical: spacing.xs,
+  },
+  plaque: {
+    width: 104,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: withAlpha(c.text, glass.rim),
+    backgroundColor: withAlpha(c.text, 0.06),
+  },
+  plaqueLabel: { color: c.text, fontSize: sf(font.xs), textAlign: 'center' },
+  plaqueHint: { color: c.textMuted, fontSize: sf(font.xs) },
   avatarCircle: {
     ...avatarShape(88),
     backgroundColor: c.surface,
