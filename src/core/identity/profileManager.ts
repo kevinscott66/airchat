@@ -625,6 +625,18 @@ class ProfileManager {
       });
     }
     await this.sweepOrphanedAvatars();
+    // v4.32.576: копии историй из альбомов. Строки удалённого профиля ушли
+    // вместе с базой, а файлы лежат в общем каталоге, и адресов их больше нет
+    // нигде — как и с аватарами до v4.32.309.
+    try {
+      const { sweepOrphanAlbumFiles } = await import('../social/storyAlbums');
+      await sweepOrphanAlbumFiles();
+    } catch (e) {
+      log.warn('delete_profile_album_sweep_failed', {
+        profileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
     return true;
   }
 

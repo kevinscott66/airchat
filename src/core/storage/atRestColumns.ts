@@ -54,6 +54,11 @@ export const AT_REST_COLUMNS: ReadonlyArray<AtRestColumnSpec> = [
   // списке. Ровно та же строка, что и sender_name в его сообщении.
   { table: 'group_members', columns: ['display_name'] },
   { table: 'stories', columns: ['media_uri', 'text', 'viewed_by'] },
+  // v4.32.576: альбомы историй. Название альбома человек пишет сам, подпись
+  // истории — тем более; media_file — имя копии на диске, тот же адрес, что и
+  // stories.media_uri, только переживший сутки.
+  { table: 'story_albums', columns: ['title'] },
+  { table: 'story_album_items', columns: ['media_file', 'text'] },
   { table: 'outbox', columns: ['payload'] },
   // v4.32.283: написанное человеком, но ещё не ставшее сообщением.
   // v4.32.304: sender_name — то же имя, что и в group_messages.sender_name.

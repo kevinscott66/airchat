@@ -296,6 +296,35 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_stories ON stories (author_pub_b64, created_at DESC);
+    /*
+     * v4.32.576: альбомы историй. История живёт сутки и уходит вместе со
+     * своим файлом — это обещание, а не недоделка. Альбом — обещание
+     * обратное: «эту оставить», поэтому в него кладётся СВОЯ копия снимка
+     * (media_file, каталог документов, см. storyAlbumFiles), а не ссылка на
+     * истёкшую строку. Ключ составной: альбомы принадлежат аккаунту, а не
+     * установке, — ровно та же причина, по которой составным стал ключ групп
+     * в v4.32.467.
+     */
+    CREATE TABLE IF NOT EXISTS story_albums (
+      id TEXT NOT NULL,
+      owner_profile_id INTEGER NOT NULL DEFAULT 1,
+      title TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (id, owner_profile_id)
+    );
+    CREATE TABLE IF NOT EXISTS story_album_items (
+      id TEXT NOT NULL,
+      album_id TEXT NOT NULL,
+      owner_profile_id INTEGER NOT NULL DEFAULT 1,
+      media_file TEXT,
+      media_type TEXT NOT NULL DEFAULT 'image',
+      text TEXT,
+      created_at INTEGER NOT NULL,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (id, owner_profile_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_story_album_items
+      ON story_album_items (album_id, owner_profile_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY NOT NULL,
       contact_pub_b64 TEXT NOT NULL,
@@ -2299,6 +2328,10 @@ export async function deleteProfileDataFromLocalDb(profileId: number): Promise<v
         'group_messages',
         'groups',
         'stories',
+        // v4.32.576: альбомы историй и их содержимое. Файлы копий подбирает
+        // sweepStoryAlbumFiles по списку уцелевших строк — как аватары.
+        'story_albums',
+        'story_album_items',
         'scheduled_messages',
         'poll_votes',
         'quick_replies',
@@ -7028,6 +7061,195 @@ export async function deleteStory(storyId: string, ownerProfileId?: number): Pro
   if (!row) return;
   const dek = await getOrCreateDataEncryptionKey();
   await dropStoryMediaFiles(d, dek, [storyUriCell(row.media_uri, dek)], pid);
+}
+
+/* ─── Альбомы историй (v4.32.576) ─────────────────────────────────────────── */
+
+export type StoryAlbumRow = {
+  id: string;
+  title: string;
+  createdAt: number;
+  /** Сколько историй в альбоме. */
+  count: number;
+  /** Имя файла обложки — самой новой истории альбома; `null` — альбом пуст. */
+  coverFile: string | null;
+  /** Название есть в базе, но ключ его не открывает. */
+  titleUnreadable?: boolean;
+};
+
+export type StoryAlbumItemRow = {
+  id: string;
+  albumId: string;
+  /** Имя файла копии, а не путь: путь живёт до обновления приложения. */
+  mediaFile: string | null;
+  mediaType: 'image' | 'video';
+  text: string | null;
+  /** Когда историю опубликовали. */
+  createdAt: number;
+  /** Когда её положили в альбом. */
+  addedAt: number;
+  mediaUnreadable?: boolean;
+  textUnreadable?: boolean;
+};
+
+export async function insertStoryAlbum(
+  row: { id: string; title: string; ownerProfileId: number; createdAt: number }
+): Promise<void> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    'INSERT OR IGNORE INTO story_albums (id, owner_profile_id, title, created_at) VALUES (?,?,?,?)',
+    [row.id, row.ownerProfileId, encryptAtRestString(row.title, dek), row.createdAt]
+  );
+}
+
+export async function renameStoryAlbum(id: string, title: string, ownerProfileId: number): Promise<void> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    'UPDATE story_albums SET title = ? WHERE id = ? AND owner_profile_id = ?',
+    [encryptAtRestString(title, dek), id, ownerProfileId]
+  );
+}
+
+/** Альбомы профиля, новые сверху, с числом историй и обложкой. */
+export async function listStoryAlbums(ownerProfileId: number): Promise<StoryAlbumRow[]> {
+  const d = await db();
+  const rows = await d.getAllAsync<{
+    id: string; title: string; created_at: number; n: number; cover: string | null;
+  }>(
+    `SELECT a.id, a.title, a.created_at,
+       (SELECT COUNT(*) FROM story_album_items i
+         WHERE i.album_id = a.id AND i.owner_profile_id = a.owner_profile_id) AS n,
+       (SELECT i.media_file FROM story_album_items i
+         WHERE i.album_id = a.id AND i.owner_profile_id = a.owner_profile_id
+         ORDER BY i.created_at DESC LIMIT 1) AS cover
+     FROM story_albums a WHERE a.owner_profile_id = ? ORDER BY a.created_at DESC`,
+    [ownerProfileId]
+  );
+  const dek = await getOrCreateDataEncryptionKey();
+  return rows.map((r) => {
+    const titleCell = readAtRestCell(r.title, dek);
+    const coverCell = readAtRestCell(r.cover, dek);
+    return {
+      id: r.id,
+      // Непрочитанное название — не пустая строка: пустой заголовок на экране
+      // неотличим от альбома, который человек так и не назвал.
+      title: cellTextOrNull(titleCell) ?? '',
+      createdAt: r.created_at,
+      count: r.n,
+      coverFile: cellTextOrNull(coverCell),
+      titleUnreadable: unreadableFromCellState(titleCell.state),
+    };
+  });
+}
+
+export async function insertStoryAlbumItem(row: {
+  id: string;
+  albumId: string;
+  ownerProfileId: number;
+  mediaFile: string | null;
+  mediaType: 'image' | 'video';
+  text: string | null;
+  createdAt: number;
+  addedAt: number;
+}): Promise<void> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    `INSERT OR IGNORE INTO story_album_items
+      (id, album_id, owner_profile_id, media_file, media_type, text, created_at, added_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [row.id, row.albumId, row.ownerProfileId, encryptAtRestNullable(row.mediaFile, dek),
+     row.mediaType, encryptAtRestNullable(row.text, dek), row.createdAt, row.addedAt]
+  );
+}
+
+/** Содержимое альбома, новые сверху. */
+export async function listStoryAlbumItems(
+  albumId: string, ownerProfileId: number
+): Promise<StoryAlbumItemRow[]> {
+  const d = await db();
+  const rows = await d.getAllAsync<{
+    id: string; album_id: string; media_file: string | null; media_type: string | null;
+    text: string | null; created_at: number; added_at: number;
+  }>(
+    `SELECT * FROM story_album_items
+      WHERE album_id = ? AND owner_profile_id = ? ORDER BY created_at DESC`,
+    [albumId, ownerProfileId]
+  );
+  const dek = await getOrCreateDataEncryptionKey();
+  return rows.map((r) => {
+    const mediaCell = readAtRestCell(r.media_file, dek);
+    const textCell = readAtRestCell(r.text, dek);
+    return {
+      id: r.id,
+      albumId: r.album_id,
+      mediaFile: cellTextOrNull(mediaCell),
+      mediaType: (r.media_type === 'video' ? 'video' : 'image') as 'image' | 'video',
+      text: cellTextOrNull(textCell),
+      createdAt: r.created_at,
+      addedAt: r.added_at,
+      mediaUnreadable: unreadableFromCellState(mediaCell.state),
+      textUnreadable: unreadableFromCellState(textCell.state),
+    };
+  });
+}
+
+/**
+ * Лежит ли уже такая строка в альбоме.
+ *
+ * Идентификатор строки складывается из альбома и истории, поэтому повторное
+ * нажатие «в альбом» на той же плитке видно ДО копирования файла: без этой
+ * проверки INSERT OR IGNORE тихо промолчал бы, а копия осталась бы на диске
+ * без строки — то есть навсегда.
+ */
+export async function storyAlbumItemExists(id: string, ownerProfileId: number): Promise<boolean> {
+  const d = await db();
+  const r = await d.getFirstAsync<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM story_album_items WHERE id = ? AND owner_profile_id = ?',
+    [id, ownerProfileId]
+  );
+  return (r?.n ?? 0) > 0;
+}
+
+export async function deleteStoryAlbumItem(id: string, ownerProfileId: number): Promise<void> {
+  const d = await db();
+  await d.runAsync(
+    'DELETE FROM story_album_items WHERE id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+}
+
+export async function deleteStoryAlbum(id: string, ownerProfileId: number): Promise<void> {
+  const d = await db();
+  await d.runAsync(
+    'DELETE FROM story_album_items WHERE album_id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+  await d.runAsync(
+    'DELETE FROM story_albums WHERE id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+}
+
+/**
+ * Имена файлов всех альбомов — по всем профилям сразу: файлы лежат в общем
+ * каталоге, и «оставить» решается по всей базе, а не по одному аккаунту.
+ *
+ * `complete` — вышло ли прочитать ВСЕ адреса. Непрочитанная строка означает
+ * файл, который в списке не назван, а на диске лежит: уборка по такому списку
+ * снесла бы историю, оставленную человеком навсегда. Отсюда признак: sweep
+ * зовут только при `complete`.
+ */
+export async function storyAlbumFileNames(): Promise<{ names: string[]; complete: boolean }> {
+  const d = await db();
+  const rows = await d.getAllAsync<{ media_file: string | null }>(
+    'SELECT media_file FROM story_album_items');
+  const dek = await getOrCreateDataEncryptionKey();
+  const names: string[] = [];
+  let complete = true;
+  for (const r of rows) {
+    const cell = readAtRestCell(r.media_file, dek);
+    const name = cellTextOrNull(cell);
+    if (name) names.push(name);
+    else if (cell.state !== 'plain') complete = false;
+  }
+  return { names, complete };
 }
 
 export { STORY_TTL_MS };

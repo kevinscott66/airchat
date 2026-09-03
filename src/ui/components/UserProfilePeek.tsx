@@ -1120,6 +1120,7 @@ export function UserProfilePeek({
       />
       <ProfilePostsModal
         visible={postsMode !== null}
+        isSelf={isSelf}
         mode={postsMode ?? 'wall'}
         authorDid={resolved.did}
         authorPubB64={resolved.pubB64}

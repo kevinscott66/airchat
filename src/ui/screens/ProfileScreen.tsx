@@ -1128,6 +1128,7 @@ function ProfileScreenImpl({
         />
         <ProfilePostsModal
           visible={postsMode !== null}
+          isSelf
           mode={postsMode ?? 'wall'}
           authorDid={did}
           authorPubB64={pair ? Buffer.from(pair.publicKey).toString('base64') : ''}
