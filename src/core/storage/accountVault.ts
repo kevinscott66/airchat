@@ -54,7 +54,7 @@ function normalizeMnemonic(mnemonic: string): string {
 /** Public, non-secret directory id. It cannot be reversed into the mnemonic. */
 export function accountVaultIdFromMnemonic(mnemonic: string): string {
   const normalized = normalizeMnemonic(mnemonic);
-  if (!validateMnemonic(normalized)) throw new Error('Invalid seed phrase');
+  if (!validateMnemonic(normalized)) throw new Error('Секретные слова не проходят проверку.');
   return Buffer.from(sha256(mnemonicSeedCached(normalized))).toString('hex').slice(0, 32);
 }
 

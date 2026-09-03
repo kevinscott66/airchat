@@ -86,7 +86,7 @@ import { pushNotificationService } from '../../notifications/pushNotifications';
 import { formatByteSize } from '../../core/media/byteSize';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
-import { rawErrorText, userErrorText } from '../components/userErrorText';
+import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
 import { log } from '../../core/logger';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
@@ -204,6 +204,7 @@ function SettingsScreenImpl({
   const [syncDevicesBusy, setSyncDevicesBusy] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [syncDevicesError, setSyncDevicesError] = useState<string | null>(null);
+  const [syncDevicesDetail, setSyncDevicesDetail] = useState<string | null>(null);
   const [currentSyncDeviceId, setCurrentSyncDeviceId] = useState<string | null>(null);
   const [profileRefreshToken, setProfileRefreshToken] = useState(0);
   const versionTapRef = useRef({ n: 0, t: 0 });
@@ -398,6 +399,7 @@ function SettingsScreenImpl({
   const loadSyncDevices = useCallback(async () => {
     setSyncDevicesBusy(true);
     setSyncDevicesError(null);
+    setSyncDevicesDetail(null);
     try {
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) throw new Error('На устройстве нет секретных слов.');
@@ -415,12 +417,19 @@ function SettingsScreenImpl({
         }));
       setCurrentSyncDeviceId(currentId);
     } catch (error) {
-      // v4.32.565: сырой текст уходит в журнал. Наружу его показывать нельзя
-      // (он английский и машинный), но и терять его нельзя: без него
-      // «Не удалось загрузить список сессий» — это единственное, что знают
-      // и человек, и разработчик, и оно одинаково для всех причин.
-      log.warn('sync_devices_load_failed', { host: syncServerHost() ?? 'не настроен', err: rawErrorText(error) });
+      // v4.32.565: сырой текст уходит в журнал. Без него «Не удалось
+      // загрузить список сессий» — это единственное, что знают и человек, и
+      // разработчик, и оно одинаково для всех причин.
+      const raw = rawErrorText(error);
+      log.warn('sync_devices_load_failed', { host: syncServerHost() ?? 'не настроен', err: raw });
       setSyncDevicesError(userErrorText(error, 'Не удалось загрузить список сессий.'));
+      // v4.32.566: и на экран — но только когда наружу пошёл общий запасной
+      // текст. Обычное правило (машинное на экран не выносим) держится на
+      // том, что причина всё равно доступна в журнале; здесь она недоступна:
+      // файл журнала пишется лишь при включённой скрытой диагностике. Экран,
+      // на котором нет ничего кроме «не удалось», хуже экрана с непонятной
+      // строкой — по строке причину называют с первого снимка.
+      setSyncDevicesDetail(isUserFacingMessage(raw) ? null : raw.slice(0, 120));
       setSyncDevices([]);
     } finally {
       setSyncDevicesBusy(false);
@@ -1922,6 +1931,11 @@ function SettingsScreenImpl({
                 <Text style={[styles.desc, { textAlign: 'center' }]} numberOfLines={1}>
                   Сервер: {syncServerHost() ?? 'не настроен'}
                 </Text>
+                {syncDevicesDetail ? (
+                  <Text style={[styles.desc, { textAlign: 'center' }]} numberOfLines={3} selectable>
+                    {syncDevicesDetail}
+                  </Text>
+                ) : null}
                 <AppPressable
                   onPress={() => { void loadSyncDevices(); }}
                   disabled={syncDevicesBusy}

@@ -148,11 +148,18 @@ export function deriveKeyPairFromMnemonicForProfile(
   derivationIndex: number
 ): KeyPairBytes {
   const normalized = mnemonic.trim().split(/\s+/).join(' ');
+  // v4.32.566: текст по-русски. Отсюда выводят ключи не только при
+  // восстановлении: облачная копия и «Активные сессии» перевыводят их из
+  // фразы на каждый запрос, а всё остальное приложение берёт готовую пару
+  // из SecureStore. Поэтому испорченная фраза не мешает приложению работать,
+  // но валит именно эти два экрана — и валила английским текстом, который
+  // userErrorText подменяет общим «не удалось». Причина не доходила до
+  // человека ни разу.
   if (!validateMnemonic(normalized)) {
-    throw new Error('Invalid seed phrase');
+    throw new Error('Секретные слова не проходят проверку.');
   }
   if (derivationIndex < 0 || !Number.isInteger(derivationIndex)) {
-    throw new Error('Invalid profile index');
+    throw new Error('Неверный номер профиля.');
   }
   const bipSeed = mnemonicSeedCached(normalized);
   const info =
@@ -219,7 +226,7 @@ async function tryDecryptLocalPayload(raw: string): Promise<string | null> {
 export async function persistEncryptedMnemonic(plain: string): Promise<void> {
   const normalized = plain.trim().split(/\s+/).join(' ');
   if (!validateMnemonic(normalized)) {
-    throw new Error('Invalid seed phrase');
+    throw new Error('Секретные слова не проходят проверку.');
   }
   const wrap = await ensureLocalWrapKey();
   const salt = randomBytes(16);
@@ -477,7 +484,8 @@ export async function importEncryptedBackup(encrypted: string, password: string)
   // v4.32.376: содержимое копии — тоже недоверенный ввод. Расшифровка удалась
   // значит пароль верен, но не значит, что внутри лежит фраза: копию мог
   // собрать не наш экспорт. Без этой проверки restoreFromMnemonic бросил бы
-  // «Invalid seed phrase» — по-английски и посреди восстановления.
+  // «Секретные слова не проходят проверку» — посреди восстановления, где
+  // человек ждёт совсем другого ответа: дело не в словах, а в копии.
   if (!validateMnemonic(mnemonic.trim().split(/\s+/).join(' '))) {
     throw new Error('Копия расшифрована, но секретных слов в ней нет.');
   }
