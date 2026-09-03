@@ -37,11 +37,12 @@
 // Про два пункта сказано честно и здесь, и на экране: «Пожаловаться» никуда
 // не отправляется — модерации в сети без сервера нет, жалоба остаётся местной
 // записью и блокировкой (core/social/contactReport); «Запрет копирования и
-// пересылки» закрывает копирование и пересылку внутри приложения, а не снимок
-// экрана (core/social/copyGuard).
+// пересылки» закрывает копирование, пересылку и выгрузку внутри приложения, а
+// со снимка экрана убирает переписку только на своём устройстве
+// (core/social/copyGuard, modules/airchat-screen-guard).
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 
@@ -99,6 +100,7 @@ import { setDisappearAndSync } from '../../core/social/disappearSync';
 import { rateLimiter } from '../../core/security/rateLimiter';
 import { getCurrentCall, initiateCall } from '../../core/social/callService';
 import { isCopyGuarded, setCopyGuard } from '../../core/social/copyGuard';
+import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
 import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
 import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
@@ -107,6 +109,21 @@ import { defaultWallpaper, type Wallpaper } from '../wallpapers';
 import { useTheme } from '../ThemeContext';
 import { loadConfig } from '../../core/config';
 import { log } from '../../core/logger';
+
+/**
+ * Про снимок экрана говорим ровно то, что делает эта платформа: iOS прячет
+ * ленту сообщений, Android закрывает окно целиком, а там, где не выходит ни
+ * то ни другое, — что снимок остаётся снимком (v4.32.570).
+ */
+function screenshotLine(): string {
+  if (isSecureContentSupported()) {
+    return 'Переписка уйдёт и со снимка экрана: на экране она видна, а на снимке и в записи экрана останется только фон.';
+  }
+  if (Platform.OS === 'android') {
+    return 'Пока эта переписка открыта, система не даст снять экран — кадр выйдет пустым.';
+  }
+  return 'Снимок экрана это не запрещает: на снимке останется всё, что видно глазом. От снимка работает водяной знак.';
+}
 
 /** Значки разделов и настроек живут во вьюхе: модель отвечает за состав и слова. */
 const QUICK_ICON: Record<QuickActionId, React.ComponentProps<typeof Ionicons>['name']> = {
@@ -586,7 +603,7 @@ export function UserProfilePeek({
     // вынести вовсе.
     Alert.alert(
       'Запрет копирования и пересылки',
-      `Вынести сообщения этой переписки внутри приложения будет нельзя: пункты «${COPY_ACTION}» и «Переслать» в меню сообщения и в панели выделения пропадут.\n\nЭто не защита от снимка экрана — запретить его приложение не может. Настройка местная, собеседнику она не передаётся.`,
+      `Вынести сообщения этой переписки внутри приложения будет нельзя: пункты «${COPY_ACTION}» и «Переслать» в меню сообщения и в панели выделения пропадут, выгрузка переписки тоже.\n\n${screenshotLine()}\n\nНастройка местная: она закрывает ваш экран, а не экран собеседника — ему запретить снимок нельзя.`,
       [
         { text: 'Отмена', style: 'cancel' },
         { text: 'Включить', onPress: commit },

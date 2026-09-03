@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["AirChatScreenGuardModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.airchatscreenguard.AirChatScreenGuardModule"]
+  }
+}

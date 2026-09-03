@@ -39,6 +39,14 @@ describe('запрет копирования закрывает и пересы
     expect(chat.split('{copyBlocked ? null : (').length - 1).toBeGreaterThanOrEqual(2);
   });
 
+  it('лента сообщений едет под защищённый слой только при запрете', () => {
+    // Обёртка выбирается по флагу: без этого переписка пропадала бы со
+    // снимков и в тех чатах, где запрет не включали.
+    expect(chat).toContain('const MessagesShell = copyBlocked && secureShellAvailable ? SecureContent : View;');
+    expect(chat).toContain('<MessagesShell style={{ flex: 1 }}>');
+    expect(chat).toContain('</MessagesShell>');
+  });
+
   it('выгрузка переписки уходит вместе с копированием', () => {
     expect(chat).toContain("...(copyBlocked ? [] : [");
     const exportIdx = chat.indexOf("text: 'Экспорт чата'");

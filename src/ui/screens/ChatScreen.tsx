@@ -769,6 +769,7 @@ import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
+import { SecureContent, isSecureContentSupported, setWindowSecure } from '../../../modules/airchat-screen-guard/src';
 
 
 
@@ -879,6 +880,12 @@ function ChatThreadView({
   // Меню сообщения и перевод собираются в колбэках, которые не пересоздаются
   // на каждый рендер, — им нужно текущее значение, а не то, что было при сборке.
   const copyBlockedRef = useRef(false);
+  // Скрыть ленту со снимка экрана умеет только iOS (см. airchat-screen-guard).
+  // Проверяем один раз: устройство по ходу разговора не меняется.
+  const secureShellAvailable = useMemo(() => isSecureContentSupported(), []);
+  // Обёртка ленты: защищённая — только при включённом запрете, иначе обычная.
+  // Без этого переписка пропадала бы со снимков и там, где её не запрещали.
+  const MessagesShell = copyBlocked && secureShellAvailable ? SecureContent : View;
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchHitIdx, setSearchHitIdx] = useState(0);
@@ -965,6 +972,14 @@ function ChatThreadView({
     });
     return () => { alive = false; unsub(); };
   }, [peerB64]);
+  // v4.32.570: на Android спрятать одну ленту нечем — там закрывается окно
+  // целиком, и только пока открыта именно эта переписка. Снимается флаг и при
+  // выходе с экрана, и при снятии запрета: чужие экраны он закрывать не должен.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !copyBlocked) return;
+    void setWindowSecure(true);
+    return () => { void setWindowSecure(false); };
+  }, [copyBlocked]);
   // v4.32.568: открытие «сразу поиском» или «сразу избранным». Экран
   // пересоздаётся на каждого собеседника (key={openPeer.pubB64}), поэтому
   // «один раз при открытии переписки» — это монтирование, и намерение не
@@ -3428,7 +3443,11 @@ function ChatThreadView({
           окно, KAV с padding вызывал двойную компенсацию (контент сжимался дважды, TextInput
           уходил за клавиатуру). На iOS behavior=padding остаётся — там adjustResize не существует. */}
       <View style={{ flex: 1, paddingBottom: manualKbPad }}>
-        <View style={{ flex: 1 }}>
+        {/* v4.32.570: при запрете копирования лента сообщений уезжает под
+            защищённый слой — на экране она видна, на снимке экрана и в записи
+            экрана её нет, остаётся фон и остальной интерфейс. Обёртка меняется
+            только вместе с настройкой, так что список пересоздаётся редко. */}
+        <MessagesShell style={{ flex: 1 }}>
         <FlashList
           ref={flashListRef}
           style={{ flex: 1 }}
@@ -3474,7 +3493,7 @@ function ChatThreadView({
             </View>
           }
         />
-        </View>
+        </MessagesShell>
 
         {showScrollToBottom ? (
           <AppPressable
