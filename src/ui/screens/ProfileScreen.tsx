@@ -195,7 +195,7 @@ function ProfileScreenImpl({
   /** Счётчик перечитывания: редактор сохранил — экран показывает новое. */
   const [profileReload, setProfileReload] = useState(0);
   /** Свои публикации и их архив — те же окна, что и в карточке профиля. */
-  const [postsMode, setPostsMode] = useState<'posts' | 'archive' | null>(null);
+  const [postsMode, setPostsMode] = useState<'wall' | 'stories' | 'archive' | null>(null);
 
   const shortDid = shortIdentity(did);
 
@@ -685,7 +685,10 @@ function ProfileScreenImpl({
             горизонтали». Полоса, а не три строки списка: это то, ради чего на
             свой профиль и заходят, и вбок они занимают один экран вместо трёх
             прокруток. Плашки — заливка и волосяная рамка, не вложенное стекло:
-            десяток размытий друг на друге стоит кадров и мутит надписи. */}
+            десяток размытий друг на друге стоит кадров и мутит надписи.
+            575: «Публикации» разошлись на «Стену» и «Истории» — живут они
+            по-разному: стена остаётся, истории гаснут через сутки. Порядок
+            тот же, что и в карточке чужого профиля, и архив так же последний. */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -693,8 +696,8 @@ function ProfileScreenImpl({
           contentContainerStyle={styles.strip}
         >
           {([
-            { id: 'posts', label: 'Публикации', icon: 'albums-outline', hint: postCount > 0 ? String(postCount) : null, onPress: () => setPostsMode('posts') },
-            { id: 'archive', label: 'Архив публикаций', icon: 'archive-outline', hint: null, onPress: () => setPostsMode('archive') },
+            { id: 'wall', label: 'Стена', icon: 'albums-outline', hint: postCount > 0 ? String(postCount) : null, onPress: () => setPostsMode('wall') },
+            { id: 'stories', label: 'Истории', icon: 'aperture-outline', hint: null, onPress: () => setPostsMode('stories') },
             {
               id: 'starred',
               label: 'Избранное',
@@ -708,6 +711,7 @@ function ProfileScreenImpl({
                 });
               },
             },
+            { id: 'archive', label: 'Архив публикаций', icon: 'archive-outline', hint: null, onPress: () => setPostsMode('archive') },
           ] as const).map((pl) => (
             <AppPressable
               key={pl.id}
@@ -1124,7 +1128,7 @@ function ProfileScreenImpl({
         />
         <ProfilePostsModal
           visible={postsMode !== null}
-          mode={postsMode ?? 'posts'}
+          mode={postsMode ?? 'wall'}
           authorDid={did}
           authorPubB64={pair ? Buffer.from(pair.publicKey).toString('base64') : ''}
           authorName={displayName || 'профиль'}

@@ -176,13 +176,10 @@ const QUICK_ICON: Record<QuickActionId, React.ComponentProps<typeof Ionicons>['n
 };
 
 const SECTION_ICON: Record<SectionId, React.ComponentProps<typeof Ionicons>['name']> = {
-  posts: 'albums-outline',
+  wall: 'albums-outline',
+  stories: 'aperture-outline',
   media: 'images-outline',
   starred: 'star-outline',
-  files: 'document-outline',
-  music: 'musical-notes-outline',
-  voice: 'mic-outline',
-  links: 'link-outline',
   archive: 'archive-outline',
 };
 
@@ -208,13 +205,16 @@ const MORE_ICON: Record<MoreId, React.ComponentProps<typeof Ionicons>['name']> =
   delete_contact: 'trash-outline',
 };
 
-/** Разделы, которые открываются общей галереей переписки, — и её вкладка. */
+/**
+ * Разделы, которые открываются общей галереей переписки, — и её вкладка.
+ *
+ * v4.32.575: раздел остался один. Файлы, музыка, голосовые и ссылки были
+ * отдельными плашками, хотя открывали ту же галерею — просто сразу на своей
+ * вкладке. Вкладки внутри никуда не делись, а полоса разделов перестала
+ * дублировать их собой.
+ */
 const SECTION_TAB: Partial<Record<SectionId, SharedMediaTab>> = {
   media: 'media',
-  files: 'docs',
-  music: 'music',
-  voice: 'voice',
-  links: 'links',
 };
 
 export interface UserProfilePeekProps {
@@ -304,7 +304,7 @@ export function UserProfilePeek({
   // Дочерние окна. Открываются поверх карточки и её не закрывают: человек
   // возвращается туда же, откуда ушёл.
   const [mediaTab, setMediaTab] = useState<SharedMediaTab | null>(null);
-  const [postsMode, setPostsMode] = useState<'posts' | 'archive' | null>(null);
+  const [postsMode, setPostsMode] = useState<'wall' | 'stories' | 'archive' | null>(null);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -639,7 +639,8 @@ export function UserProfilePeek({
   const onSection = useCallback((id: SectionId) => {
     const tab = SECTION_TAB[id];
     if (tab) { setMediaTab(tab); return; }
-    if (id === 'posts') { setPostsMode('posts'); return; }
+    if (id === 'wall') { setPostsMode('wall'); return; }
+    if (id === 'stories') { setPostsMode('stories'); return; }
     if (id === 'archive') { setPostsMode('archive'); return; }
     if (id === 'starred') {
       // Избранное живёт внутри переписки: там его и показывает экран диалога,
@@ -1119,7 +1120,7 @@ export function UserProfilePeek({
       />
       <ProfilePostsModal
         visible={postsMode !== null}
-        mode={postsMode ?? 'posts'}
+        mode={postsMode ?? 'wall'}
         authorDid={resolved.did}
         authorPubB64={resolved.pubB64}
         authorName={identity.named ? identity.title : 'профиль'}

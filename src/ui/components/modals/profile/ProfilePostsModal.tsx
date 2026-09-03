@@ -1,10 +1,12 @@
 /**
- * ProfilePostsModal — «Публикации» и «Архив публикаций» в карточке профиля
- * (v4.32.568).
+ * ProfilePostsModal — «Стена», «Истории» и «Архив публикаций» в карточке
+ * профиля (v4.32.568, разделены — 575).
  *
- * «Публикации — т.е. сторис, в принципе можно и стену публикаций»: здесь и то,
- * и другое. Сверху — сторис автора, которые ещё не истекли (они живут сутки),
- * ниже — стена: записи ленты этого же автора, от новых к старым.
+ * Сначала это был один раздел «Публикации», где сторис лежали полосой над
+ * стеной. Разделов стало три, потому что это три разных вопроса: «что человек
+ * писал» (стена — записи ленты, от новых к старым), «что у него сейчас» (
+ * истории живут сутки и смотрятся плитками) и «что я у себя убрал» (архив).
+ * Общего у них — только автор.
  *
  * Важная честность про охват. Лента AirChat не серверная: у каждого лежит
  * только то, что до него доехало. Стена показывает записи автора, дошедшие до
@@ -51,8 +53,8 @@ export function ProfilePostsModal({
   onClose,
 }: {
   visible: boolean;
-  /** 'posts' — сторис и стена автора; 'archive' — свой локальный архив. */
-  mode: 'posts' | 'archive';
+  /** 'wall' — записи автора; 'stories' — его истории; 'archive' — свой архив. */
+  mode: 'wall' | 'stories' | 'archive';
   authorDid: string;
   authorPubB64: string;
   authorName: string;
@@ -74,7 +76,8 @@ export function ProfilePostsModal({
     setPosts([]);
     setStories([]);
     setMedia({});
-    void (async () => {
+    // Истории не листают ленту: их раздел про сутки, а не про историю записей.
+    if (mode !== 'stories') void (async () => {
       try {
         const rows = mode === 'archive'
           ? await listArchivedFeedPosts(SCAN_LIMIT, 0)
@@ -100,24 +103,34 @@ export function ProfilePostsModal({
         log.warn('ui_profile_posts_failed', { err: rawErrorText(e) });
       }
     })();
-    // Сторис — только в режиме публикаций: в архиве им места нет.
-    if (mode === 'posts') {
+    // Сторис читаются только в своём разделе: ни на стене, ни в архиве им
+    // места нет.
+    if (mode === 'stories') {
       void listActiveStories(ownerProfileId)
         .then((rows) => {
-          if (!cancelled) setStories(rows.filter((s) => s.authorPubB64 === authorPubB64));
+          if (cancelled) return;
+          setStories(rows.filter((s) => s.authorPubB64 === authorPubB64));
+          // «Пусто» пишется только после чтения — до него это «ещё не знаем».
+          setLoaded(true);
         })
-        .catch(() => { /* сторис — не главное на этом экране */ });
+        .catch(() => { /* сбой чтения — не «историй нет»: подпись не появится */ });
     }
     return () => { cancelled = true; };
   }, [visible, mode, authorDid, authorPubB64, ownerProfileId]);
 
-  const title = mode === 'archive' ? 'Архив публикаций' : `Публикации · ${authorName}`;
+  const title = mode === 'archive'
+    ? 'Архив публикаций'
+    : `${mode === 'stories' ? 'Истории' : 'Стена'} · ${authorName}`;
 
-  const emptyNote = useMemo(() => (
-    mode === 'archive'
-      ? 'В архиве пусто. Сюда попадают записи, которые вы убрали из своей ленты.'
-      : 'Здесь пусто. Лента хранится на устройстве: видно только те записи автора, которые дошли до этого телефона.'
-  ), [mode]);
+  const emptyNote = useMemo(() => {
+    if (mode === 'archive') {
+      return 'В архиве пусто. Сюда попадают записи, которые вы убрали из своей ленты.';
+    }
+    if (mode === 'stories') {
+      return 'Историй нет. Они живут сутки, и видно только те, что дошли до этого телефона.';
+    }
+    return 'Здесь пусто. Лента хранится на устройстве: видно только те записи автора, которые дошли до этого телефона.';
+  }, [mode]);
 
   const renderPost = useCallback((p: FeedPostRow) => {
     const uris = media[p.id] ?? [];
@@ -164,9 +177,11 @@ export function ProfilePostsModal({
           {stories.length > 0 ? (
             <View style={styles.storiesBlock}>
               <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
-                Сторис · ещё видны {stories.length}
+                Ещё видны · {stories.length}
               </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {/* Плитками в сетку, а не полосой вбок: раздел теперь только про
+                  истории, и прятать половину из них за краем экрана незачем. */}
+              <View style={styles.storiesGrid}>
                 {stories.map((s) => (
                   <View
                     key={s.id}
@@ -188,7 +203,7 @@ export function ProfilePostsModal({
                     </Text>
                   </View>
                 ))}
-              </ScrollView>
+              </View>
             </View>
           ) : null}
 
@@ -196,7 +211,11 @@ export function ProfilePostsModal({
             posts.map(renderPost)
           ) : loaded && stories.length === 0 ? (
             <View style={styles.empty}>
-              <Ionicons name="albums-outline" size={44} color={colors.textMuted} />
+              <Ionicons
+                name={mode === 'stories' ? 'aperture-outline' : 'albums-outline'}
+                size={44}
+                color={colors.textMuted}
+              />
               <Text style={[styles.emptyText, { color: colors.textMuted }]}>{emptyNote}</Text>
             </View>
           ) : null}
@@ -220,10 +239,10 @@ const styles = StyleSheet.create({
   title: { fontSize: font.lg, fontWeight: '600', flex: 1 },
   body: { padding: spacing.md, gap: spacing.md },
   storiesBlock: { gap: spacing.xs },
+  storiesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   blockLabel: { fontSize: font.xs, textTransform: 'uppercase', letterSpacing: 0.5 },
   storyTile: {
     width: 92,
-    marginRight: spacing.sm,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
