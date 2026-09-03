@@ -1,10 +1,16 @@
 /**
- * Водяной знак под стеклом шапки — это порядок рендера, а не стиль.
+ * Водяной знак в стекле шапки — это порядок рендера, а не стиль.
  *
  * `BlurView` размывает свою подложку, а подложка — это то, что нарисовано
- * РАНЬШЕ него в том же родителе. Переставь знак ниже — и он окажется поверх
- * стекла: чёткая надпись посреди шапки, ровно то, что просили убрать. Ни
- * типов, ни линтера на такой порядок нет, поэтому его держит тест.
+ * РАНЬШЕ него в том же родителе. Слои разведены нарочно и в разные стороны:
+ *
+ *  - подкрас идёт РАНЬШЕ: размытие и есть источник его мягкости;
+ *  - буквы идут ПОЗЖЕ. В v4.32.545 они лежали в подложке вместе с подкрасом, и
+ *    на устройстве их не было видно вовсе: размытие силой 52 растирает
+ *    восемнадцать точек высоты по всей капсуле. Переставь их обратно — и
+ *    водяной знак снова исчезнет, причём молча и только на телефоне.
+ *
+ * Ни типов, ни линтера на такой порядок нет, поэтому его держит тест.
  */
 import fs from 'fs';
 import path from 'path';
@@ -14,16 +20,26 @@ const read = (...p: string[]): string => fs.readFileSync(path.join(SRC, ...p), '
 const GLASS = (): string => read('ui', 'components', 'GlassSurface.tsx');
 
 describe('водяной знак в GlassSurface', () => {
-  it('рисуется раньше BlurView — то есть попадает ему в подложку', () => {
+  it('подкрас рисуется раньше BlurView — то есть попадает ему в подложку', () => {
     const source = GLASS();
-    const mark = source.indexOf('<AirChatWordmark');
     const wash = source.indexOf('<CapsuleWash');
     const blur = source.indexOf('<BlurView');
-    expect(mark).toBeGreaterThan(-1);
     expect(wash).toBeGreaterThan(-1);
     expect(blur).toBeGreaterThan(-1);
-    expect(mark).toBeLessThan(blur);
     expect(wash).toBeLessThan(blur);
+  });
+
+  it('буквы рисуются позже BlurView — иначе размытие стирает их насовсем', () => {
+    const source = GLASS();
+    const mark = source.indexOf('<AirChatWordmark');
+    const blur = source.indexOf('<BlurView');
+    expect(mark).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(blur);
+  });
+
+  it('содержимое шапки остаётся поверх знака', () => {
+    const source = GLASS();
+    expect(source.indexOf('<AirChatWordmark')).toBeLessThan(source.indexOf('{children}'));
   });
 
   it('при выключенной прозрачности не рисуется вовсе: прятать не за что', () => {
@@ -31,9 +47,14 @@ describe('водяной знак в GlassSurface', () => {
   });
 
   it('не перехватывает нажатия шапки', () => {
+    // Оба слоя, а не один: знак переехал за BlurView, и забыть `pointerEvents`
+    // на переехавшей половине — значит накрыть кнопки шапки прозрачным щитом.
     const source = GLASS();
-    const block = source.slice(source.indexOf('watermark && !solid'), source.indexOf('<BlurView'));
-    expect(block).toContain('pointerEvents="none"');
+    const parts = source.split('watermark && !solid').slice(1);
+    expect(parts).toHaveLength(2);
+    for (const part of parts) {
+      expect(part.slice(0, part.indexOf('</View>'))).toContain('pointerEvents="none"');
+    }
   });
 
   it('подкрас берёт цвета из палитры, а не вписывает свои', () => {
