@@ -28,6 +28,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { AppPressable } from '../components/AppPressable';
+import { PersonAvatar } from '../components/PersonAvatar';
 import {
   feedCommentIsUnreadable,
   feedPostIsUnreadable,
@@ -47,7 +48,7 @@ import { appleColorEmojiTextStyle } from '../emojiStyles';
 import * as ImagePicker from 'expo-image-picker';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { loadConfig } from '../../core/config';
-import { contactLabel, nameInitial } from '../../core/social/contactLabel';
+import { contactLabel } from '../../core/social/contactLabel';
 import {
   loadFeedPosts,
   publishFeedPost,
@@ -98,7 +99,7 @@ import { commentCountFromThread } from '../../core/social/commentCount';
 import { RichText } from '../components/RichText';
 import { LocationMessage } from '../components/LocationMessage';
 import { FeedPostSkeleton } from '../components/SkeletonLoader';
-import { avatarShape, badgeTint, contrastingInk, elevation, font, identityAvatar, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
+import { badgeTint, contrastingInk, elevation, font, inkOn, mediaScrim, mono, nestedFill, radius, reactionInk, readableInk, scrim, spacing, type AppColors } from '../theme';
 import { GroupAvatar } from './groups-components/GroupAvatar';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
@@ -543,7 +544,10 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
           hitSlop={4}
           style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
         >
-          <Ionicons name="person-circle" size={40} color={colors.accent} />
+          {/* v4.32.565: у автора публикации стоял общий значок «человек» —
+              одинаковый у всех. Снимок берётся по did автора из реестра лиц,
+              буква на цветном фоне остаётся запасным вариантом. */}
+          <PersonAvatar did={item.authorDid} name={isRepost ? repostLabel : label} size={40} />
           <View style={styles.postHeaderText}>
             <Text style={styles.author}>{isRepost ? repostLabel : label}</Text>
             <View style={styles.timeRow}>
@@ -3791,7 +3795,6 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                       (resolvedContact?.displayName?.trim() ||
                         (v.nameUnreadable ? UNREADABLE_NAME_TEXT : v.viewerName?.trim()) ||
                         shortIdentity(v.viewerDid)) ?? '';
-                    const initial = nameInitial(displayName);
                     const time = clockTime(v.viewedAt);
                     const now = Date.now();
                     const diffSec = Math.max(0, Math.floor((now - v.viewedAt) / 1000));
@@ -3833,20 +3836,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                           paddingVertical: 10,
                         }}
                       >
-                        {/* v4.32.408: кружок был одним и тем же акцентом у всех —
-                            столбец одинаковых точек ничего не различал. Тот же
-                            различитель, что и везде в приложении. */}
-                        <View
-                          style={{
-                            ...avatarShape(36),
-                            backgroundColor: identityAvatar(v.viewerDid).fill,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginRight: 12,
-                          }}
-                        >
-                          <Text style={{ color: identityAvatar(v.viewerDid).ink, fontWeight: '700', fontSize: 15 }}>{initial}</Text>
-                        </View>
+                        {/* v4.32.565: лицо читателя, если оно известно.
+                            v4.32.408: иначе — тот же различитель, что везде,
+                            а не столбец одинаковых акцентных точек. */}
+                        <PersonAvatar did={v.viewerDid} name={displayName} size={36} style={{ marginRight: 12 }} />
                         <View style={{ flex: 1 }}>
                           <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }} numberOfLines={1}>
                             {displayName}
@@ -3942,11 +3935,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                   disabled={shareSending}
                   style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}
                 >
-                  <View style={{ ...avatarShape(40), backgroundColor: identityAvatar(c.peerPublicKey).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                    <Text style={{ color: identityAvatar(c.peerPublicKey).ink, fontWeight: '700', fontSize: 16 }}>
-                      {nameInitial(c.displayName)}
-                    </Text>
-                  </View>
+                  {/* v4.32.565: кому отправляем — видно по лицу, а не только
+                      по букве. */}
+                  <PersonAvatar pub={c.peerPublicKey} name={c.displayName} size={40} style={{ marginRight: 12 }} />
                   <Text style={{ color: colors.text, fontSize: 15, flex: 1 }}>{contactLabel(c.displayName, shortIdentity(c.peerPublicKey))}</Text>
                   <Ionicons name="paper-plane-outline" size={18} color={colors.accent} />
                 </AppPressable>
@@ -4127,6 +4118,12 @@ function makeCmStyles(c: AppColors) { return StyleSheet.create({
   separatorText: { color: c.textMuted, fontSize: 12, fontWeight: '500' },
 }); }
 
+/**
+ * Боковое поле списка «Новостей». Верхняя стеклянная капсула вычитает его
+ * обратно, чтобы стоять вровень с капсулами «Чатов» и «Групп» (v4.32.565).
+ */
+const FEED_GUTTER = 16;
+
 function makeStyles(c: AppColors) {
   // Плашка реакции лежит на карточке поста — от неё и считается (v4.32.395).
   const reaction = reactionInk(c, c.surface);
@@ -4140,16 +4137,22 @@ function makeStyles(c: AppColors) {
   return StyleSheet.create({
   // v4.32.36: paddingTop уменьшен с 16 до 8, чтобы h1 «Новости» не отваливался
   // ниже статус-бара больше, чем нужно. Боковой padding 16 остаётся.
-  container: { flex: 1, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16, backgroundColor: c.background },
+  container: { flex: 1, paddingHorizontal: FEED_GUTTER, paddingTop: 8, paddingBottom: 16, backgroundColor: c.background },
   // v4.32.530: см. topChrome в списке чатов — то же решение, та же причина.
   // v4.32.540: капсула, а не полоса. Волосяная линия снизу убрана — у отдельного
   // предмета кромка своя, по всему контуру, и её рисует само стекло.
+  // v4.32.565: капсула была уже соседних вкладок на два поля списка. В «Чатах»
+  // и «Группах» она отступает от края экрана на spacing.sm, а здесь тот же
+  // spacing.sm откладывался от контейнера, который уже забрал FEED_GUTTER под
+  // поля постов, — 24px против 8px, и стекло «Новостей» выглядело мельче.
+  // Отрицательное поле возвращает капсулу к краю экрана, к соседям.
   feedChrome: {
-    marginHorizontal: spacing.sm,
+    marginHorizontal: spacing.sm - FEED_GUTTER,
     marginTop: spacing.sm,
     borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
+    // spacing.lg — то же поле, что у header в «Чатах» и «Группах».
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
     paddingBottom: spacing.sm,
     ...elevation.card,
   },

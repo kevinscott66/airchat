@@ -3,11 +3,12 @@ import { View, Text } from 'react-native';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
-import { avatarShape, identityAvatar, radius, scrim } from '../../../theme';
+import { radius, scrim } from '../../../theme';
 import type { GroupMessageRow, GroupMemberRow } from '../../../../core/storage/local';
-import { contactLabel, nameInitial } from '../../../../core/social/contactLabel';
+import { contactLabel } from '../../../../core/social/contactLabel';
 import { shortIdentity } from '../../../identity/shortId';
 import { UNREADABLE_VIEWERS_TEXT } from '../../../../core/storage/unreadableText';
+import { PersonAvatar } from '../../PersonAvatar';
 
 export interface GroupSeenByModalProps {
   msg: GroupMessageRow | null;
@@ -26,13 +27,11 @@ function GroupSeenByModalImpl({ msg, allMembers, onClose }: GroupSeenByModalProp
           {(msg.seenBy ?? []).map((pub) => {
             const member = allMembers.find((m) => m.peerPubB64 === pub);
             const name = contactLabel(member?.displayName, shortIdentity(pub));
-            // v4.32.409: кружок — различитель личности, а не общая заливка.
-            const circle = identityAvatar(pub);
             return (
               <View key={pub} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ ...avatarShape(34), backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ color: circle.ink, fontWeight: '700', fontSize: 14 }}>{nameInitial(name)}</Text>
-                </View>
+                {/* v4.32.565: снимок участника, если он известен; иначе тот же
+                    кружок-различитель, что и раньше (v4.32.409). */}
+                <PersonAvatar pub={pub} name={name} size={34} />
                 <Text style={{ fontSize: 15, color: colors.text }}>{name}</Text>
               </View>
             );

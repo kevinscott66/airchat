@@ -44,7 +44,6 @@ import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
 import { getOwnDisplayName } from '../../core/identity/ownProfile';
-import { nameInitial } from '../../core/social/contactLabel';
 import { outwardName, shownName, shownNameOrNull } from '../../core/social/unreadableName';
 import {
   listGroups,
@@ -118,7 +117,7 @@ import { announceCtl, announceInviteToken } from '../groupControlAnnounce';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { publicIdFor } from '../../core/identity/publicId';
-import { avatarShape, badgeDigit, badgeTint, contrastingInk, elevation, font, identityAvatar, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
+import { avatarShape, badgeDigit, badgeTint, contrastingInk, elevation, font, identityInk, inkOn, mono, nestedFill, primaryInk, radius, rippleOn, rowMark, scrim, searchMark, spacing } from '../theme';
 import { defaultWallpaper, feedGround, type Wallpaper } from '../wallpapers';
 import { WallpaperBackground } from '../components/WallpaperBackground';
 import { isVoiceMessage, parseVoiceMeta, makeVoiceText } from '../../core/social/voiceEnvelope';
@@ -225,6 +224,7 @@ import { GrpMessageBlock } from './groups-components/text/GrpMessageBlock';
 import { GrpCollapsibleBlock } from './groups-components/text/GrpCollapsibleBlock';
 import { GroupAvatar } from './groups-components/GroupAvatar';
 import { GrpSenderAvatar } from './groups-components/GrpSenderAvatar';
+import { PersonAvatar } from '../components/PersonAvatar';
 import { PollBubble } from './groups-components/PollBubble';
 
 /**
@@ -5304,17 +5304,11 @@ function GroupMembersScreen({
               onLongPress={() => kickMember(item)}
               delayLongPress={500}
             >
-              {/* Кружок участника окрашен по хешу ключа — это различитель, а
-                  не роль палитры (v4.32.398); правило вывода общее на все
-                  экраны (v4.32.399). */}
-              {(() => {
-                const avatar = identityAvatar(item.peerPubB64);
-                return (
-                  <View style={[gmStyles.avatar, { backgroundColor: avatar.fill }]}>
-                    <Text style={[gmStyles.avatarLetter, { color: avatar.ink }]}>{nameInitial(item.displayName)}</Text>
-                  </View>
-                );
-              })()}
+              {/* v4.32.565: снимок участника, если он известен. Запасной
+                  кружок окрашен по хешу ключа — это различитель, а не роль
+                  палитры (v4.32.398); правило вывода общее на все экраны
+                  (v4.32.399). */}
+              <PersonAvatar pub={item.peerPubB64} name={item.displayName} size={44} />
               <View style={{ flex: 1 }}>
                 {/* v4.32.595: непрочитанное имя не притворяется коротким ключом —
                     иначе строка состава неотличима от «человек не назвался», а

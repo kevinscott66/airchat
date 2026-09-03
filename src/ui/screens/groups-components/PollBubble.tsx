@@ -5,7 +5,7 @@ import { AppPressable } from '../../components/AppPressable';
 import { AppModal as Modal } from '../../components/AppModal';
 import { showError, showSuccess } from '../../components/userFeedback';
 import { useTheme } from '../../ThemeContext';
-import { avatarShape, bubbleSurface, font, identityAvatar, pollInk, radius, scrim } from '../../theme';
+import { bubbleSurface, font, pollInk, radius, scrim } from '../../theme';
 import {
   parsePollText,
   getPollVotes,
@@ -15,9 +15,9 @@ import {
 import { castAndSyncPollVote, pollClosedKey } from '../../../core/social/pollVoteSync';
 import { scopedKvGetFor } from '../../../core/storage/profileScopedKv';
 import { votesLabel } from '../../utils/plural';
-import { nameInitial } from '../../../core/social/contactLabel';
 import { shortIdentity } from '../../identity/shortId';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
+import { PersonAvatar } from '../../components/PersonAvatar';
 
 export function PollBubble({
   messageId,
@@ -243,11 +243,10 @@ export function PollBubble({
                     const name = members?.find((mb) => mb.peerPubB64 === pub)?.displayName ?? shortIdentity(pub);
                     return (
                       <View key={pub} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: i < uniqueVoters.length - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border }}>
-                        {/* v4.32.409: кружок был одним акцентом у всех голосовавших —
-                            столбец одинаковых точек. Тот же различитель, что везде. */}
-                        <View style={{ ...avatarShape(32), backgroundColor: identityAvatar(pub).fill, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                          <Text style={{ color: identityAvatar(pub).ink, fontWeight: '700', fontSize: 13 }}>{nameInitial(name)}</Text>
-                        </View>
+                        {/* v4.32.565: лицо голосовавшего, если оно известно.
+                            v4.32.409: иначе — тот же различитель, что везде,
+                            а не столбец одинаковых акцентных точек. */}
+                        <PersonAvatar pub={pub} name={name} size={32} style={{ marginRight: 12 }} />
                         <Text style={{ color: colors.text, fontSize: 14, flex: 1 }} numberOfLines={1}>{name}</Text>
                         {pub === myPubB64 ? (
                           <Text style={{ color: colors.textMuted, fontSize: 12 }}>Вы</Text>

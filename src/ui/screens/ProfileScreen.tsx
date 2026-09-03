@@ -47,6 +47,7 @@ import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../core/social/peerStatus';
 import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { ownAvatarUri, saveOwnAvatar } from '../../core/identity/ownAvatar';
+import { refreshAvatarTable } from '../../core/social/avatarRegistry';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
 import { authGuard } from '../../core/security/authGuard';
 import {
@@ -615,6 +616,10 @@ function ProfileScreenImpl({
       return;
     }
     setAvatarUri(finalUri);
+    // v4.32.565: реестр лиц слушает изменение контактов, а своё фото не
+    // контакт — без явного обновления новый снимок остался бы виден только
+    // здесь, а в ленте и в переписке до перезапуска висел бы прежний.
+    void refreshAvatarTable();
     // v4.32.247: до этой версии фото профиля вообще никуда не уходило —
     // контакты всегда видели кружок с буквой.
     void publishProfileToContacts();

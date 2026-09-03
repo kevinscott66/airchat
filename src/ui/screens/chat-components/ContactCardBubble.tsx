@@ -2,16 +2,16 @@ import React from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { showError, showSuccess } from '../../components/userFeedback';
-import { avatarShape, font, identityAvatar } from '../../theme';
+import { font } from '../../theme';
 import { addContact } from '../../../core/social/contacts';
 import { publicKeyFromB64 } from '../../../core/crypto/pubKeyFormat';
 import type { KeyPairBytes } from '../../../core/crypto/keyManager';
 // Напрямую из ядра, а не через реэкспорт ChatScreen: этот компонент ChatScreen
 // же и рисует, то есть импорт «наверх» замыкал цикл модулей.
 import { parseContactCard } from '../../../core/social/contactCardEnvelope';
-import { nameInitial } from '../../../core/social/contactLabel';
 import { useBubbleSurface } from '../../BubbleKindContext';
 import { shortIdentity } from '../../identity/shortId';
+import { PersonAvatar } from '../../components/PersonAvatar';
 
 export function ContactCardBubble({
   text,
@@ -29,19 +29,16 @@ export function ContactCardBubble({
   const card = parseContactCard(text);
   if (!card) return null;
   const accentColor = bubble.icon;
-  // v4.32.409: кружок с буквой — различитель личности, как в списках
-  // просмотров и голосований. Прежняя заливка `accentColor + '33'` в
-  // исходящем пузыре была белым по 20 % поверх пузыря, то есть цвет под
-  // буквой зависел от того, какой акцент выбран в настройках.
-  const circle = identityAvatar(card.pub);
   const textColor = bubble.ink.text;
   const mutedColor = bubble.ink.secondary;
   return (
     <View style={{ minWidth: 180 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <View style={{ ...avatarShape(36), backgroundColor: circle.fill, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ color: circle.ink, fontSize: 16, fontWeight: '700' }}>{nameInitial(card.name)}</Text>
-        </View>
+        {/* v4.32.565: если этот человек уже в контактах, карточка показывает
+            его снимок. v4.32.409: запасной кружок с буквой — различитель
+            личности; прежняя заливка `accentColor + '33'` зависела от того,
+            какой акцент выбран в настройках. */}
+        <PersonAvatar pub={card.pub} name={card.name} size={36} />
         <View style={{ flex: 1 }}>
           <Text style={{ color: textColor, fontWeight: '600', fontSize: 14 }}>{card.name || 'Контакт'}</Text>
           <Text style={{ color: mutedColor, fontSize: font.xs }} numberOfLines={1}>{shortIdentity(card.pub, 10)}</Text>

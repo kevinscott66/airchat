@@ -64,6 +64,7 @@ import {
 } from './core/transport/internet/internetCoordinator';
 import { startNetworkReconnectWatcher, stopNetworkReconnectWatcher } from './core/transport/networkReconnectWatcher';
 import { syncActiveAccount } from './core/sync/liveAccountSync';
+import { startAvatarRegistry, stopAvatarRegistry } from './core/social/avatarRegistry';
 import { initSentryFromEnv } from './core/errorHandler';
 import { initPowerManager, recordUserActivity } from './core/powerManager';
 import { pushNotificationService, disposePushNotificationService, notifyFeedEvent, setActiveTabName } from './notifications/pushNotifications';
@@ -789,6 +790,9 @@ function MainTabs({
         // 2. Messaging service (new instance after dispose in cleanup).
         initMessagingService(pair);
         initPowerManager();
+        // Таблица лиц заводится здесь же: список чатов и лента рисуют кружки
+        // сразу после первого кадра, а читать базу из каждой строки нельзя.
+        startAvatarRegistry();
 
         // Локальная подписка нужна сразу: она дешёвая и позволяет первому
         // экрану обновиться, пока сетевые сервисы запускаются в фоне.
@@ -926,6 +930,9 @@ function MainTabs({
       stopInternetTransportStack();
       stopNetworkReconnectWatcher();
       getMessagingService()?.dispose();
+      // Таблица лиц привязана к аккаунту: при смене профиля чужие снимки
+      // не должны пережить того, кому они принадлежали.
+      stopAvatarRegistry();
       meshCoordinatorRef.current?.dispose();
       meshCoordinatorRef.current = null;
     };

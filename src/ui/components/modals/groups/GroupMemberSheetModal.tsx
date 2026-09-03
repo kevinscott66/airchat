@@ -6,11 +6,11 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupMemberRow } from '../../../../core/storage/local';
-import { nameInitial } from '../../../../core/social/contactLabel';
 import { shownName } from '../../../../core/social/unreadableName';
 import { roleLabel, roleTone } from '../../../../core/social/groupRolePolicy';
-import { avatarShape, contrastingInk, font, identityAvatar, mono, radius, scrim } from '../../../theme';
+import { contrastingInk, font, mono, radius, scrim } from '../../../theme';
 import { shortIdentity } from '../../../identity/shortId';
+import { PersonAvatar } from '../../PersonAvatar';
 
 export interface GroupMemberSheetModalProps {
   member: GroupMemberRow | null;
@@ -69,14 +69,10 @@ function GroupMemberSheetModalImpl({
           {mounted && member ? (
             <>
               <View style={[styles.sheetHandle, { backgroundColor: colors.textMuted }]} />
-              {(() => {
-                const avatar = identityAvatar(member.peerPubB64);
-                return (
-                  <View style={[styles.avatar, { ...avatarShape(64), alignSelf: 'center', backgroundColor: avatar.fill }]}>
-                    <Text style={{ color: avatar.ink, fontSize: 26, fontWeight: '600' }}>{nameInitial(member.displayName)}</Text>
-                  </View>
-                );
-              })()}
+              {/* v4.32.565: карточку участника открывают ради решения о нём —
+                  снимок здесь нужнее всего. Кружок с буквой остаётся, когда
+                  фотографии нет. */}
+              <PersonAvatar pub={member.peerPubB64} name={member.displayName} size={64} style={{ alignSelf: 'center' }} />
               {/* v4.32.595: имя, которое не открылось ключом, подписывается
                   пометкой — карточка участника открывается ради решения о нём. */}
               <Text style={[styles.headerName, { color: member.displayNameUnreadable ? colors.warning : colors.text, textAlign: 'center', marginTop: 8 }]}>

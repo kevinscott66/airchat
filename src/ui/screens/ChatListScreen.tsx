@@ -22,6 +22,7 @@ import {
   Vibration,
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
+import { PersonAvatar } from '../components/PersonAvatar';
 import { AppModal as Modal } from '../components/AppModal';
 import { SafeScreen } from '../components/SafeScreen';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,7 +113,7 @@ type ConversationItem = ConversationRow & {
  * фото профиля (см. profileSync), показываем его: раньше фото собеседника не
  * было видно нигде, потому что профиль уходил только в выключенный IPFS.
  */
-function AvatarCircle({ name, size = 48, avatarCid }: { name: string; size?: number; avatarCid?: string }): React.ReactElement {
+function AvatarCircle({ name, size = 48, avatarCid, pub }: { name: string; size?: number; avatarCid?: string; pub?: string }): React.ReactElement {
   const gateway = useIpfsGateway();
   const uri = useResolvedMediaUrl(avatarCid, gateway);
   const letter = nameInitial(name);
@@ -123,6 +124,12 @@ function AvatarCircle({ name, size = 48, avatarCid }: { name: string; size?: num
   const shape = avatarShape(size);
   if (uri) {
     return <Image source={{ uri }} style={[avatarStyles.tile, shape]} accessibilityIgnoresInvertColors />;
+  }
+  // v4.32.565: строка «Избранное» — переписка с самим собой, и своего фото в
+  // ней взяться неоткуда: `avatarCid` заполняется из карточки контакта, а сам
+  // себе её никто не присылает. Реестр лиц знает и свой снимок тоже.
+  if (pub) {
+    return <PersonAvatar pub={pub} name={name} size={size} style={avatarStyles.tile} />;
   }
   return (
     <View style={[avatarStyles.tile, shape, { backgroundColor: fill }]}>
@@ -303,7 +310,7 @@ function ConvRowImpl({
         <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: item.colorTag, borderRadius: radius.sm, marginRight: 8, marginLeft: -4 }} />
       ) : null}
       <View style={rowStyles.avatarWrap}>
-        <AvatarCircle name={item.displayName} avatarCid={item.avatarCid} />
+        <AvatarCircle name={item.displayName} avatarCid={item.avatarCid} pub={item.contactPubB64} />
         {isOnline ? <View style={[rowStyles.onlineDot, { backgroundColor: colors.success, borderColor: colors.background }]} /> : null}
       </View>
       <View style={rowStyles.body}>

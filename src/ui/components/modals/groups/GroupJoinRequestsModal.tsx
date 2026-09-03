@@ -5,12 +5,12 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupJoinRequest } from '../../../../core/storage/local';
-import { nameInitial } from '../../../../core/social/contactLabel';
-import { avatarShape, contrastingInk, font, identityAvatar, radius, scrim } from '../../../theme';
+import { avatarShape, contrastingInk, font, radius, scrim } from '../../../theme';
 import { shortIdentity } from '../../../identity/shortId';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { shownName } from '../../../../core/social/unreadableName';
 import { UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
+import { PersonAvatar } from '../../PersonAvatar';
 
 export interface GroupJoinRequestsModalProps {
   visible: boolean;
@@ -40,9 +40,9 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
                 keyExtractor={(r) => r.id}
                 renderItem={({ item }) => (
                   <View style={[styles.row, { borderBottomColor: colors.border }]}>
-                    <View style={[styles.avatar, { backgroundColor: identityAvatar(item.requesterPubB64).fill }]}>
-                      <Text style={[styles.avatarLetter, { color: identityAvatar(item.requesterPubB64).ink }]}>{nameInitial(item.requesterName)}</Text>
-                    </View>
+                    {/* v4.32.565: лицо заявителя, если оно известно, — заявку
+                        принимают, глядя на имя и на человека. */}
+                    <PersonAvatar pub={item.requesterPubB64} name={item.requesterName} size={44} />
                     <View style={{ flex: 1 }}>
                       {/* v4.32.594: заявку принимают, глядя на имя и на
                           сопроводительное сообщение. Непрочитанное имя молча
