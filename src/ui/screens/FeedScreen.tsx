@@ -471,7 +471,10 @@ interface FeedPostItemProps {
   feedTick: number;
   onMarkRead: (item: FeedPostRow) => void;
   onLongPressPost: (item: FeedPostRow) => void;
-  onPeekAuthor: (authorDid: string) => void;
+  // v4.32.567: вторым доводом — имя из самой публикации. Карточка профиля
+  // ищет человека в адресной книге, а автора, которого там нет, до этой
+  // версии подписывала «Без имени» — при том, что имя было на экране рядом.
+  onPeekAuthor: (authorDid: string, authorName?: string | null) => void;
   onHashtagPress: (tag: string) => void;
   onMediaPress: (urls: string[], idx: number) => void;
   onDocumentPress: (postId: string, idx: number, name: string, mime: string) => void | Promise<void>;
@@ -540,7 +543,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
       ) : null}
       <View style={styles.postHeader}>
         <AppPressable
-          onPress={() => onPeekAuthor(item.authorDid)}
+          onPress={() => onPeekAuthor(item.authorDid, item.nameUnreadable ? null : item.authorName)}
           hitSlop={4}
           style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
         >
@@ -891,6 +894,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   const [actionSheetPost, setActionSheetPost] = useState<FeedPostRow | null>(null);
   // v4.32.50: профиль автора поста/комментария — открывается при тапе по имени/аватару.
   const [peekAuthorDid, setPeekAuthorDid] = useState<string | null>(null);
+  /** Имя автора из публикации — подсказка карточке, если его нет в контактах. */
+  const [peekAuthorName, setPeekAuthorName] = useState<string | null>(null);
+  const openPeekAuthor = useCallback((did: string, name?: string | null) => {
+    setPeekAuthorName(name?.trim() || null);
+    setPeekAuthorDid(did);
+  }, []);
   const myPubB64 = useMemo(() => Buffer.from(pair.publicKey).toString('base64'), [pair]);
   // ─── Post translation ─────────────────────────────────────────────────────
   const [translatedPosts, setTranslatedPosts] = useState<Record<string, string>>({});
@@ -2695,7 +2704,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   const handlersRef = useRef({
     onMarkRead: handleMarkRead,
     onLongPressPost: handleLongPressPost,
-    onPeekAuthor: setPeekAuthorDid,
+    onPeekAuthor: openPeekAuthor,
     onHashtagPress: handleHashtagPress,
     onMediaPress: openFeedMedia,
     onDocumentPress: openFeedDocument,
@@ -2713,7 +2722,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   handlersRef.current = {
     onMarkRead: handleMarkRead,
     onLongPressPost: handleLongPressPost,
-    onPeekAuthor: setPeekAuthorDid,
+    onPeekAuthor: openPeekAuthor,
     onHashtagPress: handleHashtagPress,
     onMediaPress: openFeedMedia,
     onDocumentPress: openFeedDocument,
@@ -2732,7 +2741,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
   const stableHandlers = useMemo(() => ({
     onMarkRead: (it: FeedPostRow) => handlersRef.current.onMarkRead(it),
     onLongPressPost: (it: FeedPostRow) => handlersRef.current.onLongPressPost(it),
-    onPeekAuthor: (d: string) => handlersRef.current.onPeekAuthor(d),
+    onPeekAuthor: (d: string, n?: string | null) => handlersRef.current.onPeekAuthor(d, n),
     onHashtagPress: (t: string) => handlersRef.current.onHashtagPress(t),
     onMediaPress: (urls: string[], idx: number) => handlersRef.current.onMediaPress(urls, idx),
     onDocumentPress: (id: string, idx: number, name: string, mime: string) => handlersRef.current.onDocumentPress(id, idx, name, mime),
@@ -3603,7 +3612,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           {/* v4.32.50: тап по имени автора комментария → профиль */}
                           <AppPressable
-                            onPress={() => { if (!isOwn) setPeekAuthorDid(c.authorDid); }}
+                            onPress={() => { if (!isOwn) openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName); }}
                             hitSlop={4}
                           >
                             <Text style={cmStyles.commentAuthor}>{isOwn ? t('common.you') : shownName(c.authorName, c.nameUnreadable, t('common.anonymous'))}</Text>
@@ -3826,8 +3835,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
                         // по z-order / dismiss handling (см. v4.32.26 RNGH + Modal).
                         onPress={() => {
                           const did = v.viewerDid;
+                          const seen = v.nameUnreadable ? null : v.viewerName ?? null;
                           setViewersPostId(null);
-                          requestAnimationFrame(() => setPeekAuthorDid(did));
+                          requestAnimationFrame(() => openPeekAuthor(did, seen));
                         }}
                         style={{
                           flexDirection: 'row',
@@ -4083,8 +4093,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
       {/* v4.32.50: профиль автора поста/комментария при тапе по имени/аватару */}
       <UserProfilePeek
         visible={peekAuthorDid !== null}
-        onClose={() => setPeekAuthorDid(null)}
+        onClose={() => { setPeekAuthorDid(null); setPeekAuthorName(null); }}
         peerDid={peekAuthorDid}
+        fallbackName={peekAuthorName}
         pair={pair}
       />
       </KeyboardHost>

@@ -71,6 +71,69 @@ describe('peekIdentity', () => {
     expect(id.hint).toBe('Это ваш профиль');
   });
 
+  it('свой профиль берёт имя из своей карточки, а не из адресной книги', () => {
+    // Себя в контактах нет и не должно быть, поэтому до v4.32.567 человек
+    // открывал свой профиль и видел «Без имени (Вы)» — при заполненной
+    // карточке на соседнем экране.
+    const id = peekIdentity({
+      contact: null,
+      did: DID,
+      isSelf: true,
+      own: { name: 'Алекс', username: 'founder', bio: 'Делаю AirChat.', verified: true },
+    });
+    expect(id.title).toBe('Алекс');
+    expect(id.named).toBe(true);
+    expect(id.username).toBe('founder');
+    expect(id.bio).toBe('Делаю AirChat.');
+    expect(id.verified).toBe(true);
+  });
+
+  it('чужую карточку своя не подменяет', () => {
+    const id = peekIdentity({
+      contact: { displayName: 'Аня' },
+      did: DID,
+      isSelf: false,
+      own: { name: 'Алекс', username: 'founder', verified: true },
+    });
+    expect(id.title).toBe('Аня');
+    expect(id.username).toBeNull();
+    expect(id.verified).toBe(false);
+  });
+
+  it('имя, под которым человек представился сам, лучше пустой строки', () => {
+    // Местной подписи нет — implicit-строка заводится с пустым displayName, а
+    // peerName приезжает конвертом профиля.
+    const id = peekIdentity({
+      contact: { displayName: '', implicit: true, peerName: 'Борис', username: 'boris', bio: 'Тбилиси' },
+      did: DID,
+      isSelf: false,
+    });
+    expect(id.title).toBe('Борис');
+    expect(id.username).toBe('boris');
+    expect(id.bio).toBe('Тбилиси');
+  });
+
+  it('местная подпись важнее того, как человек назвал себя сам', () => {
+    const id = peekIdentity({
+      contact: { displayName: 'Аня с работы', peerName: 'Анна' },
+      did: DID,
+      isSelf: false,
+    });
+    expect(id.title).toBe('Аня с работы');
+  });
+
+  it('галочка контакта — только проверенная при приёме конверта', () => {
+    const yes = peekIdentity({ contact: { displayName: 'Аня', verified: true }, did: DID, isSelf: false });
+    const no = peekIdentity({ contact: { displayName: 'Аня' }, did: DID, isSelf: false });
+    expect(yes.verified).toBe(true);
+    expect(no.verified).toBe(false);
+  });
+
+  it('«@» в юзернейме не удваивается', () => {
+    const id = peekIdentity({ contact: null, did: DID, isSelf: true, own: { username: '@founder' } });
+    expect(id.username).toBe('founder');
+  });
+
   it('добавленный руками — «В ваших контактах», без предложения добавить', () => {
     const id = peekIdentity({
       contact: { displayName: 'Аня' },

@@ -16,6 +16,13 @@
 // v4.32.427: пропы снова не тронуты. Внутри — проверка открытого ключа до
 // обращения к кривой: раньше отказ приходил из noble, и его английский текст
 // показывался человеку как объяснение, почему не добавился контакт.
+//
+// v4.32.567: пропы не тронуты и здесь. Карточка перестала быть заглушкой:
+// фотография вместо буквы (общий реестр лиц, PersonAvatar), юзернейм с
+// официальной галочкой и «О себе». Свой профиль до этой версии открывался
+// как «Без имени (Вы)» с кружком «?»: себя карточка искала в адресной книге,
+// а там человека нет — своё имя, снимок и «О себе» лежат в карточке профиля
+// (identity/ownProfile), и теперь она их оттуда и читает.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Share, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -26,7 +33,7 @@ import { AppModal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
 import { AppPressable } from './AppPressable';
 import { useColors } from '../ThemeContext';
-import { avatarShape, font, mono, primaryInk, radius, scrim, spacing } from '../theme';
+import { font, mono, radius, scrim, spacing } from '../theme';
 import { showSuccess, showError } from './userFeedback';
 import {
   addContact,
@@ -38,7 +45,7 @@ import {
 import { publicKeyToDidKey } from '../../core/identity/did';
 import { publicKeyFromB64 } from '../../core/crypto/pubKeyFormat';
 import { BAD_PUBLIC_KEY_MESSAGE } from '../../core/social/contacts';
-import { peekIdentity, resolvePeer, shortDid } from './profilePeekModel';
+import { peekIdentity, resolvePeer, shortDid, type PeekOwn } from './profilePeekModel';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { userErrorText } from './userErrorText';
@@ -48,6 +55,11 @@ import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
 import { WallpaperBackground } from './WallpaperBackground';
 import { coverWallpaperFor } from '../wallpapers';
 import { publicIdFor } from '../../core/identity/publicId';
+import { PersonAvatar } from './PersonAvatar';
+import { VerifiedMark } from './VerifiedMark';
+import { getOwnDisplayName, getOwnUsername, ownFieldGet } from '../../core/identity/ownProfile';
+import { ownBadgeClaim } from '../../core/identity/ownBadge';
+import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 
 export interface UserProfilePeekProps {
   /** Видна ли модалка. */
@@ -92,6 +104,8 @@ export function UserProfilePeek({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [isSelf, setIsSelf] = useState(false);
+  // Своя карточка. null и у чужого профиля, и пока своя не прочитана.
+  const [own, setOwn] = useState<PeekOwn | null>(null);
 
   useEffect(() => {
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока
@@ -100,6 +114,7 @@ export function UserProfilePeek({
     setRenaming(false);
     setRenameDraft('');
     setIsSelf(false);
+    setOwn(null);
     if (!visible || !resolved) return;
     let cancelled = false;
     void (async () => {
@@ -107,8 +122,26 @@ export function UserProfilePeek({
         // Self-detection: сравниваем DID (публичный идентификатор, безопасно логировать).
         // Присваиваем результат сравнения, а не только `true`: иначе смена пира
         // при открытой карточке оставила бы «(Вы)» на чужом профиле.
-        if (pair && !cancelled) {
-          setIsSelf(publicKeyToDidKey(pair.publicKey) === resolved.did);
+        const mine = !!pair && publicKeyToDidKey(pair.publicKey) === resolved.did;
+        if (pair && !cancelled) setIsSelf(mine);
+        if (mine) {
+          // Своё читается по одному полю, как и на экране профиля: общей
+          // «карточки одним куском» в хранилище нет.
+          const [name, username, bio, claim] = await Promise.all([
+            getOwnDisplayName(),
+            getOwnUsername(),
+            ownFieldGet('user_bio'),
+            ownBadgeClaim(),
+          ]);
+          if (cancelled) return;
+          // Галочка — только при совпадении имени с бумагой: переименовавшийся
+          // аккаунт контакты видят без неё, и себя он должен видеть так же.
+          setOwn({
+            name,
+            username,
+            bio: normalizeOwnBio(bio) || null,
+            verified: !!claim && !!username && claim.username === username,
+          });
         }
         const all = await listContacts();
         if (cancelled) return;
@@ -127,8 +160,23 @@ export function UserProfilePeek({
   // `identity` считается и когда пир не разобрался: хуков нельзя вызывать
   // меньше, чем в прошлый раз, а ранний выход стоит ниже.
   const identity = useMemo(
-    () => peekIdentity({ contact, fallbackName, did: resolved?.did ?? '', isSelf }),
-    [contact, fallbackName, resolved, isSelf]
+    () => peekIdentity({
+      contact: contact
+        ? {
+            displayName: contact.displayName,
+            implicit: contact.implicit,
+            peerName: contact.peerName,
+            username: contact.peerUsername,
+            bio: contact.bio,
+            verified: contact.verified === 'official',
+          }
+        : null,
+      fallbackName,
+      did: resolved?.did ?? '',
+      isSelf,
+      own,
+    }),
+    [contact, fallbackName, resolved, isSelf, own]
   );
   // Имя для действий: у безымянного это заглушка из DID, а не слово «Контакт»
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
@@ -258,10 +306,17 @@ export function UserProfilePeek({
               <View style={styles.body}>
               <View style={styles.header}>
                 {/* Кольцо цветом карточки: кружок наезжает на обложку, и без
-                    него инициалы теряются на светлых пресетах. */}
-                <View style={[styles.avatar, { backgroundColor: colors.primary, borderColor: colors.surface }]}>
-                  <Text style={[styles.avatarText, { color: primaryInk(colors).text }]}>{identity.initials}</Text>
-                </View>
+                    него лицо теряется на светлых пресетах.
+                    v4.32.567: снимок вместо буквы — через общий реестр лиц,
+                    тот же, что в списке чатов и в ленте. Своё фото он тоже
+                    знает, поэтому свой профиль здесь больше не «?». */}
+                <PersonAvatar
+                  pub={resolved.pubB64}
+                  did={resolved.did}
+                  name={identity.named ? identity.title : null}
+                  size={56}
+                  style={[styles.avatarRing, { borderColor: colors.surface }]}
+                />
                 {renaming ? (
                   <View style={styles.headerBody}>
                     <TextInput
@@ -307,9 +362,27 @@ export function UserProfilePeek({
                       {identity.title}
                       {isSelf ? ' (Вы)' : ''}
                     </Text>
+                    {identity.username ? (
+                      <View style={styles.handleRow}>
+                        <Text style={[styles.handle, { color: colors.accent }]} numberOfLines={1}>
+                          @{identity.username}
+                        </Text>
+                        {identity.verified ? (
+                          <VerifiedMark size={15} label="Официальный аккаунт" />
+                        ) : null}
+                      </View>
+                    ) : null}
                     <Text style={[styles.hint, { color: colors.textSecondary }]}>
                       {identity.hint}
                     </Text>
+                    {identity.bio ? (
+                      <Text
+                        style={[styles.bio, { color: colors.text }]}
+                        numberOfLines={4}
+                      >
+                        {identity.bio}
+                      </Text>
+                    ) : null}
                   </View>
                 )}
               </View>
@@ -462,18 +535,22 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     alignItems: 'center',
   },
-  avatar: {
-    ...avatarShape(56),
-    alignItems: 'center',
-    justifyContent: 'center',
+  avatarRing: {
     borderWidth: 3,
   },
-  // v4.32.419: цвет инициалов переехал на место вызова — заливка кружка
-  // это `primary`, который выбирает пользователь, а лист стилей считается
-  // один раз при загрузке модуля и о теме не знает.
-  avatarText: {
-    fontSize: font.xl,
-    fontWeight: '700',
+  handleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  handle: {
+    fontSize: font.sm,
+    fontWeight: '600',
+  },
+  bio: {
+    fontSize: font.sm,
+    textAlign: 'center',
+    marginTop: spacing.xs,
   },
   name: {
     fontSize: font.lg,

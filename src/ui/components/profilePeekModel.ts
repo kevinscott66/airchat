@@ -49,6 +49,29 @@ export type PeekContact = {
   displayName: string;
   /** Контакт заведён автоматически при переписке, а не добавлен человеком. */
   implicit?: boolean;
+  /** Как он назвал себя сам — из его же конверта профиля. */
+  peerName?: string;
+  /** Канонический username, присланный аккаунтом. Без «@». */
+  username?: string;
+  /** «О себе» из того же конверта. */
+  bio?: string;
+  /** Официальная галочка. Проверена при приёме конверта, здесь — только ответ. */
+  verified?: boolean;
+};
+
+/**
+ * Своя карточка (v4.32.567).
+ *
+ * Берётся не из адресной книги: себя в контактах нет, и не должно быть. До
+ * этой версии карточка своего профиля этого не знала — искала себя среди
+ * контактов, не находила и показывала «Без имени (Вы)» человеку, у которого
+ * имя и фотография заданы на соседнем экране.
+ */
+export type PeekOwn = {
+  name?: string | null;
+  username?: string | null;
+  bio?: string | null;
+  verified?: boolean;
 };
 
 export type PeekIdentity = {
@@ -64,6 +87,12 @@ export type PeekIdentity = {
   inContacts: boolean;
   /** Подпись под именем. */
   hint: string;
+  /** Юзернейм без «@». `null` — не задан. */
+  username: string | null;
+  /** «О себе». `null` — пусто. */
+  bio: string | null;
+  /** Показывать ли официальную галочку. */
+  verified: boolean;
 };
 
 /**
@@ -89,9 +118,17 @@ export function peekIdentity(input: {
   fallbackName?: string | null;
   did: string;
   isSelf: boolean;
+  /** Своя карточка. Учитывается только при isSelf — чужую она не заменяет. */
+  own?: PeekOwn | null;
 }): PeekIdentity {
   const { contact, fallbackName, did, isSelf } = input;
-  const name = (contact?.displayName || '').trim() || (fallbackName || '').trim();
+  const own = isSelf ? input.own ?? null : null;
+  // Порядок именно такой: своё имя — своё, местная подпись важнее того, как
+  // человек назвал себя сам, а подсказка с экрана идёт последней.
+  const name = (own?.name || '').trim()
+    || (contact?.displayName || '').trim()
+    || (contact?.peerName || '').trim()
+    || (fallbackName || '').trim();
   const named = name.length > 0;
   const inContacts = !!contact && contact.implicit !== true;
   const hint = isSelf
@@ -113,5 +150,8 @@ export function peekIdentity(input: {
     initials: named ? nameInitials(name) : '?',
     inContacts,
     hint,
+    username: (own?.username || contact?.username || '').trim().replace(/^@/, '') || null,
+    bio: (own?.bio || contact?.bio || '').trim() || null,
+    verified: isSelf ? !!own?.verified : contact?.verified === true,
   };
 }
