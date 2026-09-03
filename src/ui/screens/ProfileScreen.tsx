@@ -50,6 +50,10 @@ import { OWN_BIO_MAX, normalizeOwnBio } from '../../core/social/profileEnvelope'
 import { newAvatarUri } from '../../core/media/avatarFiles';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
 import { authGuard } from '../../core/security/authGuard';
+import {
+  SENSITIVE_NO_PASSWORD_TEXT,
+  unlockSensitiveAccess,
+} from '../../core/security/sensitiveAccess';
 import { VerifiedMark } from '../components/VerifiedMark';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
@@ -527,8 +531,11 @@ function ProfileScreenImpl({
       Alert.alert('AirChat', 'Секретные слова не сохранены на этом устройстве.');
       return;
     }
+    // v4.32.548: пароль обязателен. Раньше при незаданном пароле слова
+    // показывались сразу — вторая дверь к той же seed-фразе, что и в
+    // «Настройки → Резервная копия», см. sensitiveAccess.
     if (!(await authGuard.hasPassword())) {
-      await showSeedWordsModal();
+      Alert.alert('AirChat', SENSITIVE_NO_PASSWORD_TEXT);
       return;
     }
     setSeedPwd('');
@@ -542,8 +549,12 @@ function ProfileScreenImpl({
     }
     setSeedPwdBusy(true);
     try {
-      const ok = await authGuard.verifyPassword(seedPwd);
-      if (!ok) {
+      const result = await unlockSensitiveAccess(seedPwd);
+      if (result === 'no_password') {
+        Alert.alert('AirChat', SENSITIVE_NO_PASSWORD_TEXT);
+        return;
+      }
+      if (result !== 'ok') {
         await showPasswordRejected();
         return;
       }

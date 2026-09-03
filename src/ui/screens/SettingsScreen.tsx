@@ -22,6 +22,11 @@ import { AppSwitch } from '../components/AppSwitch';
 import { AppModal as Modal } from '../components/AppModal';
 import * as FileSystem from 'expo-file-system/legacy';
 import { authGuard } from '../../core/security/authGuard';
+import {
+  SENSITIVE_NO_PASSWORD_TEXT,
+  sensitiveAccessGate,
+  unlockSensitiveAccess,
+} from '../../core/security/sensitiveAccess';
 import { copySecretToClipboard } from '../../core/security/clipboardSecret';
 import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../core/internalDiagnostics';
 import { Ionicons } from '@expo/vector-icons';
@@ -181,6 +186,9 @@ function SettingsScreenImpl({
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [hasAppPassword, setHasAppPassword] = useState(false);
   const [setPwdModal, setSetPwdModal] = useState(false);
+  // v4.32.548: куда вести человека после того, как пароль заведён, —
+  // он пришёл не за паролем, а за «Резервной копией».
+  const [setPwdPurpose, setSetPwdPurpose] = useState<'backup' | null>(null);
   const [changePwdModal, setChangePwdModal] = useState(false);
   const [newPwd, setNewPwd] = useState('');
   const [newPwd2, setNewPwd2] = useState('');
@@ -205,6 +213,9 @@ function SettingsScreenImpl({
 
   // ── Backup state ───────────────────────────────────────────────────────────
   const [backupBusy, setBackupBusy] = useState(false);
+  const [backupUnlockModal, setBackupUnlockModal] = useState(false);
+  const [backupPwdInput, setBackupPwdInput] = useState('');
+  const [backupUnlockBusy, setBackupUnlockBusy] = useState(false);
   const [seedModal, setSeedModal] = useState(false);
   const [seedPwdInput, setSeedPwdInput] = useState('');
   const [seedPhrase, setSeedPhrase] = useState<string | null>(null);
@@ -447,6 +458,9 @@ function SettingsScreenImpl({
       setNewPwd('');
       setNewPwd2('');
       refreshPasswordFlag();
+      // Пароль только что введён дважды — спрашивать его третий раз незачем.
+      if (setPwdPurpose === 'backup') setSubScreen('backup');
+      setSetPwdPurpose(null);
     } finally { setPwdBusy(false); }
   };
 
@@ -530,18 +544,53 @@ function SettingsScreenImpl({
     } finally { setBackupBusy(false); }
   }, []);
 
+  /**
+   * v4.32.548: «Резервная копия» больше не открывается без пароля приложения.
+   * Раздел ведёт к seed-фразе и к облачной копии — то есть к аккаунту целиком.
+   * Если пароля ещё нет, сначала предлагаем его завести, см. sensitiveAccess.
+   */
+  const openBackupSection = useCallback(async () => {
+    const gate = await sensitiveAccessGate();
+    setHasAppPassword(gate === 'verify');
+    if (gate === 'set_password') {
+      setNewPwd('');
+      setNewPwd2('');
+      setSetPwdPurpose('backup');
+      setSetPwdModal(true);
+      showError(SENSITIVE_NO_PASSWORD_TEXT);
+      return;
+    }
+    setBackupPwdInput('');
+    setBackupUnlockModal(true);
+  }, []);
+
+  const submitBackupUnlock = async (): Promise<void> => {
+    setBackupUnlockBusy(true);
+    try {
+      const result = await unlockSensitiveAccess(backupPwdInput);
+      if (result === 'empty') { showError('Введите пароль'); return; }
+      if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'rejected') { await showPasswordRejected(); return; }
+      setBackupUnlockModal(false);
+      setBackupPwdInput('');
+      setSubScreen('backup');
+    } finally { setBackupUnlockBusy(false); }
+  };
+
   const handleShowSeed = useCallback(async () => {
     setSeedBusy(true);
     try {
-      if (hasAppPassword) {
-        const ok = await authGuard.verifyPassword(seedPwdInput);
-        if (!ok) { await showPasswordRejected(); return; }
-      }
+      // v4.32.548: пароль обязателен и здесь. Раньше при незаданном пароле
+      // двадцать четыре слова показывались вообще без проверки.
+      const result = await unlockSensitiveAccess(seedPwdInput);
+      if (result === 'empty') { showError('Введите пароль'); return; }
+      if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Seed-фраза не найдена'); return; }
       setSeedPhrase(mnemonic);
     } finally { setSeedBusy(false); }
-  }, [hasAppPassword, seedPwdInput]);
+  }, [seedPwdInput]);
 
   const handleCloudUpload = useCallback(async () => {
     const validationError = validateCloudPassword(cloudPasswordInput);
@@ -639,6 +688,7 @@ function SettingsScreenImpl({
   // ── Async button wrappers (only for heavy async operations) ────────────────
   const exportBackupBtn = useAsyncButton(handleExportBackup, { throttleMs: 300 });
   const showSeedBtn = useAsyncButton(handleShowSeed, { throttleMs: 300 });
+  const openBackupBtn = useAsyncButton(openBackupSection, { throttleMs: 300 });
   const versionPressBtn = useAsyncButton(
     useCallback(async () => { onVersionPress(); }, [onVersionPress]),
     { throttleMs: 200 },
@@ -856,7 +906,7 @@ function SettingsScreenImpl({
           iconName="archive-outline"
           hue="ice"
           label="Резервная копия"
-          onPress={() => setSubScreen('backup')}
+          onPress={openBackupBtn.onPress}
         />
       </View>
 
@@ -1893,7 +1943,36 @@ function SettingsScreenImpl({
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitSetPassword(); }} disabled={pwdBusy}>
                 {pwdBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>}
               </AppPressable>
-              <AppPressable onPress={() => { setSetPwdModal(false); setNewPwd(''); setNewPwd2(''); }}>
+              <AppPressable onPress={() => { setSetPwdModal(false); setSetPwdPurpose(null); setNewPwd(''); setNewPwd2(''); }}>
+                <Text style={styles.pwdCancel}>Отмена</Text>
+              </AppPressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* v4.32.548: замок на «Резервной копии» — раздел ведёт к seed-фразе */}
+      <Modal visible={backupUnlockModal} transparent animationType="fade" testID="backup_unlock_modal" onRequestClose={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }}>
+        <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
+          <View style={styles.pwdModalBg}>
+            <View style={styles.pwdModalBox}>
+              <Text style={styles.modalTitle}>Резервная копия</Text>
+              <Text style={[styles.desc, { marginBottom: 12 }]}>Раздел защищён паролем приложения: в нём seed-фраза и облачная копия.</Text>
+              <TextInput
+                style={styles.pwdInput}
+                secureTextEntry
+                value={backupPwdInput}
+                onChangeText={setBackupPwdInput}
+                placeholder="Пароль приложения"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                editable={!backupUnlockBusy}
+                testID="backup_unlock_input"
+              />
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy}>
+                {backupUnlockBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Открыть</Text>}
+              </AppPressable>
+              <AppPressable onPress={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }}>
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -1997,8 +2076,8 @@ function SettingsScreenImpl({
                 </>
               ) : (
                 <>
-                  <Text style={[styles.desc, { marginBottom: 12 }]}>{hasAppPassword ? 'Введите пароль приложения для просмотра seed-фразы:' : 'Нажмите «Показать» для отображения seed-фразы.'}</Text>
-                  {hasAppPassword ? <TextInput style={styles.pwdInput} secureTextEntry value={seedPwdInput} onChangeText={setSeedPwdInput} placeholder="Пароль приложения" placeholderTextColor={colors.textMuted} autoCapitalize="none" /> : null}
+                  <Text style={[styles.desc, { marginBottom: 12 }]}>Введите пароль приложения для просмотра seed-фразы:</Text>
+                  <TextInput style={styles.pwdInput} secureTextEntry value={seedPwdInput} onChangeText={setSeedPwdInput} placeholder="Пароль приложения" placeholderTextColor={colors.textMuted} autoCapitalize="none" testID="seed_password_input" />
                   <AppPressable style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy}>
                     {seedBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Показать</Text>}
                   </AppPressable>
