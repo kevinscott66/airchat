@@ -2788,7 +2788,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0 }: Props): React.ReactElement 
         {/* v4.32.540: та же стеклянная капсула, что в «Чатах» (topChrome) и в
             группах. Раньше «Новости» открывались плоской полосой с волосяной
             линией внизу: три вкладки — три разных верха. */}
-        <GlassSurface style={styles.feedChrome} variant="regular" watermark>
+        <GlassSurface style={styles.feedChrome} variant="regular" wash>
         <View style={styles.topRow}>
           <Text style={[styles.h1, { flex: 1 }]}>{t('feed.title')}</Text>
           <AppPressable

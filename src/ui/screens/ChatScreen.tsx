@@ -3050,7 +3050,7 @@ function ChatThreadView({
           ради этого стекло и заводилось. */}
       <WallpaperBackground wallpaper={wallpaper} ground={feed.ground} />
       {/* Thread header with back button */}
-      <GlassSurface style={[s.threadHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
+      <GlassSurface style={[s.threadHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" wash>
         <AppPressable style={s.backBtn} onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Назад к чатам">
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </AppPressable>

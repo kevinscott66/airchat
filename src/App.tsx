@@ -111,6 +111,7 @@ import type { AppColors, ColorScheme } from './ui/theme';
 import { contactLabel } from './core/social/contactLabel';
 import { shortIdentity } from './ui/identity/shortId';
 import { GlassSurface } from './ui/components/GlassSurface';
+import { AirChatWordmark } from './ui/components/AirChatWordmark';
 import { TabGlyph } from './ui/components/TabGlyph';
 import { ScreenSlot } from './ui/components/ScreenSlot';
 
@@ -191,6 +192,18 @@ function useMainTabsStyles() {
   return useThemedStyles((c) => ({
     main: { flex: 1, backgroundColor: c.background },
     tabBody: { flex: 1, backgroundColor: c.background },
+    // Знак в полосе статуса: прижат к её нижней кромке и не ловит касаний —
+    // полоса принадлежит системе, кликать в ней нечего.
+    islandMark: {
+      position: 'absolute' as const,
+      top: 0,
+      left: 0,
+      right: 0,
+      alignItems: 'center' as const,
+      justifyContent: 'flex-end' as const,
+      paddingBottom: 1,
+    },
+    islandMarkGlyph: { opacity: 0.72 },
     tabBar: { backgroundColor: 'transparent' },
     // v4.32.532: плавающая капсула возвращена. Довод 530-й («таббар — край
     // окна, а не предмет») верен для плоской полосы, но неверен для стекла:
@@ -1282,13 +1295,31 @@ function MainTabs({
         ) : tab === 'settings' && mountingTab === 'settings' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_settings" /></View> : null}
       </View>
       {/*
-        v4.32.545: знак уехал из полосы статуса под стекло шапок (см. признак
-        `watermark` у GlassSurface). В полосе он был не водяным знаком, а ещё
-        одной надписью рядом с часами — тем заметнее, чем меньше просвет между
-        «островом» и нижней кромкой; 540-я и 544-я правки как раз и воевали за
-        эти одиннадцать точек. Под стеклом место не спорное: знак лежит в
-        подложке размытия, в работе его не видно, а на снимке экрана он есть.
+        v4.32.551: знак вернулся в полосу статуса, вплотную под «остров».
+        545-я увела его под стекло шапок, 573-я подняла над размытием — и на
+        устройстве его так и не стало видно. Дело было не в порядке слоёв: шапка
+        это заголовок экрана, и знак в ней спорит с заголовком, а не лежит за
+        ним. Место у него здесь — в просвете между нижней кромкой «острова» и
+        началом содержимого.
+
+        Просвет этот около одиннадцати точек, поэтому знак ровно на девять и
+        прижат к нижнему краю полосы: сверху остаётся зазор до самого «острова»,
+        снизу — до шапки. 544-я на этом обожглась в другую сторону — знак был
+        одиннадцати точек, то есть занимал просвет целиком, и любой отступ
+        загонял верхушку букв под вырез.
+
+        Порог по высоте полосы отсекает всё, кроме аппаратов с «островом». У
+        выреза (iPhone 12–14, полоса 47) его нижняя кромка приходится почти на
+        конец полосы, и знак лёг бы под сам вырез; у полосы без выреза (Android,
+        iPhone SE) — прямо под часы. Там знака нет вовсе: пустого места, в
+        котором он был бы водяным знаком, а не восьмой строкой интерфейса, на
+        этих аппаратах просто нет.
       */}
+      {insets.top >= 54 ? (
+        <View pointerEvents="none" style={[styles.islandMark, { height: insets.top }]}>
+          <AirChatWordmark height={9} style={styles.islandMarkGlyph} />
+        </View>
+      ) : null}
       {multiProfileEnabled ? (
         <ProfileSelector
           visible={profileSelOpen}

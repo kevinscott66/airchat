@@ -3253,7 +3253,7 @@ function GroupChatScreen({
           разных приложения, а обои под полосой не было видно вовсе. Отступ под
           часы теперь тоже здесь — оболочка его больше не отбивает. */}
       {searchVisible ? (
-        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" wash>
           <AppPressable onPress={closeSearch} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -3308,7 +3308,7 @@ function GroupChatScreen({
           ) : null}
         </GlassSurface>
       ) : (
-        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" watermark>
+        <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" wash>
           <AppPressable onPress={onBack} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
@@ -5866,7 +5866,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
         {/* v4.32.540: шапка, поиск и фильтры собраны в одну стеклянную капсулу —
             ту же, что в «Чатах» (ChatListScreen `topChrome`). Раньше «Группы»
             открывались тремя плоскими полосами подряд. */}
-        <GlassSurface style={gsStyles.topChrome} variant="regular" watermark>
+        <GlassSurface style={gsStyles.topChrome} variant="regular" wash>
         <View style={gsStyles.header}>
           <Text style={[gsStyles.title, { color: colors.text }]}>Группы</Text>
           {groups.some((g) => g.unreadCount > 0) ? (
