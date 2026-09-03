@@ -123,6 +123,22 @@ test('username registry claims globally and refuses a name held by another accou
     assert.equal(rejected.status, 401, `expected refusal for ${username}`);
   }
 
+  // v4.32.548: оставленное приложению имя открывает подписанная бумага на
+  // галочку — но именно подписанная. Самодельная, пустая и чрезмерно длинная
+  // получают тот же отказ, что и запрос вовсе без неё: сервер проверяет
+  // подпись сам, а не верит присланному «мне разрешено».
+  const forged = JSON.stringify({
+    payload: JSON.stringify({ did: 'did:key:z6Mk', kind: 'official', username: 'founder', v: 1 }),
+    signature: Buffer.alloc(64).toString('base64'),
+  });
+  for (const badge of [forged, '', 'x'.repeat(2000), 42]) {
+    const rejected = await post(alice, signed(alice, 'claim_username', {
+      username: 'founder', ownerProfileId: 0, badge,
+    }));
+    assert.equal(rejected.status, 401, `expected refusal for badge ${String(badge).slice(0, 12)}`);
+  }
+  assert.equal((await (await fetch(`${base}/v1/username/founder`)).json()).taken, false);
+
   // Освобождение по запросу владельца.
   const release = await fetch(`${base}/v1/sync/${alice.accountId}/username/release`, {
     method: 'POST',

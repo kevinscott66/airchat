@@ -17,6 +17,7 @@ const {
   normalizeClaimableUsername,
   normalizeLookupUsername,
 } = require('./reserved-usernames');
+const { didKeyFromPublicKeyB64, grantedUsername, MAX_GRANT_LEN } = require('./official-badge');
 
 const app = express();
 // The client archives binary files as base64 twice (inside JSON and in the
@@ -370,9 +371,22 @@ function validateSyncRequest(payload, accountId, op) {
       payload.ownerProfileId < 0 || payload.ownerProfileId > 1_000_000
     ) return null;
     if (op === 'claim_username') {
+      // v4.32.548: имя из списка оставленных приложению открывает только
+      // подписанная бумага на галочку. Она едет в том же payload, а значит
+      // накрыта подписью запроса: подменить её по дороге нельзя. Проверяется
+      // она здесь, а не берётся на слово: клиент можно пересобрать, и если бы
+      // сервер верил присланному «мне разрешено», список не значил бы ничего.
+      if (payload.badge != null && (typeof payload.badge !== 'string' || payload.badge.length > MAX_GRANT_LEN)) return null;
+      // Бумага привязана к аккаунту: did в ней должен совпасть с did ключа
+      // аккаунта — того самого, чей хеш стоит в accountId и в адресе запроса.
+      // Без этой сверки бумагу можно было бы переписать себе: контактам она
+      // приходит в конверте профиля открытым текстом.
+      const unlocked = payload.badge
+        ? grantedUsername(payload.badge, didKeyFromPublicKeyB64(payload.accountPublicKeyB64 || payload.publicKeyB64))
+        : null;
       // Правила длины, набора символов и списка оставленных имён проверяет
       // сервер, а не только экран: клиент можно пересобрать без проверки.
-      const username = normalizeClaimableUsername(payload.username);
+      const username = normalizeClaimableUsername(payload.username, unlocked);
       if (!username) return null;
       return {
         ...payload,

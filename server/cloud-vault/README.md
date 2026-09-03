@@ -51,6 +51,21 @@ from one seed isolated while sharing one account cursor namespace on the server.
 - `POST /v1/sync/:accountId/devices` lists registered devices, coarse Cloudflare
   country/city metadata and client-reported model/OS/app version.
 - `POST /v1/sync/:accountId/devices/revoke` revokes another device.
+- `POST /v1/sync/:accountId/username/claim` takes `@name` for `ownerProfileId`,
+  `.../username/release` gives it back, and the unsigned
+  `GET /v1/username/:name` answers only `taken` — never the owner, because the
+  account id is the address of that account's storage.
+
+Username rules are enforced here, not only on the screen: a rebuilt client must
+not be able to take `support`. Names reserved for the app (`reserved-usernames.js`,
+mirrored from the client and checked by a test) are refused outright, with one
+exception. A claim may carry `badge`: an Ed25519 grant, signed by a key whose
+public half lives in `official-badge.js`, whose payload names the `did` of the
+account and the single `username` it unlocks. The grant is part of the signed
+payload, so it cannot be swapped in transit, and it is verified against the
+did:key of `accountPublicKeyB64` — the grant travels to contacts inside profile
+envelopes in the clear, so without that binding anyone who received one could
+present it as their own. A grant for `founder` does not unlock `support`.
 
 Mutation delivery is idempotent by `mutationId`. Per-entity revisions reject
 stale writes; the revision key includes `ownerProfileId`, so two local profiles

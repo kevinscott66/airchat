@@ -38,13 +38,21 @@ const RESERVED_USERNAMES = new Set([
  * Возвращает нормализованное имя либо `null` — причину сервер не называет:
  * подробный разбор ошибки человеку показывает экран, который проверил то же
  * самое до отправки.
+ *
+ * `unlocked` (v4.32.548) — имя из ПРОВЕРЕННОЙ бумаги на галочку, а не строка
+ * из запроса: его выдаёт `official-badge.grantedUsername` после проверки
+ * подписи и привязки к аккаунту. Зеркало клиентского `checkUsernameClaim`:
+ * открывается ровно одно имя, то самое, и обе нижние границы — длина и список
+ * — обходятся только для него. Бумага на `founder` не открывает `support`.
  */
-function normalizeClaimableUsername(value) {
+function normalizeClaimableUsername(value, unlocked) {
   if (typeof value !== 'string') return null;
   const raw = value.trim().replace(/^@+/, '').toLowerCase();
   if (!/^[a-z0-9_]+$/.test(raw)) return null;
-  if (raw.length < USERNAME_MIN_SELF_SERVICE || raw.length > USERNAME_MAX) return null;
-  if (RESERVED_USERNAMES.has(raw)) return null;
+  if (raw.length > USERNAME_MAX) return null;
+  const granted = typeof unlocked === 'string' && unlocked.trim().toLowerCase() === raw;
+  if (!granted && raw.length < USERNAME_MIN_SELF_SERVICE) return null;
+  if (!granted && RESERVED_USERNAMES.has(raw)) return null;
   return raw;
 }
 

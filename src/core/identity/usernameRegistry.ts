@@ -20,6 +20,7 @@
  */
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../backup/seedPhrase';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
+import { ownBadgeGrantFor } from './ownBadge';
 import { profileManager } from './profileManager';
 import { isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
 
@@ -54,11 +55,16 @@ export async function saveOwnUsernameGlobally(username: string): Promise<Usernam
   let scope: 'global' | 'local' = 'local';
   const mnemonic = await getStoredMnemonic();
   if (mnemonic) {
+    // v4.32.548: бумага на галочку прикладывается к запросу. Список
+    // оставленных приложению имён стоит и на сервере — иначе его снимала бы
+    // пересборка клиента, — поэтому разрешение занять `@founder` надо
+    // предъявить и там. Бумаги нет почти у всех, и тогда ничего не меняется.
     const claim = await claimSyncUsername(
       mnemonic,
       deriveKeyPairFromMnemonic(mnemonic),
       username,
       ownerProfileId(),
+      await ownBadgeGrantFor(ownerProfileId()),
     );
     if (!claim.ok && claim.reason !== 'offline') return { ok: false, reason: claim.reason };
     if (claim.ok) scope = 'global';

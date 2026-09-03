@@ -427,13 +427,19 @@ export async function claimSyncUsername(
   pair: KeyPairBytes,
   username: string,
   ownerProfileId: number,
+  badge?: string | null,
 ): Promise<UsernameClaimResult> {
   try {
     const response = await request<{ ok: boolean; username: string }>(
       mnemonic,
       pair,
       'claim_username',
-      { username, ownerProfileId },
+      // v4.32.548: бумага на галочку едет вместе с запросом, потому что список
+      // оставленных приложению имён стоит и на сервере — без неё `@founder`
+      // отвергается там же, где и у постороннего. Проверяет её сервер сам:
+      // подпись накрывает весь payload, значит подменить бумагу по дороге
+      // нельзя, а поверить клиенту на слово было бы то же, что снять список.
+      badge ? { username, ownerProfileId, badge } : { username, ownerProfileId },
       'username/claim',
     );
     return response.ok ? { ok: true, username: response.username } : { ok: false, reason: 'rejected' };
