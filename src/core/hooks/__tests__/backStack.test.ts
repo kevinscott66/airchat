@@ -1,4 +1,5 @@
 import {
+  backSource,
   pushBackHandler,
   runBackHandlers,
   resetBackHandlersForTest,
@@ -55,5 +56,21 @@ describe('backStack (v4.32.540)', () => {
     pushBackHandler(() => { throw new Error('boom'); });
     expect(runBackHandlers()).toBe(true);
     expect(seen).toEqual(['screen']);
+  });
+
+  it('сообщает обработчику, кто его позвал: кнопка или жест (v4.32.575)', () => {
+    const seen: string[] = [];
+    pushBackHandler(() => { seen.push(backSource()); return false; });
+    runBackHandlers('button');
+    runBackHandlers('swipe');
+    // По умолчанию зовёт жест — системная кнопка идёт через BackHandler.
+    runBackHandlers();
+    expect(seen).toEqual(['button', 'swipe', 'swipe']);
+  });
+
+  it('снимает источник после обхода: вне «Назад» он всегда кнопка', () => {
+    pushBackHandler(() => true);
+    runBackHandlers('swipe');
+    expect(backSource()).toBe('button');
   });
 });

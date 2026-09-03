@@ -18,39 +18,66 @@
  * порог именно вбок, и лишь тогда жест забирает ответственность. Вертикальная
  * прокрутка при этом не страдает: она забирает касание раньше и по-своему.
  *
- * Куда ведёт. В общий стек `backStack` — тот же, куда кладёт колбэки
+ * Куда ведёт. Слева направо — в общий стек `backStack` — тот же, куда кладёт колбэки
  * `useBackHandler`. Поэтому жест закрывает ровно то, что закрыла бы системная
  * кнопка на Android: сначала верхнюю модалку, потом подэкран, потом вкладку.
  * Если возвращаться некуда, жест ничего не делает: приложение по нему НЕ
  * закрывается — свайпы случайны, а выход из приложения необратим.
+ *
+ * Вкладки (v4.32.575). Тот же жест ходит по нижней панели: справа налево —
+ * следующая вкладка, слева направо — предыдущая, но только когда возвращаться
+ * уже некуда. Порядок приоритетов именно такой: закрыть открытое важнее, чем
+ * сменить раздел, — иначе свайп из переписки уносил бы из неё вместо возврата
+ * к списку. Края панели не заворачиваются: за «Ещё» и перед «Новостями»
+ * ничего нет, и жест там просто ничего не делает.
  */
 import React, { useMemo } from 'react';
 import { PanResponder, StyleSheet, View, type ViewProps } from 'react-native';
 import { runBackHandlers } from '../../core/hooks/backStack';
+import { claimsSwipe, swipeStep } from './swipeBackGesture';
+import type { TabStep } from '../tabOrder';
 
-/** Порог по горизонтали, после которого жест считается намеренным (точки). */
-const DX_THRESHOLD = 28;
-/** Допустимый увод по вертикали на этом пороге: больше — это прокрутка. */
-const DY_TOLERANCE = 22;
-/** Средняя часть экрана: от какой и до какой доли высоты ловим жест. */
-const BAND_TOP = 0.18;
-const BAND_BOTTOM = 0.82;
+export type { TabStep };
 
-export function SwipeBackHost({ children, style, ...rest }: ViewProps): React.ReactElement {
+type SwipeBackHostProps = ViewProps & {
+  /**
+   * Переход на соседнюю вкладку. Хост только распознаёт жест и говорит, в
+   * какую сторону вели; решает, можно ли идти и куда именно, вызывающий.
+   */
+  onTabStep?: (step: TabStep) => void;
+};
+
+export function SwipeBackHost({
+  children,
+  style,
+  onTabStep,
+  ...rest
+}: SwipeBackHostProps): React.ReactElement {
   const [height, setHeight] = React.useState(0);
+  // Колбэк живёт в ref, а не в зависимостях: пересобранный на каждый render
+  // PanResponder терял бы жест ровно в тот момент, когда палец уже ведёт.
+  const tabStepRef = React.useRef(onTabStep);
+  tabStepRef.current = onTabStep;
 
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: (evt, g) => {
-          if (height <= 0) return false;
-          const y = evt.nativeEvent.locationY;
-          if (y < height * BAND_TOP || y > height * BAND_BOTTOM) return false;
-          // Только слева направо, только заметно вбок и почти без наклона.
-          return g.dx > DX_THRESHOLD && Math.abs(g.dy) < DY_TOLERANCE && g.dx > Math.abs(g.dy) * 2;
-        },
-        onPanResponderRelease: () => {
-          runBackHandlers();
+        onMoveShouldSetPanResponder: (evt, g) =>
+          claimsSwipe({
+            dx: g.dx,
+            dy: g.dy,
+            y: evt.nativeEvent.locationY,
+            height,
+            canStepTabs: tabStepRef.current != null,
+          }),
+        onPanResponderRelease: (_evt, g) => {
+          const step = swipeStep(g.dx);
+          // Справа налево: «Назад» тут ни при чём, это шаг вперёд по панели.
+          // Слева направо: сначала «Назад» — закрыть модалку или подэкран
+          // важнее, чем сменить вкладку, — и только если возвращаться некуда,
+          // жест уводит на предыдущую вкладку.
+          if (step < 0 && runBackHandlers()) return;
+          tabStepRef.current?.(step);
         },
         // Ответственность могла уйти системе (шторка, Control Center) —
         // тогда жест не наш, и делать по нему ничего не надо.

@@ -106,7 +106,9 @@ import { startJsThreadWatcher } from './core/utils/jsThreadWatcher';
 import { scheduleAfterFirstFrame } from './core/utils/firstFrameGate';
 import { setOpenIntentConsumer } from './notifications/openIntent';
 import { useBackHandler } from './core/hooks/useBackHandler';
+import { backSource } from './core/hooks/backStack';
 import { SwipeBackHost } from './ui/components/SwipeBackHost';
+import { stepTab, type TabStep } from './ui/tabOrder';
 import { SplashOverlay, type SplashOverlayRef } from './ui/components/SplashOverlay';
 import { badgeDigit, elevation, font, primaryInk, radius, spacing, toastSurface } from './ui/theme';
 import type { AppColors, ColorScheme } from './ui/theme';
@@ -570,6 +572,11 @@ function MainTabs({
       return true;
     }
     if (tab !== 'feed') {
+      // v4.32.575: «домой на Новости» — поведение системной кнопки, и только
+      // её. Свайпу здесь отвечать нечем: он ходит по соседям, и прыжок через
+      // три вкладки читался бы как промах. Отказ пускает жест дальше — в шаг
+      // на предыдущую вкладку.
+      if (backSource() === 'swipe') return false;
       scheduleTab('feed');
       return true;
     }
@@ -1237,6 +1244,22 @@ function MainTabs({
   const handleOpenProfiles = useCallback(() => {
     setProfileSelOpen(true);
   }, []);
+  /**
+   * Шаг по нижней панели свайпом (v4.32.575). До этой версии между разделами
+   * ходили только тапом по капсуле внизу — то есть дотягиваясь до самой
+   * дальней от пальца кромки экрана.
+   *
+   * Отказы здесь не оговорки, а условия, при которых горизонталь принадлежит
+   * не панели: открытая переписка и выбор профиля занимают экран целиком и
+   * возвращаются жестом «Назад», а поднятая клавиатура означает, что ведение
+   * пальцем вбок — это правка текста.
+   */
+  const handleTabStep = useCallback((step: TabStep) => {
+    if (tabsHidden || peerJump || groupJump || profileSelOpen) return;
+    const next = stepTab(tab, step);
+    if (next === null) return;
+    scheduleTab(next);
+  }, [tab, tabsHidden, peerJump, groupJump, profileSelOpen, scheduleTab]);
   const handleDisplayNameChanged = useCallback((name: string) => {
     onDisplayNameChanged(name);
     setActiveProfileLabel(name);
@@ -1259,6 +1282,7 @@ function MainTabs({
       style={styles.main}
       testID="main_tabs"
       collapsable={false}
+      onTabStep={handleTabStep}
     >
       {/*
         v4.32.540: верхний отступ под часы и «остров» снят с оболочки и роздан

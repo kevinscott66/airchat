@@ -18,7 +18,30 @@
 
 type BackHandlerFn = () => boolean | void;
 
+/** Откуда пришло «Назад»: системная кнопка Android или жест по экрану. */
+export type BackSource = 'button' | 'swipe';
+
 const stack: BackHandlerFn[] = [];
+
+/**
+ * v4.32.575: источник текущего «Назад».
+ *
+ * Контракт обработчиков не тронут — они по-прежнему `() => boolean | void`, и
+ * подавляющему большинству из них всё равно, кто их позвал. Знать источник
+ * нужно ровно одному месту: верхнему обработчику App, где «Назад» с любой
+ * вкладки означает «домой, на Новости». Для системной кнопки это правильно, а
+ * для свайпа — нет: свайп ходит по соседям, и прыжок через три вкладки на
+ * Новости выглядел бы как промах, а не как переход.
+ *
+ * Флаг живёт только внутри обхода стека и читается синхронно из обработчика,
+ * поэтому вложенности и гонки тут взяться неоткуда: обход не асинхронный.
+ */
+let currentSource: BackSource = 'button';
+
+/** Кто позвал обработчик. Осмысленно только во время его выполнения. */
+export function backSource(): BackSource {
+  return currentSource;
+}
 
 /** Положить обработчик наверх стека. Возвращает функцию снятия. */
 export function pushBackHandler(fn: BackHandlerFn): () => void {
@@ -38,18 +61,23 @@ export function pushBackHandler(fn: BackHandlerFn): () => void {
  * в ответ снимает себя со стека — правка массива по ходу цикла пропустила бы
  * следующий элемент.
  */
-export function runBackHandlers(): boolean {
-  for (const fn of [...stack].reverse()) {
-    let handled = false;
-    try {
-      handled = fn() !== false;
-    } catch {
-      // Сломавшийся обработчик не должен блокировать те, что под ним.
-      handled = false;
+export function runBackHandlers(from: BackSource = 'swipe'): boolean {
+  currentSource = from;
+  try {
+    for (const fn of [...stack].reverse()) {
+      let handled = false;
+      try {
+        handled = fn() !== false;
+      } catch {
+        // Сломавшийся обработчик не должен блокировать те, что под ним.
+        handled = false;
+      }
+      if (handled) return true;
     }
-    if (handled) return true;
+    return false;
+  } finally {
+    currentSource = 'button';
   }
-  return false;
 }
 
 /** Только для тестов: очистить стек между кейсами. */
