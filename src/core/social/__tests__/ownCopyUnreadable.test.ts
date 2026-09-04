@@ -41,6 +41,7 @@ jest.mock('../../storage/local', () => ({
   getGroupMessageTexts: jest.fn(async () => mockOwnText),
   insertGroupMessage: jest.fn(async (row: { replyToId: string | null; replyToPreview: string | null }) => {
     mockInserted.push(row);
+    return true;
   }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),

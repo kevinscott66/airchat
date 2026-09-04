@@ -1078,6 +1078,70 @@ async function commitFlushOutcomes(
   await updateQueue((q) => ({ next: mergeQueue(q, decisions), value: undefined }));
 }
 
+/**
+ * Тело подписанного конверта ленты как объект — или `null` (v4.32.581).
+ *
+ * `parseAndVerifyFeedEnvelope` проверяет `authorDid`, `type`, `postId` и `ts`,
+ * а до `data` не доходит вовсе: поле подписано, но «подписано настоящим
+ * ключом» — это не «является объектом». Любой контакт вправе подписать
+ * `{ type: 'feed_view', data: null }`, и разбор ниже спотыкался о первое же
+ * обращение к полю. Падение ловил общий `try`, то есть наружу это выходило
+ * молча выброшенным конвертом — но по той же причине один порченый конверт
+ * уносил с собой и всё, что разбиралось после него.
+ */
+function feedEnvelopeData<T>(payload: { type: string; data?: unknown }): T | null {
+  const d = payload.data;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) {
+    log.warn('feed_envelope_data_not_object', { type: payload.type });
+    return null;
+  }
+  return d as T;
+}
+
+/**
+ * Записи, чья рассылка ещё идёт (v4.32.581).
+ *
+ * Гонка с таймаутом ниже НЕ отменяет саму рассылку: `Promise.race` только
+ * перестаёт её ждать. Мьютекс `runFlushExclusively` держит следующий проход
+ * лишь до возврата предыдущего — то есть ровно до срабатывания таймаута, а не
+ * до конца рассылки. Без этого набора следующий проход брал ту же запись и
+ * начинал вторую рассылку поверх первой: контакт получал пост дважды, а
+ * `deliveredTo` писали две ветки вперемешку.
+ */
+const inFlightQueueItems = new Set<string>();
+
+/**
+ * Дописать в очередь адресатов, о которых стало известно уже после таймаута.
+ *
+ * `republishQueuedItem` переприсваивает `item.deliveredTo` (а не дополняет
+ * массив на месте), поэтому решение, снятое в момент таймаута, содержит список
+ * доставленных на тот момент — и всё, что рассылка добила потом, терялось при
+ * записи. Следующая попытка снова стреляла в уже получивших пост.
+ *
+ * Слияние трогает только запись, которая ещё лежит в очереди: доставленную
+ * всем или протухшую воскрешать нельзя.
+ */
+async function mergeLateDelivery(item: QueuedFeedItem): Promise<void> {
+  const delivered = item.deliveredTo;
+  if (!delivered?.length) return;
+  try {
+    await updateQueue((q) => ({
+      next: q.map((stored) => {
+        if (stored.id !== item.id) return stored;
+        const acc = new Set(stored.deliveredTo ?? []);
+        for (const d of delivered) acc.add(d);
+        return { ...stored, deliveredTo: [...acc] };
+      }),
+      value: undefined,
+    }));
+  } catch (e) {
+    log.warn('feed_queue_late_delivery_merge_failed', {
+      id: item.id,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
 export async function flushFeedPublishQueue(pair: KeyPairBytes): Promise<void> {
   if (generalFlush) return generalFlush;
   const started = runFlushExclusively(() => _flushFeedPublishQueueImpl(pair));
@@ -1108,19 +1172,44 @@ async function _flushFeedPublishQueueImpl(pair: KeyPairBytes): Promise<void> {
         });
         return null;
       }
+      // Рассылка этой записи ещё идёт с прошлого прохода — второй раз стрелять
+      // тем же постом нельзя. Попытку тоже не тратим: она уже тратится там.
+      if (inFlightQueueItems.has(item.id)) {
+        log.debug('feed_queue_item_in_flight_skip', { id: item.id });
+        return item;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
       try {
         // v4.32.67: republishQueuedItem возвращает { fullyDelivered }. Если хотя бы
         // один контакт ещё не получил — item остаётся в очереди до следующего retry
         // или до presence-триггера (mDNS onPeerDiscovered → flushFeedQueueForPeer).
+        inFlightQueueItems.add(item.id);
+        const attempt = republishQueuedItem(pair, item);
+        // v4.32.581: таймаут перестаёт ЖДАТЬ рассылку, но не прекращает её.
+        // Досчитавшись до конца, она допишет доставленных в очередь сама и
+        // снимет запись с учёта — иначе адресаты, добитые после таймаута, не
+        // попадали в файл и получали тот же пост повторно.
+        void attempt.then(
+          () => {
+            inFlightQueueItems.delete(item.id);
+            // Успели до таймаута — итог запишет commitFlushOutcomes, лишняя
+            // запись в очередь не нужна.
+            return timedOut ? mergeLateDelivery(item) : undefined;
+          },
+          () => { inFlightQueueItems.delete(item.id); },
+        );
         const result = await Promise.race([
-          republishQueuedItem(pair, item),
-          new Promise<{ fullyDelivered: boolean; foreign?: boolean }>((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`flush_item_timeout_${FLUSH_ITEM_TIMEOUT_MS}ms`)),
-              FLUSH_ITEM_TIMEOUT_MS,
-            ),
-          ),
+          attempt,
+          new Promise<{ fullyDelivered: boolean; foreign?: boolean }>((_, reject) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              reject(new Error(`flush_item_timeout_${FLUSH_ITEM_TIMEOUT_MS}ms`));
+            }, FLUSH_ITEM_TIMEOUT_MS);
+          }),
         ]);
+        // Дождались раньше таймаута — будильник больше не нужен.
+        if (timer) clearTimeout(timer);
 
         // Чужая запись ждёт своего профиля: не отправлена и попытку не потратила.
         if (result.foreign) return item;
@@ -1147,6 +1236,7 @@ async function _flushFeedPublishQueueImpl(pair: KeyPairBytes): Promise<void> {
         }
         return next;
       } catch (e) {
+        if (timer) clearTimeout(timer);
         log.warn('feed_queue_item_error', {
           id: item.id,
           err: e instanceof Error ? e.message : String(e),
@@ -1246,9 +1336,14 @@ async function tryPublishFeedPostComplete(
   outSavedState?: { postId?: string; media?: string[]; mediaMime?: string[] },
 ): Promise<TryPublishResult> {
   const text = opts.text.trim();
+  // v4.32.581. Начала текста тут больше нет. `feed_` зеркалится в системную
+  // консоль и в release (logger.mirrorJsonToConsoleInRelease), то есть первые
+  // 80 символов каждой публикации ложились открытым текстом в adb logcat и
+  // os_log — их снимает всякий, кто дотянулся до журнала устройства. Для
+  // диагностики длины хватает; ср. `dm_incoming_saved`, где по этой же
+  // причине пишутся только идентификаторы.
   log.info('feed_try_publish_enter', {
     textLen: text.length,
-    textPreview: text.slice(0, 80),
     imageUrisLen: opts.imageUris?.length ?? 0,
     docsLen: opts.documents?.length ?? 0,
   });
@@ -2087,7 +2182,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
 
     switch (payload.type) {
       case 'feed_post': {
-        const d = payload.data as FeedPostData;
+        const d = feedEnvelopeData<FeedPostData>(payload);
+        if (!d) break;
         // v4.32.191 (Round-21 #3): cap untrusted feed_post fields so a
         // single peer can't bloat SQLite + kvStore with a 50MB post.
         // v4.32.527: потолок общий с публикацией. Прежние 8 000 были меньше
@@ -2187,7 +2283,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         break;
       }
       case 'feed_reaction': {
-        const d = payload.data as FeedReactionData;
+        const d = feedEnvelopeData<FeedReactionData>(payload);
+        if (!d) break;
         // v4.32.191 (Round-21 #4): cap emoji string — a peer can send a 1MB
         // "emoji" to bloat post_reactions. Real emoji fit in ≤16 chars.
         if (typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16) break;
@@ -2202,7 +2299,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         break;
       }
       case 'feed_comment_reaction': {
-        const d = payload.data as FeedCommentReactionData;
+        const d = feedEnvelopeData<FeedCommentReactionData>(payload);
+        if (!d) break;
         if (
           typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
           typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128 ||
@@ -2234,7 +2332,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         break;
       }
       case 'feed_comment': {
-        const d = payload.data as FeedCommentData;
+        const d = feedEnvelopeData<FeedCommentData>(payload);
+        if (!d) break;
         // v4.32.191 (Round-21 #1+#2): strict shape validation + orphan-postId
         // rejection so an attacker can't spam comments pointing at nonexistent
         // posts to bloat feed_comments unboundedly.
@@ -2255,7 +2354,7 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
             break;
           }
         } catch { /* fall through — addComment will still enforce FK if set */ }
-        await s.addComment({
+        const commentStored = await s.addComment({
           id: d.commentId,
           postId: payload.postId,
           authorDid: payload.authorDid,
@@ -2263,6 +2362,17 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
           text: d.text,
           timestamp: payload.ts,
         });
+        // v4.32.581: баннер только на действительно новый комментарий. Повтор
+        // конверта здесь — обычное дело: очередь комментариев при частичной
+        // доставке шлёт его заново всем контактам, повторяя попытки до
+        // получаса. Раньше каждая попытка поднимала баннер на один и тот же
+        // уже прочитанный комментарий. Второй случай — надгробие, приехавшее
+        // раньше комментария: в ленту он не попадал, а баннер о нём был, и по
+        // нажатию человек не находил ничего.
+        if (!commentStored) {
+          log.debug('feed_comment_duplicate_skip', { commentId: d.commentId.slice(0, 16) });
+          break;
+        }
         log.info('feed_comment_received', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
         // v4.32.92: banner только если это комментарий под постом контакта, которого я вижу
         // (не под моим — авторство поста сложнее проверить без доп. lookup). Простейший
@@ -2282,7 +2392,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         // v4.32.163 P2#3: если комментарий ещё не дошёл (out-of-order delivery), пишем
         // tombstone с postId из envelope'а — опоздавший `feed_comment` увидит его в
         // addComment() и не воскреснет.
-        const d = payload.data as FeedCommentDeleteData;
+        const d = feedEnvelopeData<FeedCommentDeleteData>(payload);
+        if (!d) break;
         if (
           typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
           typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128
@@ -2320,7 +2431,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         break;
       }
       case 'feed_repost': {
-        const d = payload.data as FeedRepostData;
+        const d = feedEnvelopeData<FeedRepostData>(payload);
+        if (!d) break;
         // v4.32.199 (Round-29 #4): cap all untrusted fields. Parity with
         // feed_post inline-doc validation at line ~1546; previously an
         // attacker could ship 1000 inline media blobs per repost envelope
@@ -2402,7 +2514,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         break;
       }
       case 'feed_edit': {
-        const d = payload.data as FeedEditData;
+        const d = feedEnvelopeData<FeedEditData>(payload);
+        if (!d) break;
         // v4.32.29: auth-check — редактировать можно только свой пост.
         const existing = await s.getPost(payload.postId);
         if (!existing) {
@@ -2453,7 +2566,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
         // голосующего — остальные получатели видели у себя счётчик "Всего: 1" (только
         // свой голос). Теперь envelope переносит {postId, optionIndex, remove?} всем
         // контактам автора голоса, receiver пишет у себя в poll_votes через setPollVote.
-        const d = payload.data as FeedPollVoteData;
+        const d = feedEnvelopeData<FeedPollVoteData>(payload);
+        if (!d) break;
         const existing = await s.getPost(payload.postId);
         if (!existing) {
           log.info('feed_poll_vote_unknown_post', { postId: payload.postId.slice(0, 24) });
@@ -2510,7 +2624,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
           log.info('feed_view_self_skip', { postId: payload.postId.slice(0, 24) });
           break;
         }
-        const d = payload.data as FeedViewData;
+        const d = feedEnvelopeData<FeedViewData>(payload);
+        if (!d) break;
         const viewerName = (d.viewerName ?? '').trim().slice(0, 80) || null;
         await s.recordView(payload.postId, payload.authorDid, viewerName, payload.ts);
         log.info('feed_view_received', {

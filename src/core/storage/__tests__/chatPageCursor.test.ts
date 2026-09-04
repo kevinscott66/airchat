@@ -264,4 +264,19 @@ describe('экран переписки: подгрузка старых', () =>
     expect(CHAT).toContain('ListFooterComponent={');
     expect(CHAT).toContain('loadingMore ? (');
   });
+
+  /**
+   * v4.32.581. `getMessages` доразбирала строки с одинаковой меткой времени
+   * через `localeCompare`, а запрос, курсор и `getOlderMessages` — побайтно.
+   * Свой идентификатор — uuidv4, где расхождения нет, но идентификатор
+   * входящего сообщения приходит из конверта собеседника и бывает любым: два
+   * сообщения одной миллисекунды первая страница и подгрузка следующей
+   * раскладывали в разном порядке.
+   */
+  it('обе выдачи сообщений доразбирают одинаковые метки одним правилом', () => {
+    expect(MESSAGING).not.toContain('a.id.localeCompare(b.id)');
+    const tie = 'return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;';
+    // Обе: getMessages и getOlderMessages.
+    expect(MESSAGING.split(tie).length - 1).toBe(2);
+  });
 });

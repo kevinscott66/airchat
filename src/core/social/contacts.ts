@@ -679,9 +679,15 @@ export async function renameContact(peerPublicKeyB64: string, newName: string): 
   const pid = activeProfileId();
   await withContactLock(pid, async () => {
     const row = await contactRowGet(pid, peerPublicKeyB64);
-    if (!row) return;
+    // v4.32.581: пустая строка вместо записи — наследие старого deleteContact
+    // (см. ту же проверку в разборе индекса выше): JSON.parse('') бросает.
+    if (!row || !row.trim()) return;
     // v4.32.115: preserve `implicit` flag across renames.
-    const j = JSON.parse(row) as { displayName: string; symKey: string; profileCid?: string; implicit?: boolean };
+    const j = JSON.parse(row) as { displayName?: string; symKey?: string; profileCid?: string; implicit?: boolean };
+    // Разбор мог удаться и дать не объект — `null`, число, массив. Присвоение
+    // поля такому значению падает, а переименование контакта человек делает
+    // руками и ждёт ответа: молча оборвавшийся вызов выглядит как зависание.
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return;
     // v4.32.192 (Round-22 #7): strip control chars + cap name at 64 chars so
     // a malicious profile-card or deep-link can't bloat contacts_index JSON.
     j.displayName = (sanitizeDisplayName(newName, 64) ?? '').trim();

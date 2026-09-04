@@ -814,6 +814,17 @@ export class MessagingService {
       this.seenMessageIds.delete(em.messageId);
       return;
     }
+    // v4.32.581: разбор мог УДАТЬСЯ и дать не объект. Четыре байта `null` —
+    // валидный JSON, try выше их пропускает, а первое же обращение к полю
+    // ниже роняет разбор исключением. Отправитель этого конверта — контакт,
+    // вызов диспетчера в координаторах стоит голым `void` без `.catch`, и
+    // падение прилетало необработанным отказом промиса. Массив и число сюда
+    // тоже не годятся: полей у них нет.
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      log.warn('dm_payload_not_object', { messageId: em.messageId.slice(0, 8) });
+      this.seenMessageIds.delete(em.messageId);
+      return;
+    }
 
     // v4.32.214 (Audit-43 C1): authenticated inner-timestamp check. If the
     // sender embedded _ts inside the encrypted plaintext (every v4.32.214+
@@ -2007,7 +2018,14 @@ export class MessagingService {
       .sort((a, b) => {
         const t = a.createdAt - b.createdAt;
         if (t !== 0) return t;
-        return a.id.localeCompare(b.id);
+        // v4.32.581: побайтно, а не localeCompare. Запрос упорядочивает строки
+        // по 'ORDER BY created_at DESC, id DESC', курсор страницы сравнивает
+        // 'id < ?' — и то и другое в SQLite побайтно. Свой идентификатор —
+        // uuidv4, где расхождения нет, но идентификатор входящего сообщения
+        // приходит из конверта собеседника и бывает любым: у двух сообщений с
+        // одинаковой меткой времени первая страница и подгрузка следующей
+        // раскладывали их в разном порядке.
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
   }
 

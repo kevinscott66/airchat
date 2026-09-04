@@ -306,7 +306,13 @@ function deserializeEnvelope(env: {
     messageId: typeof env.messageId === 'string' ? env.messageId.slice(0, 128) : '',
     senderDid: typeof env.senderDid === 'string' ? env.senderDid.slice(0, 256) : '',
     recipientDid: typeof env.recipientDid === 'string' ? env.recipientDid.slice(0, 256) : '',
-    encryptedContent: new Uint8Array(Buffer.from(env.encryptedContent, 'base64')),
+    // v4.32.581: единственное поле, которое проверку обошло. Остальные восемь
+    // приводятся по типу с потолком, а это уходило прямо в Buffer.from — и
+    // конверт с `encryptedContent: 123` бросал исключение вместо того, чтобы
+    // разобраться в пустой шифротекст и быть отброшенным по общему правилу.
+    encryptedContent: typeof env.encryptedContent === 'string'
+      ? new Uint8Array(Buffer.from(env.encryptedContent, 'base64'))
+      : new Uint8Array(0),
     timestamp: typeof env.timestamp === 'number' && Number.isFinite(env.timestamp) ? env.timestamp : Date.now(),
     previousMessageCid: isPlainCid(env.previousMessageCid) ? env.previousMessageCid : undefined,
     replyTo: typeof env.replyTo === 'string' && env.replyTo.length <= 128 ? env.replyTo : undefined,
