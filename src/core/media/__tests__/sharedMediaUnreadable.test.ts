@@ -128,7 +128,9 @@ describe('окна галереи говорят про непрочитанны
     const src = CHAT_MEDIA();
     expect(src).toContain('const mediaNotice = useMemo(() => mediaSkippedNotice(items), [items]);');
     expect(src).toContain('if (!mediaRowReadable(item)) {');
-    expect(src.indexOf('{mediaNotice}')).toBeLessThan(src.indexOf('renderItem={renderItem}'));
+    // v4.32.577: сетку рисует полоса SharedMediaPane, а не FlatList окна —
+    // подпись обязана стоять над ней, как стояла над списком.
+    expect(src.indexOf('{mediaNotice}')).toBeLessThan(src.indexOf('shown.map(renderTile)'));
   });
 
   it('окно группы рисует и подпись, и место в сетке', () => {

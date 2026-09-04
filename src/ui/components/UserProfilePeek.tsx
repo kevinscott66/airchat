@@ -137,10 +137,11 @@ import { copyGuardState } from '../../core/social/copyGuard';
 import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
 import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
-import { SharedMediaModal, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
+import { SharedMediaModal, SharedMediaPane, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
 import { ProfileChatBlock } from './modals/profile/ProfileChatBlock';
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
-import { ProfilePostsModal } from './modals/profile/ProfilePostsModal';
+import { ProfilePostsModal, ProfilePostsPane } from './modals/profile/ProfilePostsModal';
+import { ProfileStarredPane } from './modals/profile/ProfileStarredPane';
 import { ProfileEditModal } from './modals/profile/ProfileEditModal';
 import { ProfileQrModal } from './modals/profile/ProfileQrModal';
 import { ProfileLinksRow } from './modals/profile/ProfileLinksRow';
@@ -180,6 +181,10 @@ const SECTION_ICON: Record<SectionId, React.ComponentProps<typeof Ionicons>['nam
   stories: 'aperture-outline',
   media: 'images-outline',
   starred: 'star-outline',
+  files: 'document-outline',
+  music: 'musical-notes-outline',
+  voice: 'mic-outline',
+  links: 'link-outline',
   archive: 'archive-outline',
 };
 
@@ -206,16 +211,28 @@ const MORE_ICON: Record<MoreId, React.ComponentProps<typeof Ionicons>['name']> =
 };
 
 /**
- * Разделы, которые открываются общей галереей переписки, — и её вкладка.
+ * Разделы, которые показывают содержимое переписки, — и какой список это.
  *
- * v4.32.575: раздел остался один. Файлы, музыка, голосовые и ссылки были
- * отдельными плашками, хотя открывали ту же галерею — просто сразу на своей
- * вкладке. Вкладки внутри никуда не делись, а полоса разделов перестала
- * дублировать их собой.
+ * v4.32.577: разделов снова пять. Дублирования, из-за которого в 575-м
+ * остался один, больше нет: раздел разворачивается прямо в карточке, и
+ * вкладок где-то ещё, которые полоса повторяла бы собой, не существует.
+ * Полноэкранная галерея осталась одним — «Показать всё» из обрезанного
+ * списка, — и открывается сразу на нужной вкладке.
  */
 const SECTION_TAB: Partial<Record<SectionId, SharedMediaTab>> = {
   media: 'media',
+  files: 'docs',
+  music: 'music',
+  voice: 'voice',
+  links: 'links',
 };
+
+/**
+ * Сколько строк раздела показать в карточке. Раздел — часть профиля, а не
+ * замена ему: за сотней файлов внизу перестало бы находиться всё остальное,
+ * ради чего карточку открывают. Остаток честно назван строкой «Показать всё».
+ */
+const PANE_LIMIT = 24;
 
 export interface UserProfilePeekProps {
   /** Видна ли модалка. */
@@ -305,6 +322,11 @@ export function UserProfilePeek({
   // возвращается туда же, откуда ушёл.
   const [mediaTab, setMediaTab] = useState<SharedMediaTab | null>(null);
   const [postsMode, setPostsMode] = useState<'wall' | 'stories' | 'archive' | null>(null);
+  /**
+   * Раскрытый раздел содержимого. `null` — не раскрыт ни один: карточка
+   * открывается профилем, а не списком файлов, и раздел разворачивают руками.
+   */
+  const [openSection, setOpenSection] = useState<SectionId | null>(null);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -317,6 +339,7 @@ export function UserProfilePeek({
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока
     // грузится адресная книга нового, на карточке висит имя предыдущего.
     setContact(null);
+    setOpenSection(null);
     setRenaming(false);
     setRenameDraft('');
     setIsSelf(false);
@@ -636,21 +659,19 @@ export function UserProfilePeek({
   }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute]);
 
   // ─── Разделы ────────────────────────────────────────────────────────────
+  /**
+   * v4.32.577: раздел разворачивается прямо в карточке, а не открывает окно
+   * поверх неё. Прежнее поведение сбивало с толку ровно тем, что делало:
+   * человек нажимал раздел профиля и оказывался на другом экране, а профиль
+   * оставался где-то под ним. Второе нажатие по тому же разделу сворачивает
+   * его — иначе полосу нельзя было бы закрыть, не выбрав что-то ещё.
+   */
   const onSection = useCallback((id: SectionId) => {
-    const tab = SECTION_TAB[id];
-    if (tab) { setMediaTab(tab); return; }
-    if (id === 'wall') { setPostsMode('wall'); return; }
-    if (id === 'stories') { setPostsMode('stories'); return; }
-    if (id === 'archive') { setPostsMode('archive'); return; }
-    if (id === 'starred') {
-      // Избранное живёт внутри переписки: там его и показывает экран диалога,
-      // со всеми ссылками на сами сообщения. Отдельного списка здесь не
-      // заводим — он был бы вторым, расходящимся с первым.
-      if (!resolved) return;
-      onOpenChat?.(resolved.pubB64, displayName, 'starred');
-      onClose();
-    }
-  }, [resolved, displayName, onOpenChat, onClose]);
+    setOpenSection((prev) => (prev === id ? null : id));
+  }, []);
+
+  /** Какой вкладкой галереи открыть «Показать всё» у раскрытого раздела. */
+  const openTab = openSection ? SECTION_TAB[openSection] ?? null : null;
 
   // ─── Настройки ──────────────────────────────────────────────────────────
   const shareContact = useCallback(() => {
@@ -1055,10 +1076,10 @@ export function UserProfilePeek({
                 </AppPressable>
               </View>
 
-              {/* v4.32.572: разделы — полоса плашек, которую листают вбок
-                  прямо в профиле. Своему хозяину первыми идут «Публикации»,
-                  «Архив публикаций» и «Избранное» — порядок задаёт модель, а
-                  не разметка. */}
+              {/* v4.32.577: разделы — полоса плашек, которую листают вбок
+                  прямо в профиле, и выбранный раздел разворачивается тут же,
+                  под ней. Порядок плашек задаёт модель, а не разметка; у
+                  владельца аккаунта последней идёт «Архив публикаций». */}
               <Text style={[styles.groupLabel, { color: colors.textSecondary }]}>Содержимое</Text>
               <ScrollView
                 horizontal
@@ -1066,27 +1087,76 @@ export function UserProfilePeek({
                 contentContainerStyle={styles.strip}
                 style={styles.stripBox}
               >
-                {sections.map((sct) => (
-                  <AppPressable
-                    key={sct.id}
-                    style={[
-                      styles.plaque,
-                      {
-                        backgroundColor: withAlpha(colors.text, 0.06),
-                        borderColor: withAlpha(colors.text, glass.rim),
-                      },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel={sct.label}
-                    onPress={() => onSection(sct.id)}
-                  >
-                    <Ionicons name={SECTION_ICON[sct.id]} size={22} color={colors.accent} />
-                    <Text style={[styles.plaqueLabel, { color: colors.text }]} numberOfLines={2}>
-                      {sct.label}
-                    </Text>
-                  </AppPressable>
-                ))}
+                {sections.map((sct) => {
+                  const on = openSection === sct.id;
+                  return (
+                    <AppPressable
+                      key={sct.id}
+                      style={[
+                        styles.plaque,
+                        {
+                          // Раскрытый раздел выделен заливкой: полоса и
+                          // список под ней должны читаться как одно место, а
+                          // не как два соседних.
+                          backgroundColor: withAlpha(on ? colors.accent : colors.text, on ? 0.18 : 0.06),
+                          borderColor: on ? colors.accent : withAlpha(colors.text, glass.rim),
+                        },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={sct.label}
+                      accessibilityState={{ selected: on }}
+                      onPress={() => onSection(sct.id)}
+                    >
+                      <Ionicons name={SECTION_ICON[sct.id]} size={22} color={colors.accent} />
+                      <Text style={[styles.plaqueLabel, { color: colors.text }]} numberOfLines={2}>
+                        {sct.label}
+                      </Text>
+                    </AppPressable>
+                  );
+                })}
               </ScrollView>
+
+              {/* Само содержимое раздела. Ровно здесь, в карточке: раньше
+                  плашка открывала окно поверх профиля, и человек, нажавший
+                  «Файлы», оказывался на другом экране. */}
+              {openSection ? (
+                <View style={[styles.pane, { borderTopColor: withAlpha(colors.text, glass.rim) }]}>
+                  {openTab ? (
+                    <SharedMediaPane
+                      active
+                      contactPubB64={resolved.pubB64}
+                      ownerProfileId={activeProfileId}
+                      gateway={gateway}
+                      tab={openTab}
+                      limit={PANE_LIMIT}
+                      onImagePress={() => setMediaTab(openTab)}
+                      onShowAll={() => setMediaTab(openTab)}
+                    />
+                  ) : openSection === 'starred' ? (
+                    <ProfileStarredPane
+                      active
+                      ownerProfileId={activeProfileId}
+                      contactPubB64={isSelf ? null : resolved.pubB64}
+                      limit={PANE_LIMIT}
+                      onShowAll={isSelf || !onOpenChat ? undefined : () => {
+                        // Полный список живёт в переписке: там у каждого
+                        // отмеченного есть переход к самому сообщению.
+                        onOpenChat(resolved.pubB64, displayName, 'starred');
+                        onClose();
+                      }}
+                    />
+                  ) : (
+                    <ProfilePostsPane
+                      active
+                      mode={openSection === 'stories' ? 'stories' : openSection === 'archive' ? 'archive' : 'wall'}
+                      isSelf={isSelf}
+                      authorDid={resolved.did}
+                      authorPubB64={resolved.pubB64}
+                      ownerProfileId={activeProfileId}
+                    />
+                  )}
+                </View>
+              ) : null}
 
               {/* Всё, что относится к переписке именно с этим человеком:
                   счёт, ключ безопасности, заметка, выгрузка. Раньше это был
@@ -1292,6 +1362,11 @@ const styles = StyleSheet.create({
   plaqueLabel: {
     fontSize: font.xs,
     textAlign: 'center',
+  },
+  pane: {
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   sheetTitle: {
     fontSize: font.md,

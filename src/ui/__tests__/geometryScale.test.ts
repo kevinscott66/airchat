@@ -183,7 +183,6 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/components/GifPicker.tsx': 6,
   'ui/components/MediaPreviewModal.tsx': 6,
   'ui/components/modals/chat/ChatScheduleModal.tsx': 6,
-  'ui/components/modals/chat/ChatSharedMediaModal.tsx': 6,
   'ui/components/modals/groups/GroupCreateModal.tsx': 6,
   'ui/components/modals/groups/GroupSeenByModal.tsx': 5,
   'ui/components/modals/groups/GroupSharedMediaModal.tsx': 6,

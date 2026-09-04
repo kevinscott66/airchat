@@ -3,10 +3,8 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   ScrollView,
   Image,
-  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoClipboardModule from 'expo-clipboard';
@@ -14,7 +12,7 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { SafeScreen } from '../../SafeScreen';
 import { useTheme } from '../../../ThemeContext';
-import { badgeTint, font, radius } from '../../../theme';
+import { badgeTint, font, radius, spacing } from '../../../theme';
 import { listConversationMedia, type SharedMediaRow } from '../../../../core/storage/local';
 import { mediaRowReadable, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
 import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
@@ -43,23 +41,46 @@ const URL_REGEX_SM = /https?:\/\/[^\s<>"]+/g;
  */
 export type SharedMediaTab = 'media' | 'links' | 'docs' | 'music' | 'voice';
 
-export function SharedMediaModal({
-  visible,
+/** Зазор между плитками сетки. Плитка считается от ширины места под неё. */
+const TILE_GAP = 2;
+/** Сколько плиток в ряду. Три — как в галерее телефона. */
+const TILE_COLUMNS = 3;
+
+/**
+ * SharedMediaPane — содержимое одной вкладки без окна вокруг (v4.32.577).
+ *
+ * Отдельно от модалки, потому что мест показа стало два: полноэкранная
+ * галерея переписки (экран диалога) и раздел прямо в карточке профиля, где
+ * никакого окна поверх нет. Списки при этом обязаны остаться одни и те же:
+ * две копии «файлов переписки» разошлись бы на первой же правке — так уже
+ * было с разбором «мм:сс».
+ *
+ * Своей вертикальной прокрутки у полосы нет: она рисует ровно то, что ей
+ * дали, а прокручивает её тот, кто её вставил. Иначе внутри карточки профиля
+ * получилась бы прокрутка в прокрутке — то есть список, до конца которого
+ * пальцем не добраться.
+ */
+export function SharedMediaPane({
+  active,
   contactPubB64,
   ownerProfileId,
   gateway,
-  initialTab = 'media',
-  onClose,
+  tab,
+  limit = null,
   onImagePress,
+  onShowAll,
 }: {
-  visible: boolean;
+  /** Читать ли содержимое. Закрытая вкладка в базу не ходит. */
+  active: boolean;
   contactPubB64: string;
   ownerProfileId: number;
   gateway: string;
-  /** С какой вкладки открыться. По умолчанию — «Медиа», как было. */
-  initialTab?: SharedMediaTab;
-  onClose: () => void;
+  tab: SharedMediaTab;
+  /** Сколько строк показать. `null` — все; иначе остальное за «Показать всё». */
+  limit?: number | null;
   onImagePress: (uris: string[], idx: number) => void;
+  /** Открыть полный список. Без него обрезка молчит — и это было бы враньём. */
+  onShowAll?: () => void;
 }): React.ReactElement {
   const { colors } = useTheme();
   // v4.32.409: плашка значка — от фона списка, значок — от плашки.
@@ -71,16 +92,11 @@ export function SharedMediaModal({
   const [sharedMusic, setSharedMusic] = useState<Array<{ name: string; size: string; createdAt: number; text: string }>>([]);
   /** v4.32.568: голосовые — свой конверт, поэтому и свой список. */
   const [sharedVoice, setSharedVoice] = useState<Array<{ id: string; durationMs: number; createdAt: number; outgoing: boolean }>>([]);
-  const [activeTab, setActiveTab] = useState<SharedMediaTab>(initialTab);
-
-  // Открытие «на своей вкладке»: состояние живёт между открытиями модалки, и
-  // без этого второй заход из раздела «Музыка» показывал бы прошлую вкладку.
-  useEffect(() => {
-    if (visible) setActiveTab(initialTab);
-  }, [visible, initialTab]);
+  /** Ширина места под сетку: в карточке профиля она уже, чем экран. */
+  const [gridWidth, setGridWidth] = useState(0);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!active) return;
     void listConversationMedia(contactPubB64, ownerProfileId).then(setItems);
     // Load links and docs from messages
     void import('../../../../core/storage/local').then(async (m) => {
@@ -124,7 +140,7 @@ export function SharedMediaModal({
       setSharedMusic(music.reverse());
       setSharedVoice(voice.reverse());
     }).catch(() => {});
-  }, [visible, contactPubB64, ownerProfileId]);
+  }, [active, contactPubB64, ownerProfileId]);
 
   /**
    * v4.32.248: «Общие медиа» показывали только снимки со шлюза IPFS, а на
@@ -156,12 +172,23 @@ export function SharedMediaModal({
   /** v4.32.584: сколько вложений не прочитано — молчать об этом нельзя. */
   const mediaNotice = useMemo(() => mediaSkippedNotice(items), [items]);
 
-  const renderItem = useCallback(({ item }: { item: SharedMediaRow; index: number }) => {
+  /** Сторона плитки: место под сетку без зазоров, поделённое на три. */
+  const tileSide = gridWidth > 0
+    ? Math.floor((gridWidth - TILE_GAP * (TILE_COLUMNS - 1)) / TILE_COLUMNS)
+    : 0;
+
+  const renderTile = useCallback((item: SharedMediaRow) => {
     // v4.32.584: строку, которую не открыл ключ, показываем местом в сетке —
     // иначе вложение исчезает бесследно.
     if (!mediaRowReadable(item)) {
       return (
-        <View style={[smStyles.thumb, smStyles.thumbUnreadable, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View
+          key={item.id}
+          style={[
+            paneStyles.thumbUnreadable,
+            { width: tileSide, height: tileSide, backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
           <Ionicons name="alert-circle-outline" size={22} color={colors.warning} />
         </View>
       );
@@ -173,11 +200,145 @@ export function SharedMediaModal({
     if (!uri) return null;
     const flatIdx = allUris.indexOf(uri);
     return (
-      <AppPressable onPress={() => onImagePress(allUris, flatIdx >= 0 ? flatIdx : 0)}>
-        <Image source={{ uri }} style={smStyles.thumb} resizeMode="cover" />
+      <AppPressable key={item.id} onPress={() => onImagePress(allUris, flatIdx >= 0 ? flatIdx : 0)}>
+        <Image source={{ uri }} style={{ width: tileSide, height: tileSide }} resizeMode="cover" />
       </AppPressable>
     );
-  }, [resolved, allCids, allUris, onImagePress, colors]);
+  }, [resolved, allCids, allUris, onImagePress, colors, tileSide]);
+
+  /** «Показано не всё» — строкой под списком, а не молчанием. */
+  const more = useCallback((shown: number, total: number) => (
+    total > shown && onShowAll ? (
+      <AppPressable
+        style={paneStyles.moreRow}
+        onPress={onShowAll}
+        accessibilityRole="button"
+        accessibilityLabel="Показать всё"
+      >
+        <Text style={[paneStyles.moreText, { color: colors.accent }]}>
+          Показать всё · {total}
+        </Text>
+      </AppPressable>
+    ) : null
+  ), [onShowAll, colors]);
+
+  const empty = (icon: React.ComponentProps<typeof Ionicons>['name'], text: string) => (
+    <View style={paneStyles.empty}>
+      <Ionicons name={icon} size={44} color={colors.textMuted} />
+      <Text style={[paneStyles.emptyText, { color: colors.textMuted }]}>{text}</Text>
+    </View>
+  );
+
+  const cut = <T,>(rows: T[]): T[] => (limit === null ? rows : rows.slice(0, limit));
+
+  if (tab === 'media') {
+    const shown = cut(items);
+    return (
+      <View onLayout={(e) => setGridWidth(e.nativeEvent.layout.width)}>
+        {mediaNotice ? (
+          <Text style={[paneStyles.skipped, { color: colors.warning }]}>{mediaNotice}</Text>
+        ) : null}
+        {items.length === 0 ? empty('images-outline', 'Нет медиафайлов') : (
+          <View style={paneStyles.grid}>
+            {tileSide > 0 ? shown.map(renderTile) : null}
+          </View>
+        )}
+        {more(shown.length, items.length)}
+      </View>
+    );
+  }
+
+  if (tab === 'links') {
+    const shown = cut(sharedLinks);
+    return (
+      <View>
+        {sharedLinks.length === 0 ? empty('link-outline', 'Нет ссылок') : shown.map((link, i) => (
+          <AppPressable
+            key={`${link.url}_${i}`}
+            style={[paneStyles.row, { borderColor: colors.border }]}
+            onPress={() => openExternal(link.url, 'chat_shared_link')}
+            onLongPress={() => { void ExpoClipboardModule.setStringAsync(link.url); showSuccess(COPIED_LINK); }}
+          >
+            <Text style={[paneStyles.rowTitle, { color: colors.accent }]} numberOfLines={1}>{link.url}</Text>
+            <Text style={[paneStyles.rowSub, { color: colors.textMuted }]}>{numericDate(link.createdAt)}</Text>
+          </AppPressable>
+        ))}
+        {more(shown.length, sharedLinks.length)}
+      </View>
+    );
+  }
+
+  if (tab === 'docs' || tab === 'music') {
+    const all = tab === 'music' ? sharedMusic : sharedDocs;
+    const icon = tab === 'music' ? 'musical-notes-outline' : 'document-outline';
+    const shown = cut(all);
+    return (
+      <View>
+        {all.length === 0
+          ? empty(icon, tab === 'music' ? 'Нет музыки' : 'Нет файлов')
+          : shown.map((doc, i) => (
+            <View key={`${doc.name}_${i}`} style={[paneStyles.row, paneStyles.rowLine, { borderColor: colors.border }]}>
+              <View style={[paneStyles.badge, { backgroundColor: docTint.fill }]}>
+                <Ionicons name={icon} size={20} color={docTint.ink} />
+              </View>
+              <View style={paneStyles.rowBody}>
+                <Text style={[paneStyles.rowName, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
+                <Text style={[paneStyles.rowSub, { color: colors.textMuted }]}>{doc.size} · {numericDate(doc.createdAt)}</Text>
+              </View>
+            </View>
+          ))}
+        {more(shown.length, all.length)}
+      </View>
+    );
+  }
+
+  const shownVoice = cut(sharedVoice);
+  return (
+    <View>
+      {sharedVoice.length === 0 ? empty('mic-outline', 'Нет голосовых') : shownVoice.map((v) => (
+        <View key={v.id} style={[paneStyles.row, paneStyles.rowLine, { borderColor: colors.border }]}>
+          <View style={[paneStyles.badge, { backgroundColor: docTint.fill }]}>
+            <Ionicons name={v.outgoing ? 'arrow-up-outline' : 'arrow-down-outline'} size={20} color={docTint.ink} />
+          </View>
+          <View style={paneStyles.rowBody}>
+            <Text style={[paneStyles.rowName, { color: colors.text }]}>{formatClockDuration(v.durationMs)}</Text>
+            <Text style={[paneStyles.rowSub, { color: colors.textMuted }]}>
+              {(v.outgoing ? 'Отправлено' : 'Получено')} · {numericDate(v.createdAt)}
+            </Text>
+          </View>
+        </View>
+      ))}
+      {more(shownVoice.length, sharedVoice.length)}
+    </View>
+  );
+}
+
+export function SharedMediaModal({
+  visible,
+  contactPubB64,
+  ownerProfileId,
+  gateway,
+  initialTab = 'media',
+  onClose,
+  onImagePress,
+}: {
+  visible: boolean;
+  contactPubB64: string;
+  ownerProfileId: number;
+  gateway: string;
+  /** С какой вкладки открыться. По умолчанию — «Медиа», как было. */
+  initialTab?: SharedMediaTab;
+  onClose: () => void;
+  onImagePress: (uris: string[], idx: number) => void;
+}): React.ReactElement {
+  const { colors } = useTheme();
+  const [activeTab, setActiveTab] = useState<SharedMediaTab>(initialTab);
+
+  // Открытие «на своей вкладке»: состояние живёт между открытиями модалки, и
+  // без этого второй заход из раздела «Музыка» показывал бы прошлую вкладку.
+  useEffect(() => {
+    if (visible) setActiveTab(initialTab);
+  }, [visible, initialTab]);
 
   const TABS = [
     { id: 'media' as const, label: 'Медиа', icon: 'images-outline' as const },
@@ -201,112 +362,101 @@ export function SharedMediaModal({
           <Text style={[smStyles.title, { color: colors.text }]}>Медиа и файлы</Text>
         </View>
         {/* Tab bar */}
-        <View style={{ flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surface }}>
+        <View style={[smStyles.tabs, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           {TABS.map((tab) => (
             <AppPressable
               key={tab.id}
-              style={{ flex: 1, alignItems: 'center', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: activeTab === tab.id ? colors.primary : 'transparent' }}
+              style={[
+                smStyles.tab,
+                { borderBottomColor: activeTab === tab.id ? colors.primary : 'transparent' },
+              ]}
               onPress={() => setActiveTab(tab.id)}
             >
               <Ionicons name={tab.icon} size={18} color={activeTab === tab.id ? colors.accent : colors.textMuted} />
-              <Text style={{ fontSize: font.xs, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
+              <Text
+                style={[
+                  smStyles.tabLabel,
+                  {
+                    color: activeTab === tab.id ? colors.accent : colors.textMuted,
+                    fontWeight: activeTab === tab.id ? '600' : '400',
+                  },
+                ]}
+              >
+                {tab.label}
+              </Text>
             </AppPressable>
           ))}
         </View>
-        {activeTab === 'media' ? (
-          items.length === 0 ? (
-            <View style={smStyles.empty}>
-              <Ionicons name="images-outline" size={48} color={colors.textMuted} />
-              <Text style={{ color: colors.textMuted, marginTop: 12 }}>Нет медиафайлов</Text>
-            </View>
-          ) : (
-            <View style={{ flex: 1 }}>
-              {mediaNotice ? (
-                <Text style={[smStyles.skipped, { color: colors.warning }]}>{mediaNotice}</Text>
-              ) : null}
-              <FlatList
-                data={items}
-                keyExtractor={(i) => i.id}
-                numColumns={3}
-                renderItem={renderItem}
-                contentContainerStyle={{ padding: 1 }}
-              />
-            </View>
-          )
-        ) : activeTab === 'links' ? (
-          <ScrollView>
-            {sharedLinks.length === 0 ? (
-              <View style={smStyles.empty}>
-                <Ionicons name="link-outline" size={48} color={colors.textMuted} />
-                <Text style={{ color: colors.textMuted, marginTop: 12 }}>Нет ссылок</Text>
-              </View>
-            ) : sharedLinks.map((link, i) => (
-              <AppPressable
-                key={`${link.url}_${i}`}
-                style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
-                onPress={() => openExternal(link.url, 'chat_shared_link')}
-                onLongPress={() => { void ExpoClipboardModule.setStringAsync(link.url); showSuccess(COPIED_LINK); }}
-              >
-                <Text style={{ color: colors.accent, fontSize: 14 }} numberOfLines={1}>{link.url}</Text>
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>{numericDate(link.createdAt)}</Text>
-              </AppPressable>
-            ))}
-          </ScrollView>
-        ) : activeTab === 'docs' || activeTab === 'music' ? (
-          <ScrollView>
-            {(activeTab === 'music' ? sharedMusic : sharedDocs).length === 0 ? (
-              <View style={smStyles.empty}>
-                <Ionicons name={activeTab === 'music' ? 'musical-notes-outline' : 'document-outline'} size={48} color={colors.textMuted} />
-                <Text style={{ color: colors.textMuted, marginTop: 12 }}>
-                  {activeTab === 'music' ? 'Нет музыки' : 'Нет файлов'}
-                </Text>
-              </View>
-            ) : (activeTab === 'music' ? sharedMusic : sharedDocs).map((doc, i) => (
-              <View key={i} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name={activeTab === 'music' ? 'musical-notes-outline' : 'document-outline'} size={20} color={docTint.ink} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1}>{doc.name}</Text>
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>{doc.size} · {numericDate(doc.createdAt)}</Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        ) : (
-          <ScrollView>
-            {sharedVoice.length === 0 ? (
-              <View style={smStyles.empty}>
-                <Ionicons name="mic-outline" size={48} color={colors.textMuted} />
-                <Text style={{ color: colors.textMuted, marginTop: 12 }}>Нет голосовых</Text>
-              </View>
-            ) : sharedVoice.map((v) => (
-              <View key={v.id} style={{ padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: radius.md, backgroundColor: docTint.fill, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name={v.outgoing ? 'arrow-up-outline' : 'arrow-down-outline'} size={20} color={docTint.ink} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontSize: font.sm, fontWeight: '600' }}>{formatClockDuration(v.durationMs)}</Text>
-                  <Text style={{ color: colors.textMuted, fontSize: font.xs }}>
-                    {(v.outgoing ? 'Отправлено' : 'Получено')} · {numericDate(v.createdAt)}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        )}
+        <ScrollView>
+          <SharedMediaPane
+            active={visible}
+            contactPubB64={contactPubB64}
+            ownerProfileId={ownerProfileId}
+            gateway={gateway}
+            tab={activeTab}
+            onImagePress={onImagePress}
+          />
+        </ScrollView>
       </SafeScreen>
     </Modal>
   );
 }
 
+const paneStyles = StyleSheet.create({
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: TILE_GAP },
+  thumbUnreadable: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  skipped: {
+    fontSize: font.xs,
+    fontStyle: 'italic',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  row: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  rowLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  rowBody: { flex: 1 },
+  rowTitle: { fontSize: font.sm },
+  rowName: { fontSize: font.sm, fontWeight: '600' },
+  rowSub: { fontSize: font.xs, marginTop: 2 },
+  badge: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moreRow: { paddingVertical: spacing.md, paddingHorizontal: spacing.sm },
+  moreText: { fontSize: font.sm, fontWeight: '600' },
+  empty: { alignItems: 'center', paddingVertical: spacing.xl, gap: spacing.sm },
+  emptyText: { fontSize: font.sm, textAlign: 'center' },
+});
+
 const smStyles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8 },
-  closeBtn: { padding: 8 },
-  title: { fontSize: 17, fontWeight: '600', flex: 1 },
-  thumb: { width: Math.floor(Dimensions.get('window').width / 3) - 2, height: Math.floor(Dimensions.get('window').width / 3) - 2, margin: 1 },
-  thumbUnreadable: { alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
-  skipped: { fontSize: 12, fontStyle: 'italic', paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+  },
+  closeBtn: { padding: spacing.xs },
+  title: { fontSize: font.lg, fontWeight: '600', flex: 1 },
+  tabs: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 2,
+  },
+  tabLabel: { fontSize: font.xs, marginTop: 2 },
 });

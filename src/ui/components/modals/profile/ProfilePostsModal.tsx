@@ -84,26 +84,37 @@ type AlbumDraft =
   | { kind: 'create'; story: StoryRow | null }
   | { kind: 'rename'; id: string };
 
-export function ProfilePostsModal({
-  visible,
+/** Режим полосы: три разных вопроса к одному автору. */
+export type ProfilePostsMode = 'wall' | 'stories' | 'archive';
+
+/**
+ * ProfilePostsPane — сам раздел, без окна вокруг (v4.32.577).
+ *
+ * Мест показа стало два: полноэкранная модалка (экран профиля) и раздел
+ * прямо в карточке профиля, где никакого окна поверх нет. Список записей,
+ * сетка историй и полоса альбомов при этом обязаны остаться одними и теми
+ * же — две копии разошлись бы на первой правке.
+ *
+ * Своей вертикальной прокрутки у полосы нет: прокручивает её тот, кто её
+ * вставил. Иначе в карточке профиля вышла бы прокрутка внутри прокрутки.
+ */
+export function ProfilePostsPane({
+  active,
   mode,
   isSelf,
   authorDid,
   authorPubB64,
-  authorName,
   ownerProfileId,
-  onClose,
 }: {
-  visible: boolean;
+  /** Читать ли содержимое. Свёрнутый раздел в базу не ходит. */
+  active: boolean;
   /** 'wall' — записи автора; 'stories' — его истории; 'archive' — свой архив. */
-  mode: 'wall' | 'stories' | 'archive';
+  mode: ProfilePostsMode;
   /** Свой ли это профиль. Полоса альбомов есть только у своего. */
   isSelf: boolean;
   authorDid: string;
   authorPubB64: string;
-  authorName: string;
   ownerProfileId: number;
-  onClose: () => void;
 }): React.ReactElement {
   const { colors } = useTheme();
   const [posts, setPosts] = useState<FeedPostRow[]>([]);
@@ -136,7 +147,7 @@ export function ProfilePostsModal({
   }, [ownerProfileId]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!active) return;
     let cancelled = false;
     setLoaded(false);
     setPosts([]);
@@ -187,18 +198,18 @@ export function ProfilePostsModal({
     }
     if (albumsShown) void reloadAlbums();
     return () => { cancelled = true; };
-  }, [visible, mode, authorDid, authorPubB64, ownerProfileId, albumsShown, reloadAlbums]);
+  }, [active, mode, authorDid, authorPubB64, ownerProfileId, albumsShown, reloadAlbums]);
 
   // Содержимое открытого альбома. Читается отдельно от полосы: в полосе
   // хватает счётчика и обложки, а строки нужны только раскрытому альбому.
   useEffect(() => {
-    if (!visible || albumId === null) { setItems([]); setItemUris({}); return; }
+    if (!active || albumId === null) { setItems([]); setItemUris({}); return; }
     let cancelled = false;
     void listStoryAlbumItems(albumId, ownerProfileId)
       .then((rows) => { if (!cancelled) setItems(rows); })
       .catch((e) => log.warn('ui_story_album_items_failed', { err: rawErrorText(e) }));
     return () => { cancelled = true; };
-  }, [visible, albumId, ownerProfileId]);
+  }, [active, albumId, ownerProfileId]);
 
   // Строки, приехавшие с другого устройства аккаунта, приходят без файла:
   // имя копии — примета той установки. Снимок скачивается по общему адресу и
@@ -344,10 +355,6 @@ export function ProfilePostsModal({
     })();
   }, [draft, draftProblem, draftText, ownerProfileId, reloadAlbums, putIntoAlbum]);
 
-  const title = mode === 'archive'
-    ? 'Архив публикаций'
-    : `${mode === 'stories' ? 'Истории' : 'Стена'} · ${authorName}`;
-
   const emptyNote = useMemo(() => {
     if (mode === 'archive') {
       return 'В архиве пусто. Сюда попадают записи, которые вы убрали из своей ленты.';
@@ -418,6 +425,201 @@ export function ProfilePostsModal({
   );
 
   return (
+    <View style={styles.body}>
+      {albumsShown ? (
+        <>
+          {/* Полоса вбок: альбомов бывает много, а сетка из них отняла бы
+              весь экран у того, ради чего сюда зашли, — у самих историй. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.albumStrip}
+          >
+            <AppPressable
+              style={[
+                styles.chip,
+                { borderColor: colors.border },
+                albumId === null ? { backgroundColor: colors.primary } : null,
+              ]}
+              onPress={() => setAlbumId(null)}
+              accessibilityLabel="Все истории"
+            >
+              <Text style={[styles.chipText, { color: albumId === null ? colors.background : colors.text }]}>
+                Все истории
+              </Text>
+            </AppPressable>
+            {albums.map((a) => {
+              const active = a.id === albumId;
+              return (
+                <AppPressable
+                  key={a.id}
+                  style={[
+                    styles.chip,
+                    { borderColor: colors.border },
+                    active ? { backgroundColor: colors.primary } : null,
+                  ]}
+                  // Открытый альбом второй раз — это меню: отдельной
+                  // кнопки «⋯» на плашке не хватило бы места.
+                  onPress={() => (active ? onAlbumMenu(a) : setAlbumId(a.id))}
+                  accessibilityLabel={`Альбом ${a.title || 'без названия'}`}
+                >
+                  <Text
+                    style={[styles.chipText, { color: active ? colors.background : colors.text }]}
+                    numberOfLines={1}
+                  >
+                    {a.titleUnreadable ? UNREADABLE_MESSAGE_TEXT : (a.title || 'Без названия')}
+                  </Text>
+                  <Text
+                    style={[styles.chipCount, { color: active ? colors.background : colors.textMuted }]}
+                  >
+                    {a.count}
+                  </Text>
+                </AppPressable>
+              );
+            })}
+            <AppPressable
+              style={[styles.chip, { borderColor: colors.border }]}
+              onPress={() => startDraft({ kind: 'create', story: null }, '')}
+              accessibilityLabel="Новый альбом"
+            >
+              <Ionicons name="add" size={16} color={colors.text} />
+              <Text style={[styles.chipText, { color: colors.text }]}>Альбом</Text>
+            </AppPressable>
+          </ScrollView>
+
+          {draft ? (
+            <View style={[styles.draft, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+              <TextInput
+                style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+                value={draftText}
+                onChangeText={setDraftText}
+                placeholder="Название альбома"
+                placeholderTextColor={colors.textMuted}
+                maxLength={ALBUM_TITLE_MAX}
+                autoFocus
+                testID="story_album_title"
+              />
+              {draftProblem ? (
+                <Text style={[styles.draftProblem, { color: colors.textMuted }]}>{draftProblem}</Text>
+              ) : null}
+              <View style={styles.draftRow}>
+                <AppPressable
+                  style={styles.draftBtn}
+                  onPress={() => setDraft(null)}
+                  accessibilityLabel="Отмена"
+                >
+                  <Text style={[styles.draftBtnText, { color: colors.textMuted }]}>Отмена</Text>
+                </AppPressable>
+                <AppPressable
+                  style={styles.draftBtn}
+                  onPress={submitDraft}
+                  disabled={draftProblem !== null}
+                  accessibilityLabel="Сохранить альбом"
+                >
+                  <Text
+                    style={[
+                      styles.draftBtnText,
+                      { color: draftProblem ? colors.textMuted : colors.primary },
+                    ]}
+                  >
+                    {draft.kind === 'rename' ? 'Переименовать' : 'Создать'}
+                  </Text>
+                </AppPressable>
+              </View>
+            </View>
+          ) : null}
+
+          {note ? (
+            <Text style={[styles.note, { color: colors.textMuted }]}>{note}</Text>
+          ) : null}
+        </>
+      ) : null}
+
+      {openAlbum ? (
+        <View style={styles.storiesBlock}>
+          <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
+            {albumCountLabel(items.length)}
+          </Text>
+          <View style={styles.storiesGrid}>
+            {items.map((it) => renderTile(
+              it.id,
+              it.mediaFile ? storyAlbumUriFromName(it.mediaFile) : (itemUris[it.id] ?? null),
+              !!it.mediaUnreadable,
+              it.textUnreadable ? UNREADABLE_MESSAGE_TEXT : (it.text || dayMonthShortTime(it.createdAt)),
+              () => onItemPress(it),
+            ))}
+          </View>
+          {items.length === 0 ? (
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              Альбом пуст. Откройте «Все истории» и нажмите на ту, что хотите оставить.
+            </Text>
+          ) : null}
+        </View>
+      ) : stories.length > 0 ? (
+        <View style={styles.storiesBlock}>
+          <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
+            Ещё видны · {stories.length}
+          </Text>
+          {/* Плитками в сетку, а не полосой вбок: раздел теперь только про
+              истории, и прятать половину из них за краем экрана незачем. */}
+          <View style={styles.storiesGrid}>
+            {stories.map((s) => renderTile(
+              s.id,
+              s.mediaUri,
+              !!s.mediaUnreadable,
+              s.textUnreadable ? UNREADABLE_MESSAGE_TEXT : (s.text || dayMonthShortTime(s.createdAt)),
+              () => onStoryPress(s),
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {posts.length > 0 ? (
+        posts.map(renderPost)
+      ) : loaded && stories.length === 0 && openAlbum === null ? (
+        <View style={styles.empty}>
+          <Ionicons
+            name={mode === 'stories' ? 'aperture-outline' : 'albums-outline'}
+            size={44}
+            color={colors.textMuted}
+          />
+          <Text style={[styles.emptyText, { color: colors.textMuted }]}>{emptyNote}</Text>
+        </View>
+      ) : null}
+      <ActionSheet state={sheet} onClose={() => setSheet(null)} />
+    </View>
+  );
+}
+
+/**
+ * Полноэкранное окно вокруг той же полосы: экран профиля открывает разделы
+ * так, а карточка профиля — прямо у себя (см. UserProfilePeek).
+ */
+export function ProfilePostsModal({
+  visible,
+  mode,
+  isSelf,
+  authorDid,
+  authorPubB64,
+  authorName,
+  ownerProfileId,
+  onClose,
+}: {
+  visible: boolean;
+  mode: ProfilePostsMode;
+  isSelf: boolean;
+  authorDid: string;
+  authorPubB64: string;
+  authorName: string;
+  ownerProfileId: number;
+  onClose: () => void;
+}): React.ReactElement {
+  const { colors } = useTheme();
+  const title = mode === 'archive'
+    ? 'Архив публикаций'
+    : `${mode === 'stories' ? 'Истории' : 'Стена'} · ${authorName}`;
+
+  return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       {/* v4.32.571: safe-area сверху. Без неё шапка со стрелкой «назад» и
           заголовком уезжала под системную строку — часы и батарею, — и нажать
@@ -430,169 +632,16 @@ export function ProfilePostsModal({
           </AppPressable>
           <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{title}</Text>
         </View>
-        <ScrollView contentContainerStyle={styles.body}>
-          {albumsShown ? (
-            <>
-              {/* Полоса вбок: альбомов бывает много, а сетка из них отняла бы
-                  весь экран у того, ради чего сюда зашли, — у самих историй. */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.albumStrip}
-              >
-                <AppPressable
-                  style={[
-                    styles.chip,
-                    { borderColor: colors.border },
-                    albumId === null ? { backgroundColor: colors.primary } : null,
-                  ]}
-                  onPress={() => setAlbumId(null)}
-                  accessibilityLabel="Все истории"
-                >
-                  <Text style={[styles.chipText, { color: albumId === null ? colors.background : colors.text }]}>
-                    Все истории
-                  </Text>
-                </AppPressable>
-                {albums.map((a) => {
-                  const active = a.id === albumId;
-                  return (
-                    <AppPressable
-                      key={a.id}
-                      style={[
-                        styles.chip,
-                        { borderColor: colors.border },
-                        active ? { backgroundColor: colors.primary } : null,
-                      ]}
-                      // Открытый альбом второй раз — это меню: отдельной
-                      // кнопки «⋯» на плашке не хватило бы места.
-                      onPress={() => (active ? onAlbumMenu(a) : setAlbumId(a.id))}
-                      accessibilityLabel={`Альбом ${a.title || 'без названия'}`}
-                    >
-                      <Text
-                        style={[styles.chipText, { color: active ? colors.background : colors.text }]}
-                        numberOfLines={1}
-                      >
-                        {a.titleUnreadable ? UNREADABLE_MESSAGE_TEXT : (a.title || 'Без названия')}
-                      </Text>
-                      <Text
-                        style={[styles.chipCount, { color: active ? colors.background : colors.textMuted }]}
-                      >
-                        {a.count}
-                      </Text>
-                    </AppPressable>
-                  );
-                })}
-                <AppPressable
-                  style={[styles.chip, { borderColor: colors.border }]}
-                  onPress={() => startDraft({ kind: 'create', story: null }, '')}
-                  accessibilityLabel="Новый альбом"
-                >
-                  <Ionicons name="add" size={16} color={colors.text} />
-                  <Text style={[styles.chipText, { color: colors.text }]}>Альбом</Text>
-                </AppPressable>
-              </ScrollView>
-
-              {draft ? (
-                <View style={[styles.draft, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-                  <TextInput
-                    style={[styles.input, { color: colors.text, borderColor: colors.border }]}
-                    value={draftText}
-                    onChangeText={setDraftText}
-                    placeholder="Название альбома"
-                    placeholderTextColor={colors.textMuted}
-                    maxLength={ALBUM_TITLE_MAX}
-                    autoFocus
-                    testID="story_album_title"
-                  />
-                  {draftProblem ? (
-                    <Text style={[styles.draftProblem, { color: colors.textMuted }]}>{draftProblem}</Text>
-                  ) : null}
-                  <View style={styles.draftRow}>
-                    <AppPressable
-                      style={styles.draftBtn}
-                      onPress={() => setDraft(null)}
-                      accessibilityLabel="Отмена"
-                    >
-                      <Text style={[styles.draftBtnText, { color: colors.textMuted }]}>Отмена</Text>
-                    </AppPressable>
-                    <AppPressable
-                      style={styles.draftBtn}
-                      onPress={submitDraft}
-                      disabled={draftProblem !== null}
-                      accessibilityLabel="Сохранить альбом"
-                    >
-                      <Text
-                        style={[
-                          styles.draftBtnText,
-                          { color: draftProblem ? colors.textMuted : colors.primary },
-                        ]}
-                      >
-                        {draft.kind === 'rename' ? 'Переименовать' : 'Создать'}
-                      </Text>
-                    </AppPressable>
-                  </View>
-                </View>
-              ) : null}
-
-              {note ? (
-                <Text style={[styles.note, { color: colors.textMuted }]}>{note}</Text>
-              ) : null}
-            </>
-          ) : null}
-
-          {openAlbum ? (
-            <View style={styles.storiesBlock}>
-              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
-                {albumCountLabel(items.length)}
-              </Text>
-              <View style={styles.storiesGrid}>
-                {items.map((it) => renderTile(
-                  it.id,
-                  it.mediaFile ? storyAlbumUriFromName(it.mediaFile) : (itemUris[it.id] ?? null),
-                  !!it.mediaUnreadable,
-                  it.textUnreadable ? UNREADABLE_MESSAGE_TEXT : (it.text || dayMonthShortTime(it.createdAt)),
-                  () => onItemPress(it),
-                ))}
-              </View>
-              {items.length === 0 ? (
-                <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-                  Альбом пуст. Откройте «Все истории» и нажмите на ту, что хотите оставить.
-                </Text>
-              ) : null}
-            </View>
-          ) : stories.length > 0 ? (
-            <View style={styles.storiesBlock}>
-              <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
-                Ещё видны · {stories.length}
-              </Text>
-              {/* Плитками в сетку, а не полосой вбок: раздел теперь только про
-                  истории, и прятать половину из них за краем экрана незачем. */}
-              <View style={styles.storiesGrid}>
-                {stories.map((s) => renderTile(
-                  s.id,
-                  s.mediaUri,
-                  !!s.mediaUnreadable,
-                  s.textUnreadable ? UNREADABLE_MESSAGE_TEXT : (s.text || dayMonthShortTime(s.createdAt)),
-                  () => onStoryPress(s),
-                ))}
-              </View>
-            </View>
-          ) : null}
-
-          {posts.length > 0 ? (
-            posts.map(renderPost)
-          ) : loaded && stories.length === 0 && openAlbum === null ? (
-            <View style={styles.empty}>
-              <Ionicons
-                name={mode === 'stories' ? 'aperture-outline' : 'albums-outline'}
-                size={44}
-                color={colors.textMuted}
-              />
-              <Text style={[styles.emptyText, { color: colors.textMuted }]}>{emptyNote}</Text>
-            </View>
-          ) : null}
+        <ScrollView>
+          <ProfilePostsPane
+            active={visible}
+            mode={mode}
+            isSelf={isSelf}
+            authorDid={authorDid}
+            authorPubB64={authorPubB64}
+            ownerProfileId={ownerProfileId}
+          />
         </ScrollView>
-        <ActionSheet state={sheet} onClose={() => setSheet(null)} />
       </SafeScreen>
     </Modal>
   );
