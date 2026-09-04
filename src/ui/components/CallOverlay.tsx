@@ -35,7 +35,7 @@ import { Animated, Easing, View, Text, StyleSheet, StatusBar, Vibration, type St
 import { BlurView } from 'expo-blur';
 import Svg, { Defs, Ellipse, RadialGradient, Stop } from 'react-native-svg';
 import { AppPressable } from './AppPressable';
-import { avatarShape, callTone, font, glass, mediaScrim, radius, spacing, withAlpha, type CallTone } from '../theme';
+import { avatarShape, callTone, callWash, font, glass, mediaScrim, radius, spacing, withAlpha, type CallTone } from '../theme';
 import { AppModal as Modal } from './AppModal';
 import { useReducedMotion, useReducedTransparency } from '../motionPrefs';
 import { setAudioModeAsync } from 'expo-audio';
@@ -98,33 +98,38 @@ const RtcView = loadRtcView();
  * Живёт ВНУТРИ сцены (портрет и имя), а не в корне экрана, и это не вёрстка,
  * а требование контраста. Фон идущего звонка выведен из того же зелёного, что
  * и кнопка «принять», и подходит к порогу графики 3:1 впритык: любое
- * осветление под круглыми кнопками уводит их за порог — замер даёт 2.85:1 уже
- * при непрозрачности 0.10. Поэтому область действий остаётся на ровной
- * заливке, а светится только та половина экрана, где нет кнопок.
+ * осветление под круглыми кнопками уводит их за порог. Поэтому область
+ * действий остаётся на ровной заливке, а светится только верх экрана.
  *
- * Пиковые непрозрачности тоже не на глаз: 0.34 и 0.22 — верх того, при котором
- * `inkMuted` (состояние звонка, «Принять» / «Отклонить») держит 4.5:1 в самой
- * яркой точке пятна. Проверяется в themeContrast.test.ts.
+ * Слой — во всю страницу, БЕЗ отступов контейнера. В 587-й он лежал внутри
+ * `s.audioStage`, у которого сверху 56 точек паддинга родителя, а снизу —
+ * панель кнопок; SVG режется по своему вьюпорту, и поперёк экрана шёл
+ * видимый шов ровно по этой границе. Границу теперь держит геометрия пятен
+ * (`callWash.bottomPct`), а не обрезка.
+ *
+ * И геометрия, и пиковые непрозрачности живут в `callWash` — там же записано,
+ * из каких замеров они взяты. Проверяется в themeContrast.test.ts.
  */
 function CallBackdrop({ tone }: { tone: CallTone }): React.ReactElement {
   return (
     <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width="100%" height="100%">
       <Defs>
         <RadialGradient id="call-wash-a" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={tone.washA} stopOpacity={0.34} />
-          <Stop offset="0.55" stopColor={tone.washA} stopOpacity={0.13} />
+          <Stop offset="0" stopColor={tone.washA} stopOpacity={callWash.a.peak} />
+          <Stop offset="0.55" stopColor={tone.washA} stopOpacity={callWash.a.mid} />
           <Stop offset="1" stopColor={tone.washA} stopOpacity={0} />
         </RadialGradient>
         <RadialGradient id="call-wash-b" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={tone.washB} stopOpacity={0.22} />
-          <Stop offset="0.55" stopColor={tone.washB} stopOpacity={0.08} />
+          <Stop offset="0" stopColor={tone.washB} stopOpacity={callWash.b.peak} />
+          <Stop offset="0.55" stopColor={tone.washB} stopOpacity={callWash.b.mid} />
           <Stop offset="1" stopColor={tone.washB} stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      {/* Пятна шире экрана и выходят за его края: иначе виден край самого
-          пятна, а он должен быть незаметен. */}
-      <Ellipse cx="18%" cy="22%" rx="78%" ry="46%" fill="url(#call-wash-a)" />
-      <Ellipse cx="88%" cy="86%" rx="72%" ry="44%" fill="url(#call-wash-b)" />
+      {/* Пятна шире экрана и выходят за его левый, правый и верхний края:
+          иначе виден край самого пятна, а он должен быть незаметен. Снизу
+          наоборот — край обязан остаться внутри экрана и выше кнопок. */}
+      <Ellipse cx={`${callWash.a.cx}%`} cy={`${callWash.a.cy}%`} rx={`${callWash.a.rx}%`} ry={`${callWash.a.ry}%`} fill="url(#call-wash-a)" />
+      <Ellipse cx={`${callWash.b.cx}%`} cy={`${callWash.b.cy}%`} rx={`${callWash.b.rx}%`} ry={`${callWash.b.ry}%`} fill="url(#call-wash-b)" />
     </Svg>
   );
 }
@@ -402,67 +407,72 @@ export function CallOverlay(): React.ReactElement | null {
   return (
     <Modal visible animationType="fade" presentationStyle="fullScreen" statusBarTranslucent onRequestClose={onHangup}>
       <StatusBar barStyle="light-content" backgroundColor={hasRemoteVideo ? mediaScrim.fill : tone.fill} />
-      <View style={[s.container, { backgroundColor: hasRemoteVideo ? mediaScrim.fill : tone.fill }]}>
-        {call.isVideo ? (
-          <View style={s.videoStage}>
-            {hasRemoteVideo && RtcView ? (
-              <RtcView style={s.remoteVideo} streamURL={remoteUrl ?? undefined} objectFit="cover" zOrder={0} accessibilityLabel="Видео собеседника" />
-            ) : (
-              <VideoFallback call={call} tone={tone} stateLabel={stateLabel} incoming={isIncoming} />
-            )}
-            <CallGlass tone={tone} fill={mediaScrim.bar} overMedia={hasRemoteVideo} style={s.videoHeader} pointerEvents="none">
-              <Text style={[s.videoPeerName, { color: mediaScrim.ink }]} numberOfLines={1}>{call.peerName}</Text>
-              <Text style={[s.videoState, { color: mediaScrim.inkMuted }]}>{stateLabel}</Text>
-            </CallGlass>
-            {hasLocalVideo && media.localVideoEnabled && RtcView ? (
-              <View style={[s.localPreviewFrame, { borderColor: withAlpha(mediaScrim.ink, glass.rim) }]}>
-                <RtcView style={s.localPreview} streamURL={localUrl ?? undefined} objectFit="cover" mirror={frontCamera} zOrder={1} accessibilityLabel="Предпросмотр вашей камеры" />
-              </View>
-            ) : hasLocalVideo ? (
-              <CallGlass tone={tone} fill={tone.chip} overMedia={hasRemoteVideo} style={[s.localPreviewFrame, s.localVideoOff]}>
-                <Ionicons name="videocam-off" size={24} color={tone.ink} />
-                <Text style={[s.localVideoOffText, { color: tone.ink }]}>Камера выключена</Text>
-              </CallGlass>
-            ) : null}
-          </View>
-        ) : (
-          <View style={s.audioStage}>
-            <CallBackdrop tone={tone} />
-            {isIncoming && <RingingRings tone={tone} />}
-            <CallerAvatar name={call.peerName} tone={tone} />
-            <Text style={[s.callerName, { color: tone.ink }]}>{call.peerName}</Text>
-            <Text style={[s.stateLabel, { color: tone.inkMuted }]}>{stateLabel}</Text>
-          </View>
-        )}
-
-        <View style={s.controls}>
-          {showCallControls && (
-            <View style={s.controlRow}>
-              <CallControl icon={media.localAudioEnabled ? 'mic' : 'mic-off'} label={media.localAudioEnabled ? 'Микрофон' : 'Без звука'} tone={tone} overMedia={hasRemoteVideo} active={!media.localAudioEnabled} onPress={onMute} />
-              <CallControl icon={speakerOn ? 'volume-high' : 'volume-medium'} label={speakerOn ? 'Динамик' : 'Трубка'} tone={tone} overMedia={hasRemoteVideo} active={speakerOn} onPress={onSpeakerToggle} />
-              {call.isVideo && (
-                <>
-                  <CallControl icon={media.localVideoEnabled ? 'videocam' : 'videocam-off'} label={media.localVideoEnabled ? 'Камера' : 'Без видео'} tone={tone} overMedia={hasRemoteVideo} active={!media.localVideoEnabled} onPress={onVideoToggle} />
-                  <CallControl icon="camera-reverse" label="Сменить камеру" tone={tone} overMedia={hasRemoteVideo} onPress={onCameraFlip} />
-                </>
+      <View style={[s.root, { backgroundColor: hasRemoteVideo ? mediaScrim.fill : tone.fill }]}>
+        {/* Подсветка — отдельным слоем НАД заливкой и ПОД содержимым, во всю
+            страницу. Внутри `s.container` её держать нельзя: у того есть
+            отступы, а SVG режется по вьюпорту — отсюда и был шов. */}
+        {!call.isVideo && <CallBackdrop tone={tone} />}
+        <View style={s.container}>
+          {call.isVideo ? (
+            <View style={s.videoStage}>
+              {hasRemoteVideo && RtcView ? (
+                <RtcView style={s.remoteVideo} streamURL={remoteUrl ?? undefined} objectFit="cover" zOrder={0} accessibilityLabel="Видео собеседника" />
+              ) : (
+                <VideoFallback call={call} tone={tone} stateLabel={stateLabel} incoming={isIncoming} />
               )}
+              <CallGlass tone={tone} fill={mediaScrim.bar} overMedia={hasRemoteVideo} style={s.videoHeader} pointerEvents="none">
+                <Text style={[s.videoPeerName, { color: mediaScrim.ink }]} numberOfLines={1}>{call.peerName}</Text>
+                <Text style={[s.videoState, { color: mediaScrim.inkMuted }]}>{stateLabel}</Text>
+              </CallGlass>
+              {hasLocalVideo && media.localVideoEnabled && RtcView ? (
+                <View style={[s.localPreviewFrame, { borderColor: withAlpha(mediaScrim.ink, glass.rim) }]}>
+                  <RtcView style={s.localPreview} streamURL={localUrl ?? undefined} objectFit="cover" mirror={frontCamera} zOrder={1} accessibilityLabel="Предпросмотр вашей камеры" />
+                </View>
+              ) : hasLocalVideo ? (
+                <CallGlass tone={tone} fill={tone.chip} overMedia={hasRemoteVideo} style={[s.localPreviewFrame, s.localVideoOff]}>
+                  <Ionicons name="videocam-off" size={24} color={tone.ink} />
+                  <Text style={[s.localVideoOffText, { color: tone.ink }]}>Камера выключена</Text>
+                </CallGlass>
+              ) : null}
+            </View>
+          ) : (
+            <View style={s.audioStage}>
+              {isIncoming && <RingingRings tone={tone} />}
+              <CallerAvatar name={call.peerName} tone={tone} />
+              <Text style={[s.callerName, { color: tone.ink }]}>{call.peerName}</Text>
+              <Text style={[s.stateLabel, { color: tone.inkMuted }]}>{stateLabel}</Text>
             </View>
           )}
 
-          <View style={s.hangupRow}>
-            {isIncoming && (
-              <View style={s.answerAction}>
-                <AppPressable style={[s.roundBtn, { backgroundColor: tone.accept, borderColor: withAlpha(tone.acceptInk, glass.rim) }]} onPress={onAccept} accessibilityRole="button" accessibilityLabel="Принять">
-                  <Ionicons name="call" size={30} color={tone.acceptInk} />
-                </AppPressable>
-                <Text style={[s.incomingLabel, { color: tone.inkMuted }]}>Принять</Text>
+          <View style={s.controls}>
+            {showCallControls && (
+              <View style={s.controlRow}>
+                <CallControl icon={media.localAudioEnabled ? 'mic' : 'mic-off'} label={media.localAudioEnabled ? 'Микрофон' : 'Без звука'} tone={tone} overMedia={hasRemoteVideo} active={!media.localAudioEnabled} onPress={onMute} />
+                <CallControl icon={speakerOn ? 'volume-high' : 'volume-medium'} label={speakerOn ? 'Динамик' : 'Трубка'} tone={tone} overMedia={hasRemoteVideo} active={speakerOn} onPress={onSpeakerToggle} />
+                {call.isVideo && (
+                  <>
+                    <CallControl icon={media.localVideoEnabled ? 'videocam' : 'videocam-off'} label={media.localVideoEnabled ? 'Камера' : 'Без видео'} tone={tone} overMedia={hasRemoteVideo} active={!media.localVideoEnabled} onPress={onVideoToggle} />
+                    <CallControl icon="camera-reverse" label="Сменить камеру" tone={tone} overMedia={hasRemoteVideo} onPress={onCameraFlip} />
+                  </>
+                )}
               </View>
             )}
-            <View style={s.answerAction}>
-              <AppPressable style={[s.roundBtn, { backgroundColor: tone.hangup, borderColor: withAlpha(tone.hangupInk, glass.rim) }]} onPress={onHangup} accessibilityRole="button" accessibilityLabel={isEnded ? 'Закрыть' : 'Отклонить'}>
-                <Ionicons name={isEnded ? 'close' : 'call'} size={30} color={tone.hangupInk} style={isEnded ? undefined : s.rotateIcon} />
-              </AppPressable>
-              {isIncoming && <Text style={[s.incomingLabel, { color: tone.inkMuted }]}>Отклонить</Text>}
+
+            <View style={s.hangupRow}>
+              {isIncoming && (
+                <View style={s.answerAction}>
+                  <AppPressable style={[s.roundBtn, { backgroundColor: tone.accept, borderColor: withAlpha(tone.acceptInk, glass.rim) }]} onPress={onAccept} accessibilityRole="button" accessibilityLabel="Принять">
+                    <Ionicons name="call" size={30} color={tone.acceptInk} />
+                  </AppPressable>
+                  <Text style={[s.incomingLabel, { color: tone.inkMuted }]}>Принять</Text>
+                </View>
+              )}
+              <View style={s.answerAction}>
+                <AppPressable style={[s.roundBtn, { backgroundColor: tone.hangup, borderColor: withAlpha(tone.hangupInk, glass.rim) }]} onPress={onHangup} accessibilityRole="button" accessibilityLabel={isEnded ? 'Закрыть' : 'Отклонить'}>
+                  <Ionicons name={isEnded ? 'close' : 'call'} size={30} color={tone.hangupInk} style={isEnded ? undefined : s.rotateIcon} />
+                </AppPressable>
+                {isIncoming && <Text style={[s.incomingLabel, { color: tone.inkMuted }]}>Отклонить</Text>}
+              </View>
             </View>
           </View>
         </View>
@@ -477,6 +487,9 @@ const ring = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
+  // `root` — заливка и подсветка во всю страницу; `container` — содержимое с
+  // отступами. Разделены ровно ради этого: подсветке нужен полный экран.
+  root: { flex: 1 },
   container: { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingTop: 56, paddingBottom: 40 },
   audioStage: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
   callerName: { fontSize: font.xxl, fontWeight: '700', textAlign: 'center', marginBottom: spacing.sm },

@@ -13,7 +13,7 @@
  */
 import { Appearance } from 'react-native';
 import { bannerColors } from '../components/StatusBanner';
-import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
+import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, callWash, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
 import type { AdminLogTone } from '../../core/social/groupAdminLog';
 import { WALLPAPER_MESHES, WALLPAPER_PRESETS, feedGround, meshById, type Wallpaper } from '../wallpapers';
 
@@ -1019,10 +1019,38 @@ describe('экран звонка', () => {
     });
   });
 
-  it('фон идущего звонка отличается от завершённого', () => {
-    // Зелёный оттенок — единственное, что отличает «звонок идёт» от
-    // «звонок закончился» на самом фоне, поэтому он должен остаться.
-    expect(callTone('active').fill).not.toBe(callTone('ended').fill);
+  it('фон одинаков во всех фазах звонка', () => {
+    // Перевёрнуто в 588-й. До неё идущий звонок был зелёно-бирюзовым, а
+    // завершённый — тёмно-лиловым, и переход между фазами перекрашивал ВЕСЬ
+    // экран: от `fill` выведены и `ink`, и `avatarFill`, и `chip`, и `ring`.
+    // Прежний комментарий утверждал, будто зелёный — «единственное, что
+    // отличает звонок идущий от законченного». Это неверно: фазу несут слова
+    // («Подключение…», таймер, «Звонок завершён») и набор кнопок. Цвет
+    // добавлял только скачок, поэтому фаза больше не меняет фон.
+    for (const phase of phases) {
+      expect(callTone(phase).fill).toBe(darkColors.background);
+    }
+  });
+
+  it('подсветка кончается выше круглых кнопок', () => {
+    // Порог графики 3:1 для «принять» / «отклонить» меряется на РОВНОМ фоне
+    // (утверждение выше), и это верно лишь пока подсветка под кнопки не
+    // заходит. В 587-й границу держала обрезка SVG по вьюпорту — она же
+    // рисовала видимый шов поперёк экрана. Теперь границу держит геометрия,
+    // и проверять надо именно её: низ каждого пятна = cy + ry.
+    expect(callWash.a.cy + callWash.a.ry).toBeLessThanOrEqual(callWash.bottomPct);
+    expect(callWash.b.cy + callWash.b.ry).toBeLessThanOrEqual(callWash.bottomPct);
+    // Область действий занимает низ экрана; запас до неё должен остаться.
+    expect(callWash.bottomPct).toBeLessThanOrEqual(70);
+  });
+
+  it('подсветка не держится на одной прозрачности', () => {
+    // Пики выше тех значений, при которых сплошная подсветка уронила бы
+    // круглые кнопки за 3:1 (`primary` ломается около 0.26, `accent` — около
+    // 0.13). Значит гасить пятна прозрачностью вместо геометрии нельзя, и
+    // `bottomPct` — не перестраховка.
+    expect(callWash.a.peak).toBeGreaterThan(0.13);
+    expect(callWash.b.peak).toBeGreaterThan(0.13);
   });
 
   it('прежний зелёный фон прятал обе круглые кнопки', () => {
@@ -1061,8 +1089,8 @@ describe('экран звонка', () => {
     // случай: самая яркая точка пятна, то есть непрозрачность из `CallBackdrop`
     // в её максимуме.
     it('имя и состояние читаются в самой яркой точке подсветки', () => {
-      const litA = mix(tone.washA, tone.fill, 0.34);
-      const litB = mix(tone.washB, tone.fill, 0.22);
+      const litA = mix(tone.washA, tone.fill, callWash.a.peak);
+      const litB = mix(tone.washB, tone.fill, callWash.b.peak);
       for (const lit of [litA, litB]) {
         expect(contrast(tone.ink, lit) >= 4.5).toBe(true);
         expect(contrast(tone.inkMuted, lit) >= 4.5).toBe(true);
@@ -1073,8 +1101,8 @@ describe('экран звонка', () => {
     // же цветом, что кнопка «принять», — и кнопка на ней давала 2.16:1. Отсюда
     // и правило: подсветка не смеет повторять заливку круглых кнопок. Порог
     // 3:1 для них меряется на РОВНОМ фоне (утверждение выше), и это верно
-    // ровно потому, что подсветка под кнопки не заходит: она живёт внутри
-    // сцены, а кнопки — в области действий под ней (см. CallOverlay).
+    // ровно потому, что подсветка под кнопки не заходит — см. отдельную
+    // проверку `callWash.bottomPct` выше.
     it('подсветка не повторяет цвет круглых кнопок', () => {
       expect(tone.washA).not.toBe(tone.accept);
       expect(tone.washA).not.toBe(tone.hangup);

@@ -55,15 +55,44 @@ describe('call media UI contract', () => {
     expect(overlay).toContain('useReducedMotion');
   });
 
-  it('подсветка фона не заходит под круглые кнопки', () => {
-    // Фон идущего звонка выведен из того же зелёного, что кнопка «принять», и
-    // подходит к порогу графики 3:1 впритык: осветление под кнопками уводит их
-    // за порог уже при непрозрачности 0.10 (замер в themeContrast.test.ts).
-    // Поэтому подсветка живёт внутри сцены, а область действий остаётся на
-    // ровной заливке — это утверждение о вёрстке, а не о вкусе.
-    const actions = overlay.slice(overlay.indexOf('<View style={s.controls}>'));
-    expect(actions).not.toContain('CallBackdrop');
-    expect(overlay).toContain('<CallBackdrop');
+  it('подсветка лежит во всю страницу, а не внутри отступов', () => {
+    // v4.32.588. Прежняя редакция этого теста утверждала только, что
+    // `CallBackdrop` не стоит внутри `s.controls`. Утверждение было верным и
+    // бесполезным: подсветка лежала внутри `s.audioStage`, у которого сверху
+    // 56 точек паддинга родителя, а снизу панель кнопок, — SVG режется по
+    // своему вьюпорту, и поперёк экрана шёл видимый шов. Тест этого не ловил.
+    //
+    // Проверяется то, что шов исключает: слой стоит прямо в `s.root`, у
+    // которого отступов нет, и НЕ стоит ни в `s.container`, ни в `s.audioStage`.
+    expect(overlay).toContain('root: { flex: 1 },');
+    expect(overlay).toMatch(/<View style=\{\[s\.root,[\s\S]{0,400}?<CallBackdrop tone=\{tone\} \/>[\s\S]{0,80}?<View style=\{s\.container\}>/);
+    const inner = overlay.slice(overlay.indexOf('<View style={s.container}>'), overlay.indexOf('</Modal>'));
+    expect(inner).not.toContain('<CallBackdrop');
+  });
+
+  it('границу подсветки держит геометрия, а не обрезка', () => {
+    // Круглые кнопки берут порог графики 3:1 только на ровной заливке, поэтому
+    // подсветка обязана кончаться выше них САМА. Числа и их обоснование живут
+    // в `callWash` (themeContrast.test.ts меряет там же); здесь проверяется,
+    // что разметка берёт их оттуда, а не повторяет литералами.
+    expect(overlay).toContain('callWash');
+    expect(overlay).toContain('stopOpacity={callWash.a.peak}');
+    expect(overlay).toContain('stopOpacity={callWash.b.peak}');
+    expect(overlay).toContain('cy={`${callWash.a.cy}%`}');
+    expect(overlay).toContain('cy={`${callWash.b.cy}%`}');
+  });
+
+  it('фазу звонка несут слова и набор кнопок, а не цвет фона', () => {
+    // С 588-й фон одинаков во всех фазах (см. themeContrast.test.ts). Значит
+    // единственное, что отличает идущий звонок от завершённого, — текст
+    // состояния и то, какие кнопки показаны. Это требование WCAG 1.4.1, а не
+    // оформление: убрать их нельзя.
+    expect(overlay).toContain("'Подключение…'");
+    expect(overlay).toContain("'Звонок завершён'");
+    expect(overlay).toContain("'Входящий звонок…'");
+    expect(overlay).toContain('formatClockDuration(elapsed)');
+    expect(overlay).toContain('showCallControls');
+    expect(overlay).toContain("isEnded ? 'close' : 'call'");
   });
 
   it('exposes media snapshots and cleans native streams with the call lifecycle', () => {
