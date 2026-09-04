@@ -3947,7 +3947,7 @@ function ChatThreadView({
           />
         )}
       />
-      {/* Android quick-react popup (replaces Alert.alert on Android) */}
+      {/* Меню сообщения — одно на все платформы (v4.32.578). */}
       <ChatQuickReactModal
         target={quickReactMsg}
         onClose={() => setQuickReactMsg(null)}
