@@ -81,6 +81,7 @@ import { KeyboardHost } from './KeyboardHost';
 import { AppPressable } from './AppPressable';
 import { GlassSurface } from './GlassSurface';
 import { SheetShell } from './SheetShell';
+import { useBackHandler } from '../../core/hooks/useBackHandler';
 import { useColors } from '../ThemeContext';
 import { font, glass, mono, radius, scrim, spacing, withAlpha } from '../theme';
 import { showSuccess, showError } from './userFeedback';
@@ -334,6 +335,38 @@ export function UserProfilePeek({
   // Своё изменили в редакторе — карточку надо перечитать: имя и «О себе» она
   // держит у себя, а не подписана на хранилище.
   const [ownReload, setOwnReload] = useState(0);
+
+  /**
+   * «Назад» из карточки закрывает то, что открыто в ней, а не экран под ней
+   * (v4.32.579).
+   *
+   * Карточка и её дочерние окна держались на одном `onRequestClose` у Modal:
+   * системная кнопка Android их закрывала, а жест — нет, потому что в
+   * `backStack` они не вставали. Свайп по открытой карточке проваливался до
+   * обработчика экрана, а тот из переписки закрывает саму переписку: человек
+   * из «Ещё» оказывался в списке чатов, потеряв и лист, и карточку, и диалог.
+   *
+   * Порядок — сверху вниз, как они лежат на экране. Лист «Ещё» и выбор обоев
+   * стоят первыми не для страховки, а для определённости: свой обработчик
+   * `SheetShell` тоже ставит, и он оказывается выше в стеке, но зависеть от
+   * порядка перерисовок в вопросе «что закроется» не стоит — результат должен
+   * быть один и тот же, чей бы обработчик ни ответил первым.
+   */
+  const back = useCallback(() => {
+    if (moreOpen) { setMoreOpen(false); return true; }
+    if (wallpaperOpen) { setWallpaperOpen(false); return true; }
+    if (qrOpen) { setQrOpen(false); return true; }
+    if (editOpen) { setEditOpen(false); return true; }
+    if (mediaTab !== null) { setMediaTab(null); return true; }
+    if (postsMode !== null) { setPostsMode(null); return true; }
+    if (renaming) { setRenaming(false); return true; }
+    // Раскрытый раздел — часть самой карточки, а не окно поверх неё: «Назад»
+    // сворачивает его так же, как повторный тап по плашке.
+    if (openSection !== null) { setOpenSection(null); return true; }
+    onClose();
+    return true;
+  }, [moreOpen, wallpaperOpen, qrOpen, editOpen, mediaTab, postsMode, renaming, openSection, onClose]);
+  useBackHandler(visible, back);
 
   useEffect(() => {
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока

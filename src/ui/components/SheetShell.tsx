@@ -5,6 +5,7 @@ import { AppPressable } from './AppPressable';
 import { GlassSurface } from './GlassSurface';
 import { motion, radius, scrim, spacing } from '../theme';
 import { isReducedMotion } from '../motionPrefs';
+import { useBackHandler } from '../../core/hooks/useBackHandler';
 
 /**
  * Нижний лист: затемнение проявляется, лист выезжает, и оба уходят обратно.
@@ -71,6 +72,17 @@ export function SheetShell({
   // это и есть «нажали мимо».
   const swallow = useCallback(() => {}, []);
 
+  // «Назад» — жестом на iOS и системной кнопкой на Android — обязано закрывать
+  // лист, а не то, что лежит под ним (v4.32.579). Раньше лист в стек `backStack`
+  // не вставал вовсе: свайп по открытому листу пролистывал стек насквозь и
+  // доходил до обработчика экрана — из карточки профиля, открытой в переписке,
+  // это уносило прямо в список чатов, вместе с закрытым диалогом.
+  const back = useCallback(() => {
+    onClose();
+    return true;
+  }, [onClose]);
+  useBackHandler(visible, back);
+
   if (!mounted) return null;
 
   return (
@@ -78,7 +90,14 @@ export function SheetShell({
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: t }]}>
         <AppPressable noScale style={styles.scrim} onPress={onClose} accessibilityLabel="Закрыть" />
       </Animated.View>
+      {/* `box-none` — не украшение, а условие того, что нажатие мимо листа
+          вообще куда-то доходит (v4.32.579). Полка растянута на весь экран
+          (`flex-end` прижимает лист к низу), лежит поверх затемнения и до этой
+          версии забирала себе каждое касание над листом: обработчика у неё нет,
+          у затемнения он есть, но затемнение ей не предок, а сосед — событию
+          некуда было всплыть, и «нажал мимо» не закрывало ничего. */}
       <Animated.View
+        pointerEvents="box-none"
         style={[
           styles.dock,
           { transform: [{ translateY: t.interpolate({ inputRange: [0, 1], outputRange: [height, 0] }) }] },
