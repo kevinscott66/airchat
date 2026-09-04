@@ -825,7 +825,20 @@ export class FeedStorage {
 
   // ─── Comments ──────────────────────────────────────────────────────────────
 
-  async addComment(row: FeedCommentRow): Promise<void> {
+  /**
+   * true — комментарий действительно записан; false — он уже был, или под ним
+   * стоит надгробие.
+   *
+   * v4.32.581: раньше возвращалось `void`, и вызывающий не мог отличить новый
+   * комментарий от повторно приехавшего. Очередь комментариев при частичной
+   * доставке шлёт конверт заново всем контактам (списка доставленных у неё,
+   * в отличие от очереди постов, нет вовсе), так что повтор — не редкость, а
+   * норма: баннер «новый комментарий» всплывал на каждой повторной попытке,
+   * до получаса подряд. Второй случай — надгробие приехало раньше самого
+   * комментария: в ленту он не попадал, а баннер о нём показывался, и по
+   * нажатию человек не находил ничего.
+   */
+  async addComment(row: FeedCommentRow): Promise<boolean> {
     const d = await this.ensureDb();
     // v4.32.163 P2#3 fix: проверяем tombstone. Если envelope `feed_comment_delete`
     // пришёл раньше самого `feed_comment` (out-of-order доставка через разные
@@ -836,9 +849,9 @@ export class FeedStorage {
       'SELECT comment_id FROM feed_comment_tombstones WHERE comment_id = ?',
       [row.id]
     );
-    if (tombstone) return;
+    if (tombstone) return false;
     const dek = await getOrCreateDataEncryptionKey();
-    await d.runAsync(
+    const res = await d.runAsync(
       `INSERT OR IGNORE INTO feed_comments (id, post_id, author_did, author_name, text, timestamp, reactions)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -851,6 +864,7 @@ export class FeedStorage {
         encryptAtRestNullable(row.reactions ? JSON.stringify(row.reactions) : null, dek),
       ]
     );
+    return (res.changes ?? 0) > 0;
   }
 
   async getComments(postId: string): Promise<FeedCommentRow[]> {
