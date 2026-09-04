@@ -132,6 +132,49 @@ test('disconnect removes peer and notifies peers in the same room', async (t) =>
   assert.equal(server.peers.has(bobId.peerId), false);
 });
 
+/**
+ * v4.32.581. peerId — открытый ключ человека, а уход из сети — знание о нём.
+ * Раньше о разрыве узнавали все подключённые сразу, и посторонний сокет читал
+ * по этим событиям, кто из пользователей в сети. В боевом режиме каждый сидит
+ * в комнате со своим же именем, поэтому проверяем именно эту форму.
+ */
+test('о разрыве узнаёт собеседник, а не любой подключённый', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const aliceId = identity();
+  const bobId = identity();
+  const eveId = identity();
+  const alice = await connectedClient(port);
+  const bob = await connectedClient(port);
+  const eve = await connectedClient(port);
+  t.after(async () => {
+    alice.close();
+    bob.close();
+    eve.close();
+    await server.close();
+  });
+
+  await Promise.all([
+    registerClient(alice, aliceId, aliceId.peerId),
+    registerClient(bob, bobId, bobId.peerId),
+    registerClient(eve, eveId, eveId.peerId),
+  ]);
+
+  // Алиса позвонила Бобу — они собеседники. Ева просто держит сокет открытым.
+  const offered = waitForEvent(bob, 'offer');
+  alice.emit('offer', { roomId: aliceId.peerId, targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await offered;
+
+  let eveSaw = null;
+  eve.on('peer_unavailable', (value) => { eveSaw = value; });
+  const aliceSaw = waitForEvent(alice, 'peer_unavailable');
+  bob.close();
+
+  assert.deepEqual(await aliceSaw, { targetPeerId: bobId.peerId, roomId: bobId.peerId });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(eveSaw, null);
+});
+
 test('enforces per-socket signaling rate limit', async (t) => {
   const server = createSignalingServer({ port: 0, rateLimit: 1, rateWindowMs: 10_000 });
   const port = await server.listen();

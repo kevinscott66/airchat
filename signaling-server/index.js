@@ -44,6 +44,14 @@ const MISSED_CALL_TTL_MS = 24 * 60 * 60 * 1000;
 const MISSED_CALLS_PER_PEER = 20;
 /** Скольким получателям сразу. Выше — вытесняем тех, чья запись старше всех. */
 const MISSED_CALL_PEERS = 10_000;
+/**
+ * Скольких собеседников помним одному подключению (v4.32.581).
+ *
+ * Нужно только для того, чтобы сказать «собеседник ушёл» тем, кого это
+ * касается. Разговоров за одно подключение бывает немного, а верхняя граница
+ * тут для того, чтобы память не росла от того, кто шлёт предложения подряд.
+ */
+const SIGNALING_COUNTERPARTS_PER_PEER = 64;
 
 function validRegister(payload) {
   return hasExactKeys(payload, ['peerId', 'roomId', 'signature'])
@@ -224,6 +232,52 @@ function createSignalingServer(options = {}) {
   }
 
 
+  /**
+   * Кому сообщать об уходе (v4.32.581).
+   *
+   * Раньше `peer_unavailable` при разрыве уходил всем подключённым сразу.
+   * Задумано это было как замена комнатной рассылки: в AirChat каждый
+   * регистрируется в комнате со своим же именем (roomId = peerId), и рассылка
+   * по комнате не доходит ни до кого. Но платой оказалась чужая тайна:
+   * peerId — это открытый ключ человека, и любой, кто просто держал сокет
+   * открытым, читал по этим событиям, кто из всех пользователей сейчас в сети
+   * и когда ушёл. Для мессенджера, который прячет даже содержимое, это слишком
+   * много.
+   *
+   * Теперь помним, с кем подключение обменивалось сигналами, и говорим об
+   * уходе только им — и по-прежнему всей комнате, если комната настоящая, то
+   * есть названа не своим же именем.
+   */
+  function rememberCounterpart(registration, peerId) {
+    if (!registration || registration.peerId === peerId) return;
+    const known = registration.counterparts;
+    known.delete(peerId);
+    known.add(peerId);
+    while (known.size > SIGNALING_COUNTERPARTS_PER_PEER) {
+      known.delete(known.keys().next().value);
+    }
+  }
+
+  function linkCounterparts(registration, target) {
+    rememberCounterpart(registration, target.peerId);
+    rememberCounterpart(target, registration.peerId);
+  }
+
+  function departureAudience(registration) {
+    const audience = new Set();
+    for (const peerId of registration.counterparts) {
+      const peer = peers.get(peerId);
+      if (peer && peer.socket.connected) audience.add(peer);
+    }
+    // Общая комната остаётся общей: там уход участника — общая новость.
+    if (registration.roomId !== registration.peerId) {
+      for (const peer of peers.values()) {
+        if (peer.roomId === registration.roomId) audience.add(peer);
+      }
+    }
+    return audience;
+  }
+
   function remoteAddress(socket) {
     return socket.handshake.address || socket.conn.remoteAddress || 'unknown';
   }
@@ -313,7 +367,7 @@ function createSignalingServer(options = {}) {
         }
         const previous = socket.data.registration;
         if (previous && peers.get(previous.peerId)?.socket === socket) peers.delete(previous.peerId);
-        const registration = { roomId: value.roomId, peerId: value.peerId, socket };
+        const registration = { roomId: value.roomId, peerId: value.peerId, socket, counterparts: new Set() };
         socket.data.registration = registration;
         socket.data.registrationChallenge = null;
         clearTimeout(socket.data.registrationTimer);
@@ -341,6 +395,7 @@ function createSignalingServer(options = {}) {
           return;
         }
         forgetMissedCall(value.targetPeerId, registration.peerId);
+        linkCounterparts(registration, target);
         target.socket.emit('offer', { roomId: value.roomId, fromPeerId: registration.peerId, sdp: value.sdp });
       });
     });
@@ -352,6 +407,7 @@ function createSignalingServer(options = {}) {
           sendUnavailable(socket, value.targetPeerId, registration.roomId);
           return;
         }
+        linkCounterparts(registration, target);
         target.socket.emit('answer', { fromPeerId: registration.peerId, sdp: value.sdp });
       });
     });
@@ -363,6 +419,7 @@ function createSignalingServer(options = {}) {
           sendUnavailable(socket, value.targetPeerId, registration.roomId);
           return;
         }
+        linkCounterparts(registration, target);
         target.socket.emit('ice-candidate', { fromPeerId: registration.peerId, candidate: value.candidate });
       });
     });
@@ -374,6 +431,7 @@ function createSignalingServer(options = {}) {
           sendUnavailable(socket, value.targetPeerId, registration.roomId);
           return;
         }
+        linkCounterparts(registration, target);
         target.socket.emit('hangup', { fromPeerId: registration.peerId });
       });
     });
@@ -386,11 +444,8 @@ function createSignalingServer(options = {}) {
       const registration = socket.data.registration;
       if (!registration || peers.get(registration.peerId)?.socket !== socket) return;
       peers.delete(registration.peerId);
-      // Each AirChat peer registers in its own room (roomId=peerId), so a
-      // same-room broadcast never reaches the active caller/callee. The peer
-      // id is already public and clients filter this notification against
-      // their current call, so notify all remaining peers instead.
-      for (const peer of peers.values()) {
+      // Только тем, кого это касается: см. departureAudience.
+      for (const peer of departureAudience(registration)) {
         peer.socket.emit('peer_unavailable', {
           targetPeerId: registration.peerId,
           roomId: registration.roomId,
