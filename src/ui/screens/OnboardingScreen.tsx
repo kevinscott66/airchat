@@ -34,6 +34,7 @@ import { PermissionsScreen } from './PermissionsScreen';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { AirChatWordmark } from '../components/AirChatWordmark';
+import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
 
 type Step = 'permissions' | 'welcome' | 'restore' | 'showSeed';
@@ -401,29 +402,34 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   ? 'Это зашифрованная резервная копия. Введите пароль, которым вы её защитили.'
                   : 'Секретные слова (24 слова), через пробел, в правильном порядке. Сюда же можно вставить зашифрованную резервную копию.'}
               </Text>
-              <TextInput
-                style={styles.textarea}
-                multiline
-                value={restoreText}
-                onChangeText={setRestoreText}
-                placeholder="слово1 слово2 …"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                // v4.32.340: поле, куда вводят 24 слова от аккаунта, было открыто
-                // системному автозаполнению. Android по умолчанию считает любое
-                // текстовое поле кандидатом и предлагает менеджеру паролей его
-                // сохранить, а iOS — подставить из связки ключей; и то и другое
-                // означает копию фразы за пределами приложения. Подсказки
-                // клавиатуры уже отключены через autoCorrect, осталось закрыть
-                // автозаполнение и словарь проверки орфографии.
-                autoComplete="off"
-                importantForAutofill="no"
-                spellCheck={false}
-                textContentType="none"
-                textAlignVertical="top"
-                testID="seed_input"
-              />
+              {/* Введённые слова стоят ровно столько же, сколько показанные при
+                  заведении аккаунта: снимок или запись экрана здесь уводит
+                  аккаунт целиком. Тот же щит (v4.32.581). */}
+              <SecretScreenGuard>
+                <TextInput
+                  style={styles.textarea}
+                  multiline
+                  value={restoreText}
+                  onChangeText={setRestoreText}
+                  placeholder="слово1 слово2 …"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  // v4.32.340: поле, куда вводят 24 слова от аккаунта, было открыто
+                  // системному автозаполнению. Android по умолчанию считает любое
+                  // текстовое поле кандидатом и предлагает менеджеру паролей его
+                  // сохранить, а iOS — подставить из связки ключей; и то и другое
+                  // означает копию фразы за пределами приложения. Подсказки
+                  // клавиатуры уже отключены через autoCorrect, осталось закрыть
+                  // автозаполнение и словарь проверки орфографии.
+                  autoComplete="off"
+                  importantForAutofill="no"
+                  spellCheck={false}
+                  textContentType="none"
+                  textAlignVertical="top"
+                  testID="seed_input"
+                />
+              </SecretScreenGuard>
       {isBackupPaste ? (
                 <TextInput
                   style={styles.pwdInput}
@@ -508,13 +514,16 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             Копия на этом устройстве уже сохранена в зашифрованном виде. После подтверждения можно пользоваться
             приложением — вводить слова снова не понадобится.
           </Text>
-          <View style={styles.grid} testID="seed_words">
+          {/* Двадцать четыре слова — единственный кадр, по которому уводят
+              аккаунт целиком; со снимка и с записи экрана он снимается
+              щитом (v4.32.581, см. SecretScreenGuard). */}
+          <SecretScreenGuard style={styles.grid} testID="seed_words">
             {seedWords.map((word, i) => (
               <Text key={`${i}-${word}`} style={styles.word}>
                 {i + 1}. {word}
               </Text>
             ))}
-          </View>
+          </SecretScreenGuard>
           <AppPressable
             style={styles.btn}
             onPress={seedConfirmedBtn.onPress}

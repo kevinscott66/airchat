@@ -10,6 +10,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import { authGuard } from '../../core/security/authGuard';
 import { SafeScreen } from '../components/SafeScreen';
+import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { primaryInk, radius } from '../theme';
@@ -124,17 +125,26 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
           </Text>
 
           <Text style={styles.label}>Секретные слова</Text>
-          <TextInput
-            style={[styles.input, styles.multiline]}
-            placeholder="24 слова…"
-            placeholderTextColor={colors.textMuted}
-            value={mnemonic}
-            onChangeText={setMnemonic}
-            multiline
-            autoCapitalize="none"
-            autoCorrect={false}
-            testID="forgot_seed_input"
-          />
+          {/* Введённые слова так же дороги, как показанные при заведении
+              аккаунта, — тот же щит (v4.32.581). `textContentType`/
+              `autoComplete` тут не для удобства: без них слова из этого поля
+              попадают в словарь подсказок клавиатуры и всплывают потом в
+              чужой переписке. */}
+          <SecretScreenGuard>
+            <TextInput
+              style={[styles.input, styles.multiline]}
+              placeholder="24 слова…"
+              placeholderTextColor={colors.textMuted}
+              value={mnemonic}
+              onChangeText={setMnemonic}
+              multiline
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              textContentType="none"
+              testID="forgot_seed_input"
+            />
+          </SecretScreenGuard>
 
           <Text style={styles.label}>Новый пароль</Text>
           <TextInput
