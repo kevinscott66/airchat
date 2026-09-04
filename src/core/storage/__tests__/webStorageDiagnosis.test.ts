@@ -76,6 +76,57 @@ describe('диагноз', () => {
   });
 });
 
+describe('файл базы занят другой вкладкой', () => {
+  // Ровно то, что показывают браузеры: Chrome называет причину, WebKit — нет.
+  const CHROME =
+    "NoModificationAllowedError: Failed to execute 'createSyncAccessHandle' on " +
+    "'FileSystemFileHandle': Access Handles cannot be created if there is another " +
+    'open Access Handle or Writable stream associated with the same file.';
+  const WEBKIT =
+    'UnknownError: The operation failed for an unknown transient reason (e.g. out of memory).';
+
+  // Окружение исправно — по фактам этот отказ неотличим от «нет места на диске».
+  const OK_ENV = { secureContext: true, hasOpfs: true, origin: 'https://air.dobropalm.tech' };
+
+  it('узнаёт обе формулировки', () => {
+    expect(isStorageFailure(CHROME)).toBe(true);
+    expect(isStorageFailure(WEBKIT)).toBe(true);
+  });
+
+  it('Chrome назвал причину — говорим её прямо', () => {
+    const text = diagnoseStorageFailure(CHROME, OK_ENV);
+    expect(text).toContain('уже занят');
+    expect(text).toContain('вкладки с AirChat');
+    // Совет из ветки «всё на месте» был бы неверным следом: диск ни при чём.
+    expect(text).not.toContain('переполненный');
+  });
+
+  it('WebKit причину не назвал — оговариваемся, но советуем то же', () => {
+    const text = diagnoseStorageFailure(WEBKIT, OK_ENV);
+    expect(text).toContain('не назвал причину');
+    expect(text).toContain('вкладки с AirChat');
+    expect(text).not.toContain('переполненный');
+  });
+
+  it('обещает, что переписка на месте — иначе человек начнёт чистить данные сайта', () => {
+    for (const m of [CHROME, WEBKIT]) {
+      expect(diagnoseStorageFailure(m, OK_ENV)).toContain('никуда не денутся');
+    }
+  });
+
+  it('занятый файл разбирается раньше сертификата и браузера', () => {
+    // Те же факты, что в ветке «нет OPFS», но причина известна точнее.
+    const text = diagnoseStorageFailure(CHROME, {
+      secureContext: false,
+      hasOpfs: false,
+      origin: null,
+    });
+    expect(text).toContain('уже занят');
+    expect(text).not.toContain('Safari 17');
+    expect(text).not.toContain('незащищённому соединению');
+  });
+});
+
 describe('чтение окружения', () => {
   it('на устройстве отдаёт пустые факты и ничего не роняет', () => {
     const env = currentStorageEnv();
