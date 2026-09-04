@@ -31,6 +31,7 @@ import {
 
 const mockOfferHandler: { current: ((msg: { fromPeerId: string; sdp: string }) => void) | null } = { current: null };
 const mockHangupHandler: { current: ((msg: { fromPeerId?: string }) => void) | null } = { current: null };
+const mockAnswerHandler: { current: ((msg: { fromPeerId?: string; sdp: string }) => void) | null } = { current: null };
 const mockPeerConnections: MockPeerConnection[] = [];
 const mockSendHangup = jest.fn();
 const mockSendIceCandidate = jest.fn();
@@ -101,7 +102,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     sendAnswer = (peer: string, sdp: string): void => { mockSendAnswer(peer, sdp); };
     sendOffer = (room: string, peer: string, sdp: string): void => { mockSendOffer(room, peer, sdp); };
     onOffer = (handler: typeof mockOfferHandler.current): void => { mockOfferHandler.current = handler; };
-    onAnswer = jest.fn();
+    onAnswer = (handler: typeof mockAnswerHandler.current): void => { mockAnswerHandler.current = handler; };
     onIceCandidate = jest.fn();
     onHangup = (handler: typeof mockHangupHandler.current): void => { mockHangupHandler.current = handler; };
     onPeerUnavailable = jest.fn();
@@ -224,6 +225,7 @@ describe('поведение сервиса звонков', () => {
     await disposeCallService();
     mockOfferHandler.current = null;
     mockHangupHandler.current = null;
+    mockAnswerHandler.current = null;
     mockPeerConnections.length = 0;
     mockSendHangup.mockClear();
     mockSendIceCandidate.mockClear();
@@ -272,6 +274,49 @@ describe('поведение сервиса звонков', () => {
     expect(getCurrentCall()?.state).toBe('ended');
     expect(mockSendHangup).not.toHaveBeenCalled();
     expect(mockSendIceCandidate).not.toHaveBeenCalled();
+  });
+
+  // v4.32.581. Сигнальный сервер в модели угроз недоверенный: он видит обе
+  // стороны и может прислать что угодно. Отправителя события он ставит сам
+  // (`fromPeerId: registration.peerId`), поэтому событие без отправителя или с
+  // чужим — это не старый сервер, а подделка, и разговор она трогать не должна.
+  it('«положили трубку» без отправителя разговор не рвёт', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+
+    mockHangupHandler.current?.({});
+    await settle();
+
+    expect(getCurrentCall()?.state).toBe('outgoing');
+  });
+
+  it('«положили трубку» от постороннего разговор не рвёт', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+
+    mockHangupHandler.current?.({ fromPeerId: 'B'.repeat(43) });
+    mockHangupHandler.current?.({ fromPeerId: 'не ключ' });
+    await settle();
+
+    expect(getCurrentCall()?.state).toBe('outgoing');
+  });
+
+  it('ответ без отправителя до setRemoteDescription не доходит', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    const pc = mockPeerConnections[mockPeerConnections.length - 1];
+    expect(pc).toBeDefined();
+    expect(pc.remoteDescription).toBeNull();
+
+    mockAnswerHandler.current?.({ sdp: 'remote-answer-sdp' });
+    await settle();
+
+    expect(pc.remoteDescription).toBeNull();
+    expect(getCurrentCall()?.state).toBe('outgoing');
+
+    // А от собеседника — доходит: проверка строгая, но не глухая.
+    mockAnswerHandler.current?.({ fromPeerId: PEER, sdp: 'remote-answer-sdp' });
+    await settle();
+
+    expect(pc.remoteDescription).not.toBeNull();
+    expect(getCurrentCall()?.state).toBe('connected');
   });
 
   it('нажатие «положить трубку» по-прежнему доходит до собеседника', async () => {

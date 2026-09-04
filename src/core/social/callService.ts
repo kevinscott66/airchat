@@ -568,6 +568,23 @@ function isValidSdp(s: unknown): s is string {
   return typeof s === 'string' && s.length > 0 && s.length <= MAX_SDP_LEN;
 }
 
+/**
+ * v4.32.581. Отправитель события — тот и только тот, с кем идёт разговор.
+ *
+ * Предложение (`onOffer`) идентификатор звонящего требовало, а ответ,
+ * ICE-кандидат и «положили трубку» — нет: проверка вида
+ * `msg.fromPeerId && msg.fromPeerId !== peer` пропускала событие без поля
+ * вовсе. Послабление осталось от времён, когда сигнальный сервер поля ещё не
+ * ставил; сейчас он ставит его на всех четырёх событиях (`fromPeerId:
+ * registration.peerId`), и единственное, что послабление делало, — снимало
+ * ровно ту проверку, ради которой этот блок и написан: сигнальный сервер в
+ * модели угроз считается недоверенным, и событие без отправителя рвало любой
+ * разговор, а ответ без отправителя ещё и уезжал в `setRemoteDescription`.
+ */
+function isFromPeer(fromPeerId: unknown, peer: string | undefined): boolean {
+  return !!peer && isValidPeerId(fromPeerId) && fromPeerId === peer;
+}
+
 function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
   sig.onOffer(async (msg) => {
     if (!isValidPeerId(msg.fromPeerId) || msg.fromPeerId === myPub) return;
@@ -655,7 +672,7 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
 
   sig.onAnswer(async (msg) => {
     if (!currentCall || currentCall.state !== 'outgoing') return;
-    if (msg.fromPeerId && msg.fromPeerId !== currentCall.peerPubB64) return;
+    if (!isFromPeer(msg.fromPeerId, currentCall.peerPubB64)) return;
     if (msg.sdp === 'busy' || msg.sdp === 'declined') {
       // И «занято», и «отклонён» — отказ собеседника, а не «не дозвонились».
       await _hangup('declined', msg.sdp === 'busy' ? 'Занято' : 'Отклонён', 'remote');
@@ -679,7 +696,7 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
   });
 
   sig.onIceCandidate((msg) => {
-    if (msg.fromPeerId && msg.fromPeerId !== currentCall?.peerPubB64) return;
+    if (!isFromPeer(msg.fromPeerId, currentCall?.peerPubB64)) return;
     // Keep the sentinel branch for older signaling servers during rollout.
     if (msg.candidate && (msg.candidate as { type?: string }).type === 'hangup') {
       log.info('call_remote_hangup_received');
@@ -712,7 +729,7 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
 
   const handleRemoteHangup = (msg: { fromPeerId?: string }): void => {
     const peer = currentCall?.peerPubB64;
-    if (!peer || (msg.fromPeerId && msg.fromPeerId !== peer)) return;
+    if (!isFromPeer(msg.fromPeerId, peer)) return;
     log.info('call_remote_hangup_received');
     void _hangup('unanswered', 'remote_hangup', 'remote');
   };
