@@ -7,6 +7,7 @@ import {
   formatLanDiagnostics,
 } from '../../core/transport/localTransportDiagnostics';
 import { getEmbeddedVpnRunning } from '../../core/vpn/airChatVpnController';
+import { getCallServiceStatus } from '../../core/social/callService';
 import { SafeScreen } from '../components/SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { primaryInk, radius } from '../theme';
@@ -35,6 +36,25 @@ function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Promise<
   return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
+/**
+ * Приём входящего звонка держится на одной вещи — регистрации телефона на
+ * сигнальном сервере. Пока её нет, сервер про этот телефон не знает и отвечает
+ * звонящему `peer_unavailable`; на самом телефоне при этом не происходит
+ * ничего, что можно было бы заметить. Раньше это состояние нельзя было
+ * посмотреть вообще: экран проверял только /health сервера, то есть отвечал на
+ * вопрос «сервер жив?», а не на вопрос «этот телефон вообще может принять
+ * звонок?». Ответы расходятся ровно в том случае, который и ломает звонки.
+ */
+function describeCallStatus(): string {
+  const st = getCallServiceStatus();
+  if (!st.hasKey) return 'Ключ звонков не загружен (профиль ещё не разблокирован?)';
+  if (st.registered) return 'Зарегистрирован — входящие звонки дойдут';
+  const err = st.lastError ? `: ${st.lastError}` : '';
+  return st.retrying
+    ? `Не зарегистрирован${err}. Повторные попытки идут.`
+    : `Не зарегистрирован${err}.`;
+}
+
 type Props = {
   onClose: () => void;
 };
@@ -43,6 +63,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [vpnLine, setVpnLine] = useState('—');
   const [signalingLine, setSignalingLine] = useState('—');
+  const [callLine, setCallLine] = useState('—');
   const [russianLine, setRussianLine] = useState('—');
   const [foreignLine, setForeignLine] = useState('—');
   const [lanLocalLine, setLanLocalLine] = useState('—');
@@ -110,6 +131,9 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
       } else {
         setSignalingLine('Не задан signalingUrl в конфиге');
       }
+
+      if (!aliveRef.current) return;
+      setCallLine(describeCallStatus());
 
       const addr = cfg.vpn?.address?.trim();
       const port = cfg.vpn?.port ?? 8443;
@@ -191,6 +215,14 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
         <View style={styles.card}>
           <Text style={styles.label}>Сигнальный сервер (WebRTC)</Text>
           <Text style={styles.value}>{signalingLine}</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Звонки: регистрация этого телефона</Text>
+          <Text style={styles.value}>{callLine}</Text>
+          <Text style={styles.hint}>
+            Без регистрации звонящий получает «абонент недоступен», а на этом телефоне ничего не происходит.
+          </Text>
         </View>
 
         <View style={styles.card}>

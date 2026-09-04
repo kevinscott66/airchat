@@ -508,7 +508,10 @@ async function getSignaling(): Promise<WebRTCSignaling | null> {
   // нормализация тут расходилась с той, что делали push и диагностика, и все
   // три расходились с той, что делает экран настроек.
   const url = cfg.webrtc.signalingUrl;
-  if (!url) return null;
+  if (!url) {
+    lastRegisterError = 'no_signaling_url';
+    return null;
+  }
   signaling = new WebRTCSignaling(url);
   return signaling;
 }
@@ -521,6 +524,28 @@ async function getSignaling(): Promise<WebRTCSignaling | null> {
  * onIceCandidate subscriptions — every incoming signalling event then fired
  * twice.
  */
+/**
+ * v4.32.587. Повтор регистрации на сигнальном сервере.
+ *
+ * `ensureRegistered` звался ровно дважды: один раз при запуске и потом из
+ * `initiateCall`. Если первая попытка не удалась — сервер лежал, сети ещё не
+ * было, телефон только проснулся, — повторить её было НЕЧЕМ. Исходящий звонок
+ * пробовал заново и потому иногда оживал; входящий не пробовал никогда, и
+ * телефон оставался невидимым для звонящих до перезапуска приложения, ничем
+ * этого не показывая.
+ */
+const REGISTER_RETRY_MS = 15_000;
+let registerRetryTimer: ReturnType<typeof setInterval> | null = null;
+/** Последняя причина отказа регистрации — для экрана диагностики. */
+let lastRegisterError: string | null = null;
+
+function stopRegisterRetry(): void {
+  if (registerRetryTimer) {
+    clearInterval(registerRetryTimer);
+    registerRetryTimer = null;
+  }
+}
+
 let ensureRegisteredInFlight: Promise<WebRTCSignaling | null> | null = null;
 let ensureRegisteredInFlightEpoch = -1;
 async function ensureRegistered(myPub: string, epoch = serviceEpoch): Promise<WebRTCSignaling | null> {
@@ -542,9 +567,11 @@ async function ensureRegistered(myPub: string, epoch = serviceEpoch): Promise<We
           return null;
         }
         signalingRegistered = true;
+        lastRegisterError = null;
         _setupIncomingHandlers(sig, myPub);
       } catch (e) {
-        log.warn('call_signaling_register_failed', { err: e instanceof Error ? e.message : String(e) });
+        lastRegisterError = e instanceof Error ? e.message : String(e);
+        log.warn('call_signaling_register_failed', { err: lastRegisterError });
         return null;
       }
     }
@@ -1026,7 +1053,40 @@ export async function initCallService(pair: KeyPairBytes, profileId = 1): Promis
   callProfileId = Number.isSafeInteger(profileId) && profileId > 0 ? profileId : 1;
   await loadCallLog();
   if (serviceEpoch !== epoch || myPubB64Global !== myPub) return;
-  await ensureRegistered(myPub, epoch);
+  stopRegisterRetry();
+  if (await ensureRegistered(myPub, epoch)) return;
+  // Не вышло — пробуем дальше. Пока регистрации нет, входящих звонков нет
+  // тоже, и молча ждать перезапуска приложения нельзя.
+  registerRetryTimer = setInterval(() => {
+    if (serviceEpoch !== epoch || myPubB64Global !== myPub || signalingRegistered) {
+      stopRegisterRetry();
+      return;
+    }
+    void ensureRegistered(myPub, epoch)
+      .then((sig) => { if (sig) stopRegisterRetry(); })
+      .catch(() => { /* следующая попытка через интервал */ });
+  }, REGISTER_RETRY_MS);
+}
+
+/**
+ * Состояние службы звонков для экрана диагностики (v4.32.587).
+ *
+ * До сих пор единственным свидетельством того, что телефон виден звонящим,
+ * было отсутствие жалоб. `/health` сигнального сервера отвечает всем подряд и
+ * про регистрацию конкретного телефона не говорит ничего.
+ */
+export function getCallServiceStatus(): {
+  hasKey: boolean;
+  registered: boolean;
+  retrying: boolean;
+  lastError: string | null;
+} {
+  return {
+    hasKey: !!myPubB64Global && !!mySigningPair,
+    registered: signalingRegistered,
+    retrying: registerRetryTimer !== null,
+    lastError: lastRegisterError,
+  };
 }
 
 /**
@@ -1050,6 +1110,7 @@ export async function disposeCallService(): Promise<void> {
     }
   } catch { /* ignore */ }
   try { signaling?.disconnect?.(); } catch { /* ignore */ }
+  stopRegisterRetry();
   myPubB64Global = null;
   mySigningPair = null;
   signaling = null;
