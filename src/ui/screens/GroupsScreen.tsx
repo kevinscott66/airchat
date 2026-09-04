@@ -5970,33 +5970,12 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
           ItemSeparatorComponent={() => (
             <View style={[gsStyles.separator, { backgroundColor: colors.border, marginLeft: 74 }]} />
           )}
-          ListEmptyComponent={
-            <View style={gsStyles.empty}>
-              <Ionicons
-                name={filterTab === 'channels' ? 'megaphone-outline' : filterTab === 'pinned' ? 'pin-outline' : filterTab === 'groups' ? 'people-circle-outline' : 'people-outline'}
-                size={52}
-                color={colors.textMuted}
-              />
-              <Text style={[gsStyles.emptyTitle, { color: colors.text }]}>
-                {filterTab === 'unread' ? 'Нет непрочитанных'
-                  : filterTab === 'groups' ? 'Нет групп'
-                  : filterTab === 'channels' ? 'Нет каналов'
-                  : filterTab === 'pinned' ? 'Нет закреплённых'
-                  : 'Нет групп'}
-              </Text>
-              <Text style={[gsStyles.emptyHint, { color: colors.textMuted }]}>
-                {filterTab === 'all'
-                  ? 'Создайте группу или канал, нажав «+»'
-                  : filterTab === 'channels'
-                  ? 'Создайте канал, нажав «+»'
-                  : 'Ничего не найдено для этого фильтра'}
-              </Text>
-            </View>
-          }
-          ListFooterComponent={archivedGroups.length > 0 ? (
+          // v4.32.584: архив стоит НАД списком, а не под ним. В подвале до
+          // него доходил только тот, кто пролистал все группы до конца.
+          ListHeaderComponent={archivedGroups.length > 0 ? (
             <View>
               <AppPressable
-                style={[gsStyles.archivedBtn, { borderTopColor: colors.border }]}
+                style={[gsStyles.archivedBtn, { borderBottomColor: colors.border }]}
                 onPress={() => setShowArchived((v) => !v)}
               >
                 <Ionicons name="archive-outline" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
@@ -6025,6 +6004,29 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
               )) : null}
             </View>
           ) : null}
+          ListEmptyComponent={
+            <View style={gsStyles.empty}>
+              <Ionicons
+                name={filterTab === 'channels' ? 'megaphone-outline' : filterTab === 'pinned' ? 'pin-outline' : filterTab === 'groups' ? 'people-circle-outline' : 'people-outline'}
+                size={52}
+                color={colors.textMuted}
+              />
+              <Text style={[gsStyles.emptyTitle, { color: colors.text }]}>
+                {filterTab === 'unread' ? 'Нет непрочитанных'
+                  : filterTab === 'groups' ? 'Нет групп'
+                  : filterTab === 'channels' ? 'Нет каналов'
+                  : filterTab === 'pinned' ? 'Нет закреплённых'
+                  : 'Нет групп'}
+              </Text>
+              <Text style={[gsStyles.emptyHint, { color: colors.textMuted }]}>
+                {filterTab === 'all'
+                  ? 'Создайте группу или канал, нажав «+»'
+                  : filterTab === 'channels'
+                  ? 'Создайте канал, нажав «+»'
+                  : 'Ничего не найдено для этого фильтра'}
+              </Text>
+            </View>
+          }
         />
       </View>
       </KeyboardHost>
@@ -6067,7 +6069,7 @@ const gsStyles = StyleSheet.create({
   empty: { alignItems: 'center', paddingTop: 80, gap: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '600' },
   emptyHint: { fontSize: 13, textAlign: 'center', paddingHorizontal: 32 },
-  archivedBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
+  archivedBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
 });
 
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.

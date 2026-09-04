@@ -22,6 +22,7 @@ import {
   Vibration,
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
+import { buildChatListRows } from './chat-utils/chatListRows';
 import { PersonAvatar } from '../components/PersonAvatar';
 import { AppModal as Modal } from '../components/AppModal';
 import { SafeScreen } from '../components/SafeScreen';
@@ -673,64 +674,34 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
 
   const loadData = useCallback(async () => {
     const pid = activeProfileId();
-    const [convsRaw, ctactsRaw] = await Promise.all([
-      showArchived ? listArchivedConversations(pid) : listConversations(pid),
+    // v4.32.584: оба списка читаются всегда, а не только нужный. Раньше в
+    // основном режиме архивные переписки не читались вовсе — и контакт, чей
+    // диалог лежал в архиве, ниже опять попадал в список как «контакт без
+    // переписки». Человек архивировал чат, а его копия оставалась на месте.
+    const [openConvs, archivedConvs, ctactsRaw] = await Promise.all([
+      listConversations(pid),
+      listArchivedConversations(pid),
       listContacts(),
     ]);
-    if (!showArchived) {
-      const archived = await listArchivedConversations(pid);
-      setArchivedCount(archived.length);
-    }
+    setArchivedCount(archivedConvs.length);
 
     // v4.32.31: self-chat «Сохранённые сообщения» показывается ТОЛЬКО в закреплённом
     // заголовке (ListHeaderComponent), а в обычном списке чатов и в списке контактов
     // — фильтруется. Критерий: peerPublicKey === myPubB64.
     const mine = pair ? Buffer.from(pair.publicKey).toString('base64') : null;
-    const convs = mine ? convsRaw.filter((c) => c.contactPubB64 !== mine) : convsRaw;
-    const ctacts = mine ? ctactsRaw.filter((c) => c.peerPublicKey !== mine) : ctactsRaw;
+    setContacts(mine ? ctactsRaw.filter((c) => c.peerPublicKey !== mine) : ctactsRaw);
 
-    const contactMap = new Map<string, Contact>();
-    for (const c of ctacts) contactMap.set(c.peerPublicKey, c);
-    setContacts(ctacts);
-
-    // Merge: include conversations that have messages + contacts with no history
-    const convMap = new Map<string, ConversationRow>();
-    for (const c of convs) convMap.set(c.contactPubB64, c);
-
-    // Build display list: conversations first (sorted by lastMessageAt), then contacts with no conv
-    const convItems: ConversationItem[] = convs.map((c) => ({
-      ...c,
-      displayName: contactMap.get(c.contactPubB64)?.displayName || shortIdentity(c.contactPubB64),
-      avatarCid: contactMap.get(c.contactPubB64)?.avatarCid,
-      verified: contactMap.get(c.contactPubB64)?.verified,
-    }));
-
-    // Contacts with no conversation yet
-    for (const ct of ctacts) {
-      if (!convMap.has(ct.peerPublicKey)) {
-        convItems.push({
-          contactPubB64: ct.peerPublicKey,
-          ownerProfileId: pid,
-          unreadCount: 0,
-          draftText: null,
-          pinned: false,
-          archived: false,
-          muted: false,
-          mutedUntil: null,
-          lastMessageAt: 0,
-          lastMessagePreview: null,
-          lastMessageDirection: null,
-          pinnedMessageId: null,
-          disappearAfterMs: null,
-          colorTag: null,
-          displayName: ct.displayName,
-          avatarCid: ct.avatarCid,
-          verified: ct.verified,
-        });
-      }
-    }
-
-    setConversations(convItems);
+    setConversations(
+      buildChatListRows({
+        openConversations: openConvs,
+        archivedConversations: archivedConvs,
+        contacts: ctactsRaw,
+        showArchived,
+        ownerProfileId: pid,
+        myPubB64: mine,
+        shortIdentity,
+      })
+    );
   }, [activeProfileId, showArchived, pair]);
 
   useEffect(() => {
@@ -1426,32 +1397,59 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           <View style={[s.separator, { marginLeft: 76 }]} />
         )}
         ListHeaderComponent={
-          !showArchived && !searchQuery && myPubB64 ? (
+          !showArchived && !searchQuery ? (
             <>
-              <StoriesRow myPubB64={myPubB64} pair={pair} refreshTick={refreshTick} />
-              <AppPressable
-                style={({ pressed }) => [
-                  rowStyles.row,
-                  { backgroundColor: pressed ? colors.surfaceHigh : colors.background },
-                ]}
-                onPress={() => onOpenChat(myPubB64, 'Сохранённые сообщения')}
-              >
-                <View style={[savedStyles.iconCircle, { backgroundColor: colors.primary }]}>
-                  <Ionicons name="bookmark" size={24} color={contrastingInk(colors.primary)} />
-                </View>
-                <View style={rowStyles.body}>
-                  <View style={rowStyles.top}>
-                    <View style={rowStyles.nameRow}>
-                      <Ionicons name="pin" size={13} color={colors.textMuted} style={{ marginRight: 3 }} />
-                      <Text style={[rowStyles.name, { color: colors.text }]}>Сохранённые сообщения</Text>
+              {myPubB64 ? (
+                <StoriesRow myPubB64={myPubB64} pair={pair} refreshTick={refreshTick} />
+              ) : null}
+              {/* v4.32.584: вход в архив стоит НАД перепиской, а не под ней.
+                  В подвале FlatList его находил только тот, кто пролистал весь
+                  список до конца — при сотне чатов архив просто переставал
+                  существовать. */}
+              {archivedCount > 0 ? (
+                <>
+                  <AppPressable style={s.archiveRow} onPress={() => setShowArchived(true)}>
+                    <View style={[s.archiveIcon, { backgroundColor: colors.surfaceHigh }]}>
+                      <Ionicons name="archive-outline" size={22} color={colors.textSecondary} />
                     </View>
-                  </View>
-                  <Text style={[rowStyles.preview, { color: colors.textSecondary }]} numberOfLines={1}>
-                    Заметки для себя
-                  </Text>
-                </View>
-              </AppPressable>
-              <View style={[s.separator, { marginLeft: 76 }]} />
+                    <Text style={[s.archiveName, { color: colors.text }]}>
+                      Архив
+                    </Text>
+                    <Text style={[s.archiveCount, { color: colors.textMuted }]}>
+                      {archivedCount}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                  </AppPressable>
+                  <View style={[s.separator, { marginLeft: 76 }]} />
+                </>
+              ) : null}
+              {myPubB64 ? (
+                <>
+                  <AppPressable
+                    style={({ pressed }) => [
+                      rowStyles.row,
+                      { backgroundColor: pressed ? colors.surfaceHigh : colors.background },
+                    ]}
+                    onPress={() => onOpenChat(myPubB64, 'Сохранённые сообщения')}
+                  >
+                    <View style={[savedStyles.iconCircle, { backgroundColor: colors.primary }]}>
+                      <Ionicons name="bookmark" size={24} color={contrastingInk(colors.primary)} />
+                    </View>
+                    <View style={rowStyles.body}>
+                      <View style={rowStyles.top}>
+                        <View style={rowStyles.nameRow}>
+                          <Ionicons name="pin" size={13} color={colors.textMuted} style={{ marginRight: 3 }} />
+                          <Text style={[rowStyles.name, { color: colors.text }]}>Сохранённые сообщения</Text>
+                        </View>
+                      </View>
+                      <Text style={[rowStyles.preview, { color: colors.textSecondary }]} numberOfLines={1}>
+                        Заметки для себя
+                      </Text>
+                    </View>
+                  </AppPressable>
+                  <View style={[s.separator, { marginLeft: 76 }]} />
+                </>
+              ) : null}
             </>
           ) : null
         }
@@ -1481,22 +1479,6 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
               ) : null}
             </View>
           )
-        }
-        ListFooterComponent={
-          !showArchived && archivedCount > 0 ? (
-            <AppPressable style={s.archiveRow} onPress={() => setShowArchived(true)}>
-              <View style={[s.archiveIcon, { backgroundColor: colors.surfaceHigh }]}>
-                <Ionicons name="archive-outline" size={22} color={colors.textSecondary} />
-              </View>
-              <Text style={[s.archiveName, { color: colors.text }]}>
-                Архив
-              </Text>
-              <Text style={[s.archiveCount, { color: colors.textMuted }]}>
-                {archivedCount}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-            </AppPressable>
-          ) : null
         }
       />
       </View>
