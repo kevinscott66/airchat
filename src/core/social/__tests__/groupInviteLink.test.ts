@@ -42,6 +42,41 @@ describe('groupInviteLink', () => {
     );
   });
 
+  // v4.32.581: обработчик ссылки в App.tsx режет путь по '/' и берёт первый
+  // кусок. Пока сборка отдавала обычный base64, '/' попадал в тело почти любой
+  // настоящей ссылки — и до разбора доезжал обрубок. Проверяем ровно тот путь,
+  // по которому ссылка приходит на самом деле.
+  it('ссылка переживает разрезание пути по «/» в обработчике deep link', () => {
+    const many = Array.from({ length: INVITE_MEMBERS_CAP }, (_, i) => ({
+      peerPubB64: pub(i + 3),
+      displayName: `Участник ${i}`,
+    }));
+    for (const params of [base, { ...base, members: many }]) {
+      const link = buildGroupInviteLink(params);
+      const body = link.slice(INVITE_LINK_PREFIX.length);
+      expect(body).not.toContain('/');
+      // Ровно так App.tsx достаёт полезную часть: parts[1] после split('/').
+      const parts = link.replace(/^airchat:\/\//, '').split('/').filter(Boolean);
+      expect(parts).toHaveLength(2);
+      expect(parseGroupInviteLink(parts[1])).toEqual(parseGroupInviteLink(link));
+      expect(parseGroupInviteLink(parts[1])?.id).toBe('g-1');
+    }
+  });
+
+  it('ссылки прежних версий в обычном base64 читаются по-прежнему', () => {
+    // Разбор принимает оба алфавита: смена алфавита на сборке не должна
+    // обесценить ссылки, которые уже разошлись.
+    const legacy = encode({
+      id: 'g-1',
+      name: 'Команда',
+      type: 'group',
+      adminPub: pub(1),
+      requireApproval: false,
+      members: [{ pub: pub(2), name: 'Аня' }],
+    });
+    expect(parseGroupInviteLink(legacy)?.adminPub).toBe(pub(1));
+  });
+
   it('ссылка без members больше не считается недействительной', () => {
     // Основная кнопка «Пригласительная ссылка» до 4.32.260 не клала members, а
     // разбор требовал массив — то есть главный способ пригласить выдавал

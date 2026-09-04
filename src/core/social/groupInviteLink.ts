@@ -140,7 +140,20 @@ export function buildGroupInviteLink(params: {
     // токен и отказал бы по ссылке, которую сам же и выдал.
     ...(isInviteToken(params.token) ? { token: params.token } : {}),
   };
-  return INVITE_LINK_PREFIX + Buffer.from(JSON.stringify(payload)).toString('base64');
+  // v4.32.581: алфавит base64url, а не обычный base64. Обычный содержит '/',
+  // а обработчик ссылки в App.tsx режет путь по '/' и берёт только первый
+  // кусок — то есть каждая ссылка приходила получателю обрезанной и падала на
+  // JSON.parse с «Недействительная ссылка приглашения». Проверил на пятистах
+  // правдоподобных приглашениях: '/' был во всех пятистах, так что не работало
+  // не «иногда», а всегда. В алфавите base64url '/' и '+' заменены на '_' и
+  // '-', разбор принимает оба алфавита, и старые ссылки (те, что дошли целыми)
+  // читаются по-прежнему.
+  return INVITE_LINK_PREFIX + toBase64Url(Buffer.from(JSON.stringify(payload)).toString('base64'));
+}
+
+/** Обычный base64 → base64url: '+/'→'-_', хвостовые '=' не нужны. */
+function toBase64Url(b64: string): string {
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 /**
@@ -158,7 +171,10 @@ export function parseGroupInviteLink(input: string): GroupInvitePayload | null {
 
   let raw: unknown;
   try {
-    raw = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+    // Оба алфавита сразу: свои новые ссылки приходят в base64url, свои старые —
+    // в обычном base64, и разбор не должен зависеть от того, какая версия
+    // приложения ссылку выдала.
+    raw = JSON.parse(Buffer.from(b64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
   } catch {
     return null;
   }
