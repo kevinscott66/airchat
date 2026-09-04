@@ -8,13 +8,13 @@
  * обещание, и оно должно совпадать с тем, что карточка умеет выполнить.
  */
 import {
-  disappearLabel,
   hubMore,
   hubQuickActions,
   hubSections,
   hubSettings,
   type HubFacts,
 } from '../profileHubModel';
+import { formatDisappearLabel } from '../../../core/social/disappearEnvelope';
 
 const base: HubFacts = {
   isSelf: false,
@@ -207,7 +207,7 @@ describe('настройки переписки', () => {
   it('текущее значение видно, не открывая пункт', () => {
     const on = hubSettings({ ...base, copyGuard: true, disappearMs: 3_600_000 });
     expect(on.find((x) => x.id === 'copy_guard')?.value).toBe('Вкл');
-    expect(on.find((x) => x.id === 'disappear')?.value).toBe('1 ч');
+    expect(on.find((x) => x.id === 'disappear')?.value).toBe('1 час');
   });
 
   // v4.32.569: запрет закрывает и пересылку, поэтому слово «копирование» в
@@ -219,18 +219,25 @@ describe('настройки переписки', () => {
   });
 });
 
-describe('disappearLabel', () => {
-  it('пишет время так, как его назвали при выборе', () => {
-    expect(disappearLabel(null)).toBe('Выключено');
-    expect(disappearLabel(0)).toBe('Выключено');
-    expect(disappearLabel(60_000)).toBe('1 мин');
-    expect(disappearLabel(3_600_000)).toBe('1 ч');
-    expect(disappearLabel(86_400_000)).toBe('1 дн');
-    expect(disappearLabel(7 * 86_400_000)).toBe('7 дн');
+/**
+ * v4.32.581. У карточки была своя копия подписи таймера: «7 дн» и
+ * «Выключено» там, где шапка переписки и системное сообщение о смене таймера
+ * печатают «7 дней» и «Выкл». Одна настройка называлась в приложении тремя
+ * способами; теперь подпись одна на всех.
+ */
+describe('подпись автоудаления', () => {
+  const valueOf = (ms: number | null): string | undefined =>
+    hubSettings({ ...base, disappearMs: ms }).find((i) => i.id === 'disappear')?.value;
+
+  it('совпадает с канонической', () => {
+    expect(valueOf(null)).toBe(formatDisappearLabel(null));
+    expect(valueOf(7 * 86_400_000)).toBe(formatDisappearLabel(7 * 86_400_000));
+    expect(valueOf(7 * 86_400_000)).toBe('7 дней');
+    expect(valueOf(null)).toBe('Выкл');
   });
 
   it('отрицательное и мусорное время не превращается в «-1 мин»', () => {
-    expect(disappearLabel(-5)).toBe('Выключено');
-    expect(disappearLabel(Number.NaN)).toBe('Выключено');
+    expect(valueOf(-5)).toBe('Выкл');
+    expect(valueOf(Number.NaN)).toBe('Выкл');
   });
 });

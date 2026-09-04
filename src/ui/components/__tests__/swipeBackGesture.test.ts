@@ -45,4 +45,16 @@ describe('жест оболочки (v4.32.575)', () => {
     expect(swipeStep(-60)).toBe(1);
     expect(swipeStep(60)).toBe(-1);
   });
+
+  // v4.32.581. Ответственность забирается на пороге, а отпускают палец где
+  // угодно — в том числе там же, где начали. Возврат пальца на место — это
+  // отмена жеста, и раньше она давала «назад»: экран закрывался ровно по
+  // тому движению, которым человек отменял его закрытие.
+  it('возврат пальца к началу отменяет жест, а не считается «назад»', () => {
+    expect(swipeStep(0)).toBeNull();
+    expect(swipeStep(DX_THRESHOLD)).toBeNull();
+    expect(swipeStep(-DX_THRESHOLD)).toBeNull();
+    expect(swipeStep(DX_THRESHOLD + 1)).toBe(-1);
+    expect(swipeStep(-DX_THRESHOLD - 1)).toBe(1);
+  });
 });

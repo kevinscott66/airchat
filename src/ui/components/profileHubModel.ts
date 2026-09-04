@@ -33,6 +33,12 @@
  * с кем-то, а не у себя в профиле.
  */
 
+// Подпись таймера — та же, что в шапке переписки и в системном сообщении о
+// смене таймера (v4.32.581). Своя копия здесь печатала «7 дн» и «Выключено»
+// там, где канонический формат даёт «7 дней» и «Выкл»: одна и та же настройка
+// называлась в приложении тремя разными способами.
+import { formatDisappearLabel } from '../../core/social/disappearEnvelope';
+
 export type HubFacts = {
   /** Это моя собственная карточка. */
   isSelf: boolean;
@@ -124,16 +130,6 @@ export type HubItem<Id> = {
   danger?: boolean;
 };
 
-/** Человеческая подпись таймера самоуничтожения. */
-export function disappearLabel(ms: number | null): string {
-  if (!ms || ms <= 0) return 'Выключено';
-  const h = ms / 3_600_000;
-  if (h < 1) return `${Math.round(ms / 60_000)} мин`;
-  if (h < 24) return `${Math.round(h)} ч`;
-  const d = Math.round(h / 24);
-  return `${d} дн`;
-}
-
 export function hubQuickActions(f: HubFacts): Array<HubItem<QuickActionId>> {
   const out: Array<HubItem<QuickActionId>> = [];
   if (f.inChat && !f.isSelf) {
@@ -190,7 +186,7 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
   out.push({ id: 'wallpaper', label: 'Изменить обои' });
   out.push({ id: 'share_contact', label: 'Поделиться этим контактом' });
   if (!f.isSelf) {
-    out.push({ id: 'disappear', label: 'Автоудаление', value: disappearLabel(f.disappearMs) });
+    out.push({ id: 'disappear', label: 'Автоудаление', value: formatDisappearLabel(f.disappearMs) });
     out.push({
       id: 'copy_guard',
       label: 'Запрет копирования и пересылки',

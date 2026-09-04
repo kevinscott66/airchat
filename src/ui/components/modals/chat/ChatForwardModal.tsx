@@ -165,7 +165,7 @@ export function ForwardModal({
         {selected.size > 0 ? (
           <View style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: colors.surfaceHigh }}>
             <Text style={{ fontSize: 13, color: colors.accent, fontWeight: '600' }}>
-              Выбрано: {selected.size} {selected.size === 1 ? 'чат' : selected.size < 5 ? 'чата' : 'чатов'}
+              Выбрано: {selected.size} {ruPlural(selected.size, ['чат', 'чата', 'чатов'])}
             </Text>
           </View>
         ) : null}
@@ -242,7 +242,7 @@ export function ForwardModal({
               {sending
                 ? <ActivityIndicator color={primaryInk(colors).text} />
                 : <Text style={{ color: primaryInk(colors).text, fontSize: 16, fontWeight: '600' }}>
-                    Переслать в {selected.size} {selected.size === 1 ? 'чат' : selected.size < 5 ? 'чата' : 'чатов'}
+                    Переслать в {selected.size} {ruPlural(selected.size, ['чат', 'чата', 'чатов'])}
                   </Text>
               }
             </AppPressable>
