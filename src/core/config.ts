@@ -430,7 +430,13 @@ function normalizeEndpoints(cfg: AppConfig): AppConfig {
   // остаться как есть — это и есть запрос на 'file://…/register-token'.
   const rawSignaling = cfg.webrtc?.signalingUrl;
   if (rawSignaling != null && rawSignaling !== '') {
-    const signalingUrl = normalizeServerBase(rawSignaling)?.httpBase;
+    // v4.32.581. `http://` отвергается так же, как у cloudBackup выше. По
+    // этому каналу идут SDP и ICE, а имя собеседника берётся из поля, которое
+    // ставит сервер: открытый http делает сигнальным сервером любого
+    // посредника в сети — чужой Wi-Fi подменяет обе стороны и слушает звонок,
+    // не тронув настоящий сервер.
+    const parsedSignaling = normalizeServerBase(rawSignaling);
+    const signalingUrl = parsedSignaling && !parsedSignaling.insecure ? parsedSignaling.httpBase : undefined;
     if (!signalingUrl) log.warn('config_signaling_rejected', { raw: String(rawSignaling).slice(0, 120) });
     out.webrtc = { ...cfg.webrtc, signalingUrl };
   } else if (rawSignaling === '') {
@@ -543,7 +549,10 @@ async function readConfigOverride(): Promise<Partial<AppConfig>> {
   try {
     const uri = documentConfigOverrideUri();
     const info = await FileSystem.getInfoAsync(uri);
-    if (!info.exists) return {};
+    // v4.32.581. Тот же потолок, что и у readUserOverride: файл один и тот же,
+    // а читателей у него два, и второй читал без ограничения — подложенный
+    // многомегабайтный override вешал JS-поток на старте.
+    if (!info.exists || (info.size ?? 0) > 256 * 1024) return {};
     const raw = await FileSystem.readAsStringAsync(uri);
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
