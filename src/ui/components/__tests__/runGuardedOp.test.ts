@@ -142,8 +142,10 @@ describe('незакрытых цепочек в экранах не остал�
   it('у каждого закрытого места есть метка для журнала', () => {
     const tags = CHAT.match(/runGuardedOp\(/g) ?? [];
     const withTag = CHAT.match(/, 'ui_chat_[a-z_]+'\)/g) ?? [];
-    // Все одиннадцать мест переписки помечены; без метки причина не ищется.
-    expect(tags.length).toBeGreaterThanOrEqual(11);
-    expect(withTag.length).toBeGreaterThanOrEqual(11);
+    // Все места переписки помечены; без метки причина не ищется.
+    // v4.32.578: было одиннадцать — двойник «В избранное» из отдельного
+    // iOS-меню ушёл вместе с меню, а не с обработкой ошибки.
+    expect(tags.length).toBeGreaterThanOrEqual(10);
+    expect(withTag.length).toBeGreaterThanOrEqual(10);
   });
 });

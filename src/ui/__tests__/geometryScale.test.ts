@@ -210,7 +210,6 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/screens/chat-components/MediaStrip.tsx': 3,
   'ui/components/VoiceMessage.tsx': 2,
   'ui/components/modals/chat/ChatPinnedListModal.tsx': 2,
-  'ui/components/modals/chat/ChatQuickReactModal.tsx': 2,
   'ui/components/modals/chat/ChatQuickRepliesModal.tsx': 2,
   'ui/components/modals/chat/ChatWallpaperPickerModal.tsx': 2,
   'ui/components/modals/groups/GroupPinnedListModal.tsx': 2,

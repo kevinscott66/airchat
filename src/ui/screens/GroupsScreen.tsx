@@ -14,7 +14,6 @@ import {
   FlatList,
   TextInput,
   Alert,
-  ActionSheetIOS,
   Platform,
   ActivityIndicator,
   ScrollView,
@@ -2147,87 +2146,39 @@ function GroupChatScreen({
         } finally { clearTimeout(to); }
       })();
     };
-    if (Platform.OS === 'ios') {
-      const extra: string[] = [];
-      if (isTextMsg) extra.push(COPY_ACTION);
-      if (isTextMsg) extra.push('Переслать');
-      if (isTextMsg && !isOwn) extra.push('В избранное');
-      if (!isSysMsg) extra.push(COPY_LINK_ACTION);
-      if (!isSysMsg) extra.push(starLabel);
-      if (canTranslate) extra.push('Перевести');
-      if (canPin) extra.push(grpPinnedList.some((p) => p.id === item.id) ? 'Открепить' : 'Закрепить');
-      if (canEdit) extra.push('Редактировать');
-      if (canClosePoll) extra.push('Завершить опрос');
-      if (!isSysMsg) extra.push('Напомнить');
-      if (!isOwn) extra.push('📩 Отметить непрочитанным');
-      if (!isOwn && onOpenDm) extra.push('Написать в ЛС');
-      extra.push('Сведения');
-      if (canDelete) extra.push('Удалить');
-      extra.push('Выбрать');
-      const options = isSysMsg ? [...extra, 'Отмена'] : [...REACTION_EMOJIS, 'Ответить', ...extra, 'Отмена'];
-      const cancelIdx = options.length - 1;
-      // For system messages: no reactions or reply prefix; extra items start at index 0
-      const replyIdx = isSysMsg ? -1 : REACTION_EMOJIS.length;
-      const extraBase = isSysMsg ? 0 : REACTION_EMOJIS.length + 1; // after reactions+reply
-      let offset = 0;
-      const copyIdx = isTextMsg ? extraBase + offset++ : -1;
-      const fwdIdx = isTextMsg ? extraBase + offset++ : -1;
-      const favIdx = (isTextMsg && !isOwn) ? extraBase + offset++ : -1;
-      const linkIdx = isSysMsg ? -1 : extraBase + offset++;
-      const starIdx = isSysMsg ? -1 : extraBase + offset++;
-      const translateIdx = canTranslate ? extraBase + offset++ : -1;
-      const pinIdx = canPin ? extraBase + offset++ : -1;
-      const editIdx = canEdit ? extraBase + offset++ : -1;
-      const closeIdx = canClosePoll ? extraBase + offset++ : -1;
-      const remindIdx = !isSysMsg ? extraBase + offset++ : -1;
-      const markUnreadIdx = !isOwn ? extraBase + offset++ : -1;
-      const dmIdx = (!isOwn && onOpenDm) ? extraBase + offset++ : -1;
-      const infoIdx = extraBase + offset++;
-      const delIdx = canDelete ? extraBase + offset++ : -1;
-      const selIdx = extraBase + offset;
-      ActionSheetIOS.showActionSheetWithOptions({ options, cancelButtonIndex: cancelIdx, destructiveButtonIndex: canDelete ? delIdx : undefined }, (i) => {
-        if (!isSysMsg && i < REACTION_EMOJIS.length) void applyReaction(item, REACTION_EMOJIS[i]);
-        else if (i === replyIdx) setReplyTo(item);
-        else if (i === copyIdx) { Clipboard.setString(item.text); showSuccess(COPIED_TEXT); }
-        else if (i === fwdIdx) setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text));
-        else if (i === favIdx) saveToFavorites();
-        else if (i === linkIdx) { Clipboard.setString(msgLink); showSuccess(COPIED_LINK); }
-        else if (i === starIdx) toggleStar();
-        else if (i === translateIdx) translateMsg();
-        else if (i === pinIdx) void pinMsg(item);
-        else if (i === editIdx) startEdit(item);
-        else if (i === closeIdx) closePoll();
-        else if (i === remindIdx) scheduleReminder();
-        else if (i === markUnreadIdx) markUnreadAndLeave();
-        else if (i === dmIdx && onOpenDm) onOpenDm(item.senderPubB64, item.senderName ?? shortIdentity(item.senderPubB64));
-        else if (i === infoIdx) setGrpMsgInfoTarget(item);
-        else if (i === delIdx) deleteMsg(item);
-        else if (i === selIdx) selectMsg();
-      });
-    } else {
-      // v4.32.227 (BUG-09): меню действий с сообщением на Android через ActionSheet
-      // (Alert обрезал список до 3 кнопок). Добавлены реакции сверху, как в iOS-ветке.
-      openSheet('Сообщение', item.text.length > 60 ? item.text.slice(0, 60) + '…' : parseGroupSysText(item.text), [
-        ...(isSysMsg ? [] : REACTION_EMOJIS.map((emoji) => ({ text: emoji, onPress: () => void applyReaction(item, emoji) }))),
-        isSysMsg ? null : { text: 'Ответить', onPress: () => setReplyTo(item) },
-        isTextMsg ? { text: COPY_ACTION, onPress: () => { Clipboard.setString(item.text); showSuccess(COPIED_TEXT); } } : null,
-        canTranslate ? { text: '🌐 Перевести', onPress: translateMsg } : null,
-        isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text)) } : null,
-        isTextMsg ? { text: 'Сохранить в Избранное', onPress: saveToFavorites } : null,
-        isSysMsg ? null : { text: 'Напомнить', onPress: scheduleReminder },
-        isSysMsg ? null : { text: COPY_LINK_ACTION, onPress: () => { Clipboard.setString(msgLink); showSuccess(COPIED_LINK); } },
-        isSysMsg ? null : { text: starLabel, onPress: toggleStar },
-        canPin ? { text: grpPinnedList.some((p) => p.id === item.id) ? 'Открепить' : 'Закрепить', onPress: () => void pinMsg(item) } : null,
-        canEdit ? { text: 'Редактировать', onPress: () => startEdit(item) } : null,
-        canClosePoll ? { text: 'Завершить опрос', onPress: closePoll } : null,
-        { text: 'Сведения', onPress: () => setGrpMsgInfoTarget(item) },
-        !isOwn ? { text: '📩 Отметить непрочитанным', onPress: markUnreadAndLeave } : null,
-        canDelete ? { text: 'Удалить', style: 'destructive' as const, onPress: () => deleteMsg(item) } : null,
-        { text: 'Выбрать', onPress: selectMsg },
-        !isOwn && onOpenDm ? { text: 'Написать в ЛС', onPress: () => onOpenDm(item.senderPubB64, item.senderName ?? shortIdentity(item.senderPubB64)) } : null,
-        { text: 'Отмена', style: 'cancel' as const },
-      ]);
-    }
+    // v4.32.578: одно меню на обе платформы. iOS-ветка поднимала системный
+    // ActionSheetIOS: он рисуется не в теме приложения, а шестнадцать его
+    // пунктов разбирались самодельной арифметикой индексов (`extraBase +
+    // offset++`) — стоило добавить пункт не в том месте, и нажатие уходило
+    // соседнему действию.
+    //
+    // Редкие действия убраны под «Ещё…»: список из двадцати с лишним строк
+    // никто не дочитывает, и «Ответить» тонуло среди «Написать в ЛС».
+    const dmName = item.senderName ?? shortIdentity(item.senderPubB64);
+    const openMore = () => openSheet('Ещё', '', [
+      canTranslate ? { text: '🌐 Перевести', onPress: translateMsg } : null,
+      isTextMsg ? { text: 'Сохранить в Избранное', onPress: saveToFavorites } : null,
+      isSysMsg ? null : { text: starLabel, onPress: toggleStar },
+      isSysMsg ? null : { text: COPY_LINK_ACTION, onPress: () => { Clipboard.setString(msgLink); showSuccess(COPIED_LINK); } },
+      isSysMsg ? null : { text: 'Напомнить', onPress: scheduleReminder },
+      canClosePoll ? { text: 'Завершить опрос', onPress: closePoll } : null,
+      { text: 'Сведения', onPress: () => setGrpMsgInfoTarget(item) },
+      !isOwn ? { text: '📩 Отметить непрочитанным', onPress: markUnreadAndLeave } : null,
+      { text: 'Выбрать', onPress: selectMsg },
+      !isOwn && onOpenDm ? { text: 'Написать в ЛС', onPress: () => onOpenDm(item.senderPubB64, dmName) } : null,
+      { text: 'Отмена', style: 'cancel' as const },
+    ]);
+    openSheet('Сообщение', item.text.length > 60 ? item.text.slice(0, 60) + '…' : parseGroupSysText(item.text), [
+      ...(isSysMsg ? [] : REACTION_EMOJIS.map((emoji) => ({ text: emoji, onPress: () => void applyReaction(item, emoji) }))),
+      isSysMsg ? null : { text: 'Ответить', onPress: () => setReplyTo(item) },
+      isTextMsg ? { text: COPY_ACTION, onPress: () => { Clipboard.setString(item.text); showSuccess(COPIED_TEXT); } } : null,
+      isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text)) } : null,
+      canEdit ? { text: 'Редактировать', onPress: () => startEdit(item) } : null,
+      canPin ? { text: grpPinnedList.some((p) => p.id === item.id) ? 'Открепить' : 'Закрепить', onPress: () => void pinMsg(item) } : null,
+      { text: 'Ещё…', onPress: openMore },
+      canDelete ? { text: 'Удалить', style: 'destructive' as const, onPress: () => deleteMsg(item) } : null,
+      { text: 'Отмена', style: 'cancel' as const },
+    ]);
   }, [applyReaction, openSheet, myPubB64, startEdit, amAdmin, canPin, pinMsg, deleteMsg, loadMessages, grpPinnedList, onOpenDm, onBack, group.id, pid, grpTranslateLang, translationCache, grpManualTranslatedIds, setTranslationCache, setGrpManualTranslatedIds, setGrpMsgInfoTarget]);
 
   const send = useCallback(() => {

@@ -44,6 +44,7 @@ import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webSto
 import { scheduleDialogBackupPersist } from './core/storage/dialogBackup';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
+import { AppNotifyHost } from './ui/components/AppNotifyHost';
 import { LoginScreen } from './ui/screens/LoginScreen';
 import { FeedScreen } from './ui/screens/FeedScreen';
 import { ChatScreen } from './ui/screens/ChatScreen';
@@ -1574,6 +1575,9 @@ function MainTabs({
           </AppPressable>
         </Animated.View>
       ) : null}
+      {/* Тост и диалоги подтверждения приложения. Стоят последними и внутри
+          TabBarInsetProvider: тост поднимается ровно над таббаром. */}
+      <AppNotifyHost />
     </SwipeBackHost>
     </TabBarInsetProvider>
     </TabRefProvider>

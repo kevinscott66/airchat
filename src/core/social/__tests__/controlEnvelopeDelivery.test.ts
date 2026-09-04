@@ -111,9 +111,11 @@ describe('служебный конверт идёт общим путём', () 
     expect(SYNC).not.toContain("item.kind === 'ctl' || item.kind === 'msg'");
   });
 
-  it('исход сообщают человеку во всех трёх местах, одним правилом', () => {
+  it('исход сообщают человеку во всех местах, одним правилом', () => {
+    // v4.32.578: мест стало два. Третьим было удаление у всех из отдельного
+    // iOS-меню — оно убрано вместе с самим меню, а не с отчётом об исходе.
     const uses = CHAT_SCREEN.match(/reportTwoSided\(/g) ?? [];
-    expect(uses).toHaveLength(3);
+    expect(uses).toHaveLength(2);
     // Ни один вызов не выбрасывает результат молча.
     const ignored = CHAT_SCREEN.split('\n').filter(
       (l) =>

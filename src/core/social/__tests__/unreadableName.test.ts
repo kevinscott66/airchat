@@ -232,6 +232,7 @@ describe('имя отправителя в группе (v4.32.593)', () => {
   it('наружу уходит короткий ключ, а не пометка и не «?»', () => {
     const src = GROUPS();
     expect(src).not.toMatch(/senderName \?\? '\?'/);
-    expect(src.match(/outwardName\(/g)?.length).toBe(5);
+    // v4.32.578: пятым было пересылание из отдельного iOS-меню группы.
+    expect(src.match(/outwardName\(/g)?.length).toBe(4);
   });
 });

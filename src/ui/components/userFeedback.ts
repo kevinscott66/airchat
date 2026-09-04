@@ -1,12 +1,21 @@
 import { Alert, Platform, ToastAndroid } from 'react-native';
 import { authGuard } from '../../core/security/authGuard';
 import { localHalfDone, peerHalfDone, type TwoSidedOutcome } from '../../core/social/twoSidedEdit';
+import { pushConfirm, pushToast, type ConfirmActionSpec } from './appNotify';
 
 /**
  * Понятные уведомления без технического жаргона для пользователя.
- * Понятное уведомление об ошибке (Toast на Android, Alert на iOS).
+ *
+ * v4.32.578: уведомления рисует само приложение, а не система. Раньше здесь
+ * стоял `Alert.alert` на iOS и `ToastAndroid` на Android — и то и другое живёт
+ * снаружи темы: поверх тёмного приложения открывалось светлое системное окно,
+ * а «Скопировано» требовало нажать «ОК». Теперь обе ветки зовут шину
+ * `appNotify`, а системное окно остаётся запасным выходом на тот случай, если
+ * хост ещё не смонтирован (ранний старт, тесты): молча терять уведомление
+ * нельзя.
  */
 export function showError(message: string): void {
+  if (pushToast('error', message)) return;
   if (Platform.OS === 'android') {
     ToastAndroid.show(message, ToastAndroid.LONG);
   } else {
@@ -35,11 +44,36 @@ export async function showPasswordRejected(): Promise<void> {
 
 /** Краткое уведомление об успехе. */
 export function showSuccess(message: string): void {
+  if (pushToast('success', message)) return;
   if (Platform.OS === 'android') {
     ToastAndroid.show(message, ToastAndroid.SHORT);
   } else {
     Alert.alert('Готово', message);
   }
+}
+
+/**
+ * Диалог подтверждения в теме приложения — замена `Alert.alert` с кнопками.
+ *
+ * Отличие от системного окна не только в цвете. `Alert.alert` на Android
+ * рендерит лишь ПЕРВЫЕ ТРИ кнопки и молча выбрасывает остальные (это же
+ * объяснено в `ActionSheet.tsx`), поэтому «Удалить у себя / Удалить у всех /
+ * Отмена» держалось ровно на пределе. Здесь список кнопок не ограничен.
+ *
+ * `cancel: true` у последней кнопки — не стиль, а поведение: она закрывает окно
+ * и не зовёт обработчик, как и тап по подложке.
+ */
+export function showConfirm(spec: { title: string; message?: string; actions: ConfirmActionSpec[] }): void {
+  if (pushConfirm(spec)) return;
+  Alert.alert(
+    spec.title,
+    spec.message ?? '',
+    spec.actions.map((a) => ({
+      text: a.label,
+      style: a.cancel ? ('cancel' as const) : a.destructive ? ('destructive' as const) : ('default' as const),
+      onPress: a.onPress,
+    }))
+  );
 }
 
 /**

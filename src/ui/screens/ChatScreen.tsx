@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-  ActionSheetIOS,
   Platform,
   Vibration,
   ScrollView,
@@ -97,7 +96,7 @@ import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { profileManager } from '../../core/identity/profileManager';
 import { rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
-import { reportTwoSided, showError, showSuccess } from '../components/userFeedback';
+import { reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
 import { exportBody } from '../../core/social/exportLine';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
@@ -767,7 +766,7 @@ import { clockTime, fullDateTime } from '../../core/time/ruDateTime';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
-import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { COPY_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
 import { SecureContent, isSecureContentSupported, setWindowSecure } from '../../../modules/airchat-screen-guard/src';
 
@@ -2573,6 +2572,7 @@ function ChatThreadView({
   // ChatQuickReactModal, и «Перевести», «Копировать ссылку», «Закрепить»,
   // «Выбрать» и «Завершить опрос» были недоступны в принципе. Вынесены наружу,
   // чтобы оба меню звали одну и ту же реализацию.
+  // v4.32.578: второго меню больше нет — iOS открывает ту же модалку.
   const isRowPinned = useCallback(
     (id: string) => pinnedMsgListRef.current.some((p) => p.id === id) || pinnedMsg?.id === id,
     [pinnedMsg]
@@ -2630,14 +2630,18 @@ function ChatThreadView({
         const res = await fetch(url, { signal: ctrl.signal });
         const out = parseTranslation(await res.json(), text);
         if (out.ok) {
-          Alert.alert('Перевод', out.text, [
-            // Перевод — тот же текст переписки, только другими словами: при
-            // запрете на копирование кнопки здесь тоже нет.
-            ...(copyBlockedRef.current
-              ? []
-              : [{ text: COPY_ACTION, onPress: () => { Clipboard.setString(out.text); showSuccess(COPIED_TEXT); } }]),
-            { text: 'OK', style: 'cancel' as const },
-          ]);
+          showConfirm({
+            title: 'Перевод',
+            message: out.text,
+            actions: [
+              // Перевод — тот же текст переписки, только другими словами: при
+              // запрете на копирование кнопки здесь тоже нет.
+              ...(copyBlockedRef.current
+                ? []
+                : [{ label: COPY_ACTION, onPress: () => { Clipboard.setString(out.text); showSuccess(COPIED_TEXT); } }]),
+              { label: 'OK', cancel: true },
+            ],
+          });
         } else {
           showError(translateFailureMessage(out.reason));
         }
@@ -2646,174 +2650,63 @@ function ChatThreadView({
   }, []);
 
   const closeRowPoll = useCallback((id: string) => {
-    Alert.alert('Завершить опрос?', 'Голосование будет закрыто, новые голоса не принимаются.', [
-      // v4.32.251: завершение уходит собеседнику конвертом — раньше опрос
-      // закрывался только у автора, а собеседник продолжал голосовать.
-      // v4.32.446: «Опрос завершён» печаталось и тогда, когда конверт не ушёл
-      // собеседнику: у автора опрос закрыт, у собеседника открыт.
-      { text: 'Завершить', style: 'destructive', onPress: () => void closeAndSyncPoll({ msgId: id, myPubB64, peerPubB64: peerB64 }).then((res) => { if (res.ok) showSuccess('Опрос завершён'); else showError(res.reason); }).catch(() => showError('Не удалось завершить опрос')) },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
+    showConfirm({
+      title: 'Завершить опрос?',
+      message: 'Голосование будет закрыто, новые голоса не принимаются.',
+      actions: [
+        // v4.32.251: завершение уходит собеседнику конвертом — раньше опрос
+        // закрывался только у автора, а собеседник продолжал голосовать.
+        // v4.32.446: «Опрос завершён» печаталось и тогда, когда конверт не ушёл
+        // собеседнику: у автора опрос закрыт, у собеседника открыт.
+        { label: 'Завершить', destructive: true, onPress: () => void closeAndSyncPoll({ msgId: id, myPubB64, peerPubB64: peerB64 }).then((res) => { if (res.ok) showSuccess('Опрос завершён'); else showError(res.reason); }).catch(() => showError('Не удалось завершить опрос')) },
+        { label: 'Отмена', cancel: true },
+      ],
+    });
   }, [myPubB64, peerB64]);
 
-  const showMessageMenu = useCallback(
-    (row: ChatMessageRow) => {
-      Vibration.vibrate(30);
-      const svc = getMessagingService();
-      if (!svc) return;
+  /**
+   * v4.32.578: длинное нажатие открывает одну и ту же модалку на всех
+   * платформах. На iOS раньше поднимался системный ActionSheetIOS: он рисуется
+   * не в теме приложения, а его четырнадцать пунктов разбирались по `indexOf`
+   * подписи — меню и обработчик расходились от любой правки текста. Список
+   * действий и его порядок теперь живут в messageMenuModel, а не в двух
+   * разъезжающихся копиях здесь.
+   */
+  const showMessageMenu = useCallback((row: ChatMessageRow) => {
+    Vibration.vibrate(30);
+    setQuickReactMsg(row);
+  }, []);
 
-      const runLocal = async () => {
-        // Save to recently deleted (KV) before actual delete
-        void (async () => {
-          try {
-            // v4.32.552: чтение-дополнение-запись идёт через kvUpdateSecretScoped.
-            // Раньше не открывшийся шифртекст приходил сюда пустой строкой,
-            // список начинался с нуля и уходил в базу поверх прежней корзины:
-            // до полусотни удалённых сообщений, которые и собирались вернуть,
-            // исчезали от одного нажатия «Удалить».
-            const { kvUpdateSecretScoped } = await import('../../core/storage/local');
-            const now = Date.now();
-            await kvUpdateSecretScoped(activeProfileId, recentlyDeletedKey(peerB64), (raw) => {
-              let list: Array<{ id: string; text: string; createdAt: number; deletedAt: number; direction: string }> = [];
-              if (raw) { try { const p = JSON.parse(raw); if (Array.isArray(p)) list = p; } catch { /* */ } }
-              // v4.32.183 (Round-13 #8): defense — if parse yielded non-array, list stays [].
-              list = list.filter((m) => m && now - m.deletedAt < DM_RECENTLY_DELETED_TTL_MS);
-              if (row.text && row.text.length < 2000 && !row.text.startsWith('\x01')) {
-                list.unshift({ id: row.id, text: row.text, createdAt: row.createdAt, deletedAt: now, direction: row.direction });
-              }
-              if (list.length > 50) list = list.slice(0, 50);
-              return JSON.stringify(list);
-            });
-          } catch { /* ignore */ }
-        })();
-        await svc.deleteMessageLocally(row.id);
-        void appendNewMessages();
-        showSuccess('Сообщение удалено');
-      };
-
-      const confirmEveryone = () => {
-        Alert.alert('Удалить у всех', 'Сообщение будет удалено у всех участников чата.', [
-          { text: 'Отмена', style: 'cancel' },
-          {
-            text: 'Удалить',
-            style: 'destructive',
-            onPress: () => {
-              void (async () => {
-                const echo = await svc.deleteMessageForEveryone(peerB64, row.id);
-                void appendNewMessages();
-                reportTwoSided(echo, 'delete');
-              })();
-            },
-          },
-        ]);
-      };
-
-      const startEdit = () => { setEditTarget(row); setMsg(row.text); };
-
-      const copyText = () => {
-        Clipboard.setString(row.text);
-        showSuccess(COPIED_TEXT);
-      };
-
-      const selectMsg = () => selectRow(row.id);
-
-      const showReactions = () => setReactionsTarget(row);
-
-      const forwardMsg = () => setForwardTarget(row);
-
-      const togglePin = () => toggleRowPin(row.id);
-
-      const pinLabel = isRowPinned(row.id) ? 'Открепить' : 'Закрепить';
-
-      const isStarred = Boolean(row.starred);
-      const starLabel = isStarred ? 'Убрать из избранного' : 'В избранное';
-      const toggleStar = () => {
-        runGuardedOp(async () => {
-          await setMessageStarred(row.id, !isStarred);
-          await appendNewMessages();
-        }, 'Не удалось изменить избранное', 'ui_chat_star_failed');
-      };
-
-      const translateMsg = () => translateRow(row.text ?? '');
-
-      const scheduleReminder = () => {
-        const preview = row.text.startsWith('\x01') ? 'Медиасообщение' : row.text.slice(0, 40);
-        promptMessageReminder(preview, showSuccess, showError);
-      };
-
-      const isPollRow = (row.text ?? '').startsWith(POLL_PREFIX);
-      const closeDmPoll = () => closeRowPoll(row.id);
-      const copyMsgLink = () => copyRowLink(row.id);
-
-      if (row.direction === 'out') {
-        if (Platform.OS === 'ios') {
-          // Пункты «Копировать» и «Переслать» именно убираются: при запрете
-          // серая строка обещала бы, что где-то их можно вернуть.
-          const iosOutOpts = ['Ответить',
-            ...(copyBlockedRef.current ? [] : ['Переслать']),
-            'Реакция', 'Редактировать',
-            ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
-            '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', 'Подробнее', 'Выбрать'];
-          if (isPollRow) iosOutOpts.push('Завершить опрос');
-          iosOutOpts.push('Удалить у себя', 'Удалить у всех', 'Отмена');
-          const iosCancelIdx = iosOutOpts.length - 1;
-          const iosDelLocalIdx = iosOutOpts.indexOf('Удалить у себя');
-          ActionSheetIOS.showActionSheetWithOptions(
-            { options: iosOutOpts, cancelButtonIndex: iosCancelIdx, destructiveButtonIndex: iosDelLocalIdx },
-            (i) => {
-              const idx = (s: string) => iosOutOpts.indexOf(s);
-              if (i === 0) setReplyTo(row);
-              else if (i === idx('Переслать')) forwardMsg();
-              else if (i === idx('Реакция')) showReactions();
-              else if (i === idx('Редактировать')) startEdit();
-              else if (i === idx(COPY_ACTION)) copyText();
-              else if (i === idx('🌐 Перевести')) translateMsg();
-              else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
-              else if (i === idx(starLabel)) toggleStar();
-              else if (i === idx(pinLabel)) togglePin();
-              else if (i === idx('Напомнить')) scheduleReminder();
-              else if (i === idx('Подробнее')) setMsgInfoTarget(row);
-              else if (i === idx('Выбрать')) selectMsg();
-              else if (isPollRow && i === idx('Завершить опрос')) closeDmPoll();
-              else if (i === idx('Удалить у себя')) void runLocal();
-              else if (i === idx('Удалить у всех')) confirmEveryone();
-            }
-          );
-        } else {
-          setQuickReactMsg(row);
+  /**
+   * Корзина «Недавно удалённые» перед фактическим удалением.
+   *
+   * v4.32.578: раньше это делал только iOS-путь ActionSheetIOS, а модалка
+   * (Android) удаляла без копии — на Android «Недавно удалённые» всегда были
+   * пусты. Теперь путь один.
+   *
+   * v4.32.552: чтение-дополнение-запись идёт через kvUpdateSecretScoped.
+   * Раньше не открывшийся шифртекст приходил сюда пустой строкой, список
+   * начинался с нуля и уходил в базу поверх прежней корзины: до полусотни
+   * удалённых сообщений, которые и собирались вернуть, исчезали от одного
+   * нажатия «Удалить».
+   */
+  const saveRecentlyDeleted = useCallback(async (row: ChatMessageRow) => {
+    try {
+      const { kvUpdateSecretScoped } = await import('../../core/storage/local');
+      const now = Date.now();
+      await kvUpdateSecretScoped(activeProfileId, recentlyDeletedKey(peerB64), (raw) => {
+        let list: Array<{ id: string; text: string; createdAt: number; deletedAt: number; direction: string }> = [];
+        if (raw) { try { const p = JSON.parse(raw); if (Array.isArray(p)) list = p; } catch { /* */ } }
+        // v4.32.183 (Round-13 #8): defense — if parse yielded non-array, list stays [].
+        list = list.filter((m) => m && now - m.deletedAt < DM_RECENTLY_DELETED_TTL_MS);
+        if (row.text && row.text.length < 2000 && !row.text.startsWith('\x01')) {
+          list.unshift({ id: row.id, text: row.text, createdAt: row.createdAt, deletedAt: now, direction: row.direction });
         }
-      } else if (Platform.OS === 'ios') {
-        const markUnread = () => void import('../../core/storage/local').then((m) => m.markConversationUnread(peerB64, activeProfileId)).then(onBackRef.current);
-        const iosInOpts = ['Ответить',
-          ...(copyBlockedRef.current ? [] : ['Переслать']),
-          'Реакция',
-          ...(copyBlockedRef.current ? [] : [COPY_ACTION]),
-          '🌐 Перевести', COPY_LINK_ACTION, starLabel, pinLabel, 'Напомнить', '📩 Отметить непрочитанным', 'Выбрать', 'Удалить у себя', 'Отмена'];
-        ActionSheetIOS.showActionSheetWithOptions(
-          { options: iosInOpts, cancelButtonIndex: iosInOpts.indexOf('Отмена'), destructiveButtonIndex: iosInOpts.indexOf('Удалить у себя') },
-          (i) => {
-            const idx = (s: string) => iosInOpts.indexOf(s);
-            if (i === 0) setReplyTo(row);
-            else if (i === idx('Переслать')) forwardMsg();
-            else if (i === idx('Реакция')) showReactions();
-            else if (i === idx(COPY_ACTION)) copyText();
-            else if (i === idx('🌐 Перевести')) translateMsg();
-            else if (i === idx(COPY_LINK_ACTION)) copyMsgLink();
-            else if (i === idx(starLabel)) toggleStar();
-            else if (i === idx(pinLabel)) togglePin();
-            else if (i === idx('Напомнить')) scheduleReminder();
-            else if (i === idx('📩 Отметить непрочитанным')) markUnread();
-            else if (i === idx('Выбрать')) selectMsg();
-            else if (i === idx('Удалить у себя')) void runLocal();
-          }
-        );
-      } else {
-        setQuickReactMsg(row);
-      }
-    },
-    [peerB64, appendNewMessages, activeProfileId,
-      isRowPinned, toggleRowPin, selectRow, copyRowLink, translateRow, closeRowPoll]
-  );
+        if (list.length > 50) list = list.slice(0, 50);
+        return JSON.stringify(list);
+      });
+    } catch { /* ignore */ }
+  }, [activeProfileId, peerB64]);
 
   // v4.32.239: поиск по переписке ходит в базу, а не фильтрует загруженную
   // страницу. Раньше искалось только среди PAGE = 40 последних сообщений, и
@@ -3243,25 +3136,25 @@ function ChatThreadView({
                   {
                     text: `Размер шрифта${chatFontSize ? ` (${chatFontSize}пт)` : ''}`,
                     onPress: () => {
-                      const options = ['Маленький (13)', 'Обычный (15)', 'Крупный (17)', 'Очень крупный (20)', 'По умолчанию', 'Отмена'];
-                      const sizes = [13, 15, 17, 20, null];
-                      if (Platform.OS === 'ios') {
-                        ActionSheetIOS.showActionSheetWithOptions({ options, cancelButtonIndex: 5 }, (i) => {
-                          if (i >= 5) return;
-                          const sz = sizes[i];
-                          setChatFontSize(sz ?? null);
-                          void scopedKvSet(chatFontSizeKey(peerB64), sz ? String(sz) : '');
-                        });
-                      } else {
-                        Alert.alert('Размер шрифта', 'Выберите размер:', [
-                          { text: 'Маленький (13)', onPress: () => { setChatFontSize(13); void scopedKvSet(chatFontSizeKey(peerB64), '13'); } },
-                          { text: 'Обычный (15)', onPress: () => { setChatFontSize(15); void scopedKvSet(chatFontSizeKey(peerB64), '15'); } },
-                          { text: 'Крупный (17)', onPress: () => { setChatFontSize(17); void scopedKvSet(chatFontSizeKey(peerB64), '17'); } },
-                          { text: 'Очень крупный (20)', onPress: () => { setChatFontSize(20); void scopedKvSet(chatFontSizeKey(peerB64), '20'); } },
-                          { text: 'По умолчанию', onPress: () => { setChatFontSize(null); void scopedKvSet(chatFontSizeKey(peerB64), ''); } },
-                          { text: 'Отмена', style: 'cancel' },
-                        ]);
-                      }
+                      // v4.32.578: один список на обе платформы. iOS-ветка
+                      // поднимала системный ActionSheetIOS — не в теме
+                      // приложения и с разбором выбора по индексу.
+                      const sizes: Array<[string, number | null]> = [
+                        ['Маленький (13)', 13], ['Обычный (15)', 15],
+                        ['Крупный (17)', 17], ['Очень крупный (20)', 20],
+                        ['По умолчанию', null],
+                      ];
+                      showConfirm({
+                        title: 'Размер шрифта',
+                        message: 'Выберите размер:',
+                        actions: [
+                          ...sizes.map(([label, sz]) => ({
+                            label,
+                            onPress: () => { setChatFontSize(sz); void scopedKvSet(chatFontSizeKey(peerB64), sz ? String(sz) : ''); },
+                          })),
+                          { label: 'Отмена', cancel: true },
+                        ],
+                      });
                     },
                   },
                   {
@@ -4100,18 +3993,23 @@ function ChatThreadView({
           const svc2 = getMessagingService();
           if (!svc2) return;
           const isOut2 = q.direction === 'out';
-          Alert.alert('Удалить сообщение', '', [
-            { text: 'Удалить у себя', style: 'destructive', onPress: () => runGuardedOp(async () => {
-              await svc2.deleteMessageLocally(q.id);
-              await appendNewMessages();
-            }, 'Не удалось удалить сообщение', 'ui_chat_delete_local_failed') },
-            ...(isOut2 ? [{ text: 'Удалить у всех', style: 'destructive' as const, onPress: () => runGuardedOp(async () => {
-              const echo = await svc2.deleteMessageForEveryone(peerB64, q.id);
-              void appendNewMessages();
-              reportTwoSided(echo, 'delete');
-            }, 'Не удалось удалить у всех', 'ui_chat_delete_everyone_failed') }] : []),
-            { text: 'Отмена', style: 'cancel' },
-          ]);
+          showConfirm({
+            title: 'Удалить сообщение',
+            actions: [
+              { label: 'Удалить у себя', destructive: true, onPress: () => runGuardedOp(async () => {
+                await saveRecentlyDeleted(q);
+                await svc2.deleteMessageLocally(q.id);
+                await appendNewMessages();
+                showSuccess('Сообщение удалено');
+              }, 'Не удалось удалить сообщение', 'ui_chat_delete_local_failed') },
+              ...(isOut2 ? [{ label: 'Удалить у всех', destructive: true, onPress: () => runGuardedOp(async () => {
+                const echo = await svc2.deleteMessageForEveryone(peerB64, q.id);
+                void appendNewMessages();
+                reportTwoSided(echo, 'delete');
+              }, 'Не удалось удалить у всех', 'ui_chat_delete_everyone_failed') }] : []),
+              { label: 'Отмена', cancel: true },
+            ],
+          });
         }}
       />
 

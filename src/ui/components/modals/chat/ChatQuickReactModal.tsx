@@ -1,12 +1,13 @@
-import React, { memo, useCallback } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { font, scrim } from '../../../theme';
+import { font, scrim, spacing } from '../../../theme';
 import { COPY_ACTION, COPY_LINK_ACTION } from '../../../clipboardText';
+import { messageMenu, type MessageMenuAction } from './messageMenuModel';
 
 export interface QuickReactTarget {
   id: string;
@@ -55,6 +56,9 @@ export interface ChatQuickReactModalProps {
 
 const noop = () => {};
 
+/** Размер эмодзи в ряду реакций: он тут не текст, а мишень для пальца. */
+const EMOJI_SIZE = 28;
+
 function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
   const {
     target, onClose, recentReactions, reactionEmojis,
@@ -66,10 +70,68 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
   const visible = !!target;
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+
+  // Каждое новое сообщение открывается со свёрнутым «Ещё»: развёрнутое от
+  // прошлого раза — это то же самое длинное полотно, от которого уходим.
+  useEffect(() => { if (!visible) setExpanded(false); }, [visible]);
 
   const isMedia = !!target && target.text.startsWith('\x01');
   const isOut = target?.direction === 'out';
   const starred = !!target?.starred;
+
+  const menu = useMemo(() => messageMenu({
+    isOut: !!isOut,
+    isMedia,
+    copyBlocked: !!copyBlocked,
+    canClosePoll: !!canClosePoll && !!onClosePoll,
+  }), [isOut, isMedia, copyBlocked, canClosePoll, onClosePoll]);
+
+  /** Значок, подпись и обработчик каждого пункта. */
+  const spec = useMemo((): Record<MessageMenuAction, ActionSpec> => ({
+    reply: { icon: 'return-down-back-outline', label: 'Ответить', onPress: onReply },
+    copy: { icon: 'copy-outline', label: COPY_ACTION, onPress: onCopy },
+    forward: { icon: 'arrow-redo-outline', label: 'Переслать', onPress: onForward },
+    edit: { icon: 'pencil-outline', label: 'Редактировать', onPress: onEdit },
+    pin: { icon: pinned ? 'pin' : 'pin-outline', label: pinned ? 'Открепить' : 'Закрепить', onPress: onTogglePin },
+    delete: { icon: 'trash-outline', label: 'Удалить', onPress: onDelete, destructive: true },
+    translate: { icon: 'language-outline', label: 'Перевести', onPress: onTranslate },
+    copyLink: { icon: 'link-outline', label: COPY_LINK_ACTION, onPress: onCopyLink },
+    star: {
+      icon: starred ? 'star' : 'star-outline',
+      iconColor: starred ? colors.star : undefined,
+      label: starred ? 'Убрать из избранного' : 'В избранное',
+      onPress: onToggleStar,
+    },
+    remind: { icon: 'alarm-outline', label: 'Напомнить', onPress: onRemind },
+    info: { icon: 'information-circle-outline', label: 'Сведения', onPress: onShowInfo },
+    markUnread: { icon: 'mail-unread-outline', label: 'Отметить непрочитанным', onPress: onMarkUnread },
+    select: { icon: 'checkmark-circle-outline', label: 'Выбрать', onPress: onSelect },
+    closePoll: { icon: 'stop-circle-outline', label: 'Завершить опрос', onPress: onClosePoll ?? noop },
+  }), [
+    onReply, onCopy, onForward, onEdit, onTogglePin, pinned, onDelete, onTranslate,
+    onCopyLink, onToggleStar, starred, colors.star, onRemind, onShowInfo,
+    onMarkUnread, onSelect, onClosePoll,
+  ]);
+
+  const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+
+  const row = (id: MessageMenuAction) => {
+    const a = spec[id];
+    return (
+      <ActionRow
+        key={id}
+        icon={a.icon}
+        iconColor={a.destructive ? colors.error : a.iconColor ?? colors.text}
+        label={a.label}
+        onPress={a.onPress}
+        textColor={a.destructive ? colors.error : colors.text}
+      />
+    );
+  };
+
+  const visibleActions = menu.primary.filter((a) => a !== 'delete');
+  const hasDelete = menu.primary.includes('delete');
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -99,60 +161,58 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
                     ))}
                     <AppPressable style={styles.emojiBtn} onPress={onOpenMore}>
                       <View style={[styles.moreBtn, { borderColor: colors.border, backgroundColor: colors.surfaceHigh }]}>
-                        <Ionicons name="add" size={20} color={colors.text} />
+                        <Ionicons name="add" size={font.xl} color={colors.text} />
                       </View>
                     </AppPressable>
                   </View>
                   <View style={[styles.dividerTop, { backgroundColor: colors.border }]} />
                 </>
               ) : null}
-              <View style={styles.actions}>
-                <ActionRow icon="return-down-back-outline" label="Ответить" onPress={onReply} textColor={colors.text} borderColor={colors.border} />
-                {!isMedia && !copyBlocked ? (
-                  <ActionRow icon="copy-outline" label={COPY_ACTION} onPress={onCopy} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                {!isMedia && !copyBlocked ? (
-                  <ActionRow icon="arrow-redo-outline" label="Переслать" onPress={onForward} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                {isOut && !isMedia ? (
-                  <ActionRow icon="pencil-outline" label="Редактировать" onPress={onEdit} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                {!isMedia ? (
-                  <ActionRow icon="language-outline" label="Перевести" onPress={onTranslate} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                <ActionRow icon="link-outline" label={COPY_LINK_ACTION} onPress={onCopyLink} textColor={colors.text} borderColor={colors.border} />
-                <ActionRow
-                  icon={pinned ? 'pin' : 'pin-outline'}
-                  label={pinned ? 'Открепить' : 'Закрепить'}
-                  onPress={onTogglePin}
-                  textColor={colors.text}
-                  borderColor={colors.border}
-                />
-                <ActionRow
-                  icon={starred ? 'star' : 'star-outline'}
-                  iconColor={starred ? colors.star : colors.text}
-                  label={starred ? 'Убрать из избранного' : 'В избранное'}
-                  onPress={onToggleStar}
-                  textColor={colors.text}
-                  borderColor={colors.border}
-                />
-                {!isOut ? (
-                  <ActionRow icon="mail-unread-outline" label="Отметить непрочитанным" onPress={onMarkUnread} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                <ActionRow icon="information-circle-outline" label="Сведения" onPress={onShowInfo} textColor={colors.text} borderColor={colors.border} />
-                <ActionRow icon="alarm-outline" label="Напомнить" onPress={onRemind} textColor={colors.text} borderColor={colors.border} />
-                <ActionRow icon="checkmark-circle-outline" label="Выбрать" onPress={onSelect} textColor={colors.text} borderColor={colors.border} />
-                {canClosePoll && onClosePoll ? (
-                  <ActionRow icon="stop-circle-outline" label="Завершить опрос" onPress={onClosePoll} textColor={colors.text} borderColor={colors.border} />
-                ) : null}
-                <ActionRow icon="trash-outline" label="Удалить" onPress={onDelete} textColor={colors.error} iconColor={colors.error} noBorder />
-              </View>
+              <ScrollView style={styles.scroll} keyboardShouldPersistTaps="always">
+                <View style={styles.actions}>
+                  {visibleActions.map(row)}
+                  {menu.more.length > 0 ? (
+                    <>
+                      <AppPressable
+                        style={styles.action}
+                        onPress={toggleExpanded}
+                        accessibilityState={{ expanded }}
+                      >
+                        <Ionicons
+                          name={expanded ? 'chevron-up' : 'ellipsis-horizontal'}
+                          size={font.lg}
+                          color={colors.textSecondary}
+                          style={styles.actionIcon}
+                        />
+                        <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>
+                          {expanded ? 'Свернуть' : 'Ещё'}
+                        </Text>
+                      </AppPressable>
+                      {expanded ? menu.more.map(row) : null}
+                    </>
+                  ) : null}
+                  {hasDelete ? (
+                    <>
+                      <View style={[styles.dividerTop, { backgroundColor: colors.border }]} />
+                      {row('delete')}
+                    </>
+                  ) : null}
+                </View>
+              </ScrollView>
             </>
           ) : null}
         </AppPressable>
       </AppPressable>
     </Modal>
   );
+}
+
+interface ActionSpec {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  iconColor?: string;
+  label: string;
+  onPress: () => void;
+  destructive?: boolean;
 }
 
 interface EmojiTileProps { emoji: string; onPress: (emoji: string) => void }
@@ -172,16 +232,11 @@ interface ActionRowProps {
   label: string;
   onPress: () => void;
   textColor: string;
-  borderColor?: string;
-  noBorder?: boolean;
 }
-function ActionRowImpl({ icon, iconColor, label, onPress, textColor, borderColor, noBorder }: ActionRowProps) {
+function ActionRowImpl({ icon, iconColor, label, onPress, textColor }: ActionRowProps) {
   return (
-    <AppPressable
-      style={[styles.action, !noBorder && borderColor ? { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: borderColor } : null]}
-      onPress={onPress}
-    >
-      <Ionicons name={icon} size={18} color={iconColor ?? textColor} style={styles.actionIcon} />
+    <AppPressable style={styles.action} onPress={onPress}>
+      <Ionicons name={icon} size={font.lg} color={iconColor ?? textColor} style={styles.actionIcon} />
       <Text style={[styles.actionLabel, { color: textColor }]}>{label}</Text>
     </AppPressable>
   );
@@ -190,19 +245,22 @@ const ActionRow = memo(ActionRowImpl);
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'flex-end' },
-  sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 20 },
-  sectionLabel: { fontSize: font.xs, fontWeight: '600', paddingHorizontal: 12, paddingTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
-  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingTop: 12 },
+  // Полотно списка ограничено по высоте: с развёрнутым «Ещё» оно прокручивается,
+  // а не упирается в верх экрана.
+  sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 20, maxHeight: '82%' },
+  scroll: { flexGrow: 0 },
+  sectionLabel: { fontSize: font.xs, fontWeight: '600', paddingHorizontal: spacing.md, paddingTop: spacing.md, textTransform: 'uppercase', letterSpacing: 0.5 },
+  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.sm, paddingTop: spacing.md },
   emojiRowTight: { paddingTop: 0 },
-  emojiBtn: { padding: 6, marginHorizontal: 4 },
-  emojiText: { fontSize: 28 },
+  emojiBtn: { padding: 6, marginHorizontal: spacing.xs },
+  emojiText: { fontSize: EMOJI_SIZE },
   moreBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  divider: { height: StyleSheet.hairlineWidth, marginHorizontal: 12, marginVertical: 6 },
-  dividerTop: { height: StyleSheet.hairlineWidth, marginHorizontal: 12, marginTop: 6, marginBottom: 4 },
-  actions: { paddingHorizontal: 4 },
-  action: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12 },
+  divider: { height: StyleSheet.hairlineWidth, marginHorizontal: spacing.md, marginVertical: 6 },
+  dividerTop: { height: StyleSheet.hairlineWidth, marginHorizontal: spacing.md, marginTop: 6, marginBottom: spacing.xs },
+  actions: { paddingHorizontal: spacing.xs },
+  action: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.md },
   actionIcon: { marginRight: 10 },
-  actionLabel: { fontSize: 15 },
+  actionLabel: { fontSize: font.md },
 });
 
 export const ChatQuickReactModal = memo(ChatQuickReactModalImpl);

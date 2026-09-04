@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { messageMenu } from '../components/modals/chat/messageMenuModel';
 
 const chat = readFileSync(join(__dirname, '..', 'screens', 'ChatScreen.tsx'), 'utf8');
 const quick = readFileSync(
@@ -17,21 +18,28 @@ const quick = readFileSync(
 );
 
 describe('запрет копирования закрывает и пересылку', () => {
-  it('пункт «Переслать» в меню сообщения на iOS выдаётся только без запрета', () => {
-    const rows = chat
-      .split('\n')
-      .filter((l) => l.includes("'Переслать'") && l.includes('copyBlockedRef.current'));
-    // Два меню: своё сообщение и чужое.
-    expect(rows).toHaveLength(2);
-    for (const r of rows) expect(r).toContain("? [] : ['Переслать']");
+  // v4.32.578: меню сообщения одно на обе платформы. Второй, системный список
+  // на iOS (ActionSheetIOS) со своей копией условий убран — вместе с риском,
+  // что копии разойдутся и запрет останется только в одной из них.
+  it('второго меню сообщения на iOS больше нет', () => {
+    expect(chat).not.toContain('ActionSheetIOS.showActionSheetWithOptions');
+    expect(chat).toContain('copyBlocked={copyBlocked}');
   });
 
-  it('меню сообщения на Android прячет «Переслать» под тем же флагом', () => {
-    expect(quick).toContain('{!isMedia && !copyBlocked ? (');
-    const forwardIdx = quick.indexOf('label="Переслать"');
-    expect(forwardIdx).toBeGreaterThan(0);
-    const before = quick.slice(0, forwardIdx);
-    expect(before.slice(before.lastIndexOf('{!isMedia'))).toContain('!copyBlocked');
+  it('состав меню не выдаёт «Переслать» и «Копировать» при запрете', () => {
+    for (const isOut of [false, true]) {
+      const blocked = messageMenu({ isOut, isMedia: false, copyBlocked: true, canClosePoll: false });
+      const all = [...blocked.primary, ...blocked.more];
+      expect(all).not.toContain('copy');
+      expect(all).not.toContain('forward');
+      const open = messageMenu({ isOut, isMedia: false, copyBlocked: false, canClosePoll: false });
+      expect([...open.primary, ...open.more]).toEqual(expect.arrayContaining(['copy', 'forward']));
+    }
+  });
+
+  it('модалка берёт состав из модели, а не из своих условий', () => {
+    expect(quick).toContain("from './messageMenuModel'");
+    expect(quick).toContain('copyBlocked: !!copyBlocked');
   });
 
   it('панель выделения прячет и «Переслать», и «Копировать»', () => {
