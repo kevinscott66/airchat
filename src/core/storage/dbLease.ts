@@ -60,7 +60,20 @@ const SELF = `t${Math.random().toString(36).slice(2, 10)}${Date.now().toString(3
  * выходе из профиля) обязано получить ту же аренду или начать с чистого
  * листа — но не ждать себя.
  */
-const leases = new Map<string, Promise<SQLite.SQLiteDatabase>>();
+const leases = new Map<string, Promise<Leased>>();
+
+/**
+ * Аренда, из которой каждый желающий берёт собственную обёртку.
+ *
+ * v4.32.582: раньше `openLeasedDatabase` отдавала всем одну и ту же обёртку, а
+ * та закрывала аренду целиком. Держателей у одной базы бывает несколько —
+ * например, две FeedStorage одного профиля живут рядом при переключении
+ * контекста и при уборке ленты удалённого аккаунта. Первый же `close()` рвал
+ * соединение и второму: его `db` оставался не-null, и каждый следующий запрос
+ * падал с `db_lease_no_owner`. Лента открывалась и тут же сообщала, что база
+ * занята. Теперь обёртка своя у каждого, а настоящее закрытие — по последнему.
+ */
+type Leased = { checkout: () => Db };
 
 type Db = SQLite.SQLiteDatabase;
 type RunResult = SQLite.SQLiteRunResult;
@@ -183,18 +196,20 @@ function makeFacade(state: Lease, gate: SqlGate, onClose: () => Promise<void>): 
  * `openReal` вызывается только у держателя и только один раз за роль.
  */
 export function openLeasedDatabase(name: string, openReal: () => Promise<Db>): Promise<Db> {
-  const existing = leases.get(name);
-  if (existing) return existing;
-  const fresh = openLease(name, openReal);
-  leases.set(name, fresh);
-  // Не открылась — запоминать нечего: следующая попытка должна начаться заново.
-  void fresh.catch(() => {
-    if (leases.get(name) === fresh) leases.delete(name);
-  });
-  return fresh;
+  let lease = leases.get(name);
+  if (!lease) {
+    lease = openLease(name, openReal);
+    leases.set(name, lease);
+    // Не открылась — запоминать нечего: следующая попытка должна начаться заново.
+    const fresh = lease;
+    void fresh.catch(() => {
+      if (leases.get(name) === fresh) leases.delete(name);
+    });
+  }
+  return lease.then((l) => l.checkout());
 }
 
-async function openLease(name: string, openReal: () => Promise<Db>): Promise<Db> {
+async function openLease(name: string, openReal: () => Promise<Db>): Promise<Leased> {
   const gate = new SqlGate(undefined, (owner) =>
     log.warn('db_lease_txn_abandoned', { db: name, owner: owner.slice(0, 8) })
   );
@@ -206,11 +221,37 @@ async function openLease(name: string, openReal: () => Promise<Db>): Promise<Db>
     leases.delete(name);
   };
 
+  /**
+   * Раздать обёртки и закрыть базу по последней отданной.
+   *
+   * Пересчёт ведётся по обёрткам, а не по вызовам `close()`: повторное закрытие
+   * одной и той же обёртки не должно уводить счётчик в минус и рвать соединение
+   * под чужой работой.
+   */
+  const share = (realClose: () => Promise<void>): Leased => {
+    let holders = 0;
+    return {
+      checkout: (): Db => {
+        holders += 1;
+        let released = false;
+        return makeFacade(state, gate, async () => {
+          if (released) return;
+          released = true;
+          holders -= 1;
+          if (holders > 0) return;
+          await realClose();
+        });
+      },
+    };
+  };
+
   if (!hasLeaseSupport()) {
     state.local = await openReal();
-    return makeFacade(state, gate, async () => {
+    return share(async () => {
       forget();
-      await state.local?.closeAsync();
+      const own = state.local;
+      state.local = null;
+      await own?.closeAsync();
     });
   }
 
@@ -381,7 +422,7 @@ async function openLease(name: string, openReal: () => Promise<Db>): Promise<Db>
     });
   }
 
-  return makeFacade(state, gate, async () => {
+  return share(async () => {
     forget();
     // Закрывает только держатель: у просителя своего соединения нет, а чужое
     // закрывать нельзя — им пользуются другие вкладки.

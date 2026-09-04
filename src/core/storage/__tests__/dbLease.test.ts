@@ -180,12 +180,56 @@ describe('аренда соединения между вкладками', () =
       mod = require('../dbLease') as typeof import('../dbLease');
     });
     const first = await mod.openLeasedDatabase('kv.db', open as never);
-    const second = await Promise.race([
+    const second = (await Promise.race([
       mod.openLeasedDatabase('kv.db', open as never),
       new Promise((_, rej) => setTimeout(() => rej(new Error('зависло')), 200)),
-    ]);
-    expect(second).toBe(first);
+    ])) as unknown as Opened['db'];
     expect(state.opens).toBe(1);
+    // Соединение общее, а обёртки разные: закрытие одной не касается другой.
+    expect(second).not.toBe(first);
+    await second.runAsync('INSERT INTO kv (k, v) VALUES (?, ?)', ['общая', '1']);
+    expect(await (first as unknown as Opened['db']).getAllAsync('SELECT * FROM kv')).toHaveLength(1);
+  });
+
+  it('закрытие одного держателя не рвёт соединение второму', async () => {
+    // v4.32.582: две FeedStorage одного профиля живут рядом — при смене
+    // контекста и при уборке ленты удалённого аккаунта. Раньше обёртка была
+    // одна на всех, и первый же close() убивал аренду: у второго держателя
+    // `db` оставался не-null, и каждый запрос падал с db_lease_no_owner —
+    // лента открывалась и тут же писала, что база занята.
+    let mod!: typeof import('../dbLease');
+    jest.isolateModules(() => {
+      mod = require('../dbLease') as typeof import('../dbLease');
+    });
+    const a = (await mod.openLeasedDatabase('kv.db', open as never)) as unknown as Opened['db'] & {
+      closeAsync: () => Promise<void>;
+    };
+    const b = (await mod.openLeasedDatabase('kv.db', open as never)) as unknown as Opened['db'];
+    expect(state.opens).toBe(1);
+
+    await a.closeAsync();
+    await tick(6);
+
+    await b.runAsync('INSERT INTO kv (k, v) VALUES (?, ?)', ['жив', '1']);
+    expect(await b.getAllAsync('SELECT * FROM kv')).toHaveLength(1);
+    // Настоящее закрытие не состоялось: база всё та же, переоткрытий не было.
+    expect(state.opens).toBe(1);
+  });
+
+  it('повторное закрытие одной обёртки не роняет счётчик держателей', async () => {
+    let mod!: typeof import('../dbLease');
+    jest.isolateModules(() => {
+      mod = require('../dbLease') as typeof import('../dbLease');
+    });
+    const a = (await mod.openLeasedDatabase('kv.db', open as never)) as unknown as {
+      closeAsync: () => Promise<void>;
+    };
+    const b = (await mod.openLeasedDatabase('kv.db', open as never)) as unknown as Opened['db'];
+    await a.closeAsync();
+    await a.closeAsync();
+    await tick(6);
+    await b.runAsync('INSERT INTO kv (k, v) VALUES (?, ?)', ['жив', '1']);
+    expect(await b.getAllAsync('SELECT * FROM kv')).toHaveLength(1);
   });
 
   it('закрытая база отдаётся соседней вкладке, а следующее открытие начинается заново', async () => {
