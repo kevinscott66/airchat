@@ -95,7 +95,7 @@ describe('файл базы занят другой вкладкой', () => {
 
   it('Chrome назвал причину — говорим её прямо', () => {
     const text = diagnoseStorageFailure(CHROME, OK_ENV);
-    expect(text).toContain('уже занят');
+    expect(text).toContain('занят вкладкой со старой версией');
     expect(text).toContain('вкладки с AirChat');
     // Совет из ветки «всё на месте» был бы неверным следом: диск ни при чём.
     expect(text).not.toContain('переполненный');
@@ -121,7 +121,7 @@ describe('файл базы занят другой вкладкой', () => {
       hasOpfs: false,
       origin: null,
     });
-    expect(text).toContain('уже занят');
+    expect(text).toContain('занят вкладкой со старой версией');
     expect(text).not.toContain('Safari 17');
     expect(text).not.toContain('незащищённому соединению');
   });

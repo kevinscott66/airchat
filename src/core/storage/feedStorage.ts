@@ -7,6 +7,7 @@
  * секретом из хранилища ключей устройства.
  */
 import * as SQLite from 'expo-sqlite';
+import { openLeasedDatabase } from './dbLease';
 import * as FileSystem from 'expo-file-system/legacy';
 import { log } from '../logger';
 import { FEED_AT_REST_COLUMNS, parseJsonColumn, parseStringArrayColumn } from './feedAtRest';
@@ -204,7 +205,9 @@ export class FeedStorage {
 
   private async runInitOnce(): Promise<void> {
     try {
-      const database = await SQLite.openDatabaseAsync(this.dbName);
+      const database = await openLeasedDatabase(this.dbName, () =>
+        SQLite.openDatabaseAsync(this.dbName)
+      );
       // v4.32.47: PRAGMA'ы до любых DDL. WAL-журнал — crash-resilience и параллельные
       // читатели не блокируют писателя. synchronous=NORMAL — компромисс: почти полная
       // durability при power-cut (WAL rollback от последнего checkpoint) и 2-3× быстрее

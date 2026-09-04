@@ -1,14 +1,19 @@
 import * as SQLite from 'expo-sqlite';
+import { openLeasedDatabase } from '../../storage/dbLease';
 import { log } from '../../logger';
 
 const MAX_CACHE_BYTES = 500 * 1024 * 1024;
+
+const IPFS_CACHE_DB = 'airchat_ipfs_cache.db';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
-    dbPromise = (async () => {
-      const database = await SQLite.openDatabaseAsync('airchat_ipfs_cache.db');
+    // v4.32.581: через аренду — в браузере файл базы достаётся одной вкладке
+    // на всё происхождение, и без неё вторая вкладка осталась бы без кэша.
+    dbPromise = openLeasedDatabase(IPFS_CACHE_DB, async () => {
+      const database = await SQLite.openDatabaseAsync(IPFS_CACHE_DB);
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS ipfs_block_cache (
           cid TEXT PRIMARY KEY NOT NULL,
@@ -18,7 +23,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       return database;
-    })();
+    });
   }
   return dbPromise;
 }

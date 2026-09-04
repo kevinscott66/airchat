@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { openLeasedDatabase } from '../../storage/dbLease';
 import { log } from '../../logger';
 
 export type RelayNode = {
@@ -11,12 +12,15 @@ export type RelayNode = {
 
 type LatLon = { lat: number; lon: number };
 
+const GEO_ROUTER_DB = 'airchat_georouter.db';
+
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function getGeoDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
-    dbPromise = (async () => {
-      const database = await SQLite.openDatabaseAsync('airchat_georouter.db');
+    // v4.32.581: см. blockstore — база арендуется, а не захватывается.
+    dbPromise = openLeasedDatabase(GEO_ROUTER_DB, async () => {
+      const database = await SQLite.openDatabaseAsync(GEO_ROUTER_DB);
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS geo_relays (
           did TEXT PRIMARY KEY NOT NULL,
@@ -28,7 +32,7 @@ async function getGeoDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       return database;
-    })();
+    });
   }
   return dbPromise;
 }

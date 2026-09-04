@@ -1,4 +1,6 @@
 import * as SQLite from 'expo-sqlite';
+
+import { openLeasedDatabase } from './dbLease';
 import * as FileSystem from 'expo-file-system/legacy';
 import { randomBytes } from '@noble/hashes/utils.js';
 import * as SecureStore from './secureStoreQueued';
@@ -1605,7 +1607,12 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
 async function db(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     if (dbOpenError !== null && Date.now() - dbOpenFailedAt < DB_REOPEN_COOLDOWN_MS) throw dbOpenError;
-    const attempt = (async () => {
+    // v4.32.581: открытие идёт через аренду. На телефоне это просто очередь
+    // операторов; в браузере — ещё и выбор вкладки-держателя: OPFS отдаёт файл
+    // базы одной вкладке на всё происхождение, и раньше вторая вкладка не
+    // запускалась вовсе. Всё, что ниже, — миграции — выполняет только
+    // держатель и только по разу: просителю отдаётся уже готовая база.
+    const attempt = openLeasedDatabase(LOCAL_DB_NAME, async () => {
       const database = await SQLite.openDatabaseAsync(LOCAL_DB_NAME);
       await initSchema(database);
       await ensureChatMessagesOwnerProfileColumn(database);
@@ -1656,7 +1663,7 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
       await ensureScheduledSenderNameEncrypted(database);
       await ensureGroupAvatarCidEncrypted(database);
       return database;
-    })();
+    });
     dbPromise = attempt;
     // Отказ разбирается здесь же, иначе он остался бы необработанным.
     void attempt.then(
