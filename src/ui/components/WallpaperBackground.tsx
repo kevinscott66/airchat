@@ -36,8 +36,8 @@ function MeshLayer({ id }: { id: string }): React.ReactElement | null {
     if (!mesh || isReducedMotion()) return;
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(drift, { toValue: 1, duration: DRIFT_MS / 2, useNativeDriver: Platform.OS !== 'web' }),
-        Animated.timing(drift, { toValue: 0, duration: DRIFT_MS / 2, useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(drift, { toValue: 1, duration: DRIFT_MS / 2, useNativeDriver: Platform.OS !== 'web', isInteraction: false }),
+        Animated.timing(drift, { toValue: 0, duration: DRIFT_MS / 2, useNativeDriver: Platform.OS !== 'web', isInteraction: false }),
       ]),
     );
     loop.start();

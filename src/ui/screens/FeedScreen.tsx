@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import { useTranslation } from 'react-i18next';
 import { useAsyncButton, useKeyedAsyncAction } from '../../core/hooks/useAsyncButton';
 import { useTabRef } from '../TabRefContext';
+import { runAfterInteractionsWithDeadline, waitForInteractions } from '../../core/utils/afterInteractions';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import {
   View,
@@ -22,7 +23,6 @@ import {
   Keyboard,
   Vibration,
   AppState,
-  InteractionManager,
   type KeyboardEvent,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -1615,10 +1615,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     // saturate the JS thread; a bottom-tab tap landing in that window had its
     // touch-responder negotiation dropped — "загрузка ленты поглощала тапы".
     // runAfterInteractions lets an in-flight tap commit its navigation first.
-    const handle = InteractionManager.runAfterInteractions(() => {
+    // v4.32.582: с крайним сроком. Потерянный handle (вечная анимация, снятый
+    // на полпути жест) держал очередь занятой навсегда — загрузка ленты не
+    // стартовала ни разу, и человек до конца сессии смотрел на скелетон.
+    const cancel = runAfterInteractionsWithDeadline(() => {
       void loadFeed();
     });
-    return () => handle.cancel();
+    return cancel;
   }, [loadFeed, pair, did, feedTick]);
 
   useEffect(() => {
@@ -1668,7 +1671,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
       // SQLite + media-resolve chain was showing up as a single ~2.2с block
       // every minute on cold-start, exactly when React was still rendering
       // the keep-alive sibling tabs.
-      await new Promise<void>((r) => InteractionManager.runAfterInteractions(() => r()));
+      await waitForInteractions();
       if (tabRef.current !== 'feed' || AppState.currentState !== 'active') return;
       const t0 = Date.now();
       log.info('ui_feed_tick_start', { ts: t0 });

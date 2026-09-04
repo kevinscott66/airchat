@@ -139,12 +139,14 @@ export const SplashOverlay = forwardRef<SplashOverlayRef, SplashOverlayProps>(
               duration: PULSE_DUR,
               easing: Easing.inOut(Easing.sin),
               useNativeDriver: true,
+              isInteraction: false,
             }),
             Animated.timing(pulseScale, {
               toValue: 1.0,
               duration: PULSE_DUR,
               easing: Easing.inOut(Easing.sin),
               useNativeDriver: true,
+              isInteraction: false,
             }),
           ])
         );

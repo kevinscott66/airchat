@@ -55,18 +55,30 @@ export function AnimatedDots({
           duration: step,
           easing,
           useNativeDriver,
+          // Декоративный индикатор не должен держать handle InteractionManager:
+          // на вебе useNativeDriver откатывается в JS, и вечный цикл иначе
+          // навсегда занимает очередь runAfterInteractions.
+          isInteraction: false,
         }),
         Animated.timing(a1, {
           toValue: active === 1 ? bright : dim,
           duration: step,
           easing,
           useNativeDriver,
+          // Декоративный индикатор не должен держать handle InteractionManager:
+          // на вебе useNativeDriver откатывается в JS, и вечный цикл иначе
+          // навсегда занимает очередь runAfterInteractions.
+          isInteraction: false,
         }),
         Animated.timing(a2, {
           toValue: active === 2 ? bright : dim,
           duration: step,
           easing,
           useNativeDriver,
+          // Декоративный индикатор не должен держать handle InteractionManager:
+          // на вебе useNativeDriver откатывается в JS, и вечный цикл иначе
+          // навсегда занимает очередь runAfterInteractions.
+          isInteraction: false,
         }),
       ]);
 

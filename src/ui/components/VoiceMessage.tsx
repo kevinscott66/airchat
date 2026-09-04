@@ -119,8 +119,8 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
   const startPulse = useCallback(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.15, duration: 400, easing: Easing.ease, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 400, easing: Easing.ease, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 400, easing: Easing.ease, useNativeDriver: true, isInteraction: false }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 400, easing: Easing.ease, useNativeDriver: true, isInteraction: false }),
       ])
     ).start();
   }, [pulseAnim]);

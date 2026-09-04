@@ -81,6 +81,7 @@ export function LoadingScreen({
         duration: 2800,
         useNativeDriver: true,
         easing: Easing.linear,
+        isInteraction: false,
       })
     );
     spinLoop.start();

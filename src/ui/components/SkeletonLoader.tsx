@@ -18,10 +18,15 @@ export function SkeletonBlock({ width = '100%', height = 16, borderRadius = 6, s
   const opacity = useRef(new Animated.Value(0.4)).current;
 
   useEffect(() => {
+    // v4.32.582: isInteraction: false обязателен. На вебе нативного драйвера
+    // нет, useNativeDriver: true молча откатывается в JS, и Animated по
+    // умолчанию берёт на каждый шаг handle InteractionManager. Цикл вечный —
+    // handle не возвращается никогда, очередь «после взаимодействий» стоит,
+    // а вместе с ней и загрузка ленты, которая этот скелетон и показывает.
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true, isInteraction: false }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true, isInteraction: false }),
       ])
     );
     anim.start();
