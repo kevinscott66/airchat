@@ -55,9 +55,12 @@ jest.mock('../local', () => ({
   outboxDeleteById: async (id: number) => {
     mockRows = mockRows.filter((r) => r.id !== id);
   },
+  // Возвращает то же, что и настоящая: останется ли строка в следующей выборке.
   outboxIncrementAttempts: async (id: number) => {
     const row = mockRows.find((r) => r.id === id);
-    if (row) row.attempts += 1;
+    if (!row) return false;
+    row.attempts += 1;
+    return row.attempts < mockMaxAttempts;
   },
   outboxPurgeDead: async () => undefined,
 }));
@@ -212,6 +215,30 @@ describe('цикл обязан кончиться', () => {
     await runSyncIfOnline();
     expect(mockRows).toHaveLength(250);
     expect(mockRows.every((r) => r.attempts === 1)).toBe(true);
+  });
+
+  /**
+   * v4.32.581. Сдвиг окна считался по числу разобранных строк, а не по числу
+   * оставшихся лежать на месте. Строка, которой последняя попытка довела
+   * счётчик до потолка, из следующей выборки исключается самим запросом
+   * (`WHERE COALESCE(attempts, 0) < ?`) — значит окно, сдвинутое на неё тоже,
+   * перепрыгивало ровно один живой конверт на каждую «умершую» строку.
+   */
+  it('умершая строка не уносит с собой живую из следующего окна', async () => {
+    mockService = {
+      ownerProfileId: async () => mockActivePid,
+      retrySendDm: async () => false,
+    };
+    mockRows = seed(250, 1);
+    // Первые 50 доживают до потолка ровно на этом проходе.
+    for (const r of mockRows.slice(0, 50)) r.attempts = mockMaxAttempts - 1;
+    await runSyncIfOnline();
+    const dead = mockRows.filter((r) => r.id <= 50);
+    const alive = mockRows.filter((r) => r.id > 50);
+    expect(dead.every((r) => r.attempts === mockMaxAttempts)).toBe(true);
+    // Ни одна из 200 оставшихся не пропущена — включая хвост за первым окном.
+    expect(alive).toHaveLength(200);
+    expect(alive.every((r) => r.attempts === 1)).toBe(true);
   });
 
   it('строки, выбравшие все попытки, из выборки уходят сами', async () => {

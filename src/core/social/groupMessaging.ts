@@ -470,7 +470,17 @@ export async function handleIncomingGroupEnvelope(
       });
       return true;
     }
-  } catch { /* non-fatal */ }
+  } catch (e) {
+    // v4.32.581. Отказ проверки прав — это отказ, а не пропуск. Сейчас ветка
+    // почти недостижима (listGroupMembers гасит свои ошибки и отдаёт пустой
+    // список, а на нём вердикт и так «не участник»), но «почти» — не то
+    // основание, на котором записывают чужое сообщение в группу.
+    log.warn('group_msg_verdict_failed_drop', {
+      gid: env.groupId.slice(0, 8),
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return true;
+  }
 
   // v4.32.299: цитата. Приходит от участника, то есть это недоверенный ввод,
   // который рисуется на экране, — правила разбора в social/replyRef.
@@ -516,7 +526,17 @@ export async function handleIncomingGroupEnvelope(
   };
 
   try {
-    await insertGroupMessage(row);
+    // v4.32.581. Счётчик непрочитанных, бейдж упоминаний и баннер — только на
+    // сообщении, которое действительно записалось. Повтор конверта — событие
+    // штатное: пуш и транспорт могут принести один и тот же msgId дважды, а
+    // постоянного списка разобранных идентификаторов у групп нет (в памяти
+    // `seenMessageIds` живёт до перезапуска). Раньше повтор давал «5 новых»
+    // на группе со вчерашним текстом и заново будил экран блокировки.
+    const stored = await insertGroupMessage(row);
+    if (!stored) {
+      log.debug('group_msg_duplicate_skip', { msgId: env.msgId.slice(0, 8) });
+      return true;
+    }
     // v4.32.573: голос, обогнавший свой опрос, ждал на полке — см.
     // pollVotePending. Сообщение записано, значит его можно применить.
     if (isPollMessage(env.text)) {

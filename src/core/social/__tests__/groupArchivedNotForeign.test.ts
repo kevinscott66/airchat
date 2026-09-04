@@ -61,7 +61,7 @@ jest.mock('../../storage/local', () => ({
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
-  insertGroupMessage: jest.fn(async (row: { groupId: string; text: string }) => { mockInserted.push(row); }),
+  insertGroupMessage: jest.fn(async (row: { groupId: string; text: string }) => { mockInserted.push(row); return true; }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   insertGroupJoinRequest: jest.fn(async (...a: unknown[]) => {

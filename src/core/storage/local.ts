@@ -4059,18 +4059,33 @@ export async function outboxDeleteById(id: number): Promise<void> {
  * v4.32.124 (AUDIT P1 Block 7): вызывать из sync-loop при неуспешной доставке.
  * Когда счётчик перешагнёт OUTBOX_MAX_ATTEMPTS, outboxDrain перестанет возвращать
  * этот item — он остаётся в БД для диагностики, но больше не трогается.
+ *
+ * Возвращает true, пока строка ещё будет выдаваться outboxDrain. Ответ нужен
+ * разбору очереди: окно сдвигается на число строк, оставшихся лежать на своих
+ * местах, а строка, исчерпавшая попытки, из следующей выборки уже исключена
+ * запросом — считать её «оставшейся» значит перепрыгнуть через один живой
+ * конверт (v4.32.581). Сбой самого UPDATE тоже даёт true: счётчик не вырос,
+ * строка никуда не делась.
  */
-export async function outboxIncrementAttempts(id: number): Promise<void> {
+export async function outboxIncrementAttempts(id: number): Promise<boolean> {
   try {
     const d = await db();
     await d.runAsync(
       'UPDATE outbox SET attempts = COALESCE(attempts, 0) + 1 WHERE id = ?',
       [id]
     );
+    const row = await d.getFirstAsync<{ attempts: number | null }>(
+      'SELECT attempts FROM outbox WHERE id = ?',
+      [id]
+    );
+    // Строки нет — её успели удалить; «оставшейся на месте» она тем более не является.
+    if (!row) return false;
+    return (row.attempts ?? 0) < OUTBOX_MAX_ATTEMPTS;
   } catch (e) {
     log.warn('outbox_increment_attempts_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
+    return true;
   }
 }
 
@@ -6064,7 +6079,19 @@ export async function updateGroupMemberRole(
 
 // Group messages
 
-export async function insertGroupMessage(msg: GroupMessageRow): Promise<void> {
+/**
+ * Записать групповое сообщение. `true` — строка действительно появилась.
+ *
+ * v4.32.581. Возвращаемое значение тут не для удобства: запрос — `INSERT OR
+ * IGNORE`, а ошибки эта функция гасит сама, поэтому снаружи «повтор по msgId»
+ * и «запись не удалась» выглядели точно так же, как успех. Приёмник на этом
+ * основании поднимал счётчик непрочитанных и заново выносил на экран
+ * блокировки сообщение, которое человек прочитал вчера, — а во втором случае
+ * показывал уведомление о сообщении, которого в группе нет. В личной
+ * переписке этого не было: там повтор отсекается через `chatMessageExists`
+ * ДО записи, и счётчик трогается только на новом сообщении.
+ */
+export async function insertGroupMessage(msg: GroupMessageRow): Promise<boolean> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -6080,7 +6107,7 @@ export async function insertGroupMessage(msg: GroupMessageRow): Promise<void> {
     // настоящее — по одной колонке `sender_name` читался весь состав группы и
     // кто в ней сколько говорит, при полностью зашифрованных сообщениях.
     const senderEnc = encryptAtRestNullable(msg.senderName ?? null, dek);
-    await d.runAsync(
+    const res = await d.runAsync(
       `INSERT OR IGNORE INTO group_messages
          (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id, reply_to_preview, reactions, created_at, owner_profile_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -6089,9 +6116,13 @@ export async function insertGroupMessage(msg: GroupMessageRow): Promise<void> {
        encryptAtRestNullable(msg.reactions ?? null, dek), msg.createdAt, msg.ownerProfileId]
     );
     emitChatWrites();
+    // `changes === 0` — сработало OR IGNORE, то есть строка с таким id уже
+    // лежит: это повтор конверта, а не новое сообщение.
+    return (res.changes ?? 0) > 0;
   } catch (e) {
     log.warn('insert_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
     notifyIfStoragePressure(e, 'group_message_save');
+    return false;
   }
 }
 

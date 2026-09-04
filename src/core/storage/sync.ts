@@ -291,15 +291,18 @@ export async function runSyncIfOnline(handlers?: SyncHandlers): Promise<void> {
             // OUTBOX_MAX_ATTEMPTS item будет пропускаться outboxDrain (TTL в 7
             // дней его в итоге удалит). Без этого «сломанные» items крутились
             // бесконечно при каждом sync-цикле.
-            await outboxIncrementAttempts(item.id);
-            kept += 1;
+            //
+            // v4.32.581: строка, которую эта попытка добила до предела, из
+            // следующей выборки уже исключена запросом — в сдвиг окна она не
+            // идёт, иначе один живой конверт был бы перепрыгнут.
+            if (await outboxIncrementAttempts(item.id)) kept += 1;
           }
           handlers?.onMessageQueued?.(item);
         } catch (e) {
           log.warn('sync_item_failed', { err: e instanceof Error ? e.message : String(e) });
           // Элемент остаётся в outbox — при следующем sync попробуем снова.
-          await outboxIncrementAttempts(item.id);
-          kept += 1;
+          // Если попыток больше не осталось, в сдвиг окна он не идёт (см. выше).
+          if (await outboxIncrementAttempts(item.id)) kept += 1;
         }
       }
 

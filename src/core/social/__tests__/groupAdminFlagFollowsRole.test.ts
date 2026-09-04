@@ -53,7 +53,7 @@ jest.mock('../../storage/local', () => ({
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   getGroupMessageTarget: jest.fn(async () => null),
-  insertGroupMessage: jest.fn(async () => {}),
+  insertGroupMessage: jest.fn(async () => true),
   updateGroupMessageText: jest.fn(async () => true),
   deleteGroupMessage: jest.fn(async () => {}),
   touchGroupConversation: jest.fn(async () => {}),
