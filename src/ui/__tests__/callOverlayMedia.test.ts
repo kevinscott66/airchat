@@ -42,6 +42,30 @@ describe('call media UI contract', () => {
     expect(overlay).toContain('localUrl');
   });
 
+  // v4.32.587: оформление приведено к «жидкому стеклу». Проверяется не вид, а
+  // те два условия, без которых стекло здесь либо нарисовано, либо небезопасно.
+  it('стекло над чужим кадром не разбавляется, а над своим фоном — разбавляется', () => {
+    // Над произвольным кадром единственная доказанная величина — `mediaScrim.bar`
+    // (0.6 чёрного даёт белым чернилам 5.2:1 даже поверх белой фотографии).
+    // Выводить прозрачность поверх неизвестного кадра нельзя, поэтому в ветке
+    // `overMedia` заливка идёт как есть.
+    expect(overlay).toContain('solid || overMedia ? fill : withAlpha(fill, glass.fill.prominent)');
+    // Системное «уменьшить прозрачность» гасит размытие целиком — как в GlassSurface.
+    expect(overlay).toContain('useReducedTransparency');
+    expect(overlay).toContain('useReducedMotion');
+  });
+
+  it('подсветка фона не заходит под круглые кнопки', () => {
+    // Фон идущего звонка выведен из того же зелёного, что кнопка «принять», и
+    // подходит к порогу графики 3:1 впритык: осветление под кнопками уводит их
+    // за порог уже при непрозрачности 0.10 (замер в themeContrast.test.ts).
+    // Поэтому подсветка живёт внутри сцены, а область действий остаётся на
+    // ровной заливке — это утверждение о вёрстке, а не о вкусе.
+    const actions = overlay.slice(overlay.indexOf('<View style={s.controls}>'));
+    expect(actions).not.toContain('CallBackdrop');
+    expect(overlay).toContain('<CallBackdrop');
+  });
+
   it('exposes media snapshots and cleans native streams with the call lifecycle', () => {
     expect(service).toContain('export function subscribeCallMedia');
     expect(service).toContain('export function getCallMediaStreams');

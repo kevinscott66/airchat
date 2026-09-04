@@ -13,7 +13,7 @@
  */
 import { Appearance } from 'react-native';
 import { bannerColors } from '../components/StatusBanner';
-import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, colorsForScheme, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
+import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
 import type { AdminLogTone } from '../../core/social/groupAdminLog';
 import { WALLPAPER_MESHES, WALLPAPER_PRESETS, feedGround, meshById, type Wallpaper } from '../wallpapers';
 
@@ -1038,6 +1038,49 @@ describe('экран звонка', () => {
     // «Принять» / «Отклонить» в CallOverlay. Убирать их нельзя — это
     // требование WCAG 1.4.1, а не оформление.
     expect(contrast(darkColors.successFill, darkColors.errorFill) < 1.1).toBe(true);
+  });
+
+  describe.each(phases)('стекло, %s', (phase) => {
+    const tone = callTone(phase);
+
+    // v4.32.587. Кнопки экрана звонка стали стеклянными: заливка кладётся
+    // поверх фона с прозрачностью `glass.fill.prominent`. Проверять после
+    // этого один только токен `chip` больше нельзя — на экране его в чистом
+    // виде нет, есть смесь токена с фоном. Утверждения выше остались (они
+    // описывают глухой режим «уменьшить прозрачность»), а здесь считается то,
+    // что человек видит в обычном.
+    it('подписи читаются на полупрозрачной кнопке', () => {
+      const idle = mix(tone.chip, tone.fill, glass.fill.prominent);
+      const active = mix(tone.chipActive, tone.fill, glass.fill.prominent);
+      expect(contrast(tone.ink, idle) >= 4.5).toBe(true);
+      expect(contrast(tone.ink, active) >= 4.5).toBe(true);
+    });
+
+    // Подсветка фона — единственное, что стеклу под собственным фоном звонка
+    // есть размывать, но она же лежит ПОД именем собеседника. Считается худший
+    // случай: самая яркая точка пятна, то есть непрозрачность из `CallBackdrop`
+    // в её максимуме.
+    it('имя и состояние читаются в самой яркой точке подсветки', () => {
+      const litA = mix(tone.washA, tone.fill, 0.34);
+      const litB = mix(tone.washB, tone.fill, 0.22);
+      for (const lit of [litA, litB]) {
+        expect(contrast(tone.ink, lit) >= 4.5).toBe(true);
+        expect(contrast(tone.inkMuted, lit) >= 4.5).toBe(true);
+      }
+    });
+
+    // Первой редакцией 587-й подсветка идущего звонка была `successFill` — тем
+    // же цветом, что кнопка «принять», — и кнопка на ней давала 2.16:1. Отсюда
+    // и правило: подсветка не смеет повторять заливку круглых кнопок. Порог
+    // 3:1 для них меряется на РОВНОМ фоне (утверждение выше), и это верно
+    // ровно потому, что подсветка под кнопки не заходит: она живёт внутри
+    // сцены, а кнопки — в области действий под ней (см. CallOverlay).
+    it('подсветка не повторяет цвет круглых кнопок', () => {
+      expect(tone.washA).not.toBe(tone.accept);
+      expect(tone.washA).not.toBe(tone.hangup);
+      expect(tone.washB).not.toBe(tone.accept);
+      expect(tone.washB).not.toBe(tone.hangup);
+    });
   });
 
   it('экран звонка не зависит от темы', () => {
