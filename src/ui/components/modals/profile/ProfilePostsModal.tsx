@@ -21,11 +21,16 @@
  * историю, а хранит СВОЮ копию снимка в каталоге документов: истёкшая история
  * исчезнет, а плитка в альбоме останется.
  *
- * Альбомы — свои и только на этом телефоне. Полосу альбомов видит владелец
- * профиля; в чужом профиле её нет — не потому что «пока не сделали», а потому
- * что альбом никуда не передаётся: истории раздаются в момент публикации и
- * через сутки истекают, канала «покажи собеседнику свой альбом» в протоколе
- * нет. Обещать его плашкой в чужом профиле было бы враньём.
+ * Альбомы — свои, но не привязаны к телефону: они уезжают в облачную копию
+ * аккаунта и собираются на втором устройстве (storyAlbumSync). Уезжает общий
+ * адрес снимка, а не имя файла, и приехавшая плитка скачивает снимок себе при
+ * первом показе.
+ *
+ * Полосу альбомов видит владелец профиля; в чужом профиле её нет — не потому
+ * что «пока не сделали», а потому что альбом не передаётся собеседнику:
+ * истории раздаются в момент публикации и через сутки истекают, канала
+ * «покажи собеседнику свой альбом» в протоколе нет. Обещать его плашкой в
+ * чужом профиле было бы враньём.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -49,6 +54,7 @@ import {
 } from '../../../../core/storage/local';
 import {
   addStoryToAlbum,
+  albumItemLocalUri,
   createStoryAlbum,
   removeStoryAlbum,
   removeStoryFromAlbum,
@@ -110,6 +116,8 @@ export function ProfilePostsModal({
   /** `null` — открыты живые истории, иначе id открытого альбома. */
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [items, setItems] = useState<StoryAlbumItemRow[]>([]);
+  /** Адреса плиток, скачанных по общему адресу: id строки → локальный файл. */
+  const [itemUris, setItemUris] = useState<Record<string, string>>({});
   const [sheet, setSheet] = useState<ActionSheetState>(null);
   const [draft, setDraft] = useState<AlbumDraft>(null);
   const [draftText, setDraftText] = useState('');
@@ -184,13 +192,37 @@ export function ProfilePostsModal({
   // Содержимое открытого альбома. Читается отдельно от полосы: в полосе
   // хватает счётчика и обложки, а строки нужны только раскрытому альбому.
   useEffect(() => {
-    if (!visible || albumId === null) { setItems([]); return; }
+    if (!visible || albumId === null) { setItems([]); setItemUris({}); return; }
     let cancelled = false;
     void listStoryAlbumItems(albumId, ownerProfileId)
       .then((rows) => { if (!cancelled) setItems(rows); })
       .catch((e) => log.warn('ui_story_album_items_failed', { err: rawErrorText(e) }));
     return () => { cancelled = true; };
   }, [visible, albumId, ownerProfileId]);
+
+  // Строки, приехавшие с другого устройства аккаунта, приходят без файла:
+  // имя копии — примета той установки. Снимок скачивается по общему адресу и
+  // остаётся здесь насовсем (albumItemLocalUri), поэтому проход нужен один
+  // раз на альбом, а не на каждую отрисовку. По очереди, а не разом: альбом
+  // из полусотни видео иначе полез бы в сеть всеми плитками сразу.
+  useEffect(() => {
+    const pending = items.filter((it) => !it.mediaFile && it.mediaCid);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const it of pending) {
+        if (cancelled) return;
+        try {
+          const uri = await albumItemLocalUri(it, ownerProfileId);
+          if (cancelled) return;
+          if (uri) setItemUris((prev) => ({ ...prev, [it.id]: uri }));
+        } catch (e) {
+          log.warn('ui_story_album_fetch_failed', { err: rawErrorText(e) });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [items, ownerProfileId]);
 
   const openAlbum = albums.find((a) => a.id === albumId) ?? null;
 
@@ -516,7 +548,7 @@ export function ProfilePostsModal({
               <View style={styles.storiesGrid}>
                 {items.map((it) => renderTile(
                   it.id,
-                  it.mediaFile ? storyAlbumUriFromName(it.mediaFile) : null,
+                  it.mediaFile ? storyAlbumUriFromName(it.mediaFile) : (itemUris[it.id] ?? null),
                   !!it.mediaUnreadable,
                   it.textUnreadable ? UNREADABLE_MESSAGE_TEXT : (it.text || dayMonthShortTime(it.createdAt)),
                   () => onItemPress(it),

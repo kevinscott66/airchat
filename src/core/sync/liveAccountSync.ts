@@ -27,6 +27,13 @@ import {
   applyFeedSyncPostDelete,
   exportFeedSyncSnapshot,
 } from '../social/feedService';
+import {
+  applySyncStoryAlbum,
+  applySyncStoryAlbumDelete,
+  applySyncStoryAlbumItem,
+  applySyncStoryAlbumItemDelete,
+  exportStoryAlbumSyncSnapshot,
+} from '../social/storyAlbumSync';
 import type { FeedCommentRow, FeedPostRow } from '../storage/feedStorage';
 import type { RawChatMessageRow } from '../storage/chatMessageBackup';
 import type { ConversationMetaRow } from '../storage/conversationMeta';
@@ -232,13 +239,14 @@ function decryptEntity(mnemonic: string, mutation: SyncMutation): EncodedEntity 
 }
 
 async function collectLocalEntities(ownerProfileId: number): Promise<LocalEntity[]> {
-  const [messages, conversations, kv, profileSettings, groups, feed] = await Promise.all([
+  const [messages, conversations, kv, profileSettings, groups, feed, albums] = await Promise.all([
     exportRawChatMessageRows(ownerProfileId),
     exportConversationMetaRows(ownerProfileId),
     exportDialogKvSnapshot(ownerProfileId),
     exportSyncProfileSettings(ownerProfileId),
     exportGroupBackupRows(ownerProfileId),
     exportFeedSyncSnapshot(),
+    exportStoryAlbumSyncSnapshot(ownerProfileId),
   ]);
   const entities: LocalEntity[] = [];
   const feedTombstoneIds = new Set(feed.commentTombstones.map((row) => `${row.commentId}\u0000${row.postId}`));
@@ -278,6 +286,21 @@ async function collectLocalEntities(ownerProfileId: number): Promise<LocalEntity
     entityId: `${row.commentId}\u0000${row.postId}`,
     value: row,
     deleted: true,
+  });
+  // v4.32.576: альбомы историй. Имени файла копии в значении нет — оно своё у
+  // каждой установки (storyAlbumSync); строка без общего адреса снимка
+  // придерживается, показывать её на другом устройстве нечем.
+  for (const row of albums.albums) entities.push({
+    entityKind: 'story_album',
+    entityId: row.value.id,
+    value: row.value,
+    hold: row.hold,
+  });
+  for (const row of albums.items) entities.push({
+    entityKind: 'story_album_item',
+    entityId: row.value.id,
+    value: row.value,
+    hold: row.hold,
   });
   return entities;
 }
@@ -449,6 +472,12 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
         postId: rawEntityId.slice(separator + 1),
         deletedAt: mutation.updatedAt,
       });
+    } else if (mutation.entityKind === 'story_album') {
+      // Не deleteSyncEntity: вместе со строками альбома с диска уходят копии
+      // снимков, а local.ts до файлов не дотягивается.
+      await applySyncStoryAlbumDelete(rawEntityId, mutation.ownerProfileId);
+    } else if (mutation.entityKind === 'story_album_item') {
+      await applySyncStoryAlbumItemDelete(rawEntityId, mutation.ownerProfileId);
     } else {
       await deleteSyncEntity(mutation.entityKind, rawEntityId, mutation.ownerProfileId);
     }
@@ -503,6 +532,12 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       break;
     case 'feed_comment':
       await applyFeedSyncComment(entity.value as FeedCommentRow);
+      break;
+    case 'story_album':
+      await applySyncStoryAlbum(entity.value, mutation.ownerProfileId);
+      break;
+    case 'story_album_item':
+      await applySyncStoryAlbumItem(entity.value, mutation.ownerProfileId);
       break;
     default:
       throw new Error(`Неподдерживаемый тип синхронизации: ${mutation.entityKind}`);

@@ -301,9 +301,17 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
      * своим файлом — это обещание, а не недоделка. Альбом — обещание
      * обратное: «эту оставить», поэтому в него кладётся СВОЯ копия снимка
      * (media_file, каталог документов, см. storyAlbumFiles), а не ссылка на
-     * истёкшую строку. Ключ составной: альбомы принадлежат аккаунту, а не
-     * установке, — ровно та же причина, по которой составным стал ключ групп
-     * в v4.32.467.
+     * истёкшую строку.
+     *
+     * Адреса у снимка два, и это не дублирование. media_file — копия на ЭТОМ
+     * телефоне, и она своя у каждой установки: имя файла второму устройству
+     * ничего не значит, поэтому наверх оно не уезжает вовсе. media_cid —
+     * общий адрес в IPFS, по нему альбом собирается на другом устройстве
+     * аккаунта. Строка без CID из синхронизации придерживается: уехавшая без
+     * снимка, она дала бы на том телефоне пустую плитку навсегда.
+     *
+     * Ключ составной: альбомы принадлежат аккаунту, а не установке, — ровно
+     * та же причина, по которой составным стал ключ групп в v4.32.467.
      */
     CREATE TABLE IF NOT EXISTS story_albums (
       id TEXT NOT NULL,
@@ -317,6 +325,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       album_id TEXT NOT NULL,
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       media_file TEXT,
+      media_cid TEXT,
       media_type TEXT NOT NULL DEFAULT 'image',
       text TEXT,
       created_at INTEGER NOT NULL,
@@ -426,6 +435,23 @@ async function ensureMessageExtraColumns(database: SQLite.SQLiteDatabase): Promi
     }
   } catch (e) {
     log.warn('message_extra_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
+ * media_cid у строк альбома (v4.32.576).
+ *
+ * Таблица завелась на день раньше столбца, и установки с той сборки уже
+ * существуют. Без этого прохода они падали бы на первом же чтении альбома.
+ */
+async function ensureStoryAlbumMediaCidColumn(database: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    const cols = await database.getAllAsync<{ name: string }>('PRAGMA table_info(story_album_items)');
+    if (cols.length > 0 && !cols.some((c) => c.name === 'media_cid')) {
+      await database.execAsync('ALTER TABLE story_album_items ADD COLUMN media_cid TEXT');
+    }
+  } catch (e) {
+    log.warn('story_album_media_cid_migration_failed', { err: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -1589,6 +1615,7 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
       await ensureReplyToColumns(database);
       await ensureMessageExtraColumns(database);
       await ensureConversationPinnedMessageColumn(database);
+      await ensureStoryAlbumMediaCidColumn(database);
       await ensureGroupPinnedMessageColumns(database);
       await ensureGroupSenderNameColumn(database);
       await ensureGroupMessageEditedAtColumn(database);
@@ -7082,6 +7109,8 @@ export type StoryAlbumItemRow = {
   albumId: string;
   /** Имя файла копии, а не путь: путь живёт до обновления приложения. */
   mediaFile: string | null;
+  /** Общий адрес снимка в IPFS: по нему альбом виден на другом устройстве. */
+  mediaCid: string | null;
   mediaType: 'image' | 'video';
   text: string | null;
   /** Когда историю опубликовали. */
@@ -7149,6 +7178,7 @@ export async function insertStoryAlbumItem(row: {
   albumId: string;
   ownerProfileId: number;
   mediaFile: string | null;
+  mediaCid: string | null;
   mediaType: 'image' | 'video';
   text: string | null;
   createdAt: number;
@@ -7158,11 +7188,39 @@ export async function insertStoryAlbumItem(row: {
   const dek = await getOrCreateDataEncryptionKey();
   await d.runAsync(
     `INSERT OR IGNORE INTO story_album_items
-      (id, album_id, owner_profile_id, media_file, media_type, text, created_at, added_at)
-     VALUES (?,?,?,?,?,?,?,?)`,
+      (id, album_id, owner_profile_id, media_file, media_cid, media_type, text, created_at, added_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [row.id, row.albumId, row.ownerProfileId, encryptAtRestNullable(row.mediaFile, dek),
+     encryptAtRestNullable(row.mediaCid, dek),
      row.mediaType, encryptAtRestNullable(row.text, dek), row.createdAt, row.addedAt]
   );
+}
+
+type StoryAlbumItemDbRow = {
+  id: string; album_id: string; media_file: string | null; media_cid: string | null;
+  media_type: string | null; text: string | null; created_at: number; added_at: number;
+};
+
+function mapStoryAlbumItemRows(rows: StoryAlbumItemDbRow[], dek: Uint8Array): StoryAlbumItemRow[] {
+  return rows.map((r) => {
+    const mediaCell = readAtRestCell(r.media_file, dek);
+    const cidCell = readAtRestCell(r.media_cid, dek);
+    const textCell = readAtRestCell(r.text, dek);
+    return {
+      id: r.id,
+      albumId: r.album_id,
+      mediaFile: cellTextOrNull(mediaCell),
+      mediaCid: cellTextOrNull(cidCell),
+      mediaType: (r.media_type === 'video' ? 'video' : 'image') as 'image' | 'video',
+      text: cellTextOrNull(textCell),
+      createdAt: r.created_at,
+      addedAt: r.added_at,
+      // Непрочитанный CID к «нет снимка» не приравнивается: файл на этом
+      // телефоне мог остаться, и плитка обязана его показать.
+      mediaUnreadable: unreadableFromCellState(mediaCell.state),
+      textUnreadable: unreadableFromCellState(textCell.state),
+    };
+  });
 }
 
 /** Содержимое альбома, новые сверху. */
@@ -7170,30 +7228,82 @@ export async function listStoryAlbumItems(
   albumId: string, ownerProfileId: number
 ): Promise<StoryAlbumItemRow[]> {
   const d = await db();
-  const rows = await d.getAllAsync<{
-    id: string; album_id: string; media_file: string | null; media_type: string | null;
-    text: string | null; created_at: number; added_at: number;
-  }>(
+  const rows = await d.getAllAsync<StoryAlbumItemDbRow>(
     `SELECT * FROM story_album_items
       WHERE album_id = ? AND owner_profile_id = ? ORDER BY created_at DESC`,
     [albumId, ownerProfileId]
   );
+  return mapStoryAlbumItemRows(rows, await getOrCreateDataEncryptionKey());
+}
+
+/** Все строки альбомов профиля — для выгрузки в облачную копию. */
+export async function listAllStoryAlbumItems(ownerProfileId: number): Promise<StoryAlbumItemRow[]> {
+  const d = await db();
+  const rows = await d.getAllAsync<StoryAlbumItemDbRow>(
+    'SELECT * FROM story_album_items WHERE owner_profile_id = ? ORDER BY created_at DESC',
+    [ownerProfileId]
+  );
+  return mapStoryAlbumItemRows(rows, await getOrCreateDataEncryptionKey());
+}
+
+/** Одна строка альбома — нужна, чтобы узнать имя копии перед удалением. */
+export async function getStoryAlbumItem(
+  id: string, ownerProfileId: number
+): Promise<StoryAlbumItemRow | null> {
+  const d = await db();
+  const row = await d.getFirstAsync<StoryAlbumItemDbRow>(
+    'SELECT * FROM story_album_items WHERE id = ? AND owner_profile_id = ?',
+    [id, ownerProfileId]
+  );
+  if (!row) return null;
+  return mapStoryAlbumItemRows([row], await getOrCreateDataEncryptionKey())[0];
+}
+
+/** Название альбома, пришедшее из облачной копии. */
+export async function upsertStoryAlbumFromSync(
+  row: { id: string; title: string; ownerProfileId: number; createdAt: number }
+): Promise<void> {
+  const d = await db();
   const dek = await getOrCreateDataEncryptionKey();
-  return rows.map((r) => {
-    const mediaCell = readAtRestCell(r.media_file, dek);
-    const textCell = readAtRestCell(r.text, dek);
-    return {
-      id: r.id,
-      albumId: r.album_id,
-      mediaFile: cellTextOrNull(mediaCell),
-      mediaType: (r.media_type === 'video' ? 'video' : 'image') as 'image' | 'video',
-      text: cellTextOrNull(textCell),
-      createdAt: r.created_at,
-      addedAt: r.added_at,
-      mediaUnreadable: unreadableFromCellState(mediaCell.state),
-      textUnreadable: unreadableFromCellState(textCell.state),
-    };
-  });
+  await d.runAsync(
+    `INSERT INTO story_albums (id, owner_profile_id, title, created_at) VALUES (?,?,?,?)
+       ON CONFLICT(id, owner_profile_id) DO UPDATE SET title = excluded.title`,
+    [row.id, row.ownerProfileId, encryptAtRestString(row.title, dek), row.createdAt]
+  );
+}
+
+/**
+ * Строка альбома, пришедшая из облачной копии.
+ *
+ * media_file не трогается ни на вставке, ни на обновлении: имя файла — примета
+ * ЭТОЙ установки, наверх оно не уезжает и в пришедшей строке его нет. Затереть
+ * им своё значение означало бы потерять копию, которая лежит рядом на диске.
+ */
+export async function upsertStoryAlbumItemFromSync(row: {
+  id: string;
+  albumId: string;
+  ownerProfileId: number;
+  mediaCid: string | null;
+  mediaType: 'image' | 'video';
+  text: string | null;
+  createdAt: number;
+  addedAt: number;
+}): Promise<void> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    `INSERT INTO story_album_items
+      (id, album_id, owner_profile_id, media_file, media_cid, media_type, text, created_at, added_at)
+     VALUES (?,?,?,NULL,?,?,?,?,?)
+     ON CONFLICT(id, owner_profile_id) DO UPDATE SET
+       album_id = excluded.album_id,
+       media_cid = excluded.media_cid,
+       media_type = excluded.media_type,
+       text = excluded.text,
+       added_at = excluded.added_at`,
+    [row.id, row.albumId, row.ownerProfileId, encryptAtRestNullable(row.mediaCid, dek),
+     row.mediaType, encryptAtRestNullable(row.text, dek), row.createdAt, row.addedAt]
+  );
 }
 
 /**
@@ -7211,6 +7321,25 @@ export async function storyAlbumItemExists(id: string, ownerProfileId: number): 
     [id, ownerProfileId]
   );
   return (r?.n ?? 0) > 0;
+}
+
+/**
+ * Запомнить имя копии, скачанной по общему адресу.
+ *
+ * Строка альбома приезжает с другого устройства без имени файла — там его и не
+ * может быть. Скачав снимок один раз, устройство кладёт его к себе насовсем:
+ * иначе плитка зависела бы от того, жив ли ещё общий адрес, а альбом — это
+ * ровно обещание «останется».
+ */
+export async function setStoryAlbumItemMediaFile(
+  id: string, ownerProfileId: number, name: string
+): Promise<void> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    'UPDATE story_album_items SET media_file = ? WHERE id = ? AND owner_profile_id = ?',
+    [encryptAtRestString(name, dek), id, ownerProfileId]
+  );
 }
 
 export async function deleteStoryAlbumItem(id: string, ownerProfileId: number): Promise<void> {

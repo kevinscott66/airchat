@@ -3,10 +3,17 @@ const path = require('path');
 const { createHmac, randomBytes } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
+// Хранилище слепое: вид сущности нужен ему только чтобы отличать строки друг
+// от друга. Но список закрытый, и незнакомый вид роняет ВЕСЬ push целиком
+// (invalid_sync_mutation) — значит, сервер обязан узнать о новом виде РАНЬШЕ,
+// чем клиент начнёт его отправлять, иначе у человека встанет вся синхронизация,
+// включая переписку.
 const ENTITY_KINDS = new Set([
   'profile', 'device', 'contact', 'conversation', 'message', 'group',
   'group_member', 'group_message', 'feed_post', 'feed_comment', 'reaction',
   'media_manifest', 'setting', 'presence',
+  // v4.32.576: альбомы историй.
+  'story_album', 'story_album_item',
 ]);
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;

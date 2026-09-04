@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const test = require('node:test');
-const { SyncDatabase, validateMutation } = require('./sync-db');
+const { SyncDatabase, validateMutation, ENTITY_KINDS } = require('./sync-db');
 
 function makeDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-sync-'));
@@ -598,4 +598,29 @@ test('секрет реестра берётся из окружения, ког
   // Слишком короткий секрет — это не «сойдёт», это остановка на старте.
   process.env.USERNAME_REGISTRY_PEPPER = 'short';
   assert.throws(() => makeDb(), /shorter than 32/);
+});
+
+// Список видов на сервере закрытый, и незнакомый вид роняет push ЦЕЛИКОМ
+// (invalid_sync_mutation) — вместе с перепиской, которая ехала в том же
+// пакете. Значит, клиент не имеет права знать вид, которого не знает сервер:
+// выкатывать надо сервер первым, а расхождение ловится здесь, а не в бою.
+test('server entity kinds cover every kind the client can send', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'core', 'sync', 'syncProtocol.ts'),
+    'utf8',
+  );
+  const start = source.indexOf('export type SyncEntityKind =');
+  const block = source.slice(start, source.indexOf(';', start));
+  const clientKinds = [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+  assert.ok(clientKinds.length > 10, 'client union parsed');
+  for (const kind of clientKinds) {
+    assert.ok(ENTITY_KINDS.has(kind), `server does not accept entity kind ${kind}`);
+  }
+});
+
+test('album rows are accepted by the sync store', () => {
+  for (const kind of ['story_album', 'story_album_item']) {
+    assert.ok(validateMutation(mutation({ entityKind: kind, mutationId: `m-${kind}` })));
+  }
+  assert.equal(validateMutation(mutation({ entityKind: 'story_albums' })), null);
 });

@@ -67,6 +67,14 @@ jest.mock('../../storage/local', () => ({
   saveSyncEntityHeads: jest.fn(async () => undefined),
 }));
 
+jest.mock('../../social/storyAlbumSync', () => ({
+  applySyncStoryAlbum: jest.fn(async () => undefined),
+  applySyncStoryAlbumDelete: jest.fn(async () => undefined),
+  applySyncStoryAlbumItem: jest.fn(async () => undefined),
+  applySyncStoryAlbumItemDelete: jest.fn(async () => undefined),
+  exportStoryAlbumSyncSnapshot: jest.fn(async () => ({ albums: [], items: [] })),
+}));
+
 jest.mock('../../social/feedService', () => ({
   applyFeedSyncComment: jest.fn(async () => undefined),
   applyFeedSyncCommentDelete: jest.fn(async () => undefined),

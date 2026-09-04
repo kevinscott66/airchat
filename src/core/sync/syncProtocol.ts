@@ -14,6 +14,8 @@ export type SyncEntityKind =
   | 'group_message'
   | 'feed_post'
   | 'feed_comment'
+  | 'story_album'
+  | 'story_album_item'
   | 'reaction'
   | 'media_manifest'
   | 'setting'

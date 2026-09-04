@@ -192,7 +192,7 @@ export async function publishStory(
  * Два источника: зашифрованное вложение (`nb:`) — расшифровывается в файл
  * кэша; обычный CID — читается из IPFS и кладётся в data:-адрес.
  */
-async function resolveStoryMedia(mediaCid: string, mediaType: 'image' | 'video'): Promise<string | null> {
+export async function resolveStoryMedia(mediaCid: string, mediaType: 'image' | 'video'): Promise<string | null> {
   if (isNbCid(mediaCid)) {
     const ref = parseNbCid(mediaCid);
     if (!ref) return null;
