@@ -111,9 +111,10 @@ jest.mock('../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-const ME = 'M'.repeat(43);
-const PEER = 'A'.repeat(43);
 const TEST_PAIR = { publicKey: new Uint8Array(32), secretKey: new Uint8Array(32) };
+// v4.32.586: своё имя служба выводит из пары сама — здесь оно должно совпасть.
+const ME = Buffer.from(TEST_PAIR.publicKey).toString('base64');
+const PEER = 'A'.repeat(43);
 
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -139,11 +140,37 @@ beforeEach(async () => {
   mockAudioTrack.stop.mockClear();
   mockFrontVideoTrack.stop.mockClear();
   mockRearVideoTrack.stop.mockClear();
-  await initCallService(ME, TEST_PAIR);
+  await initCallService(TEST_PAIR);
 });
 
 afterEach(() => {
   disposeCallService();
+});
+
+describe('call identity form', () => {
+  // v4.32.586. App.tsx передавал сюда `did:key:z…`, и сигнальный сервер отвергал
+  // регистрацию: он проверяет подпись ключом, взятым из самого `peerId`, и до
+  // того требует канонический base64 на 32 байта. Регистрация не проходила
+  // никогда — и `initiateCall` всегда возвращал false на `call_no_signaling`,
+  // то есть звонки по интернету были мертвы целиком, а не изредка.
+  it('registers under the base64 public key of its own pair, never a DID', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    const [roomId, peerId, pair] = mockRegister.mock.calls[0] as [string, string, unknown];
+    expect(peerId).toBe(Buffer.from(TEST_PAIR.publicKey).toString('base64'));
+    expect(roomId).toBe(peerId);
+    expect(pair).toBe(TEST_PAIR);
+    expect(peerId.startsWith('did:')).toBe(false);
+    // Ровно 32 байта: сервер отвергает всё остальное ещё до проверки подписи.
+    expect(Buffer.from(peerId, 'base64')).toHaveLength(32);
+  });
+
+  it('refuses to register at all when the key is not an Ed25519 public key', async () => {
+    disposeCallService();
+    mockRegister.mockClear();
+    await initCallService({ publicKey: new Uint8Array(8), secretKey: new Uint8Array(32) });
+    expect(mockRegister).not.toHaveBeenCalled();
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(false);
+  });
 });
 
 describe('call media layer', () => {

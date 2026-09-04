@@ -18,7 +18,7 @@ import {
 import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
-import { isPubKeyB64 } from '../crypto/pubKeyFormat';
+import { isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sealCallEnvelope, openCallEnvelope } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
 import { callBannerId, newCallId } from '../../notifications/callPush';
@@ -989,8 +989,37 @@ async function _hangup(
 
 /**
  * Call this once after the key pair is known so the service can register on the signaling server.
+ *
+ * v4.32.586. Своё имя служба звонков БОЛЬШЕ НЕ ПРИНИМАЕТ СНАРУЖИ, а выводит из
+ * той же пары, которой подписывает регистрацию. Раньше имя приходило отдельным
+ * доводом, и App.tsx передавал туда `did:key:z…` — форму для пуша и ссылок, а
+ * не для сигнализации. Отсюда:
+ *
+ *  1. Сигнальный сервер проверяет подпись регистрации ключом, взятым ИЗ САМОГО
+ *     `peerId` (`verifyEd25519(peerId, …)`), и предварительно требует, чтобы
+ *     `peerId` был каноническим base64 ровно на 32 байта. `did:key:` не
+ *     проходит уже по алфавиту — двоеточие. Регистрация отвергалась всегда,
+ *     `ensureRegistered` возвращал null, и `initiateCall` выходил на
+ *     `call_no_signaling`, показывая человеку «Не удалось начать звонок».
+ *     То есть звонки через интернет не работали вообще, а не иногда.
+ *
+ *  2. Тот же DID сравнивался с `fromPeerId` входящих событий, который сервер
+ *     ставит из регистрации собеседника, то есть base64. Ни одно входящее
+ *     событие не могло совпасть.
+ *
+ *  3. `sendCallWake` звал `didFromPubB64(myPub)` — на DID это null, и push о
+ *     звонке молча не уходил.
+ *
+ * Единственное правильное значение здесь — base64 открытого ключа этой пары:
+ * любое другое сервер не сможет проверить, потому что проверяет он подпись
+ * ИМЕНЕМ. Поэтому имя и выводится на месте, а не передаётся.
  */
-export async function initCallService(myPub: string, pair: KeyPairBytes, profileId = 1): Promise<void> {
+export async function initCallService(pair: KeyPairBytes, profileId = 1): Promise<void> {
+  if (!isEd25519PublicKey(pair?.publicKey)) {
+    log.warn('call_init_bad_key', { len: pair?.publicKey?.length ?? -1 });
+    return;
+  }
+  const myPub = publicKeyToB64(pair.publicKey);
   const epoch = ++serviceEpoch;
   myPubB64Global = myPub;
   mySigningPair = pair;

@@ -863,7 +863,7 @@ function MainTabs({
           }, 20_000);
 
           try {
-            await initCallService(did, pair, pid);
+            await initCallService(pair, pid);
           } catch (e) {
             log.warn('init_call_service_failed', {
               err: e instanceof Error ? e.message : String(e),

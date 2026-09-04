@@ -72,7 +72,7 @@ beforeEach(async () => {
   mockSendAnswer.mockClear();
   mockSendOffer.mockClear();
   disposeCallService();
-  await initCallService(ME, me.pair);
+  await initCallService(me.pair);
 });
 
 afterEach(() => {

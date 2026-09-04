@@ -236,7 +236,7 @@ describe('поведение сервиса звонков', () => {
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
-    await initCallService(ME, me.pair);
+    await initCallService(me.pair);
   });
 
   afterEach(async () => {

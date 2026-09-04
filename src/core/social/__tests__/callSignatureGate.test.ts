@@ -106,7 +106,7 @@ beforeEach(async () => {
   mockAnswerHandler.current = null;
   mockSendAnswer.mockClear();
   mockSendOffer.mockClear();
-  await initCallService(ME, me.pair);
+  await initCallService(me.pair);
 });
 
 afterEach(async () => {

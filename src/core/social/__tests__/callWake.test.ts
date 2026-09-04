@@ -180,7 +180,7 @@ describe('дозвон до телефона, которого нет в сет�
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
-    await initCallService(ME, me.pair);
+    await initCallService(me.pair);
   });
 
   afterEach(async () => {
