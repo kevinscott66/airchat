@@ -51,11 +51,15 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
+import { makePeer, sealOffer, testCallId } from './callTestPeers';
 
-const ME = 'M'.repeat(43);
-const PEER = 'A'.repeat(43);
-const SDP = JSON.stringify({ sdp: 'v=0\r\n', isVideo: true });
-const TEST_PAIR = { publicKey: new Uint8Array(32), secretKey: new Uint8Array(32) };
+const me = makePeer();
+const peer = makePeer();
+const other = makePeer();
+const ME = me.pub;
+const PEER = peer.pub;
+const offer = (from = peer, callId = testCallId()): Promise<string> =>
+  sealOffer(from, ME, { sdp: 'v=0\r\n', isVideo: true, callId });
 
 /** Обработчик входящего звонка асинхронный — дать ему доработать. */
 function settle(): Promise<void> {
@@ -68,7 +72,7 @@ beforeEach(async () => {
   mockSendAnswer.mockClear();
   mockSendOffer.mockClear();
   disposeCallService();
-  await initCallService(ME, TEST_PAIR);
+  await initCallService(ME, me.pair);
 });
 
 afterEach(() => {
@@ -79,7 +83,7 @@ describe('входящий звонок от заблокированного', 
   it('не звонит и не отвечает ничего', async () => {
     mockBlocked.add(PEER);
     expect(mockOfferHandler).not.toBeNull();
-    mockOfferHandler?.({ fromPeerId: PEER, sdp: SDP });
+    mockOfferHandler?.({ fromPeerId: PEER, sdp: await offer() });
     await settle();
     expect(getCurrentCall()).toBeNull();
     expect(mockSendAnswer).not.toHaveBeenCalled();
@@ -87,20 +91,20 @@ describe('входящий звонок от заблокированного', 
 
   it('молчит и когда мы заняты — «занято» тоже выдало бы нас', async () => {
     // Сперва обычный звонок, чтобы состояние стало не-idle.
-    mockOfferHandler?.({ fromPeerId: 'B'.repeat(43), sdp: SDP });
+    mockOfferHandler?.({ fromPeerId: other.pub, sdp: await offer(other, testCallId('b')) });
     await settle();
     expect(getCurrentCall()?.state).toBe('incoming');
 
     mockBlocked.add(PEER);
-    mockOfferHandler?.({ fromPeerId: PEER, sdp: SDP });
+    mockOfferHandler?.({ fromPeerId: PEER, sdp: await offer() });
     await settle();
     expect(mockSendAnswer).not.toHaveBeenCalled();
     // И чужой звонок не подменил собой текущий.
-    expect(getCurrentCall()?.peerPubB64).toBe('B'.repeat(43));
+    expect(getCurrentCall()?.peerPubB64).toBe(other.pub);
   });
 
   it('от незаблокированного — звонит как обычно', async () => {
-    mockOfferHandler?.({ fromPeerId: PEER, sdp: SDP });
+    mockOfferHandler?.({ fromPeerId: PEER, sdp: await offer() });
     await settle();
     expect(getCurrentCall()).toMatchObject({ state: 'incoming', peerPubB64: PEER, isVideo: true });
   });

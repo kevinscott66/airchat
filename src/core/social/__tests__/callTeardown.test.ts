@@ -28,6 +28,7 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
+import { envelopeBody, makePeer, sealAnswer, sealOffer, testCallId } from './callTestPeers';
 
 const mockOfferHandler: { current: ((msg: { fromPeerId: string; sdp: string }) => void) | null } = { current: null };
 const mockHangupHandler: { current: ((msg: { fromPeerId?: string }) => void) | null } = { current: null };
@@ -127,9 +128,10 @@ jest.mock('../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-const ME = 'M'.repeat(43);
-const PEER = 'A'.repeat(43);
-const TEST_PAIR = { publicKey: new Uint8Array(32), secretKey: new Uint8Array(32) };
+const me = makePeer();
+const peer = makePeer();
+const ME = me.pub;
+const PEER = peer.pub;
 
 /** Прокрутить очередь микрозадач, не двигая часы. */
 function settle(): Promise<void> {
@@ -137,10 +139,10 @@ function settle(): Promise<void> {
 }
 
 /** Изобразить входящий звонок так, как его присылает сигнальный сервер. */
-async function receiveOffer(): Promise<void> {
+async function receiveOffer(callId = testCallId()): Promise<void> {
   mockOfferHandler.current?.({
     fromPeerId: PEER,
-    sdp: JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false }),
+    sdp: await sealOffer(peer, ME, { isVideo: false, callId }),
   });
   await settle();
 }
@@ -234,7 +236,7 @@ describe('поведение сервиса звонков', () => {
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
-    await initCallService(ME, TEST_PAIR);
+    await initCallService(ME, me.pair);
   });
 
   afterEach(async () => {
@@ -292,7 +294,7 @@ describe('поведение сервиса звонков', () => {
   it('«положили трубку» от постороннего разговор не рвёт', async () => {
     await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
 
-    mockHangupHandler.current?.({ fromPeerId: 'B'.repeat(43) });
+    mockHangupHandler.current?.({ fromPeerId: makePeer().pub });
     mockHangupHandler.current?.({ fromPeerId: 'не ключ' });
     await settle();
 
@@ -305,14 +307,16 @@ describe('поведение сервиса звонков', () => {
     expect(pc).toBeDefined();
     expect(pc.remoteDescription).toBeNull();
 
-    mockAnswerHandler.current?.({ sdp: 'remote-answer-sdp' });
+    const callId = String(envelopeBody(mockSendOffer.mock.calls.at(-1)?.[2]).callId);
+    const answer = await sealAnswer(peer, ME, { sdp: 'remote-answer-sdp', callId });
+    mockAnswerHandler.current?.({ sdp: answer });
     await settle();
 
     expect(pc.remoteDescription).toBeNull();
     expect(getCurrentCall()?.state).toBe('outgoing');
 
     // А от собеседника — доходит: проверка строгая, но не глухая.
-    mockAnswerHandler.current?.({ fromPeerId: PEER, sdp: 'remote-answer-sdp' });
+    mockAnswerHandler.current?.({ fromPeerId: PEER, sdp: answer });
     await settle();
 
     expect(pc.remoteDescription).not.toBeNull();
@@ -339,7 +343,9 @@ describe('поведение сервиса звонков', () => {
 
     await jest.advanceTimersByTimeAsync(INCOMING_RINGING_TIMEOUT_MS - OUTGOING_RINGING_TIMEOUT_MS);
     expect(getCurrentCall()?.state).toBe('ended');
-    expect(mockSendAnswer).toHaveBeenCalledWith(PEER, 'declined');
+    const [to, body] = mockSendAnswer.mock.calls.at(-1) as [string, string];
+    expect(to).toBe(PEER);
+    expect(envelopeBody(body)).toMatchObject({ kind: 'answer', from: ME, to: PEER, control: 'declined' });
   });
 
   it('взятая трубка снимает срок ожидания', async () => {
@@ -358,7 +364,7 @@ describe('поведение сервиса звонков', () => {
     expect(getCurrentCall()?.state).toBe('ended');
 
     await jest.advanceTimersByTimeAsync(INCOMING_RINGING_TIMEOUT_MS * 2);
-    await receiveOffer();
+    await receiveOffer(testCallId('b'));
 
     expect(getCurrentCall()?.state).toBe('incoming');
   });
@@ -373,7 +379,7 @@ describe('форма исходников', () => {
   it('_hangup сам решает, предупреждать ли собеседника', () => {
     const body = HANGUP_BODY();
     expect(body).toContain('shouldNotifyPeer(currentCall.state, origin)');
-    expect(body).toContain('sendHangupSignal(currentCall.peerPubB64, currentCall.state)');
+    expect(body).toContain('sendHangupSignal(currentCall.peerPubB64, currentCall.state, activeCallId)');
   });
 
   it('у _hangup есть источник завершения со значением по умолчанию', () => {

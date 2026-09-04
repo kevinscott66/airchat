@@ -20,6 +20,7 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
+import { envelopeBody, makePeer, sealOffer, testCallId } from './callTestPeers';
 
 type OfferMsg = { fromPeerId: string; sdp: string };
 type UnavailableMsg = { targetPeerId: string; roomId: string };
@@ -138,9 +139,10 @@ jest.mock('../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-const ME = 'M'.repeat(43);
-const PEER = 'A'.repeat(43);
-const TEST_PAIR = { publicKey: new Uint8Array(32), secretKey: new Uint8Array(32) };
+const me = makePeer();
+const peer = makePeer();
+const ME = me.pub;
+const PEER = peer.pub;
 
 /** Прокрутить очередь микрозадач, не двигая часы. */
 async function settle(): Promise<void> {
@@ -152,7 +154,7 @@ async function settle(): Promise<void> {
 /** Тело последнего ушедшего предложения. */
 function lastOfferBody(): { sdp?: string; isVideo?: boolean; callId?: string } {
   const call = mockSendOffer.mock.calls.at(-1);
-  return JSON.parse(String(call?.[2] ?? '{}')) as { sdp?: string; isVideo?: boolean; callId?: string };
+  return envelopeBody(call?.[2]) as { sdp?: string; isVideo?: boolean; callId?: string };
 }
 
 /** Сказать звонящему то, что говорит сервер про телефон вне сети. */
@@ -178,7 +180,7 @@ describe('дозвон до телефона, которого нет в сет�
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
-    await initCallService(ME, TEST_PAIR);
+    await initCallService(ME, me.pair);
   });
 
   afterEach(async () => {
@@ -250,7 +252,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('повтор, дошедший до звонящего телефона, не получает «занято»', async () => {
-    const offer = JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false, callId: 'a'.repeat(32) });
+    const offer = await sealOffer(peer, ME, { isVideo: false });
     mockOfferHandler.current?.({ fromPeerId: PEER, sdp: offer });
     await settle();
     expect(getCurrentCall()?.state).toBe('incoming');
@@ -266,10 +268,10 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('дошедшее предложение гасит баннер, поднятый push-ом', async () => {
-    const callId = 'b'.repeat(32);
+    const callId = testCallId('b');
     mockOfferHandler.current?.({
       fromPeerId: PEER,
-      sdp: JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false, callId }),
+      sdp: await sealOffer(peer, ME, { isVideo: false, callId }),
     });
     await settle();
 
@@ -277,20 +279,26 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('чужой звонок во время нашего по-прежнему получает «занято»', async () => {
-    const OTHER = 'B'.repeat(43);
+    const other = makePeer();
     mockOfferHandler.current?.({
       fromPeerId: PEER,
-      sdp: JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false }),
+      sdp: await sealOffer(peer, ME, { isVideo: false }),
     });
     await settle();
 
+    const otherCallId = testCallId('c');
     mockOfferHandler.current?.({
-      fromPeerId: OTHER,
-      sdp: JSON.stringify({ sdp: 'other-offer-sdp', isVideo: false }),
+      fromPeerId: other.pub,
+      sdp: await sealOffer(other, ME, { sdp: 'other-offer-sdp', isVideo: false, callId: otherCallId }),
     });
     await settle();
 
-    expect(mockSendAnswer).toHaveBeenCalledWith(OTHER, 'busy');
+    // «Занято» тоже подписано — и своим номером звонка, а не номером нашего.
+    const [to, body] = mockSendAnswer.mock.calls.at(-1) as [string, string];
+    expect(to).toBe(other.pub);
+    expect(envelopeBody(body)).toMatchObject({
+      kind: 'answer', from: ME, to: other.pub, control: 'busy', callId: otherCallId,
+    });
   });
 
   it('звонок, случившийся без нас, приезжает в журнал при следующем входе', async () => {
@@ -327,7 +335,7 @@ describe('дозвон до телефона, которого нет в сет�
   it('о звонке, который идёт прямо сейчас, «вам звонили» не пишется', async () => {
     mockOfferHandler.current?.({
       fromPeerId: PEER,
-      sdp: JSON.stringify({ sdp: 'remote-offer-sdp', isVideo: false }),
+      sdp: await sealOffer(peer, ME, { isVideo: false }),
     });
     await settle();
     expect(getCurrentCall()?.state).toBe('incoming');

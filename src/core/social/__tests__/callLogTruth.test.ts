@@ -111,8 +111,11 @@ describe('журнал звонков не выдумывает направле
     expect((service.match(/_hangup\(\)/g) ?? []).length).toBe(0);
     const calls = service.match(/_hangup\('(declined|unanswered)'/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(7);
-    // отказ собеседника приходит отдельным сигналом
-    expect(service).toContain("await _hangup('declined', msg.sdp === 'busy' ? 'Занято' : 'Отклонён', 'remote');");
+    // Отказ собеседника приходит отдельным сигналом — и с v4.32.585 он
+    // читается из подписанного конверта, а не из голой строки в поле sdp.
+    expect(service).toContain(
+      "await _hangup('declined', answerEnvelope.control === 'busy' ? 'Занято' : 'Отклонён', 'remote');"
+    );
   });
 
   it('своя кнопка на звонящем входящем — это отказ, на своём исходящем — нет', () => {

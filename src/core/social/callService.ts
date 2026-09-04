@@ -19,6 +19,7 @@ import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
 import { isPubKeyB64 } from '../crypto/pubKeyFormat';
+import { sealCallEnvelope, openCallEnvelope } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
 import { callBannerId, newCallId } from '../../notifications/callPush';
 import { randomBytes } from '@noble/hashes/utils.js';
@@ -366,7 +367,7 @@ let serviceEpoch = 0;
 const mediaListeners = new Set<CallMediaListener>();
 
 // Pending incoming offer (stored until user accepts)
-let pendingOffer: { fromPubB64: string; fromName: string; sdp: string; isVideo: boolean } | null = null;
+let pendingOffer: { fromPubB64: string; fromName: string; sdp: string; isVideo: boolean; callId: string } | null = null;
 
 // v4.32.142 (AUDIT P1 T2): handle to the 2500ms 'ended'→null reset timer armed
 // by _hangup. A new incoming OFFER that arrives during this post-hangup window
@@ -387,6 +388,11 @@ let outgoingTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
  * устройства, и оставлять его там на хранение нельзя (см. notifications/callPush).
  */
 let outgoingRetryTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * Номер текущего разговора. Им подписанный ответ привязывается к своему
+ * предложению: ответ от прошлого звонка на текущий уже не годится.
+ */
+let activeCallId: string | null = null;
 let outgoingOffer: { myPub: string; peerPubB64: string; body: string } | null = null;
 /** Как часто повторять предложение звонка тому, кого не было в сети. */
 const OFFER_RETRY_INTERVAL_MS = 3000;
@@ -602,18 +608,40 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       log.info('call_blocked_drop', { from: msg.fromPeerId.slice(0, 8) });
       return;
     }
+    // v4.32.585: подпись — первое, что проверяется у содержимого. Пока
+    // конверт не вскрыт, мы не знаем ни SDP, ни номера звонка, ни даже того,
+    // что предложение вообще исходит от собеседника, а не от сигнального
+    // сервера. Поэтому и «занято» отсюда уходит только на проверенное
+    // предложение: отвечать на неподтверждённое — значит подтверждать
+    // постороннему, что телефон на связи.
+    const pair = mySigningPair;
+    if (!pair) return;
+    const fromPubB64 = msg.fromPeerId;
+    const offerEnvelope = await openCallEnvelope(msg.sdp, {
+      kind: 'offer',
+      from: fromPubB64,
+      to: myPub,
+    });
+    if (!offerEnvelope || offerEnvelope.sdp === undefined) {
+      log.warn('call_offer_unverified', { from: fromPubB64.slice(0, 8) });
+      return;
+    }
+    const isVideo = offerEnvelope.isVideo === true;
+
     // v4.32.573: повтор того же предложения — не «занято». Звонящий повторяет
     // его, пока телефон не появится в сети, и первый же дошедший повтор ставит
     // звонок в состояние «входящий». Ответить на следующий повтор «занято»
     // значило бы обрывать ровно тот звонок, который только что зазвонил.
     if (currentCall
       && (currentCall.state === 'incoming' || currentCall.state === 'connected')
-      && currentCall.peerPubB64 === msg.fromPeerId) {
+      && currentCall.peerPubB64 === fromPubB64) {
       return;
     }
     if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
       // Busy — decline automatically
-      sig.sendAnswer(msg.fromPeerId, 'busy');
+      sig.sendAnswer(fromPubB64, await sealCallEnvelope(pair, myPub, {
+        kind: 'answer', to: fromPubB64, callId: offerEnvelope.callId, control: 'busy',
+      }));
       return;
     }
 
@@ -625,27 +653,16 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       endedResetTimer = null;
     }
 
-    const fromPubB64 = msg.fromPeerId;
-    const sdpStr = msg.sdp;
-    let isVideo = false;
-    try {
-      const parsed = JSON.parse(sdpStr) as unknown;
-      // v4.32.202 (Round-32 #6): validate inner sdp shape before storing on
-      // pendingOffer — it's later handed to setRemoteDescription on accept.
-      // A successfully parsed envelope with an invalid inner SDP is rejected;
-      // otherwise the JSON envelope itself could be passed to WebRTC as SDP.
-      if (!parsed || typeof parsed !== 'object' || !isValidSdp((parsed as { sdp?: unknown }).sdp)) {
-        log.warn('call_offer_invalid_envelope_sdp', { from: fromPubB64.slice(0, 8) });
-        return;
-      }
-      isVideo = (parsed as { isVideo?: unknown }).isVideo === true;
-      pendingOffer = { fromPubB64, fromName: fromPubB64.slice(0, 12), isVideo, sdp: (parsed as { sdp: string }).sdp };
-      // v4.32.573: предложение доехало — баннер из шторки больше не нужен.
-      const wokenBy = (parsed as { callId?: unknown }).callId;
-      if (typeof wokenBy === 'string' && /^[a-f0-9]{16,128}$/i.test(wokenBy)) dismissCallBanner(wokenBy);
-    } catch {
-      pendingOffer = { fromPubB64, fromName: fromPubB64.slice(0, 12), isVideo: false, sdp: sdpStr };
-    }
+    activeCallId = offerEnvelope.callId;
+    pendingOffer = {
+      fromPubB64,
+      fromName: fromPubB64.slice(0, 12),
+      isVideo,
+      sdp: offerEnvelope.sdp,
+      callId: offerEnvelope.callId,
+    };
+    // v4.32.573: предложение доехало — баннер из шторки больше не нужен.
+    dismissCallBanner(offerEnvelope.callId);
 
     currentCall = {
       state: 'incoming',
@@ -673,19 +690,32 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
   sig.onAnswer(async (msg) => {
     if (!currentCall || currentCall.state !== 'outgoing') return;
     if (!isFromPeer(msg.fromPeerId, currentCall.peerPubB64)) return;
-    if (msg.sdp === 'busy' || msg.sdp === 'declined') {
-      // И «занято», и «отклонён» — отказ собеседника, а не «не дозвонились».
-      await _hangup('declined', msg.sdp === 'busy' ? 'Занято' : 'Отклонён', 'remote');
+    // v4.32.585: ответ тоже под подписью — и отказ в том числе. Раньше строки
+    // 'busy' и 'declined' сервер мог выдумать сам и оборвать любой звонок, а
+    // подменённый SDP ответа давал ту же посадку посередине, что и подменённое
+    // предложение. Номер звонка в конверте отсекает ответ от прошлого звонка.
+    const answerEnvelope = await openCallEnvelope(msg.sdp, {
+      kind: 'answer',
+      from: msg.fromPeerId as string,
+      to: myPub,
+      ...(activeCallId ? { callId: activeCallId } : {}),
+    });
+    if (!answerEnvelope) {
+      log.warn('call_answer_unverified', { from: String(msg.fromPeerId).slice(0, 8) });
       return;
     }
-    // v4.32.192 (Round-22 #2): reject oversized/non-string sdp payloads.
-    if (!isValidSdp(msg.sdp)) return;
+    if (answerEnvelope.control) {
+      // И «занято», и «отклонён» — отказ собеседника, а не «не дозвонились».
+      await _hangup('declined', answerEnvelope.control === 'busy' ? 'Занято' : 'Отклонён', 'remote');
+      return;
+    }
+    if (answerEnvelope.sdp === undefined) return;
     try {
       const wrtc = loadWebRtc();
       const answerPc = pc;
       const generation = callGeneration;
       if (!answerPc || !wrtc) return;
-      await answerPc.setRemoteDescription(new wrtc.RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+      await answerPc.setRemoteDescription(new wrtc.RTCSessionDescription({ type: 'answer', sdp: answerEnvelope.sdp }));
       if (callGeneration !== generation || pc !== answerPc || currentCall?.state !== 'outgoing') return;
       await flushPendingIce(answerPc);
       if (callGeneration !== generation || pc !== answerPc || currentCall?.state !== 'outgoing') return;
@@ -845,14 +875,23 @@ async function _createPc(myPub: string, remotePub: string): Promise<RTCPeerConne
   return newPc;
 }
 
-async function sendHangupSignal(peer: string, state: CallState): Promise<void> {
+async function sendHangupSignal(peer: string, state: CallState, callId: string | null): Promise<void> {
   // Prefer a dedicated event when the transport exposes it. The current
   // WebRTCSignaling wrapper predates that API, so its Socket.IO socket is also
   // supported here while the ICE sentinel remains the compatibility path.
   const sig = signaling ?? await getSignaling();
   if (!sig) return;
   if (state === 'incoming') {
-    try { sig.sendAnswer(peer, 'declined'); } catch { /* ignore */ }
+    // v4.32.585: отказ тоже подписан. Неподписанное «отклонён» умел выдумать
+    // сигнальный сервер, и звонящему это выглядело как отказ собеседника.
+    const pair = mySigningPair;
+    const myPub = myPubB64Global;
+    if (!pair || !myPub || !callId) return;
+    try {
+      sig.sendAnswer(peer, await sealCallEnvelope(pair, myPub, {
+        kind: 'answer', to: peer, callId, control: 'declined',
+      }));
+    } catch { /* ignore */ }
     return;
   }
   if (state !== 'outgoing' && state !== 'connected') return;
@@ -894,6 +933,7 @@ async function _hangup(
   // on state === 'ended' — don't re-record, don't re-tear-down.
   if (!currentCall) {
     pendingOffer = null;
+    activeCallId = null;
     cleanupCallResources();
     return;
   }
@@ -906,7 +946,7 @@ async function _hangup(
   // исходящий или разговор — обычная трубка).
   const notifyPromise =
     myPubB64Global && shouldNotifyPeer(currentCall.state, origin)
-      ? sendHangupSignal(currentCall.peerPubB64, currentCall.state)
+      ? sendHangupSignal(currentCall.peerPubB64, currentCall.state, activeCallId)
       : null;
   // v4.32.139 (AUDIT P0 T1): clear buffered remote ICE to prevent leak
   // between calls.
@@ -923,6 +963,7 @@ async function _hangup(
     recordCallEnd(currentCall, Date.now(), cause);
   }
   callGeneration += 1;
+  activeCallId = null;
   cleanupCallResources();
 
   currentCall = { ...currentCall, state: 'ended' };
@@ -1206,7 +1247,13 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
     // нужен, чтобы push о звонке не склеился с прошлым баннером и чтобы
     // разбудившийся телефон погасил баннер, когда предложение доедет.
     const callId = newCallId(randomBytes(16));
-    const offerBody = JSON.stringify({ sdp: offer.sdp, isVideo, callId });
+    if (!mySigningPair) { log.warn('call_no_signing_key'); return false; }
+    // v4.32.585: предложение уходит подписанным — отпечаток DTLS внутри SDP
+    // тем самым привязан к ключу личности звонящего.
+    const offerBody = await sealCallEnvelope(mySigningPair, myPub, {
+      kind: 'offer', to: peerPubB64, callId, sdp: offer.sdp ?? '', isVideo,
+    });
+    activeCallId = callId;
     sig.sendOffer(myPub, peerPubB64, offerBody);
     outgoingOffer = { myPub, peerPubB64, body: offerBody };
     // Разбудить телефон, которого может не быть в сети. Уходят только номер
@@ -1260,7 +1307,7 @@ export async function acceptCall(): Promise<boolean> {
     return false;
   }
 
-  const { fromPubB64, fromName, sdp: offerSdp, isVideo } = pendingOffer;
+  const { fromPubB64, fromName, sdp: offerSdp, isVideo, callId: acceptedCallId } = pendingOffer;
   const generation = callGeneration;
 
   // v4.32.124 (AUDIT P0 #4): permission gate BEFORE any media device call.
@@ -1328,7 +1375,10 @@ export async function acceptCall(): Promise<boolean> {
     await pc.setLocalDescription(answer);
     if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'incoming') return false;
 
-    sig.sendAnswer(fromPubB64, answer.sdp ?? '');
+    if (!mySigningPair) throw new Error('call_no_signing_key');
+    sig.sendAnswer(fromPubB64, await sealCallEnvelope(mySigningPair, myPub, {
+      kind: 'answer', to: fromPubB64, callId: acceptedCallId, sdp: answer.sdp ?? '',
+    }));
 
     // Направление и время начала переносятся из строки входящего звонка
     // (проверка выше гарантирует, что это она же), а не проставляются заново.
