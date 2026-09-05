@@ -832,7 +832,7 @@ class SyncDatabase {
       throw error;
     }
     return {
-      serverEpoch: this.serverEpoch,
+      serverEpoch: this.accountEpoch(accountId),
       acceptedMutationIds,
       rejectedMutationIds,
       nextCursor: this.latestCursor(accountId),
@@ -880,7 +880,7 @@ class SyncDatabase {
       this.compactSyncMutationsInTransaction(accountId, now, idleTtlMs, gcMaxRows);
       this.db.exec('COMMIT');
       return {
-        serverEpoch: this.serverEpoch,
+        serverEpoch: this.accountEpoch(accountId),
         nextCursor: rows.length > 0 || after > 0 ? nextCursor : null,
         hasMore,
         mutations: rows.map((row) => ({
@@ -898,6 +898,21 @@ class SyncDatabase {
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  /**
+   * Метка серверной копии конкретного аккаунта (v4.32.595).
+   *
+   * `server_epoch` живёт в `sync_meta` и переживает удаление строк аккаунта,
+   * поэтому сам по себе он не отличает «сервер тот же» от «аккаунт заведён
+   * заново». `created_at` строки аккаунта меняется ровно при пересоздании,
+   * так что пары хватает, и миграция не нужна — колонка уже есть.
+   */
+  accountEpoch(accountId) {
+    const row = this.db.prepare(
+      'SELECT created_at FROM sync_accounts WHERE account_id = ?',
+    ).get(accountId);
+    return `${this.serverEpoch}:${row ? row.created_at : 0}`;
   }
 
   latestCursor(accountId) {

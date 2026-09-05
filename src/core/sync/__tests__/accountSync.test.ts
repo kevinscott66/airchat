@@ -151,3 +151,88 @@ describe('пришедшие строки проверяются на прина
     expect(await pullRows([{ ...mutation, updatedAt: Number.NaN }])).not.toHaveBeenCalled();
   });
 });
+
+// Метка серверной копии сохранялась с первого дня, но ни разу не сравнивалась,
+// и потеря копии на сервере проходила молча: локальные «головы» уверены, что
+// всё уже отправлено, сервер про эти записи не знает — и не узнает. Здесь
+// проверяется единственное, что делает проход: заметить расхождение, отдать
+// вызывающему шанс забыть головы и обнулить курсор.
+test('detects a recreated server copy after push and reports reset', async () => {
+  readState.mockResolvedValue({
+    ownerProfileId: 1,
+    cursor: '7',
+    serverEpoch: 'epoch-1',
+    lastPullAt: null,
+    lastPushAt: null,
+  });
+  push.mockResolvedValue({
+    serverEpoch: 'epoch-2',
+    acceptedMutationIds: ['m-1'],
+    rejectedMutationIds: [],
+    nextCursor: '1',
+  });
+  const onServerReset = jest.fn().mockResolvedValue(undefined);
+
+  const result = await syncAccountOnce({
+    mnemonic: 'seed',
+    pair,
+    ownerProfileId: 1,
+    pendingMutations: [mutation],
+    applyMutation: jest.fn(),
+    onServerReset,
+  });
+
+  expect(result.status).toBe('reset');
+  expect(onServerReset).toHaveBeenCalledTimes(1);
+  expect(pull).not.toHaveBeenCalled();
+  expect(writeState).toHaveBeenCalledWith(1, { cursor: null, serverEpoch: 'epoch-2' });
+});
+
+test('detects a recreated server copy on pull and keeps the applied rows', async () => {
+  readState.mockResolvedValue({
+    ownerProfileId: 1,
+    cursor: '7',
+    serverEpoch: 'epoch-1',
+    lastPullAt: null,
+    lastPushAt: null,
+  });
+  pull.mockResolvedValue({
+    serverEpoch: 'epoch-2',
+    nextCursor: '2',
+    hasMore: false,
+    mutations: [mutation],
+  });
+  const applyMutation = jest.fn().mockResolvedValue(undefined);
+  const onServerReset = jest.fn().mockResolvedValue(undefined);
+
+  const result = await syncAccountOnce({
+    mnemonic: 'seed',
+    pair,
+    ownerProfileId: 1,
+    pendingMutations: [mutation],
+    applyMutation,
+    onServerReset,
+  });
+
+  expect(result.status).toBe('reset');
+  expect(applyMutation).toHaveBeenCalledWith(mutation);
+  expect(onServerReset).toHaveBeenCalledTimes(1);
+  expect(writeState).toHaveBeenLastCalledWith(1, { cursor: null, serverEpoch: 'epoch-2' });
+});
+
+// Первый в жизни проход не знает метки — и это не повод считать, что сервер
+// что-то потерял: сбрасывать нечего, головы пустые.
+test('a first sync without a known epoch is not a reset', async () => {
+  const onServerReset = jest.fn().mockResolvedValue(undefined);
+  const result = await syncAccountOnce({
+    mnemonic: 'seed',
+    pair,
+    ownerProfileId: 1,
+    pendingMutations: [mutation],
+    applyMutation: jest.fn(),
+    onServerReset,
+  });
+
+  expect(result.status).toBe('synced');
+  expect(onServerReset).not.toHaveBeenCalled();
+});

@@ -18,6 +18,7 @@ import {
   importRawChatMessageRows,
   rebuildConversationsFromMessages,
   saveSyncEntityHeads,
+  clearSyncEntityHeads,
   type SyncEntityHead,
 } from '../storage/local';
 import {
@@ -597,6 +598,9 @@ async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId:
       afterProjection: async () => {
         if (messagesChanged) await rebuildConversationsFromMessages(ownerProfileId);
       },
+      onServerReset: async () => {
+        await clearSyncEntityHeads(ownerProfileId);
+      },
       onPushAccepted: async (response: SyncPushResponse) => {
         const accepted = response.acceptedMutationIds
           .map((mutationId) => collected.pendingHeads.get(mutationId))
@@ -607,6 +611,10 @@ async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId:
       shouldContinue,
     });
     if (result.status === 'offline' || !shouldContinue()) return;
+    // Серверная копия заведена заново: головы уже сброшены, следующий проход
+    // соберёт отправку целиком. Обычные условия выхода тут не применимы —
+    // отправлять пока было нечего именно потому, что головы врали.
+    if (result.status === 'reset') continue;
     const hasRejected = (result.pushed?.rejectedMutationIds.length ?? 0) > 0;
     const hasMorePush = collected.mutations.length >= MAX_PUSH_MUTATIONS;
     if (!hasRejected && !hasMorePush && !result.pulled?.hasMore) return;

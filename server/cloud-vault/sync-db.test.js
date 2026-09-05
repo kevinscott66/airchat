@@ -624,3 +624,28 @@ test('album rows are accepted by the sync store', () => {
   }
   assert.equal(validateMutation(mutation({ entityKind: 'story_albums' })), null);
 });
+
+// `server_epoch` лежит в sync_meta и переживает удаление строк аккаунта, так
+// что сам по себе он не отличает «сервер тот же» от «аккаунт заведён заново».
+// Клиент решает по этой метке, надо ли выгружать всё заново, поэтому цена
+// ошибки здесь — молча потерянная переписка.
+test('account epoch is stable for a live account and changes when it is recreated', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const accountId = 'e'.repeat(32);
+  assert.deepEqual(db.ensureAccount(accountId, 'owner-e'), { ok: true });
+  assert.deepEqual(db.ensureDevice(accountId, 'phone-1', null, 'Phone'), { ok: true });
+
+  const epoch = db.push(accountId, 'phone-1', [mutation()]).serverEpoch;
+  assert.equal(db.pull(accountId, 'phone-1', null, 10).serverEpoch, epoch);
+  db.ensureAccount(accountId, 'owner-e');
+  assert.equal(db.accountEpoch(accountId), epoch);
+
+  // Ждём смены миллисекунды: created_at берётся из часов, и в пределах одного
+  // тика пересозданная строка была бы неотличима от прежней.
+  const tick = Date.now();
+  while (Date.now() === tick) { /* busy wait */ }
+  db.db.prepare('DELETE FROM sync_accounts WHERE account_id = ?').run(accountId);
+  assert.deepEqual(db.ensureAccount(accountId, 'owner-e'), { ok: true });
+  assert.notEqual(db.accountEpoch(accountId), epoch);
+});

@@ -15,13 +15,15 @@ export type AccountSyncOptions = {
   applyMutation: SyncProjection;
   afterProjection?: () => Promise<void>;
   onPushAccepted?: (response: SyncPushResponse, mutations: readonly SyncMutation[]) => Promise<void>;
+  /** Called when the server's copy of this account was created anew. */
+  onServerReset?: () => Promise<void>;
   limit?: number;
   /** Becomes false when the active profile is wiped or switched. */
   shouldContinue?: () => boolean;
 };
 
 export type AccountSyncResult = {
-  status: 'synced' | 'offline';
+  status: 'synced' | 'offline' | 'reset';
   pushed: SyncPushResponse | null;
   pulled: SyncPullResponse | null;
 };
@@ -48,6 +50,30 @@ function isDeliverable(mutation: SyncMutation, ownerProfileId: number): boolean 
     && Number.isSafeInteger(mutation.updatedAt) && mutation.updatedAt >= 0;
 }
 
+/**
+ * Сервер завёл копию этого аккаунта заново (v4.32.595).
+ *
+ * `serverEpoch` сохраняли с первого дня, но ни разу не сравнивали, и потеря
+ * серверной копии проходила молча: локальные «головы» уверены, что всё уже
+ * отправлено, сервер про эти записи не знает — и не узнает никогда, потому
+ * что собирать их заново некому. Теперь метка меняется и при пересоздании
+ * строки аккаунта (см. accountEpoch на сервере), а расхождение здесь
+ * означает ровно одно: выгружать надо всё заново. Головы сбрасывает
+ * вызывающий, курсор обнуляется тут же, а проход возвращает `reset`, чтобы
+ * следующий собрал отправку с чистого листа.
+ */
+async function detectServerReset(
+  options: AccountSyncOptions,
+  known: string | null,
+  reported: string,
+): Promise<boolean> {
+  if (!known || known === reported) return false;
+  log.warn('sync_server_reset', { ownerProfileId: options.ownerProfileId });
+  if (options.onServerReset) await options.onServerReset();
+  await saveSyncState(options.ownerProfileId, { cursor: null, serverEpoch: reported });
+  return true;
+}
+
 async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> {
   if (options.shouldContinue && !options.shouldContinue()) {
     return { status: 'offline', pushed: null, pulled: null };
@@ -64,6 +90,9 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
     pushed = await pushSyncMutations(options.mnemonic, options.pair, options.pendingMutations);
     if (options.shouldContinue && !options.shouldContinue()) {
       return { status: 'offline', pushed, pulled: null };
+    }
+    if (await detectServerReset(options, state.serverEpoch, pushed.serverEpoch)) {
+      return { status: 'reset', pushed, pulled: null };
     }
     await saveSyncState(options.ownerProfileId, {
       serverEpoch: pushed.serverEpoch,
@@ -103,6 +132,9 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
     return { status: 'offline', pushed, pulled: null };
   }
   if (options.afterProjection) await options.afterProjection();
+  if (await detectServerReset(options, state.serverEpoch, pulled.serverEpoch)) {
+    return { status: 'reset', pushed, pulled };
+  }
   await saveSyncState(options.ownerProfileId, {
     cursor: pulled.nextCursor,
     serverEpoch: pulled.serverEpoch,

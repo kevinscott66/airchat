@@ -1823,6 +1823,19 @@ export async function getSyncEntityHeads(ownerProfileId: number): Promise<SyncEn
   }));
 }
 
+/**
+ * Забыть, что сервер уже видел эти записи (v4.32.595).
+ *
+ * Нужно ровно в одном случае: серверная копия аккаунта заведена заново.
+ * Головы — это утверждение «там уже лежит», и после потери серверной копии
+ * оно ложно; удаление возвращает сборщик отправки к полному объёму, а сами
+ * данные лежат в своих таблицах и не трогаются.
+ */
+export async function clearSyncEntityHeads(ownerProfileId: number): Promise<void> {
+  if (!validSyncProfileId(ownerProfileId)) throw new Error('Invalid sync profile id');
+  await (await db()).runAsync('DELETE FROM sync_entity_heads WHERE owner_profile_id = ?', [ownerProfileId]);
+}
+
 /** Persist only heads confirmed by a successful push or pull projection. */
 export async function saveSyncEntityHeads(heads: readonly SyncEntityHead[]): Promise<void> {
   if (heads.length === 0) return;
