@@ -122,6 +122,7 @@ import {
 import { getMutedAuthors, toggleMutedAuthor } from '../../core/social/mutedAuthors';
 import { atTimestamp, hasMoreAfterRefresh, mergeByRowId, mergeListHead } from '../../core/storage/listHeadMerge';
 import { decidePage, shouldApplyRows, type DbRead } from '../../core/storage/readResult';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../../core/storage/readRetry';
 import {
   acceptCommentList,
   appendOwnComment,
@@ -1418,7 +1419,24 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     log.info('ui_feed_load_start', { ts: t0, version: myVersion });
     try {
       const tA = Date.now();
-      const read = await loadFeedPosts(FEED_PAGE, 0);
+      // v4.32.601: одно проигранное чтение — ещё не сбой. Сразу после
+      // разблокировки база занята восстановлением сессии, синхронизацией и
+      // разбором очереди, и первое чтение ленты регулярно упирается в неё.
+      // Прежде экран немедленно писал «Не удалось открыть ленту» —
+      // предупреждение, которое человек видел через мгновение после Face ID и
+      // которое снималось само на следующем тике. Повторяем, и лишь потом
+      // считаем это сбоем.
+      let read = await loadFeedPosts(FEED_PAGE, 0);
+      for (let attempt = 1; attempt <= READ_RETRY_ATTEMPTS && !shouldApplyRows(read); attempt += 1) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, readRetryDelayMs(attempt)); });
+        if (!isMountedRef.current) return;
+        if (loadVersionRef.current !== myVersion) {
+          log.info('ui_feed_load_superseded', { myVersion, current: loadVersionRef.current });
+          return;
+        }
+        log.info('ui_feed_load_retry', { attempt, version: myVersion });
+        read = await loadFeedPosts(FEED_PAGE, 0);
+      }
       log.info('ui_feed_load_posts_done', { ms: Date.now() - tA, n: read ? read.length : -1 });
       if (!isMountedRef.current) return;
       if (loadVersionRef.current !== myVersion) {
