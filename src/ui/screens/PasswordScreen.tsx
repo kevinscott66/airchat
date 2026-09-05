@@ -9,11 +9,13 @@ import {
   Animated,
   Vibration,
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppPressable } from '../components/AppPressable';
 import { AUTH_MAX_ATTEMPTS, authGuard } from '../../core/security/authGuard';
 import { isBiometricUnlockEnabled, readBiometricPassword } from '../../core/security/biometricUnlock';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
+import { GlassSurface } from '../components/GlassSurface';
 import { PinPad } from '../components/PinPad';
 import { showError } from '../components/userFeedback';
 import { useColors, useThemedStyles } from '../ThemeContext';
@@ -36,6 +38,13 @@ type Props = {
 /** Задержка перед авто-проверкой набранного PIN — заодно окно на «стереть». */
 const PIN_AUTOSUBMIT_DELAY_MS = 50;
 
+/** Подпись замка, когда открывают лицом, а не кодом. */
+const BIOMETRIC_HINT = Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку';
+
+/** Знак лица — во весь круг: он здесь вместо клавиатуры, а не значок при ней. */
+const FACE_GLYPH = 92;
+const FACE_CIRCLE = 156;
+
 export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactElement {
   const [pin, setPin] = useState('');
   const [password, setPassword] = useState('');
@@ -52,6 +61,21 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   const submittingRef = useRef(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const [biometricReady, setBiometricReady] = useState(false);
+  /**
+   * Чем замок открывают прямо сейчас.
+   *
+   * v4.32.598: пока Face ID работает, клавиатуры на экране нет. Лицо и шесть
+   * цифр — два разных способа войти, и показывать оба разом значит звать
+   * набирать код там, где набирать нечего: человек смотрит в экран, а под
+   * системным запросом уже нарисованы клавиши. Поэтому `face` — это знак лица
+   * на месте клавиатуры, и клавиатура встаёт туда, только когда Face ID
+   * отказал, был отменён или его не включали.
+   *
+   * `checking` — те доли секунды, пока признак читается из хранилища (очередь
+   * к Keystore на запуске не пустая). Показать за это время клавиатуру значило
+   * бы моргнуть ею и убрать.
+   */
+  const [unlockBy, setUnlockBy] = useState<'checking' | 'face' | 'pin'>('checking');
   /**
    * Запрос Face ID уже был. Ровно один автоматический на открытие экрана:
    * отмена запроса не должна тут же вызывать его снова — из такой петли
@@ -120,6 +144,23 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     },
     spinner: { marginTop: spacing.lg },
     shakeWrap: { width: '100%' as const },
+    faceWrap: { alignItems: 'center' as const },
+    facePress: { borderRadius: radius.full },
+    faceCircle: {
+      width: FACE_CIRCLE,
+      height: FACE_CIRCLE,
+      borderRadius: radius.full,
+      overflow: 'hidden' as const,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    facePressed: { opacity: 0.7 },
+    faceCaption: {
+      marginTop: spacing.lg,
+      textAlign: 'center' as const,
+      color: c.textMuted,
+      fontSize: font.sm,
+    },
   }));
 
   /**
@@ -175,20 +216,20 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   }, [shakeAnim]);
 
   const submitValue = useCallback(
-    async (value: string): Promise<void> => {
+    async (value: string): Promise<boolean> => {
       if (!value) {
         showError('Введите пароль');
-        return;
+        return false;
       }
       // v4.32.326: пока проверка идёт, вторая отправка того же значения просто
       // списала бы ещё одну попытку из пяти.
-      if (submittingRef.current) return;
+      if (submittingRef.current) return false;
       submittingRef.current = true;
       setLoading(true);
       try {
         if (await authGuard.checkPassword(value)) {
           onSuccess();
-          return;
+          return true;
         }
         setPin('');
         setPassword('');
@@ -199,6 +240,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
         } else {
           showError(`Неверный пароль. Осталось попыток: ${remaining}`);
         }
+        return false;
       } finally {
         submittingRef.current = false;
         setLoading(false);
@@ -214,12 +256,12 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
    * `checkPassword` с теми же пятью попытками. Отдельной двери в приложение
    * Face ID не открывает: он только избавляет от набора.
    */
-  const handleBiometric = useCallback(async (): Promise<void> => {
-    if (submittingRef.current) return;
+  const handleBiometric = useCallback(async (): Promise<boolean> => {
+    if (submittingRef.current) return false;
     const stored = await readBiometricPassword();
-    // Отказ или отмена — молча: человек видит клавиатуру и наберёт код сам.
-    if (!stored) return;
-    await submitValue(stored);
+    // Отказ или отмена — молча: на месте лица встанет клавиатура, код наберут сами.
+    if (!stored) return false;
+    return submitValue(stored);
   }, [submitValue]);
 
   useEffect(() => {
@@ -228,9 +270,16 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
       const enabled = await isBiometricUnlockEnabled();
       if (cancelled) return;
       setBiometricReady(enabled);
-      if (!enabled || biometricAskedRef.current) return;
+      if (!enabled || biometricAskedRef.current) {
+        setUnlockBy('pin');
+        return;
+      }
       biometricAskedRef.current = true;
-      await handleBiometric();
+      setUnlockBy('face');
+      const opened = await handleBiometric();
+      // Открылось — экран сейчас снимут, менять на нём нечего. Нет — за знаком
+      // лица встаёт клавиатура.
+      if (!cancelled && !opened) setUnlockBy('pin');
     })();
     return () => {
       cancelled = true;
@@ -279,6 +328,10 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   }
 
   const attempts = attemptsHint(remainingAttempts, AUTH_MAX_ATTEMPTS);
+  const hint =
+    unlockBy === 'face' ? BIOMETRIC_HINT
+      : usePinMode ? `Введите PIN-код (${PIN_LENGTH} цифр)`
+        : 'Введите пароль';
 
   return (
     <SafeScreen edges={['top', 'bottom']} backgroundColor={colors.background}>
@@ -289,74 +342,109 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
       >
         <View style={styles.container}>
           <AirChatLockup height={30} style={styles.lockup} />
-          <Text style={styles.hint}>
-            {usePinMode ? `Введите PIN-код (${PIN_LENGTH} цифр)` : 'Введите пароль'}
-          </Text>
+          {unlockBy === 'checking' ? (
+            <ActivityIndicator style={styles.spinner} color={colors.accent} />
+          ) : (
+            <>
+              <Text style={styles.hint}>{hint}</Text>
 
-          <Animated.View style={[styles.shakeWrap, { transform: [{ translateX: shakeAnim }] }]}>
-            {usePinMode ? (
-              <PinPad
-                pin={pin}
-                length={PIN_LENGTH}
-                onKey={handlePinKey}
-                disabled={loading}
-                onBiometric={biometricReady ? () => void handleBiometric() : undefined}
-              />
-            ) : (
-              <>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Пароль"
-                  placeholderTextColor={colors.textMuted}
-                  secureTextEntry
-                  value={password}
-                  onChangeText={setPassword}
-                  // v4.32.326: без trim. Пароль сохраняется ровно таким, каким
-                  // его набрали в настройках, — а здесь у него молча снимались
-                  // пробелы по краям. Пароль с пробелом было не ввести вовсе:
-                  // пять попыток, пятнадцать минут, и так до сброса по словам.
-                  onSubmitEditing={() => void submitValue(password)}
-                  autoFocus
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  testID="app_password_input"
-                />
+              <Animated.View style={[styles.shakeWrap, { transform: [{ translateX: shakeAnim }] }]}>
+                {unlockBy === 'face' ? (
+                  <View style={styles.faceWrap}>
+                    <AppPressable
+                      onPress={() => void handleBiometric()}
+                      style={({ pressed }) => [styles.facePress, pressed && styles.facePressed]}
+                      disabled={loading}
+                      accessibilityRole="button"
+                      accessibilityLabel={BIOMETRIC_HINT}
+                      testID="app_password_face"
+                    >
+                      <GlassSurface variant="regular" rim style={styles.faceCircle}>
+                        <MaterialCommunityIcons
+                          name={Platform.OS === 'ios' ? 'face-recognition' : 'fingerprint'}
+                          size={FACE_GLYPH}
+                          color={colors.accent}
+                        />
+                      </GlassSurface>
+                    </AppPressable>
+                    <Text style={styles.faceCaption}>Нажмите, если запрос не появился</Text>
+                  </View>
+                ) : usePinMode ? (
+                  <PinPad
+                    pin={pin}
+                    length={PIN_LENGTH}
+                    onKey={handlePinKey}
+                    disabled={loading}
+                    onBiometric={biometricReady ? () => void handleBiometric() : undefined}
+                  />
+                ) : (
+                  <>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Пароль"
+                      placeholderTextColor={colors.textMuted}
+                      secureTextEntry
+                      value={password}
+                      onChangeText={setPassword}
+                      // v4.32.326: без trim. Пароль сохраняется ровно таким, каким
+                      // его набрали в настройках, — а здесь у него молча снимались
+                      // пробелы по краям. Пароль с пробелом было не ввести вовсе:
+                      // пять попыток, пятнадцать минут, и так до сброса по словам.
+                      onSubmitEditing={() => void submitValue(password)}
+                      autoFocus
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      testID="app_password_input"
+                    />
+                    <AppPressable
+                      style={[styles.button, loading && styles.buttonDisabled]}
+                      onPress={() => void submitValue(password)}
+                      disabled={loading}
+                      accessibilityRole="button"
+                      testID="app_password_submit"
+                    >
+                      {loading ? (
+                        <ActivityIndicator color={primaryInk(colors).text} />
+                      ) : (
+                        <Text style={styles.buttonText}>Войти</Text>
+                      )}
+                    </AppPressable>
+                  </>
+                )}
+              </Animated.View>
+
+              {unlockBy === 'face' ? (
                 <AppPressable
-                  style={[styles.button, loading && styles.buttonDisabled]}
-                  onPress={() => void submitValue(password)}
-                  disabled={loading}
+                  onPress={() => setUnlockBy('pin')}
+                  style={styles.forgotWrap}
                   accessibilityRole="button"
-                  testID="app_password_submit"
+                  testID="app_password_use_pin"
                 >
-                  {loading ? (
-                    <ActivityIndicator color={primaryInk(colors).text} />
-                  ) : (
-                    <Text style={styles.buttonText}>Войти</Text>
-                  )}
+                  <Text style={styles.forgotLink}>Ввести код</Text>
                 </AppPressable>
-              </>
-            )}
-          </Animated.View>
-
-          <AppPressable
-            onPress={() => setUsePinMode((v) => !v)}
-            style={styles.forgotWrap}
-            accessibilityRole="button"
-          >
-            <Text style={styles.forgotLink}>
-              {usePinMode ? 'Ввести текстовый пароль' : 'Ввести PIN-код'}
-            </Text>
-          </AppPressable>
-          <AppPressable
-            onPress={onForgot}
-            style={styles.forgotWrap}
-            accessibilityRole="button"
-            testID="app_password_forgot"
-          >
-            <Text style={styles.forgotLinkSmall}>Забыли пароль?</Text>
-          </AppPressable>
-          {attempts ? <Text style={styles.attemptsText}>{attempts}</Text> : null}
-          {loading ? <ActivityIndicator style={styles.spinner} color={colors.accent} /> : null}
+              ) : (
+                <AppPressable
+                  onPress={() => setUsePinMode((v) => !v)}
+                  style={styles.forgotWrap}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.forgotLink}>
+                    {usePinMode ? 'Ввести текстовый пароль' : 'Ввести PIN-код'}
+                  </Text>
+                </AppPressable>
+              )}
+              <AppPressable
+                onPress={onForgot}
+                style={styles.forgotWrap}
+                accessibilityRole="button"
+                testID="app_password_forgot"
+              >
+                <Text style={styles.forgotLinkSmall}>Забыли пароль?</Text>
+              </AppPressable>
+              {attempts ? <Text style={styles.attemptsText}>{attempts}</Text> : null}
+              {loading ? <ActivityIndicator style={styles.spinner} color={colors.accent} /> : null}
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeScreen>
