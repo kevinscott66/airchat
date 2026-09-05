@@ -51,7 +51,15 @@ function isKnownProvider(provider) {
   return typeof provider === 'string' && Object.prototype.hasOwnProperty.call(PROVIDERS, provider);
 }
 
-/** Аудитории провайдера: список bundle id / client id через запятую или пробел. */
+/**
+ * Аудитории провайдера: список bundle id / client id через запятую или пробел.
+ *
+ * В systemd писать их через ПРОБЕЛ нельзя: `Environment=` режет значение по
+ * пробелам на отдельные присваивания, и всё после первого id молча теряется.
+ * Снаружи это выглядит как 401 при привязке ровно со второго телефона.
+ * Правильная форма — через запятую:
+ *   Environment=APPLE_SIGNIN_AUDIENCES=bundle.one,bundle.two
+ */
 function configuredAudiences(provider, env = process.env) {
   if (!isKnownProvider(provider)) return [];
   return String(env[PROVIDERS[provider].audienceEnv] || '')
