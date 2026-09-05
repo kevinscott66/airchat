@@ -13,7 +13,7 @@
  */
 import { Appearance } from 'react-native';
 import { bannerColors } from '../components/StatusBanner';
-import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callLayout, callTone, callWash, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
+import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, authCardRim, authWash, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callLayout, callTone, callWash, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
 import type { AdminLogTone } from '../../core/social/groupAdminLog';
 import { WALLPAPER_MESHES, WALLPAPER_PRESETS, feedGround, meshById, type Wallpaper } from '../wallpapers';
 
@@ -2161,5 +2161,105 @@ describe('последние вписанные цвета: кнопка, плё
     // причина, по которой поверх карты пишут только через mediaScrim.
     expect(contrast(darkColors.text, MAP_PAPER)).toBeLessThan(1.5);
     expect(MAP_PAPER).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+/**
+ * Экраны без аккаунта: подсветка фона и стеклянная карточка формы (v4.32.591).
+ *
+ * Считается ровно то, что человек видит: цвет пятна в его пике, цвет карточки
+ * над этим пятном и всё, что лежит на карточке. Токены палитры в чистом виде
+ * на этих экранах больше не встречаются нигде.
+ */
+describe('подсветка и стекло экранов без аккаунта', () => {
+  const themes: Array<[string, AppColors]> = [
+    ['тёмная', darkColors],
+    ['светлая', lightColors],
+  ];
+
+  /** Самая яркая точка пятна поверх фона темы. */
+  const lit = (p: AppColors, which: 'a' | 'b'): string =>
+    which === 'a'
+      ? mix(p.primary, p.background, authWash.peakA)
+      : mix(p.accent, p.background, authWash.peakB);
+
+  /** Стеклянная карточка `prominent` над этой точкой. */
+  const card = (p: AppColors, which: 'a' | 'b'): string =>
+    mix(p.surface, lit(p, which), glass.fill.prominent);
+
+  it('пятна разведены по высоте и не складываются', () => {
+    // Если бы они перекрывались, худшей точкой была бы не вершина одного
+    // пятна, а сумма двух, и все замеры ниже считались бы не от того цвета.
+    // Низ верхнего пятна и верх нижнего сходятся ровно на половине высоты.
+    expect(authWash.a.cy + authWash.a.ry).toBeLessThanOrEqual(authWash.b.cy - authWash.b.ry);
+  });
+
+  it('края пятен уходят за экран', () => {
+    // Внутри экрана не должно оставаться места, где пятно кончается само:
+    // там виден его собственный край, и фон читается как два круга.
+    expect(authWash.a.cx - authWash.a.rx).toBeLessThan(0);
+    expect(authWash.b.cx + authWash.b.rx).toBeGreaterThan(100);
+  });
+
+  it('пики ниже средних остановок не бывают', () => {
+    expect(authWash.midA).toBeLessThan(authWash.peakA);
+    expect(authWash.midB).toBeLessThan(authWash.peakB);
+  });
+
+  for (const [name, p] of themes) {
+    for (const which of ['a', 'b'] as const) {
+      it(`${name}: второстепенный текст читается на голом пятне ${which}`, () => {
+        // Главное ограничение на яркость подсветки, и оно не про карточку:
+        // на этих экранах есть текст ВНЕ её (заглушка «Загрузка…»), а значит
+        // фон обязан держать 4.5:1 сам по себе. В светлой теме `primary` при
+        // 0.22 даёт уже 4.50:1 — отсюда 0.20.
+        expect(contrast(p.textSecondary, lit(p, which))).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(p.text, lit(p, which))).toBeGreaterThanOrEqual(4.5);
+      });
+
+      it(`${name}: кнопка «создать аккаунт» видна на карточке над пятном ${which}`, () => {
+        // Порог графики: у сплошной кнопки читается её граница, а не подпись.
+        expect(contrast(p.primary, card(p, which))).toBeGreaterThanOrEqual(3);
+      });
+
+      it(`${name}: текст на карточке над пятном ${which} читается`, () => {
+        expect(contrast(p.text, card(p, which))).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(p.textSecondary, card(p, which))).toBeGreaterThanOrEqual(4.5);
+      });
+
+      it(`${name}: кромка вторичной кнопки видна на карточке над пятном ${which}`, () => {
+        // `authCardRim` — это чернила с прозрачностью; на карточке они дают
+        // ровно смесь, поэтому считается она, а не сам токен.
+        const ink = contrastingInk(p.surface);
+        const alpha = ink === '#ffffff' ? authWash.rimOnDark : authWash.rimOnLight;
+        expect(authCardRim(p)).toBe(withAlpha(ink, alpha));
+        expect(contrast(mix(ink, card(p, which), alpha), card(p, which))).toBeGreaterThanOrEqual(3);
+      });
+    }
+
+    it(`${name}: палитровый контур на карточке не виден — потому кромка и замеряется`, () => {
+      // Проверка не-пустоты: если бы `border` проходил, `authCardRim` был бы
+      // лишней сущностью. Он не проходит — карточка это `surface` с
+      // непрозрачностью 0.74, то есть почти сам `surface`.
+      expect(contrast(p.border, card(p, 'a'))).toBeLessThan(3);
+      expect(contrast(p.surfaceHigh, card(p, 'a'))).toBeLessThan(3);
+    });
+
+    it(`${name}: меньшая доля чернил в кромке не проходит`, () => {
+      const ink = contrastingInk(p.surface);
+      const alpha = ink === '#ffffff' ? authWash.rimOnDark : authWash.rimOnLight;
+      const c = card(p, 'a');
+      expect(contrast(mix(ink, c, alpha - 0.1), c)).toBeLessThan(3);
+    });
+  }
+
+  it('обои переписки сюда не годятся — это и есть причина своей подсветки', () => {
+    // Проверка не-пустоты для выбора «свои пятна, а не пресет». Худшая точка
+    // `aurora` рассчитана на ленту, где поверх лежат пузыри со своей заливкой;
+    // под карточкой `regular` кнопка «создать аккаунт» даёт там 2.67:1.
+    const aurora = meshById('aurora');
+    expect(aurora).toBeTruthy();
+    const over = mix(darkColors.surface, aurora!.ground, glass.fill.regular);
+    expect(contrast(darkColors.primary, over)).toBeLessThan(3);
   });
 });

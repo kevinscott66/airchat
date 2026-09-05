@@ -61,7 +61,9 @@ describe('экран знакомства', () => {
   const src = read('ui/screens/OnboardingScreen.tsx');
 
   it('держит обе кнопки внутри колонки', () => {
-    const at = src.indexOf('<View style={styles.column}>');
+    // v4.32.591: колонка стала стеклянной карточкой, но утверждение то же —
+    // обе кнопки внутри неё, а не во всю ширину окна.
+    const at = src.indexOf('style={styles.card}');
     expect(at).toBeGreaterThan(0);
     const end = src.indexOf('testID="onboarding_restore"');
     const column = src.slice(at, end > at ? end : src.length);
@@ -73,7 +75,7 @@ describe('экран знакомства', () => {
     // LoadingOverlay накрывает экран, а не форму: сузить его до колонки значило
     // бы оставить по бокам живые нажатия во время генерации ключей.
     const overlay = src.indexOf('message="Генерация ключей…"');
-    const column = src.indexOf('<View style={styles.column}>');
+    const column = src.indexOf('style={styles.card}');
     expect(overlay).toBeGreaterThan(0);
     expect(column).toBeGreaterThan(overlay);
   });

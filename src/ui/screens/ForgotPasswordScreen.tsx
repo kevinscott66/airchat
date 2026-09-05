@@ -10,10 +10,12 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import { authGuard } from '../../core/security/authGuard';
 import { SafeScreen } from '../components/SafeScreen';
+import { AuthBackdrop } from '../components/AuthBackdrop';
+import { GlassSurface } from '../components/GlassSurface';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { formColumn, primaryInk, radius } from '../theme';
+import { authCardRim, formColumn, primaryInk, radius } from '../theme';
 
 type Props = {
   onSuccess: () => void;
@@ -29,15 +31,22 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
     flex: { flex: 1 },
-    // Тот же потолок ширины, что у экранов заведения аккаунта: это тот же
-    // разговор с человеком без аккаунта, и поле со словами с кнопкой «сбросить»
-    // не должны растягиваться на всю ширину окна браузера.
+    // v4.32.591: прокрутка только центрирует, ширину и поля держит карточка.
     scroll: {
+      flexGrow: 1,
       padding: 20,
       paddingBottom: 40,
+      justifyContent: 'center' as const,
+    },
+    // Тот же потолок ширины и то же стекло, что у экранов заведения аккаунта:
+    // это тот же разговор с человеком без аккаунта, и поле со словами с
+    // кнопкой «сбросить» не должны растягиваться на всю ширину окна браузера.
+    card: {
       width: '100%' as const,
       maxWidth: formColumn.maxWidth,
       alignSelf: 'center' as const,
+      padding: 20,
+      borderRadius: radius.lg,
     },
     title: {
       fontSize: 22,
@@ -59,9 +68,11 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
       color: c.textSecondary,
       marginBottom: 6,
     },
+    // Кромка, а не `border`: на стеклянной карточке палитровый контур даёт
+    // около 1.2:1 при пороге графики 3:1 — поля исчезают (см. authCardRim).
     input: {
       borderWidth: 1,
-      borderColor: c.border,
+      borderColor: authCardRim(c),
       borderRadius: radius.md,
       padding: 12,
       fontSize: 16,
@@ -118,6 +129,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
 
   return (
     <SafeScreen edges={['top', 'bottom']} backgroundColor={colors.background}>
+      <AuthBackdrop />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
@@ -127,6 +139,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
           keyboardShouldPersistTaps="handled"
           testID="forgot_password_screen"
         >
+          <GlassSurface variant="prominent" style={styles.card}>
           <Text style={styles.title}>Восстановление по секретным словам</Text>
           <Text style={styles.desc}>
             Введите те же секретные слова (24 слова), что сохранены для этого аккаунта, и задайте новый пароль
@@ -191,6 +204,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
           <AppPressable onPress={onCancel} style={styles.cancelWrap} testID="forgot_cancel">
             <Text style={styles.cancelText}>Назад к вводу пароля</Text>
           </AppPressable>
+          </GlassSurface>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeScreen>

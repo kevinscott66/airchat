@@ -13,7 +13,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { formColumn, primaryInk, radius } from '../theme';
+import { authCardRim, formColumn, primaryInk, radius } from '../theme';
 import {
   generateMnemonicAndStore,
   getStoredMnemonic,
@@ -29,6 +29,8 @@ import { looksLikeEncryptedBackup } from '../../core/backup/backupFormat';
 import { deleteKeyPairFromStore, loadKeyPair } from '../../core/crypto/keyManager';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
+import { AuthBackdrop } from '../components/AuthBackdrop';
+import { GlassSurface } from '../components/GlassSurface';
 import { validateMnemonic } from 'bip39';
 import { PermissionsScreen } from './PermissionsScreen';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
@@ -46,7 +48,7 @@ type Props = {
 export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
-    kav: { flex: 1, backgroundColor: c.background },
+    kav: { flex: 1 },
     restoreScrollContent: {
       flexGrow: 1,
       paddingHorizontal: 24,
@@ -61,26 +63,28 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     // нажатия от края до края, и описание одной лентой в полтораста знаков.
     // Потолок ширины один на все три шага — иначе колонка прыгала бы при
     // переходе «начало → восстановление».
-    column: {
+    //
+    // v4.32.591: та же колонка стала стеклянной карточкой, и стиль у всех трёх
+    // шагов теперь один. Отступ и скругление переехали сюда из контейнеров:
+    // поля карточки — её собственные, иначе стекло обрезало бы содержимое по
+    // краю, а под фоном это видно.
+    card: {
       width: '100%' as const,
       maxWidth: formColumn.maxWidth,
       alignSelf: 'center' as const,
+      padding: 20,
+      borderRadius: radius.lg,
     },
-    restoreInner: {
-      backgroundColor: c.background,
-      width: '100%' as const,
-      maxWidth: formColumn.maxWidth,
-      alignSelf: 'center' as const,
-    },
-    flex: { flex: 1, backgroundColor: c.background },
-    center: { flex: 1, padding: 24, justifyContent: 'center' as const, backgroundColor: c.background },
-    scroll: { flex: 1, backgroundColor: c.background },
+    flex: { flex: 1 },
+    center: { flex: 1, padding: 24, justifyContent: 'center' as const },
+    scroll: { flex: 1 },
+    // Прокрутка показа слов центрируется так же, как восстановление: карточка
+    // внутри, поля — у неё.
     scrollContent: {
+      flexGrow: 1,
       padding: 20,
       paddingBottom: 40,
-      width: '100%' as const,
-      maxWidth: formColumn.maxWidth,
-      alignSelf: 'center' as const,
+      justifyContent: 'center' as const,
     },
     backRow: {
       flexDirection: 'row' as const,
@@ -120,8 +124,13 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       alignItems: 'center' as const,
       marginBottom: 12,
     },
+    // Заливки у вторичной кнопки на стекле нет вовсе, и это замер, а не вкус:
+    // карточка — это `surface` с непрозрачностью 0.74, поэтому `surface` на
+    // ней даёт около 1.2:1 при пороге графики 3:1, то есть кнопка исчезает.
+    // Границу держит кромка (см. authCardRim).
     btnSecondary: {
-      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: authCardRim(c),
       padding: 14,
       borderRadius: radius.md,
       alignItems: 'center' as const,
@@ -131,7 +140,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     textarea: {
       minHeight: 120,
       borderWidth: 1,
-      borderColor: c.border,
+      borderColor: authCardRim(c),
       borderRadius: radius.md,
       padding: 12,
       color: c.text,
@@ -141,7 +150,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     },
     pwdInput: {
       borderWidth: 1,
-      borderColor: c.border,
+      borderColor: authCardRim(c),
       borderRadius: radius.md,
       padding: 12,
       color: c.text,
@@ -363,10 +372,11 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   if (step === 'welcome') {
     return (
       <SafeScreen>
+      <AuthBackdrop />
       <View style={styles.center} testID="onboarding_welcome" collapsable={false}>
         <LoadingOverlay visible={busy} message="Генерация ключей…" />
-        {/* Затемнение выше — на весь экран, форма ниже — в колонке. */}
-        <View style={styles.column}>
+        {/* Затемнение выше — на весь экран, форма ниже — в карточке. */}
+        <GlassSurface variant="prominent" style={styles.card}>
           <AirChatWordmark height={26} style={styles.wordmark} />
           <Text style={styles.sub}>
             Чат с защитой сообщений. Секретные слова (24 слова) — ваш ключ восстановления. Без них на новом
@@ -390,7 +400,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                 загрузить. Кнопка не должна обещать только один из двух. */}
             <Text style={styles.btnTextDark}>Восстановить аккаунт</Text>
           </AppPressable>
-        </View>
+        </GlassSurface>
       </View>
       </SafeScreen>
     );
@@ -399,6 +409,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   if (step === 'restore') {
     return (
       <SafeScreen>
+      <AuthBackdrop />
         {/* v4.32.102 K.8: корневой KAV — на Android adjustResize уже работает, behavior=undefined чтобы избежать двойной компенсации */}
         <KeyboardAvoidingView
           style={styles.kav}
@@ -410,7 +421,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.restoreInner} testID="onboarding_restore">
+            <GlassSurface variant="prominent" style={styles.card} testID="onboarding_restore">
               <LoadingOverlay visible={busy} message="Восстановление…" />
               <AppPressable
                 style={styles.backRow}
@@ -506,7 +517,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               >
                 <Text style={styles.btnText}>Восстановить</Text>
               </AppPressable>
-            </View>
+            </GlassSurface>
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeScreen>
@@ -516,6 +527,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   if (step === 'showSeed') {
     return (
       <SafeScreen>
+      <AuthBackdrop />
       <View style={styles.flex} testID="seed_phrase_screen">
         <LoadingOverlay visible={busy} message="Сохранение…" />
         <ScrollView
@@ -523,6 +535,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
           contentContainerStyle={styles.scrollContent}
           testID="seed_scroll"
         >
+          <GlassSurface variant="prominent" style={styles.card}>
           <AppPressable
             style={styles.backRow}
             onPress={handleBack}
@@ -561,6 +574,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
           >
             <Text style={styles.btnText}>Я сохранил секретные слова</Text>
           </AppPressable>
+          </GlassSurface>
         </ScrollView>
       </View>
       </SafeScreen>
@@ -569,6 +583,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
 
   return (
     <SafeScreen>
+    <AuthBackdrop />
     <View style={styles.center}>
       <Text style={styles.sub}>Загрузка…</Text>
     </View>
