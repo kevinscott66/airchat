@@ -15,7 +15,7 @@ import { AUTH_MAX_ATTEMPTS, authGuard } from '../../core/security/authGuard';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError } from '../components/userFeedback';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { AirChatWordmark } from '../components/AirChatWordmark';
+import { AirChatLockup } from '../components/AirChatLockup';
 import { primaryInk, radius } from '../theme';
 import {
   PIN_BACKSPACE,
@@ -146,7 +146,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
       backgroundColor: c.background,
     },
     /** Знак стоит вместо заголовка, поэтому и отступ снизу у него заголовочный. */
-    wordmark: {
+    lockup: {
       marginBottom: 8,
       alignSelf: 'center' as const,
     },
@@ -334,7 +334,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
         style={styles.flex}
       >
         <View style={styles.container}>
-          <AirChatWordmark height={24} style={styles.wordmark} />
+          <AirChatLockup height={30} style={styles.lockup} />
           <Text style={styles.hint}>
             {usePinMode ? `Введите PIN-код (${PIN_LENGTH} цифр)` : 'Введите пароль'}
           </Text>

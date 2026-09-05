@@ -35,7 +35,8 @@ import { validateMnemonic } from 'bip39';
 import { PermissionsScreen } from './PermissionsScreen';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
-import { AirChatWordmark } from '../components/AirChatWordmark';
+import { AirChatLockup } from '../components/AirChatLockup';
+import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
 
@@ -98,7 +99,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     backText: { color: c.accent, fontSize: 16, fontWeight: '600' as const },
     title: { fontSize: 26, fontWeight: '700' as const, color: c.text, marginBottom: 12 },
     /** Знак стоит вместо заголовка, поэтому и отступ снизу у него заголовочный. */
-    wordmark: {
+    lockup: {
       marginBottom: 12,
       alignSelf: 'flex-start' as const,
     },
@@ -373,11 +374,12 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     return (
       <SafeScreen>
       <AuthBackdrop />
+      <ThemeSwitchButton />
       <View style={styles.center} testID="onboarding_welcome" collapsable={false}>
         <LoadingOverlay visible={busy} message="Генерация ключей…" />
         {/* Затемнение выше — на весь экран, форма ниже — в карточке. */}
         <GlassSurface variant="prominent" style={styles.card}>
-          <AirChatWordmark height={26} style={styles.wordmark} />
+          <AirChatLockup height={34} style={styles.lockup} />
           <Text style={styles.sub}>
             Чат с защитой сообщений. Секретные слова (24 слова) — ваш ключ восстановления. Без них на новом
             устройстве восстановить доступ нельзя.

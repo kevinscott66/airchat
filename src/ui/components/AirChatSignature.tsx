@@ -23,12 +23,13 @@
  * подпись внутри него играли одним набором цветов.
  */
 import React, { useId } from 'react';
+import { StyleSheet } from 'react-native';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { useColors } from '../ThemeContext';
 
 /** Ширина подписи при высоте росчерка 100 — от верха «A» до низа петель. */
-const ASPECT = 3.8546;
+const ASPECT = 3.855;
 
 /**
  * Контуры набраны так, что viewBox совпадает с чернильными границами росчерка:
@@ -132,7 +133,7 @@ export function AirChatSignature({
       width={height * ASPECT}
       height={height}
       viewBox={`0 0 ${100 * ASPECT} 100`}
-      style={style}
+      style={[styles.signature, style]}
       accessibilityRole="image"
       accessibilityLabel="AirChat"
     >
@@ -151,3 +152,16 @@ export function AirChatSignature({
     </Svg>
   );
 }
+
+const styles = StyleSheet.create({
+  /**
+   * `position: relative` — не оформление, а web.
+   *
+   * В браузере это обычный `<svg>`, и он, в отличие от `View`, остаётся
+   * статичным в потоке. Внутри `GlassSurface` слои стекла лежат абсолютом, а
+   * по правилам отрисовки CSS позиционированный элемент с z-index 0 красится
+   * ПОВЕРХ непозиционированных, — то есть `BlurView` забирал бы подпись себе
+   * в подложку и размывал её. На устройстве порядок задаётся деревом.
+   */
+  signature: { position: 'relative' },
+});

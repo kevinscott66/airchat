@@ -1,0 +1,58 @@
+/**
+ * Название приложения: марка, а за ней подпись.
+ *
+ * v4.32.592. До этой версии на приветствии и на замке стояло одно слово
+ * гротеском (`AirChatWordmark`, 537-я). Претензий к самому начертанию не было,
+ * но экран запуска не показывал знака вовсе — иконка на домашнем экране и
+ * первый кадр приложения не имели ничего общего, — а слово, набранное
+ * геометрическим гротеском, ничем не отличалось от любого заголовка ниже.
+ *
+ * Марка и подпись разделяют работу. Марка — опознание: она же на иконке, её
+ * ищут глазом. Подпись — тон: рукописный росчерк говорит, что это личная
+ * переписка, а не сервис; и она же стоит на штампе снимка экрана
+ * (см. IslandStamp), так что бренд в двух местах теперь один, а не два.
+ *
+ * Обёртка `View` здесь не только про строку. `react-native-svg` отдаёт в
+ * браузере статичный `<svg>`, и внутри `GlassSurface` слои стекла (они лежат
+ * абсолютом) красятся поверх него по правилам CSS — размытие забирало знак
+ * себе в подложку. `View` у RNW позиционирован, поэтому всё, что внутри него,
+ * оказывается над стеклом. На устройстве порядок и так задаётся деревом.
+ */
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
+import { AirChatMark } from './AirChatMark';
+import { AirChatSignature } from './AirChatSignature';
+import { spacing } from '../theme';
+
+/**
+ * Габарит марки к высоте подписи.
+ *
+ * Не единица: у росчерка заявленная высота — это от макушки «А» до нижнего
+ * завитка, и на глаз буквы занимают меньше своей рамки. Марка в полную высоту
+ * подписи выглядела бы крупнее её, хотя числа равны.
+ */
+const MARK_RATIO = 0.85;
+
+export type AirChatLockupProps = {
+  /** Высота росчерка в точках; марка считается от неё. */
+  height?: number;
+  style?: StyleProp<ViewStyle>;
+};
+
+export function AirChatLockup({ height = 34, style }: AirChatLockupProps): React.ReactElement {
+  return (
+    <View style={[styles.row, style]}>
+      <AirChatMark size={Math.round(height * MARK_RATIO)} />
+      <AirChatSignature height={height} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+});

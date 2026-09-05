@@ -47,8 +47,11 @@ describe('подкрас стекла в GlassSurface', () => {
     expect(wash).toBeLessThan(blur);
   });
 
-  it('букв в стекле нет: под размытием их не видно, над ним они спорят с шапкой', () => {
-    expect(GLASS()).not.toContain('AirChatWordmark');
+  it('названия в стекле нет: под размытием его не видно, над ним оно спорит с шапкой', () => {
+    const source = GLASS();
+    for (const name of ['AirChatLockup', 'AirChatSignature', 'AirChatMark']) {
+      expect(source).not.toContain(name);
+    }
   });
 
   it('при выключенной прозрачности не рисуется вовсе: прятать не за что', () => {
