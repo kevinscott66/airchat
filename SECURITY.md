@@ -2,9 +2,10 @@
 
 ## Threat model
 
-AirChat is built for offline-first, privacy-conscious communication in networks
-that may be unreliable, filtered or monitored. The design addresses three
-vectors:
+AirChat is built for privacy-conscious communication in networks that may be
+unreliable, filtered or monitored. The account is kept online and synchronised
+through a server; the server is treated as hostile infrastructure that happens
+to be useful, not as a trusted party. The design addresses three vectors:
 
 1. **Hostile network.** ISP or state surveillance, man-in-the-middle attempts on
    transport channels, traffic analysis, partitioning and censorship.
@@ -12,8 +13,14 @@ vectors:
    history: the local database is encrypted at rest and key material is held in
    the platform secure store.
 3. **Untrusted infrastructure.** No server is trusted with plaintext. The
-   signalling relay brokers handshakes only; the cloud vault stores an archive
-   it cannot decrypt.
+   signalling relay brokers handshakes only; the cloud vault stores a backup
+   archive it cannot decrypt; the sync database holds per-entity records
+   encrypted on the device with a key derived from the seed phrase, and sees
+   only their metadata — account and device ids, entity kind, revision and
+   timestamp. That metadata is a real disclosure and is treated as one: it
+   reveals who talks to a server, from how many devices and how often, and it
+   is not protected by the encryption above. The username registry answers only
+   *taken* or *free*, never who holds a name.
 
 ## Cryptography
 
