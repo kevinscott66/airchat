@@ -6,7 +6,7 @@ RUN npm ci --omit=dev
 # Список файлов перечислен поимённо, чтобы тесты не уезжали в образ. Цена
 # этого — новый модуль надо не забыть дописать сюда: без строки образ
 # собирается молча, а падает уже в проде на require.
-COPY index.js README.md sync-db.js reserved-usernames.js official-badge.js ./
+COPY index.js README.md sync-db.js reserved-usernames.js official-badge.js geoip.js ./
 
 RUN mkdir -p /var/lib/airchat-cloud-vault-example \
   && chown -R node:node /var/lib/airchat-cloud-vault-example

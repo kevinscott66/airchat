@@ -18,6 +18,7 @@ const {
   normalizeLookupUsername,
 } = require('./reserved-usernames');
 const { didKeyFromPublicKeyB64, grantedUsername, MAX_GRANT_LEN } = require('./official-badge');
+const { lookupCountry } = require('./geoip');
 
 const app = express();
 // The client archives binary files as base64 twice (inside JSON and in the
@@ -130,7 +131,15 @@ const MAX_RATE_BUCKETS = 10_000;
 // safe and necessary.
 const CLIENT_IP_HEADER = String(process.env.CLIENT_IP_HEADER || '').trim().toLowerCase();
 
-function rateLimitKey(req) {
+/**
+ * Адрес клиента так, как его видит это развёртывание: названный заголовок
+ * прокси, иначе `req.ip` (за Nginx Express уже развернул X-Forwarded-For).
+ *
+ * v4.32.595: раньше это была внутренность rateLimitKey. Определение страны
+ * сессии нуждается ровно в том же адресе, а два ответа на вопрос «кто к нам
+ * пришёл» разъехались бы при первой же правке.
+ */
+function clientAddress(req) {
   if (CLIENT_IP_HEADER) {
     const raw = req.headers[CLIENT_IP_HEADER];
     const value = Array.isArray(raw) ? raw[0] : raw;
@@ -139,6 +148,10 @@ function rateLimitKey(req) {
     if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 64);
   }
   return req.ip || 'unknown';
+}
+
+function rateLimitKey(req) {
+  return clientAddress(req);
 }
 
 app.disable('x-powered-by');
@@ -419,14 +432,22 @@ function validateSyncRequest(payload, accountId, op) {
 function sessionGeo(req) {
   const remote = req.socket?.remoteAddress;
   const trustedProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-  if (!trustedProxy) return { countryCode: null, city: null };
-  const country = String(req.get('cf-ipcountry') || '').trim().toUpperCase();
-  const countryCode = /^[A-Z]{2}$/.test(country) ? country : null;
-  const rawCity = String(req.get('cf-ipcity') || '').trim();
+  // Заголовки cf-* читаем только из-за доверенного прокси: снаружи их ставит
+  // кто угодно, и «страна сессии» стала бы полем, которое клиент заполняет сам.
+  const country = trustedProxy ? String(req.get('cf-ipcountry') || '').trim().toUpperCase() : '';
+  const rawCity = trustedProxy ? String(req.get('cf-ipcity') || '').trim() : '';
   const city = rawCity
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
     .slice(0, 64) || null;
+  // v4.32.595: Cloudflare стоит не перед каждым развёртыванием — перед нашим
+  // его нет вовсе, и заголовка не было ни в одном запросе: в «Активных
+  // сессиях» каждое устройство показывалось как «Регион не определён». Своя
+  // таблица RIR отвечает на том же сервере, адрес никому наружу не уходит.
+  // Заголовок остаётся главнее: он знает ещё и город.
+  const countryCode = /^[A-Z]{2}$/.test(country)
+    ? country
+    : lookupCountry(clientAddress(req), DATA_DIR);
   return { countryCode, city };
 }
 

@@ -128,8 +128,37 @@ const COUNTRY_NAMES: Record<string, string> = {
   US: 'США', TR: 'Турция', AM: 'Армения', GE: 'Грузия',
 };
 
+/**
+ * Название страны по её коду.
+ *
+ * v4.32.595: список выше знал девять стран, а сервер с этой версии отвечает
+ * кодом для любого выделенного блока адресов. Всё остальное показывалось как
+ * «AE» или «NL» — формально верно и человеку бесполезно. Intl.DisplayNames
+ * знает их все и склоняет по-русски, но собран он не в каждой сборке Hermes,
+ * поэтому обращение к нему обёрнуто: не вышло — остаётся прежний список, за
+ * ним сам код.
+ */
+let countryNamer: Intl.DisplayNames | null | undefined;
+
+function countryName(code: string): string {
+  if (countryNamer === undefined) {
+    try {
+      countryNamer = new Intl.DisplayNames(['ru'], { type: 'region', fallback: 'none' });
+    } catch {
+      countryNamer = null;
+    }
+  }
+  try {
+    const named = countryNamer?.of(code);
+    if (named && named !== code) return named;
+  } catch {
+    // Код не из ISO 3166 — ниже отработает запасной список.
+  }
+  return COUNTRY_NAMES[code] ?? code;
+}
+
 function sessionLocation(device: SyncDevice): string {
-  const country = device.countryCode ? (COUNTRY_NAMES[device.countryCode] ?? device.countryCode) : '';
+  const country = device.countryCode ? countryName(device.countryCode) : '';
   return [device.city, country].filter(Boolean).join(', ') || 'Регион не определён';
 }
 
