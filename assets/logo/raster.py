@@ -1,11 +1,17 @@
 """Растеризация assets/logo/airchat-mark.svg без внешних утилит.
 
 В окружении нет rsvg-convert/inkscape/cairosvg, а headless Chrome виснет на
-повторных запусках. Геометрия марки — три отрезка со скруглёнными концами,
-три узла и кольцо — повторяется здесь один в один с SVG, поэтому PNG и
-вектор совпадают пиксель в пиксель. Сглаживание — суперсэмплингом.
+повторных запусках. Марка — два контура с квадратичными кривыми, поэтому здесь
+они читаются прямо из SVG и заливаются полигоном по достаточно частой выборке:
+PNG и вектор совпадают, потому что источник у них один файл, а не две копии
+геометрии. Сглаживание — суперсэмплингом.
+
+Дырка в реплике — второй подконтур того же `d`, обойдённый в обратную сторону:
+в SVG её делает правило nonzero, здесь — заливка нулём поверх первого контура.
+Порядок важен: хвост рисуется после, иначе дырка съела бы его основание.
 """
 import os
+import re
 from PIL import Image, ImageDraw
 
 SP = os.path.dirname(os.path.abspath(__file__))
@@ -13,46 +19,80 @@ OUT = os.path.dirname(SP)  # assets/
 os.makedirs(OUT, exist_ok=True)
 
 GROUND = (11, 11, 18)          # #0B0B12
-G_FROM = (0xA5, 0x94, 0xFF)    # #A594FF
-G_TO = (0x6A, 0x56, 0xEE)      # #6A56EE
-G1, G2 = (120.0, 96.0), (392.0, 416.0)
+SVG = open(os.path.join(SP, 'airchat-mark.svg'), encoding='utf-8').read()
+G_FROM, G_TO = (0xA5, 0x94, 0xFF), (0x6A, 0x56, 0xEE)
+G1 = (float(re.search(r'x1="([\d.]+)"', SVG)[1]), float(re.search(r'y1="([\d.]+)"', SVG)[1]))
+G2 = (float(re.search(r'x2="([\d.]+)"', SVG)[1]), float(re.search(r'y2="([\d.]+)"', SVG)[1]))
+VIEW = float(re.search(r'viewBox="0 0 (\d+)', SVG)[1])
+PATHS = re.findall(r'<path d="([^"]+)"', SVG)
 
-SEGMENTS = [((256, 128), (128, 384)), ((256, 128), (384, 384)),
-            ((160, 320), (224, 320)), ((288, 320), (352, 320))]
-STROKE = 32
-NODES = [(256, 128), (128, 384), (384, 384)]
-NODE_R = 38
-RING = (256, 320, 34, 14)      # cx, cy, внешний r, внутренний r
+# Габарит чернил: марка кадрируется по нему, а не по полям файла.
+INK = (127.4, 120.0, 392.9, 416.0)
+CENTER = ((INK[0] + INK[2]) / 2, (INK[1] + INK[3]) / 2)
+SPAN = max(INK[2] - INK[0], INK[3] - INK[1])
+
+
+def contours(d, steps=48):
+    """Подконтуры `d` как списки точек. Команды: M, L, Q, Z."""
+    tokens = re.findall(r'[A-Za-z]|-?\d+(?:\.\d+)?', d)
+    subs, pts, cur, start, cmd, i = [], [], None, None, None, 0
+    def num():
+        nonlocal i
+        i += 1
+        return float(tokens[i - 1])
+    while i < len(tokens):
+        if tokens[i].isalpha():
+            cmd = tokens[i]
+            i += 1
+        if cmd == 'Z':
+            if pts:
+                subs.append(pts)
+                pts = []
+            cur = start
+            if i < len(tokens) and not tokens[i].isalpha():
+                cmd = 'L'
+            else:
+                continue
+        if cmd == 'M':
+            cur = start = (num(), num())
+            pts.append(cur)
+            cmd = 'L'
+        elif cmd == 'L':
+            cur = (num(), num())
+            pts.append(cur)
+        elif cmd == 'Q':
+            cx, cy, ex, ey = num(), num(), num(), num()
+            x0, y0 = cur
+            for k in range(1, steps + 1):
+                t = k / steps
+                pts.append(((1 - t) ** 2 * x0 + 2 * (1 - t) * t * cx + t * t * ex,
+                            (1 - t) ** 2 * y0 + 2 * (1 - t) * t * cy + t * t * ey))
+            cur = (ex, ey)
+        else:
+            raise ValueError('неизвестная команда контура: %r' % cmd)
+    if pts:
+        subs.append(pts)
+    return subs
+
+
+def place(n, scale):
+    """Преобразование координат SVG в пиксели буфера n×n."""
+    f = n * scale / SPAN
+    return lambda p: (n / 2 + (p[0] - CENTER[0]) * f, n / 2 + (p[1] - CENTER[1]) * f)
 
 
 def build_mask(n, scale):
-    """Маска марки в буфере n×n. scale — доля холста, занимаемая габаритом."""
-    f = scale / (332 / 512) * n / 512          # viewBox → пиксели
-    def P(p):
-        return (n / 2 + (p[0] - 256) * f, n / 2 + (p[1] - 256) * f)
+    P = place(n, scale)
     m = Image.new("L", (n, n), 0)
     d = ImageDraw.Draw(m)
-    half = STROKE / 2 * f
-    for a, b in SEGMENTS:
-        d.line([P(a), P(b)], fill=255, width=max(1, round(STROKE * f)))
-        for p in (a, b):                       # скруглённые концы
-            x, y = P(p)
-            d.ellipse([x - half, y - half, x + half, y + half], fill=255)
-    for p in NODES:
-        x, y = P(p)
-        r = NODE_R * f
-        d.ellipse([x - r, y - r, x + r, y + r], fill=255)
-    cx, cy, ro, ri = RING
-    x, y = P((cx, cy))
-    d.ellipse([x - ro * f, y - ro * f, x + ro * f, y + ro * f], fill=255)
-    d.ellipse([x - ri * f, y - ri * f, x + ri * f, y + ri * f], fill=0)
+    for path in PATHS:
+        for k, sub in enumerate(contours(path)):
+            d.polygon([P(p) for p in sub], fill=0 if k % 2 else 255)
     return m
 
 
 def gradient(n, scale):
-    f = scale / (332 / 512) * n / 512
-    def P(p):
-        return (n / 2 + (p[0] - 256) * f, n / 2 + (p[1] - 256) * f)
+    P = place(n, scale)
     ax, ay = P(G1)
     bx, by = P(G2)
     dx, dy = bx - ax, by - ay
@@ -85,10 +125,10 @@ def render(name, size, scale, bg=None, flat=None, ss=4):
     print(name, size, os.path.getsize(os.path.join(OUT, name + ".png")))
 
 
-render("icon", 1024, 0.58, bg=GROUND)
-render("android-icon-foreground", 1024, 0.44)
+render("icon", 1024, 0.62, bg=GROUND)
+render("android-icon-foreground", 1024, 0.47)
 render("android-icon-background", 1024, 0, bg=GROUND)
-render("android-icon-monochrome", 1024, 0.44, flat=(0, 0, 0))
-render("splash-icon", 1024, 0.55)
-render("favicon", 196, 0.66, bg=GROUND, ss=8)
-render("logo/airchat-mark", 512, 0.90, ss=6)
+render("android-icon-monochrome", 1024, 0.47, flat=(0, 0, 0))
+render("splash-icon", 1024, 0.58)
+render("favicon", 196, 0.70, bg=GROUND, ss=8)
+render("logo/airchat-mark", 512, 0.94, ss=6)

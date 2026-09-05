@@ -144,3 +144,63 @@ describe('prebuild не может тихо унести ресурс', () => {
     expect(fs.readFileSync(BUILD_ICON_PATH, 'utf8')).toBe(fs.readFileSync(ICON_PATH, 'utf8'));
   });
 });
+
+/**
+ * v4.32.593. Марка была перерисована, а этот ресурс — нет: в статус-баре
+ * пятьдесят семь версий подряд жил прежний знак, и заметить это можно было
+ * только глазами на устройстве. Расхождение возможно потому, что ресурс —
+ * пересчёт вектора в 24dp, а не ссылка на него, и связь держалась на памяти.
+ * Здесь она держится на арифметике: пересчёт повторяется из того же SVG.
+ */
+describe('знак в статус-баре — тот же, что в приложении', () => {
+  const MARK = fs.readFileSync(path.join(ROOT, 'assets', 'logo', 'airchat-mark.svg'), 'utf8');
+  const XML = fs.readFileSync(ICON_PATH, 'utf8');
+  /** Габарит чернил в координатах файла — тот же, из которого кадрируется AirChatMark. */
+  const INK = { x: 127.4, y: 120, w: 265.5, h: 296 };
+  /** 24dp с полем в 1dp сверху и снизу; по горизонтали знак центрован. */
+  const SCALE = 22 / INK.h;
+  const OX = (24 - INK.w * SCALE) / 2 - INK.x * SCALE;
+  const OY = 1 - INK.y * SCALE;
+
+  const commands = (d: string): string[] => d.match(/[A-Za-z]/g) ?? [];
+  const numbers = (d: string): number[] => (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+
+  const svgPaths = [...MARK.matchAll(/<path d="([^"]+)"/g)].map((m) => m[1]);
+  const xmlPaths = [...XML.matchAll(/android:pathData="([^"]+)"/g)].map((m) => m[1]);
+
+  it('контуров столько же и обходятся они теми же командами', () => {
+    expect(xmlPaths).toHaveLength(svgPaths.length);
+    xmlPaths.forEach((d, index) => {
+      expect(commands(d)).toEqual(commands(svgPaths[index]));
+    });
+  });
+
+  it('каждая точка — пересчёт точки вектора, а не нарисованная заново', () => {
+    xmlPaths.forEach((d, index) => {
+      const from = numbers(svgPaths[index]);
+      const to = numbers(d);
+      expect(to).toHaveLength(from.length);
+      for (let i = 0; i < from.length; i += 2) {
+        expect(to[i]).toBeCloseTo(from[i] * SCALE + OX, 2);
+        expect(to[i + 1]).toBeCloseTo(from[i + 1] * SCALE + OY, 2);
+      }
+    });
+  });
+
+  it('дырка реплики выживает на 24dp — иначе знак был бы сплошным пятном', () => {
+    // Внутренний контур обходится в обратную сторону: дырку делает правило
+    // nonzero, оно же по умолчанию, поэтому fillType здесь намеренно не задан.
+    expect(XML).not.toContain('android:fillType');
+    const outer = xmlPaths[0];
+    const subpaths = outer.split('M').filter((part) => part.trim().length > 0);
+    expect(subpaths).toHaveLength(2);
+    const width = (d: string): number => {
+      const xs = numbers(d).filter((_, i) => i % 2 === 0);
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    // Прежний знак терял на этом размере кольцо: его дырка уходила под 2dp.
+    // У реплики она шире половины иконки, и на mdpi силуэт остаётся собой.
+    expect(width(subpaths[1])).toBeGreaterThan(12);
+    expect(width(subpaths[1])).toBeLessThan(width(subpaths[0]));
+  });
+});

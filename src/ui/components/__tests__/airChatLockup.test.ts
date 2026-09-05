@@ -47,6 +47,22 @@ function signaturePath(source: string): string {
   return chunks.map((c) => c.slice(1, -1)).join(' ');
 }
 
+/** Склеенные куски `BUBBLE` — в исходнике они разбиты по длине строки. */
+function BUBBLE_PATH(source: string): string {
+  const body = source.match(/const BUBBLE = \[([\s\S]*?)\]\.join/);
+  expect(body).not.toBeNull();
+  const chunks = body![1].match(/'[^']*'/g) ?? [];
+  expect(chunks.length).toBeGreaterThan(0);
+  return chunks.map((c) => c.slice(1, -1)).join('');
+}
+
+/** Хвост — одной строкой: он короткий и переносить его незачем. */
+function TAIL_PATH(source: string): string {
+  const m = source.match(/const TAIL = '([^']+)';/);
+  expect(m).not.toBeNull();
+  return m![1];
+}
+
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
 
 /**
@@ -127,55 +143,61 @@ describe('подпись AirChat', () => {
 });
 
 describe('марка AirChat', () => {
-  /** Кружки из файла: `<circle cx="…" cy="…" r="…"/>`. */
-  const assetCircles = (): { cx: number; cy: number; r: number }[] =>
-    [...ASSET().matchAll(/<circle cx="(\d+)" cy="(\d+)" r="(\d+)"/g)].map((m) => ({
-      cx: Number(m[1]),
-      cy: Number(m[2]),
-      r: Number(m[3]),
-    }));
+  /** Строки `d` из файла — их же обязан содержать компонент. */
+  const assetPaths = (): string[] => [...ASSET().matchAll(/<path d="([^"]+)"\/>/g)].map((m) => m[1]);
 
-  it('лучи повторяют файл иконки один в один', () => {
-    const asset = ASSET();
-    const inFile = [...asset.matchAll(/<path d="([^"]+)"\/>/g)].map((m) => m[1]);
-    expect(inFile.length).toBeGreaterThan(0);
+  it('повторяет файл иконки один в один', () => {
+    // Из этого файла растеризуется иконка приложения и favicon. Разойдись он
+    // с компонентом — в интерфейсе окажется не тот знак, что на домашнем
+    // экране, и заметить это можно только глазами на двух экранах сразу.
+    const inFile = assetPaths();
+    expect(inFile).toHaveLength(2);
     const source = MARK();
-    for (const d of inFile) expect(source).toContain(`'${d}'`);
-    // И обратно: лишнего луча в компоненте тоже быть не должно.
-    const inCode = [...source.matchAll(/'(M\d[^']*)'/g)].map((m) => m[1]);
-    expect(inCode.sort()).toEqual(inFile.sort());
+    const inCode = [BUBBLE_PATH(source), TAIL_PATH(source)];
+    expect(inCode.sort()).toEqual([...inFile].sort());
   });
 
-  it('узлы и кольцо повторяют файл иконки', () => {
-    const circles = assetCircles();
-    const ring = circles.find((c) => c.r !== 38);
-    const nodes = circles.filter((c) => c.r === 38);
-    expect(ring).toBeDefined();
-    expect(nodes).toHaveLength(3);
-    const source = MARK();
-    expect(constant(source, 'NODE_R')).toBe(38);
-    expect(constant(source, 'RING_R')).toBe(ring!.r);
-    expect(constant(source, 'STROKE')).toBe(Number(/stroke-width="(\d+)"/.exec(ASSET())![1]));
-    expect(constant(source, 'RING_STROKE')).toBe(
-      Number(/<circle cx="\d+" cy="\d+" r="\d+" stroke-width="(\d+)"/.exec(ASSET())![1]),
-    );
-    for (const n of nodes) expect(source).toContain(`{ cx: ${n.cx}, cy: ${n.cy} }`);
-    expect(source).toContain(`<Circle cx={${ring!.cx}} cy={${ring!.cy}} r={RING_R}`);
+  it('дырка реплики — второй обход того же контура, а не отдельная фигура', () => {
+    // Второй <Path> закрасил бы первый, а не вырезал: правило nonzero делает
+    // дырку только внутри одного `d`.
+    const bubble = BUBBLE_PATH(MARK());
+    expect(bubble.match(/M/g)).toHaveLength(2);
+    expect(bubble.match(/Z/g)).toHaveLength(2);
   });
 
-  it('рамка обрезана по чернилам, а не по полям иконки', () => {
+  it('буквы в знаке нет: рядом с подписью она бы удвоилась', () => {
+    // Подпись сама начинается с росчерковой «A»; знак-буква читался бы как
+    // «A AirChat» — опиской, а не знаком.
+    const source = MARK();
+    expect(source).not.toContain('<Circle');
+    expect(source).toContain('Почему не буква');
+  });
+
+  it('рамка обрезана по чернилам, а не по полям файла', () => {
     // В файле вокруг знака оставлены поля под маску iOS. В строке рядом с
-    // подписью они читались бы отступом непонятно откуда, поэтому компонент
-    // берёт рамку по габаритам узлов — и обязан считать её от них же.
-    const nodes = assetCircles().filter((c) => c.r === 38);
-    const minX = Math.min(...nodes.map((n) => n.cx)) - 38;
-    const minY = Math.min(...nodes.map((n) => n.cy)) - 38;
-    const maxX = Math.max(...nodes.map((n) => n.cx)) + 38;
-    const maxY = Math.max(...nodes.map((n) => n.cy)) + 38;
-    expect(maxX - minX).toBe(maxY - minY);
+    // подписью они читались бы отступом ниоткуда, поэтому рамка компонента
+    // равна габаритам самих контуров — и обязана пересчитываться из них.
+    const bs = assetPaths().map(pathBounds);
+    const minX = Math.min(...bs.map((b) => b.minX));
+    const minY = Math.min(...bs.map((b) => b.minY));
+    const w = Math.max(...bs.map((b) => b.maxX)) - minX;
+    const h = Math.max(...bs.map((b) => b.maxY)) - minY;
     const source = MARK();
-    expect(source).toContain(`const BOX = { x: ${minX}, y: ${minY}, size: ${maxX - minX} } as const;`);
-    expect(source).toContain('viewBox={`${BOX.x} ${BOX.y} ${BOX.size} ${BOX.size}`}');
+    const box = /const BOX = \{ x: ([\d.]+), y: ([\d.]+), w: ([\d.]+), h: ([\d.]+) \}/.exec(source);
+    expect(box).not.toBeNull();
+    expect(Number(box![1])).toBeCloseTo(minX, 1);
+    expect(Number(box![2])).toBeCloseTo(minY, 1);
+    expect(Number(box![3])).toBeCloseTo(w, 1);
+    expect(Number(box![4])).toBeCloseTo(h, 1);
+    expect(source).toContain('viewBox={`${BOX.x} ${BOX.y} ${BOX.w} ${BOX.h}`}');
+  });
+
+  it('знак не квадратный, и ширина берётся из пропорции', () => {
+    // Округли ширину до высоты — и реплику расплющит по горизонтали.
+    const source = MARK();
+    expect(source).toContain('const MARK_ASPECT = BOX.w / BOX.h;');
+    expect(source).toContain('width={size * MARK_ASPECT}');
+    expect(source).toContain('height={size}');
   });
 });
 

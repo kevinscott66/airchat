@@ -1091,3 +1091,88 @@ them the whole evening:
 `isSecureContext` absent (a device, an old runtime) reads as *unknown*, never
 as "you are on HTTP". Telling someone their connection is insecure when it is
 not is exactly the failure this section exists to prevent.
+
+## 23. The mark, redrawn - 4.32.593
+
+Request, verbatim: "с логотипом не сходится, не подходит / либо сам лого
+поменять". Two sections are superseded here: 20.2 (the geometry), 20.4 (how
+the raster is produced), and the scale table in 20.3.
+
+### 23.1 What did not come together
+
+Section 21 replaced the system-font wordmark with a drawn one, and 4.32.592
+put the section 20 mark in front of it. The two are drawn by different
+instruments. The signature is a converted brush outline: filled contours,
+width modulated by pressure, terminals that round off where the pen lifts, the
+whole word leaning right. The mark was a diagram: one uniform 32-unit stroke,
+three ball nodes, a stroked ring. Side by side they read as a logo borrowed
+from one product and a name borrowed from another. The user saw it before any
+argument for it existed; the argument only confirms it.
+
+Nothing was wrong with either half on its own, which is why this was worth
+recording. A mark is not judged alone once it has a word next to it.
+
+### 23.2 The rejected letter
+
+The first redraw was an "A" in the signature's own hand — same pen, same
+slant, same modulation. It matched perfectly and was thrown away: next to a
+word that itself opens with a script "A", it reads as "A AirChat", two
+different A's in a row, which looks like a typo rather than a lockup. A mark
+that repeats the first letter of the name only works when it *is* that
+letter's own drawing, and here it could not be — the signature already owns it.
+
+### 23.3 The mark
+
+A chat reply drawn with the same pen. Geometrically it is an oval with a
+second oval cut out of it, offset up and to the right, plus a tail that flicks
+away from the lower left. The offset is the whole idea: it makes the wall
+thick at the bottom left and thin at the top right, which is exactly what a
+held pen does, so the weight modulation is a consequence of the construction
+rather than a decoration applied to it. The same 0.13 shear that leans the
+script leans the mark.
+
+It says what the name says without spelling any part of it, so it can stand in
+front of the signature without competing with it, and it survives being cut
+down to a favicon, where a letter next to a word would just be noise.
+
+Ink lives in `127.4 120 → 392.9 416` of the 512 viewBox: 265.5 wide by 296
+tall, deliberately not square. `AirChatMark` crops to that box, so `size` is
+the height of the ink and the lockup's row gap is the only space between mark
+and word. Colour is unchanged from 20.2 — `#A594FF → #6A56EE` in the file,
+`accent → primary` in the component, so the mark follows the theme and the
+accent chosen in settings while the icon cannot.
+
+The hole is the second subpath of the same `d`, traversed the other way.
+Nonzero fill turns it into a hole; a separate shape painted in the background
+colour would have been the alternative, and it would break the moment the mark
+sits on anything but that colour.
+
+### 23.4 Sizes
+
+The mark is no longer square, so the section 20.3 numbers were recomputed
+against its longer side: `icon` 0.62, `android-icon-foreground` and
+`android-icon-monochrome` 0.47 (the diagonal of a 265×296 box is a smaller
+fraction of its bounding square than the old 332-square was, so more of the
+canvas is safe under the circular mask), `splash-icon` 0.58, `favicon` 0.70,
+`logo/airchat-mark` 0.94.
+
+`ic_notification.xml` no longer drops anything. The old ring's hole fell under
+2 dp at 24 dp and had to be filled in; the reply's hole is 14.3 dp across and
+its thinnest wall is 1.3 dp, so the silhouette holds even on mdpi. That
+resource is a recomputation of the vector rather than a reference to it, and
+for fifty-seven versions it silently kept the old mark — nobody looks at a
+status bar icon. It is now tied to the SVG by arithmetic in
+`notificationIcon.test.ts`: same commands, every point the same affine
+transform of the same point.
+
+### 23.5 Reproducibility
+
+`assets/logo/airchat-mark.svg` is still the source and `assets/logo/raster.py`
+still regenerates the PNG set with one command, but the second paragraph of
+20.4 no longer holds: the script reads the paths, the gradient endpoints and
+the viewBox out of the SVG and flattens the quadratics itself. Two hand-kept
+copies of the geometry were defensible while the geometry was five primitives;
+they are not defensible for two contours of twenty-odd curves, and the failure
+mode is silent — a PNG that drifts from the vector looks fine until it is next
+to it. The environment still has no `rsvg-convert`, `inkscape`, `cairosvg` or
+`sharp`; that part of 20.4 is unchanged.
