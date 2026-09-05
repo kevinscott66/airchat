@@ -264,19 +264,41 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     return submitValue(stored);
   }, [submitValue]);
 
+  /**
+   * Всегда свежий `handleBiometric` — но не в зависимостях эффекта.
+   *
+   * v4.32.599: `onSuccess` приходит из `App` новой стрелкой на каждую его
+   * перерисовку, и через `submitValue` эта новизна доходила до эффекта ниже.
+   * Эффект перезапускался прямо посреди проверки пароля, видел, что запрос уже
+   * был, и ставил клавиатуру — поверх удавшегося Face ID, пока крутится
+   * ожидание. Заодно каждый такой перезапуск заново спрашивал у хранилища
+   * признак биометрии.
+   */
+  const handleBiometricRef = useRef(handleBiometric);
+  useEffect(() => {
+    handleBiometricRef.current = handleBiometric;
+  });
+
+  // Ровно один раз на открытие экрана — отсюда и пустые зависимости.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const enabled = await isBiometricUnlockEnabled();
       if (cancelled) return;
       setBiometricReady(enabled);
-      if (!enabled || biometricAskedRef.current) {
+      if (!enabled) {
         setUnlockBy('pin');
+        return;
+      }
+      if (biometricAskedRef.current) {
+        // Повторный проход (в разработке React дёргает эффект дважды): запрос
+        // уже был, второй раз лицо не спрашиваем и вид не трогаем.
+        setUnlockBy((v) => (v === 'checking' ? 'pin' : v));
         return;
       }
       biometricAskedRef.current = true;
       setUnlockBy('face');
-      const opened = await handleBiometric();
+      const opened = await handleBiometricRef.current();
       // Открылось — экран сейчас снимут, менять на нём нечего. Нет — за знаком
       // лица встаёт клавиатура.
       if (!cancelled && !opened) setUnlockBy('pin');
@@ -284,7 +306,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     return () => {
       cancelled = true;
     };
-  }, [handleBiometric]);
+  }, []);
 
   const handlePinKey = useCallback((key: string) => {
     if (submittingRef.current) return;

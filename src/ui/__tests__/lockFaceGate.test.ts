@@ -60,10 +60,30 @@ describe('чем открывают замок', () => {
 
   it('отказ и отмена возвращают клавиатуру, а не запирают на лице', () => {
     // Один автоматический запрос на открытие экрана — и его исход решает вид.
-    expect(src).toContain('const opened = await handleBiometric();');
+    expect(src).toContain('const opened = await handleBiometricRef.current();');
     expect(src).toContain("if (!cancelled && !opened) setUnlockBy('pin');");
-    // Биометрии нет или запрос уже был — клавиатура сразу.
-    expect(src).toContain('if (!enabled || biometricAskedRef.current) {');
+    // Биометрии нет — клавиатура сразу.
+    expect(src).toContain('if (!enabled) {');
+  });
+
+  /**
+   * v4.32.599: пад вставал поверх удавшегося Face ID. `onSuccess` приходит из
+   * `App` новой стрелкой на каждую его перерисовку, `submitValue` и
+   * `handleBiometric` пересоздавались следом, и эффект перезапускался посреди
+   * проверки пароля: запрос уже был — значит клавиатура. Лечится тем, что
+   * эффект больше ни от чего не зависит, а свежий обработчик берётся из ref.
+   */
+  it('запрос лица не перезапускается от перерисовки родителя', () => {
+    const effect = src.slice(
+      src.indexOf('  // Ровно один раз на открытие экрана'),
+      src.indexOf('const handlePinKey')
+    );
+    expect(effect).toContain('}, []);');
+    expect(effect).not.toContain('handleBiometric()');
+    // Повторный проход эффекта не сбивает уже выбранный вид.
+    expect(effect).toContain("setUnlockBy((v) => (v === 'checking' ? 'pin' : v));");
+    // Ref обновляется отдельным эффектом, а не присваиванием в теле компонента.
+    expect(src).toContain('const handleBiometricRef = useRef(handleBiometric);');
   });
 
   it('к клавиатуре есть дорога и без отказа на запросе', () => {
