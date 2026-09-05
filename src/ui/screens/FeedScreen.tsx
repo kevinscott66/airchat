@@ -11,7 +11,6 @@ import {
   StyleSheet,
   FlatList,
   RefreshControl,
-  Modal,
   Image,
   ScrollView,
   Alert,
@@ -41,7 +40,7 @@ import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
 import { showPermissionDeniedAlert } from '../permissionAlert';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { AppModal } from '../components/AppModal';
 import * as Network from 'expo-network';
 import { Ionicons } from '@expo/vector-icons';
 import { appleColorEmojiTextStyle } from '../emojiStyles';
@@ -3075,14 +3074,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
         />
 
         {/* Emoji reaction picker */}
-        <Modal
+        <AppModal
           visible={reactionTarget !== null}
           transparent
           animationType="fade"
           onRequestClose={() => setReactionTarget(null)}
+          rootStyle={styles.emojiOverlay}
         >
-          {/* v4.32.25: GestureHandlerRootView обязателен для RNGH Pressable внутри Modal на Android. */}
-          <GestureHandlerRootView style={styles.emojiOverlay}>
           <AppPressable style={styles.emojiOverlay} onPress={() => setReactionTarget(null)}>
             {/* v4.32.227 (BUG-03): stopPropagation so taps INSIDE the sheet don't
                 close it, while taps on the backdrop (outer AppPressable) do. Plus a
@@ -3116,21 +3114,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
               </AppPressable>
             </AppPressable>
           </AppPressable>
-          </GestureHandlerRootView>
-        </Modal>
+        </AppModal>
 
-        <Modal
+        <AppModal
           visible={modalOpen}
           transparent
           animationType="slide"
           onRequestClose={handleSoftDismissModal}
+          rootStyle={styles.modalOverlay}
         >
-          {/* v4.32.25: RNGH Pressable (через AppPressable) внутри Modal на Android НЕ работает
-              без отдельного GestureHandlerRootView, т.к. Modal создаёт новое native-окно
-              вне корневого жест-дерева из App.tsx. Без этого кнопки "Опубликовать"/"Отмена"
-              выглядят как нажимаемые, но onPress не срабатывает — юзер видит "тишину".
-              https://docs.swmansion.com/react-native-gesture-handler/docs/installation#js */}
-          <GestureHandlerRootView style={styles.modalOverlay}>
           <View style={styles.modalOverlay}>
             {/* v4.32.122: на Android используем flex:1 + marginTop=insets.top+8 — модалка
                 естественно заполняет доступную область (ресайзится вместе с окном когда
@@ -3596,8 +3588,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
               </View>
             </KeyboardAvoidingView>
           </View>
-          </GestureHandlerRootView>
-        </Modal>
+        </AppModal>
       </View>
 
       {/* ─── Comments fullscreen (v4.32.159) ──────────────────────────────
@@ -3605,14 +3596,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
            full-screen: шапка-бар ← | «N комментарий» | 🔍 ▸ pinned-шапка с
            исходным постом ▸ «Начало обсуждения» ▸ пузырьки комментариев ▸
            input снизу. Стиль — наши iOS HIG токены (colors.*), не tmail dark. */}
-      <Modal
+      <AppModal
         visible={!!commentPostId}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={closeComments}
+        rootStyle={{ flex: 1, backgroundColor: colors.background }}
       >
-        {/* v4.32.25: GestureHandlerRootView обязателен для RNGH Pressable внутри Modal на Android. */}
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
           {/*
             v4.32.540: у SafeAreaView отобраны 'top' и 'bottom'. Отступы под часы
             и под жест-полосу теперь стоят на самих краях содержимого — шапке и
@@ -3834,17 +3824,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                 покажет: она открывалась бы поверх уже открытого окна. */}
             {authorPeek}
           </SafeAreaView>
-        </GestureHandlerRootView>
-      </Modal>
+      </AppModal>
 
       {/* ─── Viewers modal (v4.32.68) ────────────────────────────────────── */}
-      <Modal
+      <AppModal
         visible={!!viewersPostId}
         transparent
         animationType="slide"
         onRequestClose={closeViewers}
+        rootStyle={{ flex: 1 }}
       >
-        <GestureHandlerRootView style={{ flex: 1 }}>
           <AppPressable
             style={{ flex: 1, backgroundColor: scrim.modal }}
             onPress={closeViewers}
@@ -3971,13 +3960,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
               )}
             </AppPressable>
           </AppPressable>
-        </GestureHandlerRootView>
-      </Modal>
+      </AppModal>
 
       {/* Share to chat modal */}
-      <Modal visible={shareToTarget !== null} transparent animationType="slide" onRequestClose={() => setShareToTarget(null)}>
-        {/* v4.32.25: GestureHandlerRootView обязателен для RNGH Pressable внутри Modal на Android. */}
-        <GestureHandlerRootView style={{ flex: 1 }}>
+      <AppModal visible={shareToTarget !== null} transparent animationType="slide" onRequestClose={() => setShareToTarget(null)} rootStyle={{ flex: 1 }}>
         <AppPressable style={{ flex: 1, backgroundColor: scrim.modal }} onPress={() => setShareToTarget(null)}>
           <AppPressable onPress={() => {}} style={{ marginTop: 'auto', borderTopLeftRadius: 20, borderTopRightRadius: 20, backgroundColor: colors.surface, maxHeight: '75%' }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
@@ -4060,18 +4046,17 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
             </ScrollView>
           </AppPressable>
         </AppPressable>
-        </GestureHandlerRootView>
-      </Modal>
+      </AppModal>
       {/* v4.32.34: Action-sheet для долгого нажатия на пост — замена Alert.alert, который
           на Android capped at 3 buttons. Рендерится как bottom-sheet Modal с прокручиваемым
           списком действий. Учитывает isSelf / isTranslated / item.archived / item.repostOf. */}
-      <Modal
+      <AppModal
         visible={actionSheetPost !== null}
         transparent
         animationType="fade"
         onRequestClose={() => setActionSheetPost(null)}
+        rootStyle={{ flex: 1, justifyContent: 'flex-end', backgroundColor: scrim.modal }}
       >
-        <GestureHandlerRootView style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: scrim.modal }}>
           <AppPressable
             style={StyleSheet.absoluteFill}
             onPress={() => setActionSheetPost(null)}
@@ -4192,8 +4177,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
               </View>
             );
           })()}
-        </GestureHandlerRootView>
-      </Modal>
+      </AppModal>
       {feedMediaViewerElement}
       {/* v4.32.50: профиль автора поста/комментария при тапе по имени/аватару.
           v4.32.573: пока открыт полноэкранный тред, карточка живёт внутри

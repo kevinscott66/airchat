@@ -11,8 +11,8 @@ import {
   pushConfirm,
   pushToast,
   resetNotifyBus,
+  addToastListener,
   setConfirmListener,
-  setToastListener,
   type ConfirmSpec,
   type ToastSpec,
 } from '../appNotify';
@@ -27,7 +27,7 @@ describe('шина уведомлений', () => {
 
   it('с хостом доводит тост до него', () => {
     const seen: ToastSpec[] = [];
-    setToastListener((t) => seen.push(t));
+    addToastListener((t) => seen.push(t));
     expect(pushToast('error', 'не вышло')).toBe(true);
     expect(seen).toHaveLength(1);
     expect(seen[0].tone).toBe('error');
@@ -36,7 +36,7 @@ describe('шина уведомлений', () => {
 
   it('каждый тост получает свой номер — иначе два одинаковых слипнутся в один', () => {
     const seen: ToastSpec[] = [];
-    setToastListener((t) => seen.push(t));
+    addToastListener((t) => seen.push(t));
     pushToast('success', 'сохранено');
     pushToast('success', 'сохранено');
     expect(seen).toHaveLength(2);
@@ -67,9 +67,27 @@ describe('шина уведомлений', () => {
   });
 
   it('снятый хост возвращает вызовы системе, а не в пустоту', () => {
-    setToastListener(() => {});
+    const off = addToastListener(() => {});
     expect(pushToast('success', 'раз')).toBe(true);
-    setToastListener(null);
+    off();
     expect(pushToast('success', 'два')).toBe(false);
+  });
+
+  // v4.32.597: Modal живёт в отдельном native-окне, и тост из дерева App.tsx
+  // остаётся ЗА ним — «ID скопирован» выезжал позади карточки профиля. Слой
+  // тоста есть у каждого окна, и сообщение обязано доставаться верхнему.
+  it('тост достаётся верхнему окну, а не хосту под ним', () => {
+    const bottom: string[] = [];
+    const top: string[] = [];
+    addToastListener((t) => bottom.push(t.message));
+    const closeTop = addToastListener((t) => top.push(t.message));
+    pushToast('success', 'ID скопирован');
+    expect(top).toEqual(['ID скопирован']);
+    expect(bottom).toEqual([]);
+    // Окно закрылось — тост снова рисует приложение.
+    closeTop();
+    pushToast('success', 'после закрытия');
+    expect(bottom).toEqual(['после закрытия']);
+    expect(top).toEqual(['ID скопирован']);
   });
 });

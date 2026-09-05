@@ -15,6 +15,8 @@
  * Подписчик один: хост монтируется один раз в `App.tsx`. Пока его нет (ранний
  * старт, тесты), `push*` честно возвращает false, и вызывающий откатывается на
  * системное окно — молча терять уведомление нельзя.
+ *
+ * Тост — исключение: у него подписчиков стопка, см. `addToastListener`.
  */
 
 /** Назначение уведомления. Цвет и значок выбирает хост. */
@@ -58,12 +60,30 @@ export const TOAST_MS: Record<NotifyTone, number> = {
 type ToastListener = (spec: ToastSpec) => void;
 type ConfirmListener = (spec: ConfirmSpec) => void;
 
-let toastListener: ToastListener | null = null;
+/**
+ * Слушатели тоста — стопкой, и сообщение получает последний.
+ *
+ * v4.32.597. Хост тоста был один, на всё приложение. Но карточка профиля, лист
+ * действий, окно комментариев — это `Modal`, а `Modal` живёт в отдельном
+ * НАТИВНОМ окне поверх приложения, и нарисованный под ним тост человек не
+ * видит: «ID скопирован» уходил за ту самую карточку, из которой ID и
+ * копировали.
+ *
+ * Поэтому слой тоста рисует каждое окно (`AppModal`), а шина отдаёт сообщение
+ * тому, кто подписался последним, — то есть верхнему окну на экране. Окно
+ * закрылось, слой снялся — и тост снова рисует хост приложения.
+ */
+const toastListeners: ToastListener[] = [];
 let confirmListener: ConfirmListener | null = null;
 let seq = 0;
 
-export function setToastListener(fn: ToastListener | null): void {
-  toastListener = fn;
+/** Подписать слой тоста. Возвращает отписку — её и надо звать при размонтировании. */
+export function addToastListener(fn: ToastListener): () => void {
+  toastListeners.push(fn);
+  return () => {
+    const at = toastListeners.lastIndexOf(fn);
+    if (at >= 0) toastListeners.splice(at, 1);
+  };
 }
 
 export function setConfirmListener(fn: ConfirmListener | null): void {
@@ -72,9 +92,10 @@ export function setConfirmListener(fn: ConfirmListener | null): void {
 
 /** true — тост отдан хосту; false — хоста нет, показывать нечем. */
 export function pushToast(tone: NotifyTone, message: string): boolean {
-  if (!toastListener) return false;
+  const top = toastListeners[toastListeners.length - 1];
+  if (!top) return false;
   seq += 1;
-  toastListener({ id: seq, tone, message });
+  top({ id: seq, tone, message });
   return true;
 }
 
@@ -88,7 +109,7 @@ export function pushConfirm(spec: Omit<ConfirmSpec, 'id'>): boolean {
 
 /** Только для тестов: вернуть шину в исходное состояние. */
 export function resetNotifyBus(): void {
-  toastListener = null;
+  toastListeners.length = 0;
   confirmListener = null;
   seq = 0;
 }

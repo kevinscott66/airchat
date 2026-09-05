@@ -14,9 +14,9 @@
 // в дереве, и открывайте меню через setSheet({ title, options }).
 
 import React from 'react';
-import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppModal } from './AppModal';
 import { AppPressable } from './AppPressable';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useTheme } from '../ThemeContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { radius, scrim } from '../theme';
@@ -55,61 +55,60 @@ export function ActionSheet({
   };
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       transparent
       animationType="slide"
       onRequestClose={onClose}
       statusBarTranslucent
+      rootStyle={styles.flex}
     >
-      <GestureHandlerRootView style={styles.flex}>
-        {/* Подложка: тап закрывает лист */}
-        <AppPressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border, paddingBottom: insets.bottom + 8 }]}>
-          <View style={styles.handleWrap}>
-            <View style={[styles.handle, { backgroundColor: colors.border }]} />
-          </View>
-          {state ? (
-            <>
-              {state.title ? (
-                <Text style={[styles.title, { color: colors.text }]} numberOfLines={2}>{state.title}</Text>
-              ) : null}
-              {state.message ? (
-                <Text style={[styles.message, { color: colors.textSecondary }]}>{state.message}</Text>
-              ) : null}
-              <ScrollView
-                style={styles.scroll}
-                contentContainerStyle={{ paddingBottom: 4 }}
-                keyboardShouldPersistTaps="always"
-                showsVerticalScrollIndicator
-              >
-                {state.options.map((opt, idx) => (
-                  <AppPressable
-                    key={`${opt.label}-${idx}`}
-                    style={[styles.row, { borderTopColor: colors.border }]}
-                    onPress={() => handlePick(opt)}
-                  >
-                    <Text
-                      style={[styles.rowText, { color: opt.destructive ? colors.error : colors.text }]}
-                      numberOfLines={2}
-                    >
-                      {opt.label}
-                    </Text>
-                  </AppPressable>
-                ))}
-              </ScrollView>
-              {/* Липкая «Отмена» */}
-              <AppPressable
-                style={[styles.cancel, { backgroundColor: colors.surfaceHigh }]}
-                onPress={onClose}
-              >
-                <Text style={[styles.cancelText, { color: colors.text }]}>Отмена</Text>
-              </AppPressable>
-            </>
-          ) : null}
+      {/* Подложка: тап закрывает лист */}
+      <AppPressable style={styles.backdrop} onPress={onClose} />
+      <View style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border, paddingBottom: insets.bottom + 8 }]}>
+        <View style={styles.handleWrap}>
+          <View style={[styles.handle, { backgroundColor: colors.border }]} />
         </View>
-      </GestureHandlerRootView>
-    </Modal>
+        {state ? (
+          <>
+            {state.title ? (
+              <Text style={[styles.title, { color: colors.text }]} numberOfLines={2}>{state.title}</Text>
+            ) : null}
+            {state.message ? (
+              <Text style={[styles.message, { color: colors.textSecondary }]}>{state.message}</Text>
+            ) : null}
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={{ paddingBottom: 4 }}
+              keyboardShouldPersistTaps="always"
+              showsVerticalScrollIndicator
+            >
+              {state.options.map((opt, idx) => (
+                <AppPressable
+                  key={`${opt.label}-${idx}`}
+                  style={[styles.row, { borderTopColor: colors.border }]}
+                  onPress={() => handlePick(opt)}
+                >
+                  <Text
+                    style={[styles.rowText, { color: opt.destructive ? colors.error : colors.text }]}
+                    numberOfLines={2}
+                  >
+                    {opt.label}
+                  </Text>
+                </AppPressable>
+              ))}
+            </ScrollView>
+            {/* Липкая «Отмена» */}
+            <AppPressable
+              style={[styles.cancel, { backgroundColor: colors.surfaceHigh }]}
+              onPress={onClose}
+            >
+              <Text style={[styles.cancelText, { color: colors.text }]}>Отмена</Text>
+            </AppPressable>
+          </>
+        ) : null}
+      </View>
+    </AppModal>
   );
 }
 
