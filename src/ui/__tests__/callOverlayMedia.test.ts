@@ -65,9 +65,11 @@ describe('call media UI contract', () => {
     // Проверяется то, что шов исключает: слой стоит прямо в `s.root`, у
     // которого отступов нет, и НЕ стоит ни в `s.container`, ни в `s.audioStage`.
     expect(overlay).toContain('root: { flex: 1 },');
-    expect(overlay).toMatch(/<View style=\{\[s\.root,[\s\S]{0,400}?<CallBackdrop tone=\{tone\} \/>[\s\S]{0,80}?<View style=\{s\.container\}>/);
-    const inner = overlay.slice(overlay.indexOf('<View style={s.container}>'), overlay.indexOf('</Modal>'));
-    expect(inner).not.toContain('<CallBackdrop');
+    expect(overlay).toMatch(/<View style=\{\[s\.root,[\s\S]{0,400}?<CallBackdrop tone=\{tone\} wide=\{wide\} \/>[\s\S]{0,120}?<View style=\{\[s\.container,/);
+    const at = overlay.indexOf('<View style={[s.container,');
+    expect(at).toBeGreaterThan(0);
+    const inner = overlay.slice(at, overlay.indexOf('</Modal>'));
+    expect(inner).not.toContain('<CallBackdrop tone={tone} wide={wide} />');
   });
 
   it('границу подсветки держит геометрия, а не обрезка', () => {
@@ -76,10 +78,38 @@ describe('call media UI contract', () => {
     // в `callWash` (themeContrast.test.ts меряет там же); здесь проверяется,
     // что разметка берёт их оттуда, а не повторяет литералами.
     expect(overlay).toContain('callWash');
-    expect(overlay).toContain('stopOpacity={callWash.a.peak}');
-    expect(overlay).toContain('stopOpacity={callWash.b.peak}');
-    expect(overlay).toContain('cy={`${callWash.a.cy}%`}');
-    expect(overlay).toContain('cy={`${callWash.b.cy}%`}');
+    expect(overlay).toContain('stopOpacity={callWash.peakA}');
+    expect(overlay).toContain('stopOpacity={callWash.peakB}');
+    expect(overlay).toContain('const g = wide ? callWash.landscape : callWash.portrait;');
+    expect(overlay).toContain('cy={`${g.a.cy}%`}');
+    expect(overlay).toContain('cy={`${g.b.cy}%`}');
+  });
+
+  it('в широком окне экран звонка становится двумя колонками', () => {
+    // v4.32.589. Столбик «аватар → имя → состояние → кнопки» рассчитан на
+    // телефон в портрете. На iPad в альбоме, в окне браузера на MacBook и на
+    // сайте в горизонтальном положении он стоит посреди пустоты, а по высоте
+    // впритык. В широком окне контейнер разворачивается в строку.
+    //
+    // Раскладка выбирается по ОКНУ, а не по устройству: на сайте окно тянет
+    // сам пользователь, и списка моделей здесь быть не может.
+    expect(overlay).toContain('useWindowDimensions');
+    expect(overlay).toContain('const wide = winW > winH && winW >= callLayout.wideMinWidth;');
+    expect(overlay).toContain("containerWide: { flexDirection: 'row'");
+    // Сцена в строке не должна распираться процентами — иначе она выдавит
+    // колонку кнопок за экран.
+    expect(overlay).toContain("stageWide: { width: 'auto', height: '100%' }");
+    expect(overlay).toContain('wide && s.stageWide');
+    // Ширина колонки — зажим из `callLayout`, а не литерал в разметке.
+    expect(overlay).toContain('callLayout.controlsMax');
+    expect(overlay).toContain('callLayout.controlsMin');
+    expect(overlay).toContain('callLayout.controlsFraction');
+    // Колонка не сжимается: иначе «принять» и «отклонить» перестанут
+    // помещаться рядом.
+    expect(overlay).toContain('controlsWide: { flexShrink: 0');
+    // Подсветка знает про раскладку — в альбоме кнопки справа, и вертикальная
+    // граница пятен там не защищает ничего.
+    expect(overlay).toContain('<CallBackdrop tone={tone} wide={wide} />');
   });
 
   it('фазу звонка несут слова и набор кнопок, а не цвет фона', () => {

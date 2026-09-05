@@ -31,11 +31,11 @@
  * заливки глухими — ровно как в `GlassSurface`.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, View, Text, StyleSheet, StatusBar, Vibration, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
+import { Animated, Easing, View, Text, StyleSheet, StatusBar, Vibration, useWindowDimensions, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import Svg, { Defs, Ellipse, RadialGradient, Stop } from 'react-native-svg';
 import { AppPressable } from './AppPressable';
-import { avatarShape, callTone, callWash, font, glass, mediaScrim, radius, spacing, withAlpha, type CallTone } from '../theme';
+import { avatarShape, callLayout, callTone, callWash, font, glass, mediaScrim, radius, spacing, withAlpha, type CallTone } from '../theme';
 import { AppModal as Modal } from './AppModal';
 import { useReducedMotion, useReducedTransparency } from '../motionPrefs';
 import { setAudioModeAsync } from 'expo-audio';
@@ -104,32 +104,35 @@ const RtcView = loadRtcView();
  * Слой — во всю страницу, БЕЗ отступов контейнера. В 587-й он лежал внутри
  * `s.audioStage`, у которого сверху 56 точек паддинга родителя, а снизу —
  * панель кнопок; SVG режется по своему вьюпорту, и поперёк экрана шёл
- * видимый шов ровно по этой границе. Границу теперь держит геометрия пятен
- * (`callWash.bottomPct`), а не обрезка.
+ * видимый шов ровно по этой границе. Границу теперь держит геометрия пятен,
+ * а не обрезка.
  *
- * И геометрия, и пиковые непрозрачности живут в `callWash` — там же записано,
- * из каких замеров они взяты. Проверяется в themeContrast.test.ts.
+ * `wide` выбирает раскладку: в столбике кнопки внизу и пятна живут вверху, в
+ * двух колонках кнопки справа и пятна уходят влево. И геометрия, и пиковые
+ * непрозрачности живут в `callWash` — там же записано, из каких замеров они
+ * взяты. Проверяется в themeContrast.test.ts.
  */
-function CallBackdrop({ tone }: { tone: CallTone }): React.ReactElement {
+function CallBackdrop({ tone, wide }: { tone: CallTone; wide: boolean }): React.ReactElement {
+  const g = wide ? callWash.landscape : callWash.portrait;
   return (
     <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width="100%" height="100%">
       <Defs>
         <RadialGradient id="call-wash-a" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={tone.washA} stopOpacity={callWash.a.peak} />
-          <Stop offset="0.55" stopColor={tone.washA} stopOpacity={callWash.a.mid} />
+          <Stop offset="0" stopColor={tone.washA} stopOpacity={callWash.peakA} />
+          <Stop offset="0.55" stopColor={tone.washA} stopOpacity={callWash.midA} />
           <Stop offset="1" stopColor={tone.washA} stopOpacity={0} />
         </RadialGradient>
         <RadialGradient id="call-wash-b" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={tone.washB} stopOpacity={callWash.b.peak} />
-          <Stop offset="0.55" stopColor={tone.washB} stopOpacity={callWash.b.mid} />
+          <Stop offset="0" stopColor={tone.washB} stopOpacity={callWash.peakB} />
+          <Stop offset="0.55" stopColor={tone.washB} stopOpacity={callWash.midB} />
           <Stop offset="1" stopColor={tone.washB} stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      {/* Пятна шире экрана и выходят за его левый, правый и верхний края:
-          иначе виден край самого пятна, а он должен быть незаметен. Снизу
-          наоборот — край обязан остаться внутри экрана и выше кнопок. */}
-      <Ellipse cx={`${callWash.a.cx}%`} cy={`${callWash.a.cy}%`} rx={`${callWash.a.rx}%`} ry={`${callWash.a.ry}%`} fill="url(#call-wash-a)" />
-      <Ellipse cx={`${callWash.b.cx}%`} cy={`${callWash.b.cy}%`} rx={`${callWash.b.rx}%`} ry={`${callWash.b.ry}%`} fill="url(#call-wash-b)" />
+      {/* Со стороны, противоположной кнопкам, пятна выходят за края экрана —
+          так их собственный край гарантированно не читается. Со стороны кнопок
+          наоборот: край обязан остаться внутри экрана и не дойти до них. */}
+      <Ellipse cx={`${g.a.cx}%`} cy={`${g.a.cy}%`} rx={`${g.a.rx}%`} ry={`${g.a.ry}%`} fill="url(#call-wash-a)" />
+      <Ellipse cx={`${g.b.cx}%`} cy={`${g.b.cy}%`} rx={`${g.b.rx}%`} ry={`${g.b.ry}%`} fill="url(#call-wash-b)" />
     </Svg>
   );
 }
@@ -270,10 +273,10 @@ function CallControl({ icon, label, tone, overMedia, active = false, onPress }: 
   );
 }
 
-function VideoFallback({ call, tone, stateLabel, incoming }: { call: CallInfo; tone: CallTone; stateLabel: string; incoming: boolean }): React.ReactElement {
+function VideoFallback({ call, tone, stateLabel, incoming, wide }: { call: CallInfo; tone: CallTone; stateLabel: string; incoming: boolean; wide: boolean }): React.ReactElement {
   return (
     <View style={s.videoFallback}>
-      <CallBackdrop tone={tone} />
+      <CallBackdrop tone={tone} wide={wide} />
       {incoming && <RingingRings tone={tone} />}
       <CallerAvatar name={call.peerName} tone={tone} />
       <Text style={[s.videoFallbackName, { color: mediaScrim.ink }]}>{call.peerName}</Text>
@@ -384,6 +387,14 @@ export function CallOverlay(): React.ReactElement | null {
 
   const phase = call?.state === 'ended' ? 'ended' : 'active';
   const tone = useMemo(() => callTone(phase), [phase]);
+  // v4.32.589. Раскладка выбирается по ОКНУ, а не по устройству: на сайте это
+  // окно браузера, которое пользователь тянет как хочет, а на iPad — реальная
+  // ориентация. Списка моделей здесь быть не может; условие — то, что видно.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const wide = winW > winH && winW >= callLayout.wideMinWidth;
+  const controlsWidth = Math.round(
+    Math.min(callLayout.controlsMax, Math.max(callLayout.controlsMin, winW * callLayout.controlsFraction)),
+  );
 
   if (!call || call.state === 'idle') return null;
 
@@ -411,14 +422,14 @@ export function CallOverlay(): React.ReactElement | null {
         {/* Подсветка — отдельным слоем НАД заливкой и ПОД содержимым, во всю
             страницу. Внутри `s.container` её держать нельзя: у того есть
             отступы, а SVG режется по вьюпорту — отсюда и был шов. */}
-        {!call.isVideo && <CallBackdrop tone={tone} />}
-        <View style={s.container}>
+        {!call.isVideo && <CallBackdrop tone={tone} wide={wide} />}
+        <View style={[s.container, wide && s.containerWide]}>
           {call.isVideo ? (
-            <View style={s.videoStage}>
+            <View style={[s.videoStage, wide && s.stageWide]}>
               {hasRemoteVideo && RtcView ? (
                 <RtcView style={s.remoteVideo} streamURL={remoteUrl ?? undefined} objectFit="cover" zOrder={0} accessibilityLabel="Видео собеседника" />
               ) : (
-                <VideoFallback call={call} tone={tone} stateLabel={stateLabel} incoming={isIncoming} />
+                <VideoFallback call={call} tone={tone} stateLabel={stateLabel} incoming={isIncoming} wide={wide} />
               )}
               <CallGlass tone={tone} fill={mediaScrim.bar} overMedia={hasRemoteVideo} style={s.videoHeader} pointerEvents="none">
                 <Text style={[s.videoPeerName, { color: mediaScrim.ink }]} numberOfLines={1}>{call.peerName}</Text>
@@ -436,7 +447,7 @@ export function CallOverlay(): React.ReactElement | null {
               ) : null}
             </View>
           ) : (
-            <View style={s.audioStage}>
+            <View style={[s.audioStage, wide && s.stageWide]}>
               {isIncoming && <RingingRings tone={tone} />}
               <CallerAvatar name={call.peerName} tone={tone} />
               <Text style={[s.callerName, { color: tone.ink }]}>{call.peerName}</Text>
@@ -444,7 +455,7 @@ export function CallOverlay(): React.ReactElement | null {
             </View>
           )}
 
-          <View style={s.controls}>
+          <View style={[s.controls, wide && [s.controlsWide, { width: controlsWidth }]]}>
             {showCallControls && (
               <View style={s.controlRow}>
                 <CallControl icon={media.localAudioEnabled ? 'mic' : 'mic-off'} label={media.localAudioEnabled ? 'Микрофон' : 'Без звука'} tone={tone} overMedia={hasRemoteVideo} active={!media.localAudioEnabled} onPress={onMute} />
@@ -491,7 +502,17 @@ const s = StyleSheet.create({
   // отступами. Разделены ровно ради этого: подсветке нужен полный экран.
   root: { flex: 1 },
   container: { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingTop: 56, paddingBottom: 40 },
+  // Широкое окно: сцена слева, кнопки колонкой справа.
+  //
+  // 56 точек сверху набраны под строку состояния телефона в портрете; в альбоме
+  // её там нет, а высоты, наоборот, мало — отступ снимается. По горизонтали
+  // наоборот добавляется: в альбоме у iPhone в браузере по краям вырез и
+  // скруглённые углы, и содержимое к самому краю прижимать нельзя.
+  containerWide: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing.xl, paddingBottom: spacing.xl, paddingHorizontal: spacing.xl },
   audioStage: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
+  // `width: '100%'` в строке распёрло бы сцену на всё окно и выдавило колонку
+  // кнопок за экран: в ряду ширину задаёт `flex`, а не проценты.
+  stageWide: { width: 'auto', height: '100%' },
   callerName: { fontSize: font.xxl, fontWeight: '700', textAlign: 'center', marginBottom: spacing.sm },
   stateLabel: { fontSize: font.md, textAlign: 'center' },
   videoStage: { flex: 1, width: '100%', overflow: 'hidden', backgroundColor: mediaScrim.fill },
@@ -507,6 +528,12 @@ const s = StyleSheet.create({
   localVideoOff: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm },
   localVideoOffText: { fontSize: font.xs, textAlign: 'center', marginTop: spacing.sm },
   controls: { width: '100%', alignItems: 'center', gap: spacing.xl, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+  // Ширину колонки считает сам компонент (зажим из `callLayout`), здесь — то,
+  // что от ширины не зависит. `flexShrink: 0`: колонка не сжимается под сценой,
+  // иначе «принять» и «отклонить» перестали бы помещаться рядом.
+  // `controlRow` уже умеет переносить строки, поэтому четыре кнопки видеозвонка
+  // в узкой колонке встают 2×2 сами.
+  controlsWide: { flexShrink: 0, paddingTop: 0, paddingHorizontal: 0, marginLeft: spacing.xl },
   controlRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', flexWrap: 'wrap', columnGap: spacing.md, rowGap: spacing.md },
   controlSlot: { borderRadius: radius.lg },
   controlBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.lg, minWidth: 76, minHeight: 72 },

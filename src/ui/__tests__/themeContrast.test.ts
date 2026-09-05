@@ -13,7 +13,7 @@
  */
 import { Appearance } from 'react-native';
 import { bannerColors } from '../components/StatusBanner';
-import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callTone, callWash, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
+import { ACCENT_SWATCHES, BRAND_X, MAP_PAPER, MENU_ICON_HUES, QR_CODE, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG, accentOnFill, applyAccent, badgeTint, bubbleInk, bubbleSurface, bubbleSurfaceOn, callLayout, callTone, callWash, colorsForScheme, glass, contrastRatio, contrastingInk, darkColors, fadedOn, identityAvatar, identityFill, identityHue, identityInk, inkOn, lightColors, mediaScrim, nestedFill, normalizeAccent, pollInk, primaryInk, readableInk, reactionInk, readableOn, resolveColors, resolveScheme, rippleOn, rowMark, scrim, searchMark, spoilerPlate, switchTone, tintedIcon, tintedPlate, toastSurface, withAlpha, type AppColors, type BadgeTone, type CallPhase, type FillInk, type MenuIconHue, type PollInk } from '../theme';
 import type { AdminLogTone } from '../../core/social/groupAdminLog';
 import { WALLPAPER_MESHES, WALLPAPER_PRESETS, feedGround, meshById, type Wallpaper } from '../wallpapers';
 
@@ -1032,25 +1032,57 @@ describe('экран звонка', () => {
     }
   });
 
-  it('подсветка кончается выше круглых кнопок', () => {
+  it('подсветка в столбике кончается выше круглых кнопок', () => {
     // Порог графики 3:1 для «принять» / «отклонить» меряется на РОВНОМ фоне
     // (утверждение выше), и это верно лишь пока подсветка под кнопки не
     // заходит. В 587-й границу держала обрезка SVG по вьюпорту — она же
     // рисовала видимый шов поперёк экрана. Теперь границу держит геометрия,
     // и проверять надо именно её: низ каждого пятна = cy + ry.
-    expect(callWash.a.cy + callWash.a.ry).toBeLessThanOrEqual(callWash.bottomPct);
-    expect(callWash.b.cy + callWash.b.ry).toBeLessThanOrEqual(callWash.bottomPct);
-    // Область действий занимает низ экрана; запас до неё должен остаться.
-    expect(callWash.bottomPct).toBeLessThanOrEqual(70);
+    const g = callWash.portrait;
+    expect(g.a.cy + g.a.ry).toBeLessThanOrEqual(g.bottomPct);
+    expect(g.b.cy + g.b.ry).toBeLessThanOrEqual(g.bottomPct);
+    // Ряд кнопок занимает низ экрана; запас до него должен остаться.
+    expect(g.bottomPct).toBeLessThanOrEqual(70);
+  });
+
+  it('подсветка в двух колонках кончается левее колонки кнопок', () => {
+    // v4.32.589. В широком окне кнопки не внизу, а справа, и вертикальная
+    // граница подсветку уже не защищает — считать надо по ширине: cx + rx.
+    const g = callWash.landscape;
+    expect(g.a.cx + g.a.rx).toBeLessThanOrEqual(g.rightPct);
+    expect(g.b.cx + g.b.rx).toBeLessThanOrEqual(g.rightPct);
+  });
+
+  it('колонка кнопок не залезает на подсветку в самом узком широком окне', () => {
+    // Главная арифметика альбомной раскладки, и она НЕ самоочевидна.
+    //
+    // Ширина колонки кнопок — доля окна с зажимом снизу, поэтому чем окно
+    // уже, тем БОЛЬШУЮ его долю колонка занимает. Худший случай — ровно на
+    // пороге `wideMinWidth`, где зажим `controlsMin` уже сработал. Если в этой
+    // точке сцена окажется уже, чем `rightPct`, подсветка вылезет под круглые
+    // кнопки и порог 3:1 сломается — то есть порог включения раскладки держит
+    // контраст, а не вкус, и опускать его нельзя.
+    const narrowest = callLayout.wideMinWidth;
+    const column = Math.min(
+      callLayout.controlsMax,
+      Math.max(callLayout.controlsMin, narrowest * callLayout.controlsFraction),
+    );
+    const stagePct = ((narrowest - column) / narrowest) * 100;
+    expect(stagePct).toBeGreaterThan(callWash.landscape.rightPct);
+    // И обратная сторона зажима: на широком экране колонка не расплывается.
+    expect(callLayout.controlsMax).toBeGreaterThanOrEqual(callLayout.controlsMin);
+    // В `controlsMin` обязаны влезть «принять» и «отклонить» рядом: два круга
+    // по 68 плюс зазор 48 между ними (см. roundBtn и hangupRow в CallOverlay).
+    expect(callLayout.controlsMin).toBeGreaterThanOrEqual(68 * 2 + 48);
   });
 
   it('подсветка не держится на одной прозрачности', () => {
     // Пики выше тех значений, при которых сплошная подсветка уронила бы
     // круглые кнопки за 3:1 (`primary` ломается около 0.26, `accent` — около
     // 0.13). Значит гасить пятна прозрачностью вместо геометрии нельзя, и
-    // `bottomPct` — не перестраховка.
-    expect(callWash.a.peak).toBeGreaterThan(0.13);
-    expect(callWash.b.peak).toBeGreaterThan(0.13);
+    // границы в обеих раскладках — не перестраховка.
+    expect(callWash.peakA).toBeGreaterThan(0.13);
+    expect(callWash.peakB).toBeGreaterThan(0.13);
   });
 
   it('прежний зелёный фон прятал обе круглые кнопки', () => {
@@ -1089,8 +1121,8 @@ describe('экран звонка', () => {
     // случай: самая яркая точка пятна, то есть непрозрачность из `CallBackdrop`
     // в её максимуме.
     it('имя и состояние читаются в самой яркой точке подсветки', () => {
-      const litA = mix(tone.washA, tone.fill, callWash.a.peak);
-      const litB = mix(tone.washB, tone.fill, callWash.b.peak);
+      const litA = mix(tone.washA, tone.fill, callWash.peakA);
+      const litB = mix(tone.washB, tone.fill, callWash.peakB);
       for (const lit of [litA, litB]) {
         expect(contrast(tone.ink, lit) >= 4.5).toBe(true);
         expect(contrast(tone.inkMuted, lit) >= 4.5).toBe(true);
@@ -1101,8 +1133,8 @@ describe('экран звонка', () => {
     // же цветом, что кнопка «принять», — и кнопка на ней давала 2.16:1. Отсюда
     // и правило: подсветка не смеет повторять заливку круглых кнопок. Порог
     // 3:1 для них меряется на РОВНОМ фоне (утверждение выше), и это верно
-    // ровно потому, что подсветка под кнопки не заходит — см. отдельную
-    // проверку `callWash.bottomPct` выше.
+    // ровно потому, что подсветка под кнопки не заходит — см. проверки
+    // границ подсветки в обеих раскладках выше.
     it('подсветка не повторяет цвет круглых кнопок', () => {
       expect(tone.washA).not.toBe(tone.accept);
       expect(tone.washA).not.toBe(tone.hangup);
