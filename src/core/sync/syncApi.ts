@@ -8,6 +8,7 @@ import { ED25519_SECRET_KEY_BYTES } from '../crypto/keyManager';
 import { deriveKeyPairFromMnemonic } from '../backup/seedPhrase';
 import { getConfigSync } from '../config';
 import { signJson } from '../crypto/signature';
+import { bytesToBase64Url } from '../utils/base64url';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import * as SecureStore from '../storage/secureStoreQueued';
 import type {
@@ -228,7 +229,7 @@ async function ensureDeviceEnrolled(mnemonic: string, accountPair: KeyPairBytes,
       devicePublicKeyB64,
       deviceLabel: `AirChat ${Platform.OS}`,
       timestamp: Date.now(),
-      nonce: Buffer.from(randomBytes(16)).toString('base64url'),
+      nonce: bytesToBase64Url(randomBytes(16)),
       deviceInfo: currentDeviceInfo(),
     };
     await fetchSigned(`${base}/v1/sync/${accountId}/devices/enroll`, await signJson(accountPair, payload));
@@ -295,7 +296,7 @@ async function request<T>(
     devicePublicKeyB64,
     deviceLabel: `AirChat ${Platform.OS}`,
     timestamp: Date.now(),
-    nonce: Buffer.from(randomBytes(16)).toString('base64url'),
+    nonce: bytesToBase64Url(randomBytes(16)),
     deviceInfo: currentDeviceInfo(),
     ...extra,
   };

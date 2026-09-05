@@ -43,6 +43,7 @@ import { log } from '../logger';
 import { feedCommentIsHeldFromSync, feedPostIsHeldFromSync } from '../social/feedPostGuard';
 import { heldEntityCount, presentEntityKeys, pushableEntities } from './entityHold';
 import { syncAccountOnce } from './accountSync';
+import { base64UrlToUtf8, bytesToBase64Url, utf8ToBase64Url } from '../utils/base64url';
 import type { SyncEntityKind, SyncMutation, SyncPushResponse } from './syncProtocol';
 import type { KeyPairBytes } from '../crypto/keyManager';
 
@@ -100,16 +101,16 @@ function stableStringify(value: unknown): string {
 }
 
 function fingerprint(value: unknown): string {
-  return Buffer.from(sha256(new TextEncoder().encode(stableStringify(value)))).toString('base64url');
+  return bytesToBase64Url(sha256(new TextEncoder().encode(stableStringify(value))));
 }
 
 function encodedEntityId(entityId: string): string {
-  return Buffer.from(entityId, 'utf8').toString('base64url');
+  return utf8ToBase64Url(entityId);
 }
 
 function decodedEntityId(entityId: string): string | null {
   try {
-    const value = Buffer.from(entityId, 'base64url').toString('utf8');
+    const value = base64UrlToUtf8(entityId);
     return value.length > 0 && value.length <= 256 ? value : null;
   } catch {
     return null;

@@ -26,6 +26,7 @@ import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import * as SecureStore from '../storage/secureStoreQueued';
 import { log } from '../logger';
 import { deriveLocalDekFromMnemonic } from '../storage/dekDerivation';
+import { bytesToBase64Url } from '../utils/base64url';
 
 export const CLOUD_VAULT_VERSION = 1;
 export const CLOUD_VAULT_KDF_ITERS = 180_000;
@@ -177,7 +178,7 @@ function cloudBaseUrl(): string | null {
 }
 
 function randomNonce(): string {
-  return Buffer.from(randomBytes(16)).toString('base64url');
+  return bytesToBase64Url(randomBytes(16));
 }
 
 async function fetchCloud(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
