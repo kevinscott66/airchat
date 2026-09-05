@@ -1062,7 +1062,8 @@ function SettingsScreenImpl({
         идёт переписка. Отозвать её было нечем, кроме как удалить у себя.
         Подпись говорит ровно то, что делает код: настройка управляет
         РАССЫЛКОЙ карточки, а уже полученную кем-то фотографию она забрать не
-        может — как и любая настройка в переписке без сервера.
+        может: копия уже лежит у него, и сервер синхронизации её оттуда не
+        заберёт.
       */}
       <Text style={styles.sectionTitle}>Фотография профиля</Text>
       <Text style={styles.hint}>
@@ -1337,9 +1338,9 @@ function SettingsScreenImpl({
           {FONT_SIZE_OPTIONS.map((opt) => {
             const active = fontSize === opt.value;
             return (
-              <AppPressable key={opt.value} style={[styles.themeBtn, active && styles.themeBtnActive, { flex: 1, minWidth: 0 }]} onPress={() => void setFontSize(opt.value as FontSizeValue)} accessibilityRole="radio" accessibilityState={{ selected: active }}>
-                <Text style={{ fontSize: opt.value - 3, fontWeight: '700', color: active ? primaryOn : colors.textSecondary }}>А</Text>
-                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive, { fontSize: scaleFont(font.xs) }]}>{opt.label}</Text>
+              <AppPressable key={opt.value} style={[styles.themeBtn, active && styles.themeBtnActive, styles.fontBtn]} onPress={() => void setFontSize(opt.value as FontSizeValue)} accessibilityRole="radio" accessibilityState={{ selected: active }}>
+                <Text style={[styles.fontBtnSample, { color: active ? primaryOn : colors.textSecondary, fontSize: opt.value - 3, lineHeight: opt.value + 2 }]}>А</Text>
+                <Text numberOfLines={2} style={[styles.fontBtnLabel, active && styles.themeBtnTextActive]}>{opt.label}</Text>
               </AppPressable>
             );
           })}
@@ -2413,6 +2414,22 @@ function makeStyles(c: AppColors, sf: (base: number) => number) {
     },
     themeBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
     themeBtnText: { color: c.textSecondary, fontSize: sf(12), fontWeight: '500' },
+    // Выбор кегля (v4.32.594). Две вещи, из-за которых «Очень крупный» и его
+    // «А» вылезали за плашку, и обе исправлены здесь, а не подрезкой строки:
+    //
+    // 1. Кнопки стояли строкой — «А» и подпись бок о бок. На четверть ширины
+    //    экрана этого хватало только самой короткой подписи. Теперь колонка:
+    //    образец сверху, слово под ним, и на слово работает вся ширина кнопки.
+    // 2. Подпись масштабировалась выбранным кеглем — то есть на «Очень
+    //    крупном» разрасталась ровно та надпись, которая этот выбор называет.
+    //    Орган управления не меняет собственный размер от того, чем управляет:
+    //    подписи здесь — font.xs без множителя, как деления на линейке.
+    //
+    // Две строки разрешены намеренно: подпись переносится, а не обрезается —
+    // «Очень кру…» не называет размер.
+    fontBtn: { flexDirection: 'column', gap: 3, flex: 1, minWidth: 0, paddingHorizontal: 4 },
+    fontBtnSample: { fontWeight: '700' },
+    fontBtnLabel: { color: c.textSecondary, fontSize: font.xs, fontWeight: '500', textAlign: 'center' },
     themeBtnTextActive: { color: contrastingInk(c.primary), fontWeight: '700' },
     hourBtn: { padding: 8, borderRadius: radius.md, backgroundColor: c.surfaceHigh },
 
