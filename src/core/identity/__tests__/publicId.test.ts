@@ -68,6 +68,23 @@ describe('checkUsernameClaim', () => {
     expect(checkUsernameClaim('a'.repeat(33), 'a'.repeat(33))).toEqual({ ok: false, reason: 'too_long' });
   });
 
+  // v4.32.594: рядом с юзернеймами ходят числовые идентификаторы, и `@12345`
+  // от них не отличить. Такое имя не выдаётся и по бумаге — иначе граница
+  // держалась бы только на поле ввода.
+  it('имя из одних цифр не занимается — ни своей рукой, ни по бумаге', () => {
+    expect(checkUsernameClaim('12345')).toEqual({ ok: false, reason: 'digits_only' });
+    expect(checkUsernameClaim('@0007')).toEqual({ ok: false, reason: 'digits_only' });
+    expect(checkUsernameClaim('123456', '123456')).toEqual({ ok: false, reason: 'digits_only' });
+    // Отказ идёт раньше длины: иначе `@12` объяснялся бы короткостью, и
+    // человек дописывал бы цифры, упираясь в ту же дверь.
+    expect(checkUsernameClaim('12')).toEqual({ ok: false, reason: 'digits_only' });
+  });
+
+  it('цифры внутри имени по-прежнему разрешены', () => {
+    expect(checkUsernameClaim('kevin66')).toEqual({ ok: true, username: 'kevin66' });
+    expect(checkUsernameClaim('_1234')).toEqual({ ok: true, username: '_1234' });
+  });
+
   it('называет причину для пустого и для запрещённых символов', () => {
     expect(checkUsernameClaim('   ')).toEqual({ ok: false, reason: 'empty' });
     expect(checkUsernameClaim('кевин')).toEqual({ ok: false, reason: 'charset' });

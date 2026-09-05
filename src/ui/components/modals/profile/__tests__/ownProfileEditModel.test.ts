@@ -7,6 +7,7 @@ import {
   PRONOUNS_MAX,
   PROFILE_LINK_MAX,
   profileCompletionPct,
+  USERNAME_TAKEN,
   usernameClaimErrorText,
   usernameSaveErrorText,
   usernameSavedText,
@@ -31,11 +32,12 @@ describe('пределы полей', () => {
 });
 
 describe('отказ по юзернейму', () => {
-  const reasons = ['empty', 'charset', 'too_long', 'too_short', 'reserved'] as const;
+  /** Отказы, которые человек может исправить сам, зная причину. */
+  const fixable = ['empty', 'charset', 'digits_only', 'too_long', 'too_short'] as const;
 
-  it('каждая причина объясняется своей фразой', () => {
-    const texts = reasons.map((r) => usernameClaimErrorText(r));
-    expect(new Set(texts).size).toBe(reasons.length);
+  it('каждая исправимая причина объясняется своей фразой', () => {
+    const texts = fixable.map((r) => usernameClaimErrorText(r));
+    expect(new Set(texts).size).toBe(fixable.length);
     texts.forEach((t) => expect(t.length).toBeGreaterThan(0));
   });
 
@@ -43,13 +45,34 @@ describe('отказ по юзернейму', () => {
     expect(usernameClaimErrorText('too_short')).toContain(String(USERNAME_MIN_SELF_SERVICE));
   });
 
-  it('«занято» и «зарезервировано» — разные ответы: во втором случае имя не освободится', () => {
-    expect(usernameSaveErrorText('taken')).not.toBe(usernameClaimErrorText('reserved'));
+  it('про одни цифры сказано прямо: иначе это читается как «набор символов»', () => {
+    expect(usernameClaimErrorText('digits_only')).toContain('цифр');
+    expect(usernameClaimErrorText('digits_only')).not.toBe(usernameClaimErrorText('charset'));
   });
 
-  it('отказы реестра тоже различимы', () => {
-    const texts = (['taken', 'rejected', 'local'] as const).map((r) => usernameSaveErrorText(r));
-    expect(new Set(texts).size).toBe(3);
+  /**
+   * v4.32.594: почему имя недоступно — не дело того, кто его набрал. Занято
+   * человеком, оставлено приложению, отклонено реестром — одна фраза на три
+   * случая: иначе перебор имён превращается в чтение внутреннего списка.
+   */
+  it('недоступность имени объясняется одной фразой на все случаи', () => {
+    const texts = [
+      usernameClaimErrorText('reserved'),
+      usernameSaveErrorText('taken'),
+      usernameSaveErrorText('rejected'),
+    ];
+    expect(new Set(texts)).toEqual(new Set([USERNAME_TAKEN]));
+  });
+
+  it('ни одна из этих фраз не выдаёт причину', () => {
+    const text = USERNAME_TAKEN.toLowerCase();
+    ['оставлен', 'зарезерв', 'реестр', 'приложени', 'другим человеком'].forEach((leak) => {
+      expect(text).not.toContain(leak);
+    });
+  });
+
+  it('свой же аккаунт на этом телефоне — причина названная: её человек устранит сам', () => {
+    expect(usernameSaveErrorText('local')).not.toBe(USERNAME_TAKEN);
   });
 });
 

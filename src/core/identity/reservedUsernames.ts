@@ -57,7 +57,13 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Почему юзернейм не приняли. Текст к причине пишет экран. */
-export type UsernameRejection = 'empty' | 'charset' | 'too_short' | 'too_long' | 'reserved';
+export type UsernameRejection =
+  | 'empty'
+  | 'charset'
+  | 'digits_only'
+  | 'too_short'
+  | 'too_long'
+  | 'reserved';
 
 export type UsernameClaim =
   | { ok: true; username: string }
@@ -72,6 +78,13 @@ export function checkUsernameClaim(value: unknown, unlocked?: unknown): Username
   const raw = typeof value === 'string' ? value.trim().replace(/^@+/, '').toLowerCase() : '';
   if (!raw) return { ok: false, reason: 'empty' };
   if (!/^[a-z0-9_]+$/.test(raw)) return { ok: false, reason: 'charset' };
+  // v4.32.594: имя из одних цифр не занимается вообще — ни своей рукой, ни по
+  // бумаге. Рядом с юзернеймами в приложении ходят числовые идентификаторы
+  // (номер профиля, номер группы), и `@12345` читается как один из них: по
+  // такому имени человек не отличит аккаунт от служебного номера, а адресная
+  // строка вида `@1` — готовая вывеска для чужого «официального» аккаунта.
+  // Проверка стоит ДО разрешения по бумаге: цифровое имя не выдаётся и ею.
+  if (/^\d+$/.test(raw)) return { ok: false, reason: 'digits_only' };
   if (raw.length > USERNAME_MAX) return { ok: false, reason: 'too_long' };
   // v4.32.547: имя, выписанное аккаунту официально, он вправе занять — иначе
   // список отменял бы собственную выдачу: `founder` лежит в нём как раз затем,
