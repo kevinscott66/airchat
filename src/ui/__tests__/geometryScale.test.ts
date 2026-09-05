@@ -195,7 +195,7 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/components/modals/chat/ChatStarredModal.tsx': 4,
   'ui/components/modals/groups/GroupStarredModal.tsx': 4,
   'ui/screens/PrivacyPolicyScreen.tsx': 4,
-  'App.tsx': 3,
+  'App.tsx': 2,
   'ui/components/SplashOverlay.tsx': 3,
   'ui/components/modals/groups/GroupAdminLogModal.tsx': 3,
   'ui/components/modals/shared/ScheduledListModal.tsx': 3,

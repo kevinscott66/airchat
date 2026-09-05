@@ -41,6 +41,7 @@ import { ownerPidForPublicKey } from './core/identity/ownerPidLookup';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, ownFieldGet, stripOwnDisplayName } from './core/identity/ownProfile';
 import { ensureLocalStorageReadyForBoot, kvGet, subscribeChatWrites, purgeDisappearedMessages, createGroup, upsertGroupMember, groupIdState, liveAttachmentBlobIds } from './core/storage/local';
 import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webStorageDiagnosis';
+import { dekFailureAdvice } from './core/storage/dekFailureAdvice';
 import { scheduleDialogBackupPersist } from './core/storage/dialogBackup';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
@@ -111,7 +112,7 @@ import { backSource } from './core/hooks/backStack';
 import { SwipeBackHost } from './ui/components/SwipeBackHost';
 import { stepTab, type TabStep } from './ui/tabOrder';
 import { SplashOverlay, type SplashOverlayRef } from './ui/components/SplashOverlay';
-import { badgeDigit, elevation, font, primaryInk, radius, spacing, toastSurface } from './ui/theme';
+import { badgeDigit, elevation, font, primaryInk, radius, spacing, toastSurface, TOUCH_TARGET_MIN } from './ui/theme';
 import type { AppColors, ColorScheme } from './ui/theme';
 import { contactLabel } from './core/social/contactLabel';
 import { shortIdentity } from './ui/identity/shortId';
@@ -1643,17 +1644,85 @@ function MainScreen({
  * не подписан — `useColors()` прямо в `App` вернул бы дефолт контекста и не
  * обновлялся бы при смене темы. Всё, чему нужна тема, живёт ниже провайдера.
  */
-function BootErrorView({ message }: { message: string }): React.ReactElement {
+function BootErrorView({
+  message,
+  onReset,
+}: {
+  message: string;
+  onReset?: () => void;
+}): React.ReactElement {
+  // v4.32.603: у отказа «данные не открываются» до сих пор не было ни
+  // человеческого объяснения, ни выхода — экран показывал строку исключения и
+  // на этом заканчивался. Разбор причины живёт отдельным чистым модулем, он же
+  // решает, помогает ли здесь сброс: при «хранилище не отвечает» удалять
+  // нечего и нельзя, данные целы.
+  const advice = useMemo(() => dekFailureAdvice(message), [message]);
+  /** Первое нажатие — только предупреждение. Удаление необратимо, и одного касания для него мало. */
+  const [resetArmed, setResetArmed] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const canReset = advice?.resettable === true && !!onReset;
   const styles = useThemedStyles((c) => ({
     center: { flex: 1, justifyContent: 'center' as const, alignItems: 'center' as const, backgroundColor: c.background },
-    title: { color: c.error, fontSize: 18, fontWeight: '700' as const, marginBottom: 8 },
-    body: { color: c.textSecondary, textAlign: 'center' as const, paddingHorizontal: 24 },
+    title: { color: c.error, fontSize: font.lg, fontWeight: '700' as const, marginBottom: spacing.xs },
+    body: { color: c.textSecondary, textAlign: 'center' as const, paddingHorizontal: spacing.lg },
+    warn: {
+      color: c.error,
+      textAlign: 'center' as const,
+      paddingHorizontal: spacing.lg,
+      marginTop: spacing.md,
+      fontSize: font.sm,
+    },
+    resetBtn: {
+      marginTop: spacing.lg,
+      minHeight: TOUCH_TARGET_MIN,
+      justifyContent: 'center' as const,
+      paddingHorizontal: spacing.lg,
+      backgroundColor: c.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: c.border,
+      opacity: resetBusy ? 0.6 : 1,
+    },
+    resetText: { color: c.error, fontWeight: '600' as const, fontSize: font.md },
   }));
   return (
     <SafeScreen edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.center} testID="boot_error">
         <Text style={styles.title}>Ошибка запуска</Text>
-        <Text style={styles.body}>{message}</Text>
+        <Text style={styles.body}>{advice ? advice.text : message}</Text>
+        {canReset ? (
+          <>
+            {resetArmed ? (
+              <Text style={styles.warn} testID="boot_error_reset_warning">
+                Переписка, сохранённая только на этом устройстве, исчезнет навсегда. Для входа
+                понадобятся секретные слова — убедитесь, что они у вас есть.
+              </Text>
+            ) : null}
+            <AppPressable
+              style={styles.resetBtn}
+              disabled={resetBusy}
+              onPress={() => {
+                if (!resetArmed) {
+                  setResetArmed(true);
+                  return;
+                }
+                setResetBusy(true);
+                onReset?.();
+              }}
+              testID="boot_error_reset"
+              accessibilityRole="button"
+              accessibilityLabel="Удалить локальные данные и начать заново"
+            >
+              <Text style={styles.resetText}>
+                {resetBusy
+                  ? 'Удаляем…'
+                  : resetArmed
+                    ? 'Да, удалить и начать заново'
+                    : 'Удалить данные и начать заново'}
+              </Text>
+            </AppPressable>
+          </>
+        ) : null}
       </View>
     </SafeScreen>
   );
@@ -2368,7 +2437,7 @@ export default function App(): React.ReactElement {
 
   let body: React.ReactElement;
   if (bootError) {
-    body = <BootErrorView message={bootError} />;
+    body = <BootErrorView message={bootError} onReset={() => { void onWalletLogout(); }} />;
   } else if (gate === 'onboarding') {
     body = <OnboardingScreen onComplete={onOnboardingComplete} />;
   } else if (gate === 'backup_warn' && pair) {

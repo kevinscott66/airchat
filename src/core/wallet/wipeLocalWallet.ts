@@ -25,7 +25,7 @@ import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import { purgeSensitiveCache } from '../media/cacheFiles';
 import { clearSecretClipboardNow } from '../security/clipboardSecret';
 import { sweepAvatarFiles } from '../media/avatarFiles';
-import { clearDekMemory, DEK_KEY } from '../storage/localEncryption';
+import { clearDekMemory, DEK_CANARY_KEY, DEK_KEY } from '../storage/localEncryption';
 import { resetIpfsClient } from '../transport/ipfs/node';
 import { AUTH_SECURE_KEYS, authGuard } from '../security/authGuard';
 import { BIOMETRIC_SECURE_KEYS } from '../security/biometricUnlock';
@@ -50,6 +50,13 @@ const SECRET_KEYS: readonly string[] = [
   ...SYNC_DEVICE_SECURE_KEYS,
   PROFILE_STATE_KEY,
   DEK_KEY,
+  // Канарейка секретом не является — её содержимое известно заранее. Но
+  // пережить сброс она не имеет права: это утверждение «на устройстве есть
+  // данные, зашифрованные вот тем ключом», и оставшись без ключа, она
+  // превращает следующий запуск в отказ `key_lost_data_present`. Проверять
+  // её здесь — единственный способ узнать об этом до того, как приложение
+  // перестанет открываться.
+  DEK_CANARY_KEY,
   FCM_TOKEN_KEY,
 ];
 
@@ -176,6 +183,17 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   await step('profiles', () => profileManager.clearForWalletWipe(), failed);
   await step('mnemonic', () => wipeMnemonicAndSessionFlags(), failed);
   await step('keypair', () => deleteKeyPairFromStore(), failed);
+  // v4.32.603: канарейка уходит ПЕРЕД ключом, и порядок здесь не косметика.
+  // Удаление ключа её не трогало вовсе, и после «выйти и удалить данные»
+  // на устройстве оставалась запись «данные зашифрованы ключом, которого
+  // нет» — при следующем запуске политика видела ровно её и честно
+  // отказывалась открывать приложение: `key_lost_data_present`. Починить это
+  // изнутри было нечем, приложение просто не стартовало.
+  //
+  // Порядок выбран из двух возможных исходов частичного сбоя: ключ без
+  // канарейки принимается на следующем запуске как есть (`stored_adopted`),
+  // а канарейка без ключа делает запуск невозможным.
+  await step('dek_canary', () => SecureStore.deleteItemAsync(DEK_CANARY_KEY), failed);
   await step('dek_key', () => SecureStore.deleteItemAsync(DEK_KEY), failed);
   await step('fcm_token', () => SecureStore.deleteItemAsync(FCM_TOKEN_KEY), failed);
   await step('local_db', () => wipeLocalDatabase(), failed);

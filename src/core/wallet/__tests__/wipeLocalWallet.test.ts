@@ -160,7 +160,7 @@ import { SESSION_SECURE_KEYS } from '../../backup/seedPhrase';
 import { KEYPAIR_SECURE_KEYS } from '../../crypto/keyManager';
 import { AUTH_SECURE_KEYS } from '../../security/authGuard';
 import { SYNC_DEVICE_SECURE_KEYS } from '../../sync/syncApi';
-import { DEK_KEY } from '../../storage/localEncryption';
+import { DEK_CANARY_KEY, DEK_KEY } from '../../storage/localEncryption';
 import { PROFILE_STATE_KEY } from '../../identity/profileStateKey';
 import { performLocalWalletWipe } from '../wipeLocalWallet';
 
@@ -174,6 +174,7 @@ const ALL_SECRETS = [
   ...SYNC_DEVICE_SECURE_KEYS,
   PROFILE_STATE_KEY,
   DEK_KEY,
+  DEK_CANARY_KEY,
   FCM_TOKEN_KEY,
 ];
 
@@ -266,6 +267,35 @@ describe('performLocalWalletWipe', () => {
 
     expect(posOf('collect_profile_ids')).toBeLessThan(posOf('profiles'));
     expect(mockCalls).toContain('feed_dbs:1+4');
+  });
+
+  it('канарейка ключа уходит вместе с ключом и раньше него', async () => {
+    // Регрессия v4.32.603. Канарейку не удалял никто: после «выйти и удалить
+    // данные» на устройстве оставалась запись «данные зашифрованы ключом,
+    // которого нет», и следующий запуск отказывался открывать приложение
+    // (`local data key unavailable: key_lost_data_present`). Починить это
+    // изнутри было нечем — до входа дело просто не доходило.
+    const res = await performLocalWalletWipe();
+
+    expect(mockStore.has(DEK_CANARY_KEY)).toBe(false);
+    expect(res.survivors).toEqual([]);
+    // Порядок: из двух исходов частичного сбоя ключ без канарейки запуску не
+    // мешает, а канарейка без ключа делает его невозможным.
+    expect(mockCalls.indexOf(`delete:${DEK_CANARY_KEY}`)).toBeGreaterThanOrEqual(0);
+    expect(mockCalls.indexOf(`delete:${DEK_CANARY_KEY}`)).toBeLessThan(
+      mockCalls.indexOf(`delete:${DEK_KEY}`)
+    );
+  });
+
+  it('пережившая канарейка — это ok:false', async () => {
+    // Секретом она не является, но оставшись одна, стоит дороже секрета:
+    // приложение после неё не запускается вовсе. Молчать об этом нельзя.
+    mockDeleteFailures.set(DEK_CANARY_KEY, 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.ok).toBe(false);
+    expect(res.survivors).toEqual([DEK_CANARY_KEY]);
   });
 
   it('переживший секрет — это ok:false, а не исключение', async () => {

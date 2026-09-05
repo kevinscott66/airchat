@@ -1885,21 +1885,40 @@ export async function saveSyncEntityHeads(heads: readonly SyncEntityHead[]): Pro
 /** Закрыть и удалить локальную БД (чаты, kv, outbox) — при выходе из аккаунта. */
 export async function wipeLocalDatabase(): Promise<void> {
   await closeLocalDatabase();
-  const databaseUris = [
-    `${FileSystem.documentDirectory ?? ''}SQLite/${LOCAL_DB_NAME}`,
-    `${FileSystem.documentDirectory ?? ''}SQLite/${LOCAL_DB_NAME}-wal`,
-    `${FileSystem.documentDirectory ?? ''}SQLite/${LOCAL_DB_NAME}-shm`,
-  ].filter(Boolean);
+  // v4.32.603: в браузере у базы нет файлов. expo-sqlite держит её в OPFS, а
+  // expo-file-system там — заглушка: `documentDirectory` равен null, а
+  // `getInfoAsync` бросает UnavailabilityError. Прежний код всё равно собирал
+  // пути (получалось «SQLite/имя» — без источника, то есть ни на что не
+  // указывающее), спотыкался на первой же проверке и объявлял базу
+  // неудалённой. При этом `deleteDatabaseAsync` на web поддержан и отрабатывал:
+  // база стиралась, а сброс всегда заканчивался ошибкой шага `local_db`.
+  const documentDir = FileSystem.documentDirectory;
+  const databaseUris = documentDir
+    ? [
+        `${documentDir}SQLite/${LOCAL_DB_NAME}`,
+        `${documentDir}SQLite/${LOCAL_DB_NAME}-wal`,
+        `${documentDir}SQLite/${LOCAL_DB_NAME}-shm`,
+      ]
+    : [];
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    let deleted = true;
     try {
       await SQLite.deleteDatabaseAsync(LOCAL_DB_NAME);
     } catch (e) {
+      deleted = false;
       lastError = e;
       log.warn('local_db_delete_failed', {
         attempt: attempt + 1,
         err: e instanceof Error ? e.message : String(e),
       });
+    }
+    // Файлов нет — проверять нечего, и единственный доступный факт это то,
+    // прошло ли само удаление. Считать «не смогли проверить» за «осталось»
+    // здесь нельзя: именно так web-сброс и не завершался никогда.
+    if (databaseUris.length === 0) {
+      if (deleted) return;
+      continue;
     }
     let remains = false;
     for (const uri of databaseUris) {
