@@ -179,7 +179,7 @@ describe('подсказка-маршрут цитирует существую�
     { file: 'ui/screens/ContactsScreen.tsx', marker: 'Добавьте первый контакт' },
     { file: 'ui/screens/ContactsScreen.tsx', marker: 'Вставьте его сюда' },
     { file: 'ui/screens/ProfileScreen.tsx', marker: 'Друг может отсканировать код' },
-    { file: 'ui/screens/PrivacyPolicyScreen.tsx', marker: 'Вы можете удалить их' },
+    { file: 'ui/screens/PrivacyPolicyScreen.tsx', marker: 'в настройках стирает эту копию' },
   ];
 
   test.each(HINTS)('$file: $marker', ({ file, marker }) => {
