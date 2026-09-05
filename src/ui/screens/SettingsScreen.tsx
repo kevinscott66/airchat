@@ -27,6 +27,14 @@ import {
   sensitiveAccessGate,
   unlockSensitiveAccess,
 } from '../../core/security/sensitiveAccess';
+import {
+  disableBiometricUnlock,
+  enableBiometricUnlock,
+  isBiometricAvailable,
+  isBiometricUnlockEnabled,
+} from '../../core/security/biometricUnlock';
+import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/passwordPolicy';
+import { PasswordField } from '../components/PasswordField';
 import { copySecretToClipboard } from '../../core/security/clipboardSecret';
 import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../core/internalDiagnostics';
 import { Ionicons } from '@expo/vector-icons';
@@ -66,7 +74,7 @@ import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs
 // переключателя к нему не было вовсе (см. social/translateConsent).
 import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../../core/backup/seedPhrase';
-import { isCloudVaultConfigured, uploadCloudVault, validateCloudPassword } from '../../core/backup/cloudVault';
+import { isCloudVaultConfigured, uploadCloudVault } from '../../core/backup/cloudVault';
 // v4.32.540: фотография профиля — отдельное решение от «когда я в сети»:
 // лицо прячут не по тем же причинам, по которым прячут активность.
 import {
@@ -217,6 +225,18 @@ function SettingsScreenImpl({
   // ── Security state ─────────────────────────────────────────────────────────
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [hasAppPassword, setHasAppPassword] = useState(false);
+  /**
+   * Шаг ввода пароля в окнах «установить» и «сменить».
+   *
+   * Цифровая клавиатура занимает высоту, и три поля подряд в окно не помещаются
+   * — да и не нужны там одновременно: пароль спрашивается по одному разу, как
+   * на системном экране кода.
+   */
+  const [pwdStep, setPwdStep] = useState<'old' | 'new' | 'repeat'>('new');
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [bioModal, setBioModal] = useState(false);
+  const [bioPwdInput, setBioPwdInput] = useState('');
+  const [bioBusy, setBioBusy] = useState(false);
   const [setPwdModal, setSetPwdModal] = useState(false);
   // v4.32.548: куда вести человека после того, как пароль заведён, —
   // он пришёл не за паролем, а за «Резервной копией».
@@ -509,12 +529,32 @@ function SettingsScreenImpl({
     void authGuard.hasPassword().then(setHasAppPassword);
   }, []);
 
+  /** Открыть окно установки пароля с первого шага. */
+  const openSetPassword = useCallback(() => {
+    setNewPwd('');
+    setNewPwd2('');
+    setPwdStep('new');
+    setSetPwdModal(true);
+  }, []);
+
+  const openChangePassword = useCallback(() => {
+    setOldPwd('');
+    setNewPwd('');
+    setNewPwd2('');
+    setPwdStep('old');
+    setChangePwdModal(true);
+  }, []);
+
   const submitSetPassword = async (): Promise<void> => {
-    if (newPwd.length < authGuard.minPasswordLength) {
-      showError(`Пароль не короче ${authGuard.minPasswordLength} символов`);
+    const policyError = passwordPolicyError(newPwd);
+    if (policyError) { showError(policyError); return; }
+    if (newPwd !== newPwd2) {
+      showError('Пароли не совпадают');
+      setNewPwd('');
+      setNewPwd2('');
+      setPwdStep('new');
       return;
     }
-    if (newPwd !== newPwd2) { showError('Пароли не совпадают'); return; }
     setPwdBusy(true);
     try {
       const ok = await authGuard.setPassword(newPwd);
@@ -531,11 +571,15 @@ function SettingsScreenImpl({
   };
 
   const submitChangePassword = async (): Promise<void> => {
-    if (newPwd.length < authGuard.minPasswordLength) {
-      showError(`Новый пароль не короче ${authGuard.minPasswordLength} символов`);
+    const policyError = passwordPolicyError(newPwd);
+    if (policyError) { showError(policyError); return; }
+    if (newPwd !== newPwd2) {
+      showError('Пароли не совпадают');
+      setNewPwd('');
+      setNewPwd2('');
+      setPwdStep('new');
       return;
     }
-    if (newPwd !== newPwd2) { showError('Пароли не совпадают'); return; }
     setPwdBusy(true);
     try {
       const ok = await authGuard.changePassword(oldPwd, newPwd);
@@ -549,6 +593,73 @@ function SettingsScreenImpl({
       setNewPwd2('');
       refreshPasswordFlag();
     } finally { setPwdBusy(false); }
+  };
+
+  /**
+   * Перейти к следующему шагу или отправить.
+   *
+   * Длина проверяется на шаге «новый», а не только при отправке: узнать, что
+   * код слишком короткий, после того как его набрали дважды, — обидно.
+   */
+  const advancePwdStep = (change: boolean): void => {
+    if (pwdStep === 'old') {
+      if (!oldPwd) { showError('Введите текущий пароль'); return; }
+      setPwdStep('new');
+      return;
+    }
+    if (pwdStep === 'new') {
+      const policyError = passwordPolicyError(newPwd);
+      if (policyError) { showError(policyError); return; }
+      setPwdStep('repeat');
+      return;
+    }
+    void (change ? submitChangePassword() : submitSetPassword());
+  };
+
+  const refreshBiometricFlag = useCallback(() => {
+    void isBiometricUnlockEnabled().then(setBioEnabled);
+  }, []);
+
+  useEffect(() => { refreshBiometricFlag(); }, [refreshBiometricFlag]);
+
+  /**
+   * Включить или выключить вход по Face ID.
+   *
+   * Включение спрашивает пароль: под биометрией лежит он сам, и класть туда
+   * нечего, пока не подтверждено, что человек его знает. Выключение ничего не
+   * спрашивает — отказ от удобства не должен упираться в проверку.
+   */
+  const handleToggleBiometric = useCallback((next: boolean) => {
+    if (!next) {
+      setBioBusy(true);
+      void disableBiometricUnlock()
+        .then(() => { setBioEnabled(false); })
+        .finally(() => setBioBusy(false));
+      return;
+    }
+    setBioPwdInput('');
+    setBioModal(true);
+  }, []);
+
+  const submitEnableBiometric = async (): Promise<void> => {
+    setBioBusy(true);
+    try {
+      const result = await unlockSensitiveAccess(bioPwdInput);
+      if (result === 'empty') { showError('Введите пароль'); return; }
+      if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'rejected') { await showPasswordRejected(); return; }
+      if (!(await enableBiometricUnlock(bioPwdInput))) {
+        showError('Не удалось включить вход по биометрии');
+        return;
+      }
+      setBioEnabled(true);
+      setBioModal(false);
+      setBioPwdInput('');
+      showSuccess('Вход по биометрии включён');
+    } finally {
+      setBioBusy(false);
+      setBioPwdInput('');
+    }
   };
 
   const confirmLogout = useCallback(() => {
@@ -622,13 +733,13 @@ function SettingsScreenImpl({
       setNewPwd('');
       setNewPwd2('');
       setSetPwdPurpose('backup');
-      setSetPwdModal(true);
+      openSetPassword();
       showError(SENSITIVE_NO_PASSWORD_TEXT);
       return;
     }
     setBackupPwdInput('');
     setBackupUnlockModal(true);
-  }, []);
+  }, [openSetPassword]);
 
   const submitBackupUnlock = async (): Promise<void> => {
     setBackupUnlockBusy(true);
@@ -658,11 +769,22 @@ function SettingsScreenImpl({
     } finally { setSeedBusy(false); }
   }, [seedPwdInput]);
 
+  /**
+   * Отправить копию в облако (v4.32.595: паролем приложения).
+   *
+   * Раньше здесь заводился отдельный «облачный пароль» — второй пароль, который
+   * нигде больше не спрашивают и потому забывают первым; а забытый облачный
+   * пароль означает, что копии нет, о чём человек узнаёт при восстановлении.
+   * Теперь это тот же пароль приложения: он подтверждается тут же, и ключ
+   * копии по-прежнему выводится из него вместе с секретными словами.
+   */
   const handleCloudUpload = useCallback(async () => {
-    const validationError = validateCloudPassword(cloudPasswordInput);
-    if (validationError) { showError(validationError); return; }
     setCloudBusy(true);
     try {
+      const unlocked = await unlockSensitiveAccess(cloudPasswordInput);
+      if (unlocked === 'empty') { showError('Введите пароль'); return; }
+      if (unlocked === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (unlocked === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Seed-фраза не найдена'); return; }
       await uploadCloudVault(mnemonic, cloudPasswordInput);
@@ -1591,7 +1713,7 @@ function SettingsScreenImpl({
       <AppPressable
         style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
         android_ripple={{ color: colors.ripple }}
-        onPress={() => hasAppPassword ? setChangePwdModal(true) : setSetPwdModal(true)}
+        onPress={() => (hasAppPassword ? openChangePassword() : openSetPassword())}
         testID="settings_change_password"
       >
         <Ionicons name="key-outline" size={22} color={colors.text} />
@@ -1601,6 +1723,24 @@ function SettingsScreenImpl({
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </AppPressable>
+
+      {hasAppPassword && isBiometricAvailable() ? (
+        <View style={styles.card}>
+          <View style={[styles.switchRow, styles.switchRowLast]}>
+            <View style={styles.rowBody}>
+              <Text style={styles.label}>{Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}</Text>
+              <Text style={styles.desc}>
+                Пароль остаётся прежним и хранится в защищённом хранилище устройства — биометрия только избавляет от набора.
+              </Text>
+            </View>
+            <AppSwitch
+              value={bioEnabled}
+              onValueChange={handleToggleBiometric}
+              disabled={bioBusy}
+            />
+          </View>
+        </View>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Автоблокировка</Text>
       <View style={styles.card}>
@@ -1796,7 +1936,7 @@ function SettingsScreenImpl({
 
       <Text style={styles.sectionTitle}>Облачная копия</Text>
       <View style={styles.card}>
-        <Text style={[styles.desc, { paddingVertical: 10 }]}>Сид-фраза и облачный пароль нужны вместе. На сервер отправляется только зашифрованная копия профиля, баз и аватаров.</Text>
+        <Text style={[styles.desc, { paddingVertical: 10 }]}>Копия шифруется секретными словами вместе с паролем приложения — нужны оба. На сервер уходит только закрытый файл: профиль, базы и аватары.</Text>
       </View>
       <AppPressable
         style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
@@ -1807,7 +1947,7 @@ function SettingsScreenImpl({
         {cloudBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="cloud-upload-outline" size={22} color={isCloudVaultConfigured() ? colors.text : colors.textMuted} />}
         <View style={styles.rowBody}>
           <Text style={[styles.label, !isCloudVaultConfigured() && { color: colors.textMuted }]}>Сохранить в облако</Text>
-          <Text style={styles.desc}>{isCloudVaultConfigured() ? 'Защитить копию дополнительным паролем' : 'Сервер облачных копий не настроен'}</Text>
+          <Text style={styles.desc}>{isCloudVaultConfigured() ? 'Зашифровать паролем приложения и отправить' : 'Сервер облачных копий не настроен'}</Text>
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </AppPressable>
@@ -2083,14 +2223,43 @@ function SettingsScreenImpl({
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
             <View style={styles.pwdModalBox}>
-              <Text style={styles.modalTitle}>Новый пароль</Text>
-              <Text style={styles.desc}>Минимум {authGuard.minPasswordLength} символа</Text>
-              <TextInput style={styles.pwdInput} secureTextEntry value={newPwd} onChangeText={setNewPwd} placeholder="Пароль" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
-              <TextInput style={styles.pwdInput} secureTextEntry value={newPwd2} onChangeText={setNewPwd2} placeholder="Повтор" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitSetPassword(); }} disabled={pwdBusy}>
-                {pwdBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>}
+              <Text style={styles.modalTitle}>
+                {pwdStep === 'repeat' ? 'Повторите пароль' : 'Новый пароль'}
+              </Text>
+              <Text style={styles.desc}>
+                {pwdStep === 'repeat'
+                  ? 'Введите его ещё раз — так же, как в первый.'
+                  : `Не короче ${PASSWORD_MIN_LENGTH} символов. Один пароль на всё приложение: он же откроет секретные слова и облачную копию.`}
+              </Text>
+              {pwdStep === 'repeat' ? (
+                <PasswordField
+                  key="set-repeat"
+                  value={newPwd2}
+                  onChange={setNewPwd2}
+                  onComplete={() => { void submitSetPassword(); }}
+                  disabled={pwdBusy}
+                  placeholder="Повтор пароля"
+                  testID="set_password_repeat"
+                />
+              ) : (
+                <PasswordField
+                  key="set-new"
+                  value={newPwd}
+                  onChange={setNewPwd}
+                  onComplete={() => advancePwdStep(false)}
+                  disabled={pwdBusy}
+                  placeholder="Новый пароль"
+                  testID="set_password_input"
+                />
+              )}
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(false)} disabled={pwdBusy}>
+                {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
+                  <Text style={styles.pwdPrimaryBtnText}>
+                    {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
+                  </Text>
+                )}
               </AppPressable>
-              <AppPressable onPress={() => { setSetPwdModal(false); setSetPwdPurpose(null); setNewPwd(''); setNewPwd2(''); }}>
+              <AppPressable onPress={() => { setSetPwdModal(false); setSetPwdPurpose(null); setNewPwd(''); setNewPwd2(''); setPwdStep('new'); }}>
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -2105,15 +2274,12 @@ function SettingsScreenImpl({
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Резервная копия</Text>
               <Text style={[styles.desc, { marginBottom: 12 }]}>Раздел защищён паролем приложения: в нём seed-фраза и облачная копия.</Text>
-              <TextInput
-                style={styles.pwdInput}
-                secureTextEntry
+              <PasswordField
                 value={backupPwdInput}
-                onChangeText={setBackupPwdInput}
+                onChange={setBackupPwdInput}
+                onComplete={() => { void submitBackupUnlock(); }}
+                disabled={backupUnlockBusy}
                 placeholder="Пароль приложения"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                editable={!backupUnlockBusy}
                 testID="backup_unlock_input"
               />
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy}>
@@ -2127,20 +2293,87 @@ function SettingsScreenImpl({
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Включение входа по биометрии */}
+      <Modal visible={bioModal} transparent animationType="fade" onRequestClose={() => { setBioModal(false); setBioPwdInput(''); }}>
+        <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
+          <View style={styles.pwdModalBg}>
+            <View style={styles.pwdModalBox}>
+              <Text style={styles.modalTitle}>{Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}</Text>
+              <Text style={styles.desc}>Введите пароль приложения — он ляжет в защищённое хранилище устройства и будет доступен только по биометрии.</Text>
+              <PasswordField
+                value={bioPwdInput}
+                onChange={setBioPwdInput}
+                onComplete={() => { void submitEnableBiometric(); }}
+                disabled={bioBusy}
+                placeholder="Пароль приложения"
+                testID="biometric_password_input"
+              />
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy}>
+                {bioBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Включить</Text>}
+              </AppPressable>
+              <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }}>
+                <Text style={styles.pwdCancel}>Отмена</Text>
+              </AppPressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* Change Password */}
       <Modal visible={changePwdModal} transparent animationType="fade" onRequestClose={() => setChangePwdModal(false)}>
         {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
             <View style={styles.pwdModalBox}>
-              <Text style={styles.modalTitle}>Сменить пароль</Text>
-              <TextInput style={styles.pwdInput} secureTextEntry value={oldPwd} onChangeText={setOldPwd} placeholder="Текущий пароль" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
-              <TextInput style={styles.pwdInput} secureTextEntry value={newPwd} onChangeText={setNewPwd} placeholder="Новый пароль" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
-              <TextInput style={styles.pwdInput} secureTextEntry value={newPwd2} onChangeText={setNewPwd2} placeholder="Повтор нового" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitChangePassword(); }} disabled={pwdBusy}>
-                {pwdBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>}
+              <Text style={styles.modalTitle}>
+                {pwdStep === 'old' ? 'Текущий пароль'
+                  : pwdStep === 'new' ? 'Новый пароль'
+                    : 'Повторите новый'}
+              </Text>
+              <Text style={styles.desc}>
+                {pwdStep === 'old' ? 'Подтвердите, что помните нынешний пароль.'
+                  : pwdStep === 'new' ? `Не короче ${PASSWORD_MIN_LENGTH} символов.`
+                    : 'Введите новый пароль ещё раз.'}
+              </Text>
+              {pwdStep === 'old' ? (
+                <PasswordField
+                  key="chg-old"
+                  value={oldPwd}
+                  onChange={setOldPwd}
+                  onComplete={() => advancePwdStep(true)}
+                  disabled={pwdBusy}
+                  placeholder="Текущий пароль"
+                  testID="change_password_old"
+                />
+              ) : pwdStep === 'new' ? (
+                <PasswordField
+                  key="chg-new"
+                  value={newPwd}
+                  onChange={setNewPwd}
+                  onComplete={() => advancePwdStep(true)}
+                  disabled={pwdBusy}
+                  placeholder="Новый пароль"
+                  testID="change_password_new"
+                />
+              ) : (
+                <PasswordField
+                  key="chg-repeat"
+                  value={newPwd2}
+                  onChange={setNewPwd2}
+                  onComplete={() => advancePwdStep(true)}
+                  disabled={pwdBusy}
+                  placeholder="Повтор нового"
+                  testID="change_password_repeat"
+                />
+              )}
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(true)} disabled={pwdBusy}>
+                {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
+                  <Text style={styles.pwdPrimaryBtnText}>
+                    {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
+                  </Text>
+                )}
               </AppPressable>
-              <AppPressable onPress={() => { setChangePwdModal(false); setOldPwd(''); setNewPwd(''); setNewPwd2(''); }}>
+              <AppPressable onPress={() => { setChangePwdModal(false); setOldPwd(''); setNewPwd(''); setNewPwd2(''); setPwdStep('old'); }}>
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -2224,7 +2457,14 @@ function SettingsScreenImpl({
               ) : (
                 <>
                   <Text style={[styles.desc, { marginBottom: 12 }]}>Введите пароль приложения для просмотра seed-фразы:</Text>
-                  <TextInput style={styles.pwdInput} secureTextEntry value={seedPwdInput} onChangeText={setSeedPwdInput} placeholder="Пароль приложения" placeholderTextColor={colors.textMuted} autoCapitalize="none" testID="seed_password_input" />
+                  <PasswordField
+                    value={seedPwdInput}
+                    onChange={setSeedPwdInput}
+                    onComplete={() => { void handleShowSeed(); }}
+                    disabled={seedBusy}
+                    placeholder="Пароль приложения"
+                    testID="seed_password_input"
+                  />
                   <AppPressable style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy}>
                     {seedBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Показать</Text>}
                   </AppPressable>
@@ -2243,20 +2483,15 @@ function SettingsScreenImpl({
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
             <View style={styles.pwdModalBox}>
-              <Text style={styles.modalTitle}>Облачный пароль</Text>
-              <Text style={styles.desc}>Минимум 12 символов. Пароль не сохраняется и не отправляется на сервер. Потеря пароля означает потерю доступа к облачной копии.</Text>
-              <TextInput
-                style={styles.pwdInput}
-                secureTextEntry
+              <Text style={styles.modalTitle}>Копия в облако</Text>
+              <Text style={styles.desc}>Введите пароль приложения. Копия шифруется им вместе с секретными словами прямо здесь — на сервер уходит уже закрытый файл. Без слов и пароля её не откроет никто, включая нас.</Text>
+              <PasswordField
                 value={cloudPasswordInput}
-                onChangeText={setCloudPasswordInput}
-                placeholder="Дополнительный пароль"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="off"
-                importantForAutofill="no"
-                textContentType="none"
+                onChange={setCloudPasswordInput}
+                onComplete={() => { void handleCloudUpload(); }}
+                disabled={cloudBusy}
+                placeholder="Пароль приложения"
+                testID="cloud_password_input"
               />
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy}>
                 {cloudBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Зашифровать и отправить</Text>}

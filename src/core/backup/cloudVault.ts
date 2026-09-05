@@ -25,12 +25,17 @@ import {
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import * as SecureStore from '../storage/secureStoreQueued';
 import { log } from '../logger';
+import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../security/passwordPolicy';
 import { deriveLocalDekFromMnemonic } from '../storage/dekDerivation';
 import { bytesToBase64Url } from '../utils/base64url';
 
 export const CLOUD_VAULT_VERSION = 1;
 export const CLOUD_VAULT_KDF_ITERS = 180_000;
-export const CLOUD_PASSWORD_MIN_LENGTH = 12;
+/**
+ * Планка облачного пароля — та же, что у пароля приложения (v4.32.595).
+ * Отдельного облачного пароля больше нет, см. passwordPolicy.
+ */
+export const CLOUD_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH;
 export const CLOUD_VAULT_MAX_BYTES = 80 * 1024 * 1024;
 export const CLOUD_VAULT_MAX_KDF_ITERS = 1_000_000;
 const CLOUD_REQUEST_TIMEOUT_MS = 30_000;
@@ -75,13 +80,7 @@ function isSafeArchiveFile(name: string): boolean {
 }
 
 export function validateCloudPassword(password: string): string | null {
-  if (typeof password !== 'string' || password.normalize('NFC').length < CLOUD_PASSWORD_MIN_LENGTH) {
-    return `Облачный пароль должен содержать минимум ${CLOUD_PASSWORD_MIN_LENGTH} символов.`;
-  }
-  if (password.trim() !== password) {
-    return 'Облачный пароль не должен начинаться или заканчиваться пробелом.';
-  }
-  return null;
+  return passwordPolicyError(password);
 }
 
 function deriveCloudKey(mnemonic: string, password: string, salt: Uint8Array, iters: number): Uint8Array {

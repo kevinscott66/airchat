@@ -10,15 +10,16 @@ import {
   Vibration,
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
-import { Ionicons } from '@expo/vector-icons';
 import { AUTH_MAX_ATTEMPTS, authGuard } from '../../core/security/authGuard';
+import { isBiometricUnlockEnabled, readBiometricPassword } from '../../core/security/biometricUnlock';
 import { SafeScreen } from '../components/SafeScreen';
+import { AuthBackdrop } from '../components/AuthBackdrop';
+import { PinPad } from '../components/PinPad';
 import { showError } from '../components/userFeedback';
 import { useColors, useThemedStyles } from '../ThemeContext';
 import { AirChatLockup } from '../components/AirChatLockup';
-import { primaryInk, radius } from '../theme';
+import { font, primaryInk, radius, spacing } from '../theme';
 import {
-  PIN_BACKSPACE,
   PIN_LENGTH,
   applyPinKey,
   attemptsHint,
@@ -32,93 +33,8 @@ type Props = {
   onForgot: () => void;
 };
 
-const PIN_DIGITS = [
-  ['1', '2', '3'],
-  ['4', '5', '6'],
-  ['7', '8', '9'],
-  ['', '0', PIN_BACKSPACE],
-];
-
 /** Задержка перед авто-проверкой набранного PIN — заодно окно на «стереть». */
 const PIN_AUTOSUBMIT_DELAY_MS = 50;
-
-function PinPad({
-  pin,
-  onKey,
-  disabled,
-}: {
-  pin: string;
-  onKey: (key: string) => void;
-  disabled: boolean;
-}): React.ReactElement {
-  const colors = useColors();
-  const styles = useThemedStyles((c) => ({
-    container: { alignItems: 'center' as const, paddingVertical: 8 },
-    dotsRow: { flexDirection: 'row' as const, gap: 16, marginBottom: 32 },
-    dot: { width: 14, height: 14, borderRadius: 7 },
-    dotFilled: { backgroundColor: c.primary },
-    dotEmpty: { backgroundColor: c.border, borderWidth: 1, borderColor: c.textMuted },
-    row: { flexDirection: 'row' as const, gap: 20, marginBottom: 12 },
-    btn: {
-      width: 72,
-      height: 72,
-      borderRadius: 36,
-      backgroundColor: c.surface,
-      alignItems: 'center' as const,
-      justifyContent: 'center' as const,
-    },
-    emptyBtn: { width: 72, height: 72 },
-    btnPressed: { backgroundColor: c.surfaceHigh },
-    btnDisabled: { opacity: 0.5 },
-    btnText: { color: c.text, fontSize: 24, fontWeight: '400' as const },
-  }));
-
-  return (
-    <View style={styles.container}>
-      {/* Точки */}
-      <View
-        style={styles.dotsRow}
-        accessible
-        accessibilityLabel={`Введено цифр: ${pin.length} из ${PIN_LENGTH}`}
-      >
-        {Array.from({ length: PIN_LENGTH }).map((_, i) => (
-          <View
-            key={i}
-            style={[styles.dot, i < pin.length ? styles.dotFilled : styles.dotEmpty]}
-          />
-        ))}
-      </View>
-      {/* Клавиатура */}
-      {PIN_DIGITS.map((row, ri) => (
-        <View key={ri} style={styles.row}>
-          {row.map((key) => {
-            if (!key) return <View key="empty" style={styles.emptyBtn} />;
-            return (
-              <AppPressable
-                key={key}
-                style={({ pressed }) => [
-                  styles.btn,
-                  pressed && styles.btnPressed,
-                  disabled && styles.btnDisabled,
-                ]}
-                onPress={() => onKey(key)}
-                disabled={disabled}
-                accessibilityRole="button"
-                accessibilityLabel={key === PIN_BACKSPACE ? 'Стереть' : key}
-              >
-                {key === PIN_BACKSPACE ? (
-                  <Ionicons name="backspace-outline" size={24} color={colors.text} />
-                ) : (
-                  <Text style={styles.btnText}>{key}</Text>
-                )}
-              </AppPressable>
-            );
-          })}
-        </View>
-      ))}
-    </View>
-  );
-}
 
 export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactElement {
   const [pin, setPin] = useState('');
@@ -135,6 +51,13 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
    */
   const submittingRef = useRef(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const [biometricReady, setBiometricReady] = useState(false);
+  /**
+   * Запрос Face ID уже был. Ровно один автоматический на открытие экрана:
+   * отмена запроса не должна тут же вызывать его снова — из такой петли
+   * человеку было бы не выйти к клавиатуре.
+   */
+  const biometricAskedRef = useRef(false);
 
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
@@ -142,61 +65,60 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     container: {
       flex: 1,
       justifyContent: 'center' as const,
-      padding: 20,
-      backgroundColor: c.background,
+      padding: spacing.lg,
     },
     /** Знак стоит вместо заголовка, поэтому и отступ снизу у него заголовочный. */
     lockup: {
-      marginBottom: 8,
+      marginBottom: spacing.sm,
       alignSelf: 'center' as const,
     },
     title: {
-      fontSize: 24,
+      fontSize: font.xxl,
       fontWeight: '700' as const,
-      marginBottom: 8,
+      marginBottom: spacing.sm,
       textAlign: 'center' as const,
       color: c.text,
     },
     hint: {
-      fontSize: 13,
+      fontSize: font.sm,
       color: c.textMuted,
       textAlign: 'center' as const,
-      marginBottom: 24,
+      marginBottom: spacing.xl,
     },
     input: {
       borderWidth: 1,
       borderColor: c.border,
       borderRadius: radius.md,
-      padding: 14,
-      fontSize: 16,
-      marginBottom: 16,
+      padding: spacing.md,
+      fontSize: font.lg,
+      marginBottom: spacing.lg,
       color: c.text,
       backgroundColor: c.surface,
     },
     button: {
       backgroundColor: c.primary,
-      padding: 14,
+      padding: spacing.md,
       borderRadius: radius.md,
       alignItems: 'center' as const,
     },
     buttonDisabled: { opacity: 0.7 },
-    buttonText: { color: primaryInk(c).text, fontSize: 16, fontWeight: '600' as const },
-    forgotWrap: { marginTop: 20, alignItems: 'center' as const },
-    forgotLink: { color: c.accent, fontSize: 16 },
-    forgotLinkSmall: { color: c.accent, fontSize: 13 },
+    buttonText: { color: primaryInk(c).text, fontSize: font.lg, fontWeight: '600' as const },
+    forgotWrap: { marginTop: spacing.lg, alignItems: 'center' as const },
+    forgotLink: { color: c.accent, fontSize: font.md },
+    forgotLinkSmall: { color: c.accent, fontSize: font.sm },
     attemptsText: {
-      marginTop: 16,
+      marginTop: spacing.lg,
       textAlign: 'center' as const,
       color: c.error,
-      fontSize: 13,
+      fontSize: font.sm,
     },
     message: {
       textAlign: 'center' as const,
-      marginBottom: 24,
+      marginBottom: spacing.xl,
       color: c.textSecondary,
-      lineHeight: 22,
+      lineHeight: font.xxl,
     },
-    spinner: { marginTop: 16 },
+    spinner: { marginTop: spacing.lg },
     shakeWrap: { width: '100%' as const },
   }));
 
@@ -285,6 +207,36 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
     [onSuccess, refreshStatus, shake]
   );
 
+  /**
+   * Разблокировать по Face ID.
+   *
+   * Под биометрией лежит сам пароль, и дальше он идёт обычным путём — через
+   * `checkPassword` с теми же пятью попытками. Отдельной двери в приложение
+   * Face ID не открывает: он только избавляет от набора.
+   */
+  const handleBiometric = useCallback(async (): Promise<void> => {
+    if (submittingRef.current) return;
+    const stored = await readBiometricPassword();
+    // Отказ или отмена — молча: человек видит клавиатуру и наберёт код сам.
+    if (!stored) return;
+    await submitValue(stored);
+  }, [submitValue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const enabled = await isBiometricUnlockEnabled();
+      if (cancelled) return;
+      setBiometricReady(enabled);
+      if (!enabled || biometricAskedRef.current) return;
+      biometricAskedRef.current = true;
+      await handleBiometric();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [handleBiometric]);
+
   const handlePinKey = useCallback((key: string) => {
     if (submittingRef.current) return;
     setPin((p) => applyPinKey(p, key));
@@ -311,6 +263,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   if (lockoutMs > 0) {
     return (
       <SafeScreen edges={['top', 'bottom']} backgroundColor={colors.background}>
+        <AuthBackdrop />
         <View style={styles.container}>
           <Text style={styles.title}>Доступ заблокирован</Text>
           <Text style={styles.message}>
@@ -329,6 +282,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
 
   return (
     <SafeScreen edges={['top', 'bottom']} backgroundColor={colors.background}>
+      <AuthBackdrop />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
@@ -341,7 +295,13 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
 
           <Animated.View style={[styles.shakeWrap, { transform: [{ translateX: shakeAnim }] }]}>
             {usePinMode ? (
-              <PinPad pin={pin} onKey={handlePinKey} disabled={loading} />
+              <PinPad
+                pin={pin}
+                length={PIN_LENGTH}
+                onKey={handlePinKey}
+                disabled={loading}
+                onBiometric={biometricReady ? () => void handleBiometric() : undefined}
+              />
             ) : (
               <>
                 <TextInput

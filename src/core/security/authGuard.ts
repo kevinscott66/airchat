@@ -12,6 +12,8 @@ import { bytesEqualConstTime } from '../crypto/bytesEqual';
 import { loadKeyPair } from '../crypto/keyManager';
 import { profileManager } from '../identity/profileManager';
 import { log } from '../logger';
+import { disableBiometricUnlock, enableBiometricUnlock, isBiometricUnlockEnabled } from './biometricUnlock';
+import { PASSWORD_MIN_LENGTH, passwordPolicyError } from './passwordPolicy';
 
 const AUTH_PAYLOAD_KEY = 'airchat_app_password_v1';
 const FAILED_ATTEMPTS_KEY = 'airchat_app_password_failed_v1';
@@ -78,8 +80,8 @@ export class AuthGuard {
     return AuthGuard.instance;
   }
 
-  /** Минимальная длина пароля приложения. */
-  minPasswordLength = 4;
+  /** Минимальная длина пароля. Одна на всё приложение, см. passwordPolicy. */
+  minPasswordLength = PASSWORD_MIN_LENGTH;
 
   isSessionUnlocked(): boolean {
     return this.sessionUnlocked;
@@ -99,7 +101,7 @@ export class AuthGuard {
   }
 
   async setPassword(password: string): Promise<boolean> {
-    if (password.length < this.minPasswordLength) return false;
+    if (passwordPolicyError(password)) return false;
     try {
       const salt = randomBytes(32);
       const hash = hashPassword(password, salt);
@@ -111,6 +113,13 @@ export class AuthGuard {
       };
       await SecureStore.setItemAsync(AUTH_PAYLOAD_KEY, JSON.stringify(payload));
       await this.resetFailedAttempts();
+      // Под биометрией лежит сам пароль, и после смены он там прежний —
+      // то есть Face ID открывал бы приложение тем, чего уже не существует.
+      // Не вышло перезаписать — выключаем: молчаливо неработающий Face ID
+      // хуже, чем его отсутствие.
+      if (await isBiometricUnlockEnabled()) {
+        if (!(await enableBiometricUnlock(password))) await disableBiometricUnlock();
+      }
       return true;
     } catch (e) {
       log.error('auth_set_password_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -162,7 +171,7 @@ export class AuthGuard {
   }
 
   async changePassword(oldPassword: string, newPassword: string): Promise<boolean> {
-    if (newPassword.length < this.minPasswordLength) return false;
+    if (passwordPolicyError(newPassword)) return false;
     // v4.32.315: через verifyPassword, а не напрямую. Прямой вызов проходил мимо
     // счётчика попыток и мимо блокировки — то есть форма «сменить пароль» была
     // площадкой для подбора старого пароля без ограничений, в обход тех самых
@@ -228,7 +237,7 @@ export class AuthGuard {
    * проверка стоит одного bip39-вывода на нажатие кнопки раз в жизни.
    */
   async resetPasswordWithVerifiedSeed(mnemonic: string, newPassword: string): Promise<boolean> {
-    if (newPassword.length < this.minPasswordLength) return false;
+    if (passwordPolicyError(newPassword)) return false;
     if (!(await this.verifyMnemonicMatchesWallet(mnemonic))) return false;
     const ok = await this.setPassword(newPassword);
     if (ok) {

@@ -15,6 +15,11 @@ jest.mock('../../storage/secureStoreQueued', () => {
 });
 
 jest.mock('bip39', () => ({ validateMnemonic: jest.fn(() => true) }));
+jest.mock('../biometricUnlock', () => ({
+  isBiometricUnlockEnabled: jest.fn(async () => false),
+  enableBiometricUnlock: jest.fn(async () => true),
+  disableBiometricUnlock: jest.fn(async () => {}),
+}));
 jest.mock('../../identity/profileManager', () => ({
   profileManager: { init: jest.fn(async () => {}), getActiveProfile: jest.fn(() => null) },
 }));
@@ -34,6 +39,11 @@ const mockSecureStore = jest.requireMock('../../storage/secureStoreQueued') as {
 };
 const mockKeyManager = jest.requireMock('../../crypto/keyManager') as { loadKeyPair: jest.Mock };
 const mockBip39 = jest.requireMock('bip39') as { validateMnemonic: jest.Mock };
+const mockBiometric = jest.requireMock('../biometricUnlock') as {
+  isBiometricUnlockEnabled: jest.Mock;
+  enableBiometricUnlock: jest.Mock;
+  disableBiometricUnlock: jest.Mock;
+};
 
 function freshGuard(): AuthGuard {
   // Reset singleton
@@ -297,5 +307,45 @@ describe('AuthGuard — сброс пароля по секретным слов
     // loadKeyPair отдаёт null: кошелька на устройстве нет.
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
     expect(await guard.verifyPassword('забытый!')).toBe(true);
+  });
+});
+
+/**
+ * Пароль сменился — под биометрией лежит прежний.
+ *
+ * Face ID открывал бы приложение тем, чего уже не существует: чтение прошло
+ * бы, а `checkPassword` отверг бы значение и списал попытку из пяти. Молча
+ * неработающий Face ID хуже его отсутствия, поэтому либо перезаписываем, либо
+ * выключаем.
+ */
+describe('AuthGuard — биометрия переживает смену пароля', () => {
+  beforeEach(() => {
+    mockBiometric.isBiometricUnlockEnabled.mockResolvedValue(false);
+    mockBiometric.enableBiometricUnlock.mockResolvedValue(true);
+    mockBiometric.disableBiometricUnlock.mockClear();
+    mockBiometric.enableBiometricUnlock.mockClear();
+  });
+
+  test('выключенную биометрию не трогаем', async () => {
+    const guard = freshGuard();
+    await guard.setPassword('пароль1');
+    expect(mockBiometric.enableBiometricUnlock).not.toHaveBeenCalled();
+    expect(mockBiometric.disableBiometricUnlock).not.toHaveBeenCalled();
+  });
+
+  test('включённая биометрия получает новый пароль', async () => {
+    const guard = freshGuard();
+    mockBiometric.isBiometricUnlockEnabled.mockResolvedValue(true);
+    await guard.setPassword('пароль2');
+    expect(mockBiometric.enableBiometricUnlock).toHaveBeenCalledWith('пароль2');
+    expect(mockBiometric.disableBiometricUnlock).not.toHaveBeenCalled();
+  });
+
+  test('не удалось перезаписать — биометрия выключается', async () => {
+    const guard = freshGuard();
+    mockBiometric.isBiometricUnlockEnabled.mockResolvedValue(true);
+    mockBiometric.enableBiometricUnlock.mockResolvedValue(false);
+    await guard.setPassword('пароль3');
+    expect(mockBiometric.disableBiometricUnlock).toHaveBeenCalled();
   });
 });

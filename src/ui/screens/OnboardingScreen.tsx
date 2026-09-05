@@ -38,6 +38,7 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { AirChatLockup } from '../components/AirChatLockup';
 import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
+import { authGuard } from '../../core/security/authGuard';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
 
 type Step = 'permissions' | 'welcome' | 'restore' | 'showSeed';
@@ -279,13 +280,19 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
         const cloudStatus = await restoreCloudVault(trimmed, cloudPwd);
         if (cloudStatus === 'not_found') {
           Alert.alert('AirChat', 'Локальный аккаунт восстановлен. Облачной копии для этой фразы пока нет.');
+        } else {
+          // Копия открылась — значит это и есть пароль приложения с прежнего
+          // устройства (v4.32.595: он один на всё). Ставим его сразу, иначе
+          // приложение осталось бы без замка, а человек — с уверенностью, что
+          // пароль у него есть.
+          await authGuard.setPassword(cloudPwd);
         }
       }
       await setFirstLaunchDone();
       await setSeedShown();
       await onComplete(pair);
     } catch (e) {
-      Alert.alert('AirChat', userErrorText(e, 'Не удалось восстановить аккаунт или облачную копию. Проверьте фразу и облачный пароль.'));
+      Alert.alert('AirChat', userErrorText(e, 'Не удалось восстановить аккаунт или облачную копию. Проверьте секретные слова и пароль приложения.'));
     } finally {
       setBusy(false);
     }
@@ -497,13 +504,13 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               {!isBackupPaste ? (
                 <>
                   <Text style={styles.encHint}>
-                    Если у вас есть облачная копия, введите её дополнительный пароль. Он не сохраняется и нужен вместе с 24 словами.
+                    Если у вас есть облачная копия, введите пароль приложения с прежнего устройства — копия зашифрована им вместе с 24 словами.
                   </Text>
                   <TextInput
                     style={styles.pwdInput}
                     value={cloudPwd}
                     onChangeText={setCloudPwd}
-                    placeholder="Дополнительный облачный пароль (необязательно)"
+                    placeholder="Пароль приложения (если есть копия)"
                     placeholderTextColor={colors.textMuted}
                     secureTextEntry
                     autoCapitalize="none"

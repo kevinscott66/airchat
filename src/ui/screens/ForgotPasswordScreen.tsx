@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
 import { authGuard } from '../../core/security/authGuard';
+import { passwordPolicyError } from '../../core/security/passwordPolicy';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
@@ -100,8 +101,9 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
       showError('Введите секретные слова');
       return;
     }
-    if (newPassword.length < authGuard.minPasswordLength) {
-      showError(`Пароль не короче ${authGuard.minPasswordLength} символов`);
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) {
+      showError(policyError);
       return;
     }
     if (newPassword !== confirm) {

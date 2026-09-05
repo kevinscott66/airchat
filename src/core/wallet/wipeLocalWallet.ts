@@ -28,6 +28,7 @@ import { sweepAvatarFiles } from '../media/avatarFiles';
 import { clearDekMemory, DEK_KEY } from '../storage/localEncryption';
 import { resetIpfsClient } from '../transport/ipfs/node';
 import { AUTH_SECURE_KEYS, authGuard } from '../security/authGuard';
+import { BIOMETRIC_SECURE_KEYS } from '../security/biometricUnlock';
 import { cancelScheduledDialogBackup, deleteAllDialogBackups } from '../storage/dialogBackup';
 import { SYNC_DEVICE_SECURE_KEYS, clearSyncDeviceCredentials } from '../sync/syncApi';
 
@@ -42,6 +43,7 @@ const FCM_TOKEN_KEY = 'airchat_fcm_token_v1';
  */
 const SECRET_KEYS: readonly string[] = [
   ...SEED_SECURE_KEYS,
+  ...BIOMETRIC_SECURE_KEYS,
   ...SESSION_SECURE_KEYS,
   ...KEYPAIR_SECURE_KEYS,
   ...AUTH_SECURE_KEYS,
