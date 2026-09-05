@@ -40,6 +40,13 @@ import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { authGuard } from '../../core/security/authGuard';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
+import {
+  decryptSeedBinding,
+  fetchSeedBinding,
+  listSeedBindingProviders,
+  type SeedBindingEnvelope,
+} from '../../core/backup/seedBinding';
+import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 
 type Step = 'permissions' | 'welcome' | 'restore' | 'showSeed';
 
@@ -137,6 +144,16 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       borderRadius: radius.md,
       alignItems: 'center' as const,
     },
+    /** Ряд с яблоком: значок и подпись стоят рядом, как в системном окне. */
+    appleRow: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      gap: 8,
+      marginBottom: 16,
+    },
+    linkBtn: { alignSelf: 'center' as const, paddingVertical: 8, marginBottom: 8 },
+    linkText: { color: c.accent, fontWeight: '600' as const },
     btnText: { color: primaryInk(c).text, fontWeight: '600' as const },
     btnTextDark: { color: c.text, fontWeight: '600' as const },
     textarea: {
@@ -170,6 +187,13 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   const [restorePwd, setRestorePwd] = useState('');
   const [cloudPwd, setCloudPwd] = useState('');
   const [busy, setBusy] = useState(false);
+  /**
+   * Apple ID подтверждён, конверт со словами лежит здесь. Слова из него не
+   * достаются, пока не введён пароль приложения: в этом весь смысл привязки —
+   * вход через Apple отвечает «кто пришёл», а не «пустить».
+   */
+  const [appleBinding, setAppleBinding] = useState<SeedBindingEnvelope | null>(null);
+  const [appleReady, setAppleReady] = useState(false);
 
   /**
    * v4.32.376: в это же поле вставляют зашифрованную резервную копию — ту, что
@@ -255,9 +279,75 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      // Кнопку рисуем, только если вход есть и на телефоне, и на сервере.
+      // Мёртвая кнопка хуже отсутствующей: она обещает и не делает.
+      if (!(await isAppleSignInAvailable())) return;
+      const providers = await listSeedBindingProviders();
+      if (!cancelled) setAppleReady(providers.includes('apple'));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleAppleRestore = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const identity = await signInWithApple();
+      if (!identity) return;
+      const envelope = await fetchSeedBinding('apple', identity.idToken);
+      if (!envelope) {
+        Alert.alert('AirChat', 'К этому Apple ID секретные слова не привязаны. Введите их вручную.');
+        return;
+      }
+      setAppleBinding(envelope);
+      setRestoreText('');
+    } catch (e) {
+      Alert.alert('AirChat', userErrorText(e, 'Не удалось получить привязку. Попробуйте ещё раз.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Слова из привязки. Пароль тот же, что у облачной копии, — он один на всё,
+   * поэтому одного ввода хватает и на конверт, и на копию, и на замок.
+   */
+  const handleRestoreFromBinding = async (): Promise<void> => {
+    if (!appleBinding) return;
+    const mnemonic = decryptSeedBinding(appleBinding, cloudPwd);
+    if (!mnemonic) {
+      Alert.alert('AirChat', 'Неверный пароль приложения.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const pair = await restoreFromMnemonic(mnemonic);
+      if (isCloudVaultConfigured()) {
+        const cloudStatus = await restoreCloudVault(mnemonic, cloudPwd);
+        if (cloudStatus === 'not_found') {
+          Alert.alert('AirChat', 'Аккаунт восстановлен. Облачной копии для него пока нет.');
+        }
+      }
+      await authGuard.setPassword(cloudPwd);
+      await setFirstLaunchDone();
+      await setSeedShown();
+      await onComplete(pair);
+    } catch (e) {
+      Alert.alert('AirChat', userErrorText(e, 'Не удалось восстановить аккаунт. Попробуйте ещё раз.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleRestore = async (): Promise<void> => {
     if (isBackupPaste) {
       await handleRestoreFromBackup();
+      return;
+    }
+    if (appleBinding) {
+      await handleRestoreFromBinding();
       return;
     }
     const trimmed = normalizeSeedInput(restoreText);
@@ -450,13 +540,44 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               </AppPressable>
               <Text style={styles.title}>Восстановление</Text>
               <Text style={styles.sub}>
-                {isBackupPaste
-                  ? 'Это зашифрованная резервная копия. Введите пароль, которым вы её защитили.'
-                  : 'Секретные слова (24 слова), через пробел, в правильном порядке. Сюда же можно вставить зашифрованную резервную копию.'}
+                {appleBinding
+                  ? 'Apple ID подтверждён. Секретные слова придут с сервера — введите пароль приложения, которым вы их привязали.'
+                  : isBackupPaste
+                    ? 'Это зашифрованная резервная копия. Введите пароль, которым вы её защитили.'
+                    : 'Секретные слова (24 слова), через пробел, в правильном порядке. Сюда же можно вставить зашифрованную резервную копию.'}
               </Text>
+              {appleReady && !appleBinding && !isBackupPaste ? (
+                <>
+                  <AppPressable
+                    style={[styles.btnSecondary, styles.appleRow]}
+                    onPress={() => { void handleAppleRestore(); }}
+                    disabled={busy}
+                    testID="btn_restore_apple"
+                    accessibilityRole="button"
+                    accessibilityLabel="Войти через Apple ID"
+                  >
+                    <Text style={styles.btnTextDark}>Войти через Apple ID</Text>
+                  </AppPressable>
+                  <Text style={styles.encHint}>
+                    Если вы привязывали слова к Apple ID, вводить их заново не нужно — понадобится только пароль приложения.
+                  </Text>
+                </>
+              ) : null}
+              {appleBinding ? (
+                <AppPressable
+                  style={styles.linkBtn}
+                  onPress={() => setAppleBinding(null)}
+                  disabled={busy}
+                  testID="btn_restore_manual"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.linkText}>Ввести слова вручную</Text>
+                </AppPressable>
+              ) : null}
               {/* Введённые слова стоят ровно столько же, сколько показанные при
                   заведении аккаунта: снимок или запись экрана здесь уводит
                   аккаунт целиком. Тот же щит (v4.32.581). */}
+              {appleBinding ? null : (
               <SecretScreenGuard>
                 <TextInput
                   style={styles.textarea}
@@ -482,6 +603,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   testID="seed_input"
                 />
               </SecretScreenGuard>
+              )}
       {isBackupPaste ? (
                 <TextInput
                   style={styles.pwdInput}
@@ -504,13 +626,15 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               {!isBackupPaste ? (
                 <>
                   <Text style={styles.encHint}>
-                    Если у вас есть облачная копия, введите пароль приложения с прежнего устройства — копия зашифрована им вместе с 24 словами.
+                    {appleBinding
+                      ? 'Пароль приложения с прежнего устройства: им зашифрованы и привязанные слова, и облачная копия.'
+                      : 'Если у вас есть облачная копия, введите пароль приложения с прежнего устройства — копия зашифрована им вместе с 24 словами.'}
                   </Text>
                   <TextInput
                     style={styles.pwdInput}
                     value={cloudPwd}
                     onChangeText={setCloudPwd}
-                    placeholder="Пароль приложения (если есть копия)"
+                    placeholder={appleBinding ? 'Пароль приложения' : 'Пароль приложения (если есть копия)'}
                     placeholderTextColor={colors.textMuted}
                     secureTextEntry
                     autoCapitalize="none"

@@ -6,7 +6,8 @@
     "version": "4.32.595",
     "scheme": "airchat",
     "plugins": [
-      "./plugins/withFirebaseModularHeaders"
+      "./plugins/withFirebaseModularHeaders",
+      "expo-apple-authentication"
     ],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -34,8 +35,12 @@
           "audio"
         ]
       },
+      "usesAppleSignIn": true,
       "entitlements": {
-        "aps-environment": "production"
+        "aps-environment": "production",
+        "com.apple.developer.applesignin": [
+          "Default"
+        ]
       },
       "googleServicesFile": "./GoogleService-Info.plist"
     },

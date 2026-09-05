@@ -88,6 +88,7 @@
     "event-target-shim": "^6.0.2",
     "events": "^3.3.0",
     "expo": "~55.0.8",
+    "expo-apple-authentication": "~55.0.17",
     "expo-asset": "~55.0.10",
     "expo-audio": "~55.0.16",
     "expo-battery": "~55.0.9",

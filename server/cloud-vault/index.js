@@ -19,6 +19,12 @@ const {
 } = require('./reserved-usernames');
 const { didKeyFromPublicKeyB64, grantedUsername, MAX_GRANT_LEN } = require('./official-badge');
 const { lookupCountry } = require('./geoip');
+const {
+  configuredProviders,
+  isKnownProvider,
+  seedEnvelopeError,
+  verifyIdentityToken,
+} = require('./seed-binding');
 
 const app = express();
 // The client archives binary files as base64 twice (inside JSON and in the
@@ -116,6 +122,15 @@ const MEDIA_MAX_FILES = Number.isSafeInteger(Number(process.env.MEDIA_MAX_FILES)
   ? Number(process.env.MEDIA_MAX_FILES)
   : 10_000;
 const MAX_RATE_BUCKETS = 10_000;
+/**
+ * Привязка слов к Apple ID / Google живёт вне подписи аккаунта — её зовут
+ * с чистого телефона, где ключа ещё нет. Значит и планка обращений своя,
+ * куда более узкая, чем общая: каждый запрос стоит проверки RSA, а поводов
+ * дёргать его чаще, чем раз в полминуты, у честного клиента нет.
+ */
+const SEED_BINDING_WINDOW_MS = 5 * 60 * 1000;
+const SEED_BINDING_LIMIT = 10;
+const seedBindingBuckets = new Map();
 
 // Which header carries the real client address, if any. Empty by default, and
 // that default is the safe one: behind Nginx nothing strips an inbound
@@ -925,6 +940,109 @@ app.get('/v1/username/:username', (req, res) => {
     return res.json({ username, taken: syncDb.lookupUsername(username) !== null });
   } catch {
     return res.status(500).json({ error: 'username_lookup_failed' });
+  }
+});
+
+/**
+ * Привязка секретных слов к Apple ID / Google (v4.32.595).
+ *
+ * Сервер хранит шифртекст и проверяет только, кто пришёл: подпись id_token
+ * по JWKS провайдера. Ключ конверта выводится на телефоне из пароля
+ * приложения, поэтому одного лишь входа через Apple мало — пароль обязателен.
+ */
+function seedBindingRateLimited(req, res) {
+  const now = Date.now();
+  const key = clientAddress(req);
+  const bucket = seedBindingBuckets.get(key);
+  if (!bucket || now - bucket.startedAt >= SEED_BINDING_WINDOW_MS) {
+    if (seedBindingBuckets.size >= MAX_RATE_BUCKETS) {
+      const oldest = seedBindingBuckets.keys().next().value;
+      if (oldest !== undefined) seedBindingBuckets.delete(oldest);
+    }
+    seedBindingBuckets.set(key, { startedAt: now, count: 1 });
+    return false;
+  }
+  bucket.count += 1;
+  if (bucket.count > SEED_BINDING_LIMIT) {
+    res.status(429).json({ error: 'rate_limited' });
+    return true;
+  }
+  return false;
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - SEED_BINDING_WINDOW_MS;
+  for (const [key, bucket] of seedBindingBuckets) {
+    if (bucket.startedAt < cutoff) seedBindingBuckets.delete(key);
+  }
+}, SEED_BINDING_WINDOW_MS).unref();
+
+async function authenticateSeedBinding(req, res) {
+  const provider = req.body?.provider;
+  if (!isKnownProvider(provider)) {
+    res.status(400).json({ error: 'invalid_provider' });
+    return null;
+  }
+  const verdict = await verifyIdentityToken(provider, req.body?.idToken);
+  if (verdict.ok) return verdict;
+  if (verdict.reason === 'provider_not_configured') {
+    res.status(503).json({ error: 'provider_not_configured' });
+    return null;
+  }
+  if (verdict.reason === 'jwks_unavailable') {
+    res.status(503).json({ error: 'identity_unavailable' });
+    return null;
+  }
+  // Причину отказа наружу не отдаём: она подсказывала бы, чем именно
+  // подделанный токен не подошёл.
+  res.status(401).json({ error: 'identity_rejected' });
+  return null;
+}
+
+/** Какие входы включены на этом сервере — чтобы клиент не рисовал мёртвых кнопок. */
+app.get('/v1/seed-binding/providers', (_req, res) => {
+  noStore(res);
+  return res.json({ providers: configuredProviders() });
+});
+
+app.post('/v1/seed-binding/put', async (req, res) => {
+  noStore(res);
+  if (seedBindingRateLimited(req, res)) return undefined;
+  const auth = await authenticateSeedBinding(req, res);
+  if (!auth) return undefined;
+  const envelopeError = seedEnvelopeError(req.body?.envelope);
+  if (envelopeError) return res.status(400).json({ error: envelopeError });
+  try {
+    syncDb.putSeedBinding(auth.provider, auth.sub, JSON.stringify(req.body.envelope));
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ error: 'seed_binding_put_failed' });
+  }
+});
+
+app.post('/v1/seed-binding/get', async (req, res) => {
+  noStore(res);
+  if (seedBindingRateLimited(req, res)) return undefined;
+  const auth = await authenticateSeedBinding(req, res);
+  if (!auth) return undefined;
+  try {
+    const stored = syncDb.getSeedBinding(auth.provider, auth.sub);
+    if (!stored) return res.status(404).json({ error: 'not_found' });
+    return res.json({ envelope: stored.envelope, updatedAt: stored.updatedAt });
+  } catch {
+    return res.status(500).json({ error: 'seed_binding_get_failed' });
+  }
+});
+
+app.post('/v1/seed-binding/delete', async (req, res) => {
+  noStore(res);
+  if (seedBindingRateLimited(req, res)) return undefined;
+  const auth = await authenticateSeedBinding(req, res);
+  if (!auth) return undefined;
+  try {
+    return res.json({ ok: syncDb.deleteSeedBinding(auth.provider, auth.sub) });
+  } catch {
+    return res.status(500).json({ error: 'seed_binding_delete_failed' });
   }
 });
 

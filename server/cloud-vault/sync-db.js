@@ -243,6 +243,19 @@ class SyncDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_sync_device_enrollments_recent
         ON sync_device_enrollments (account_id, enrolled_at DESC);
+
+      -- Привязка секретных слов к Apple ID / Google (v4.32.595). Таблица
+      -- намеренно живёт вне sync_accounts: её ищут раньше, чем аккаунт
+      -- вообще заведён на этом телефоне, — в этом весь смысл привязки.
+      -- Ключ строки — слепой индекс от «провайдер:sub» на том же секрете,
+      -- что и имена: утечка базы не выдаёт, чей это Apple ID.
+      CREATE TABLE IF NOT EXISTS seed_bindings (
+        subject_key TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        envelope TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
@@ -251,7 +264,7 @@ class SyncDatabase {
     this.ensureProfileScopedCursors();
     this.ensureEntityHeadsProfileScope();
     this.db.prepare(
-      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '4')
+      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '5')
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ).run();
     const existing = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('server_epoch');
@@ -546,6 +559,50 @@ class SyncDatabase {
       'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username_key = ?',
     ).get(this.usernameKey(username));
     return row || null;
+  }
+
+  /**
+   * Слепой индекс привязки: HMAC от «провайдер:sub» на секрете сервера.
+   * Тот же секрет, что у имён, — заводить второй незачем, а свойство нужно
+   * то же: по базе нельзя сказать, чей это Apple ID.
+   */
+  seedBindingKey(provider, subject) {
+    return createHmac('sha256', this.usernamePepper)
+      .update(`seed-binding:${String(provider)}:${String(subject)}`, 'utf8')
+      .digest('base64url');
+  }
+
+  /** Положить конверт со словами. Повторная привязка переписывает прежний. */
+  putSeedBinding(provider, subject, envelopeJson, now = Date.now()) {
+    const key = this.seedBindingKey(provider, subject);
+    this.db.prepare(
+      `INSERT INTO seed_bindings (subject_key, provider, envelope, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (subject_key) DO UPDATE SET
+         provider = excluded.provider,
+         envelope = excluded.envelope,
+         updated_at = excluded.updated_at`,
+    ).run(key, String(provider), envelopeJson, now, now);
+    return true;
+  }
+
+  getSeedBinding(provider, subject) {
+    const row = this.db.prepare(
+      'SELECT envelope, updated_at AS updatedAt FROM seed_bindings WHERE subject_key = ?',
+    ).get(this.seedBindingKey(provider, subject));
+    if (!row) return null;
+    try {
+      return { envelope: JSON.parse(row.envelope), updatedAt: row.updatedAt };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Отвязать. Возвращает `true`, если запись была. */
+  deleteSeedBinding(provider, subject) {
+    const result = this.db.prepare('DELETE FROM seed_bindings WHERE subject_key = ?')
+      .run(this.seedBindingKey(provider, subject));
+    return (result.changes || 0) > 0;
   }
 
   hasAccount(accountId) {

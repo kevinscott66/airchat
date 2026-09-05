@@ -51,7 +51,7 @@ import { profileManager } from '../../core/identity/profileManager';
 import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
-import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
+import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { ACCENT_SWATCHES, avatarShape, badgeTint, colorsForScheme, contrastingInk, font, mono, radius, scrim, tintedIcon, TOUCH_TARGET_MIN, type AppColors, type BadgeTone, type MenuIconHue } from '../theme';
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
@@ -75,6 +75,11 @@ import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs
 import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../../core/backup/seedPhrase';
 import { isCloudVaultConfigured, uploadCloudVault } from '../../core/backup/cloudVault';
+// v4.32.595: привязка секретных слов к Apple ID — второй путь домой, когда
+// слова потеряны. Сервер хранит только шифртекст, ключ выводится из пароля
+// приложения, а Apple отвечает лишь на вопрос «кто пришёл» (см. seedBinding).
+import { deleteSeedBinding, listSeedBindingProviders, putSeedBinding } from '../../core/backup/seedBinding';
+import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 // v4.32.540: фотография профиля — отдельное решение от «когда я в сети»:
 // лицо прячут не по тем же причинам, по которым прячут активность.
 import {
@@ -98,6 +103,16 @@ import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/
 import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
 import { log } from '../../core/logger';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
+
+
+/**
+ * Здесь уже привязывали слова к Apple ID.
+ *
+ * Подсказка для надписи на кнопке, не источник истины: запись живёт на
+ * сервере под слепым индексом, и увидеть её можно только предъявив токен
+ * Apple. Флажок у профиля свой — привязка тоже своя у каждого аккаунта.
+ */
+const APPLE_BINDING_HINT_KEY = 'apple_seed_binding_v1';
 
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -237,6 +252,20 @@ function SettingsScreenImpl({
   const [bioModal, setBioModal] = useState(false);
   const [bioPwdInput, setBioPwdInput] = useState('');
   const [bioBusy, setBioBusy] = useState(false);
+  /**
+   * Привязка слов к Apple ID.
+   *
+   * `appleBindReady` — кнопку показываем только когда она сработает: Apple ID
+   * должен работать на самом устройстве, а сервер — принимать провайдера.
+   * `appleBound` — всего лишь местная подсказка «отсюда уже привязывали»:
+   * правду знает сервер, и спросить её можно только вместе со входом через
+   * Apple, а дёргать системное окно ради надписи в настройках нечестно.
+   */
+  const [appleBindReady, setAppleBindReady] = useState(false);
+  const [appleBound, setAppleBound] = useState(false);
+  const [appleBindModal, setAppleBindModal] = useState(false);
+  const [appleBindPwd, setAppleBindPwd] = useState('');
+  const [appleBindBusy, setAppleBindBusy] = useState(false);
   const [setPwdModal, setSetPwdModal] = useState(false);
   // v4.32.548: куда вести человека после того, как пароль заведён, —
   // он пришёл не за паролем, а за «Резервной копией».
@@ -661,6 +690,95 @@ function SettingsScreenImpl({
       setBioPwdInput('');
     }
   };
+
+  /**
+   * Показывать ли строку привязки. Спрашиваем и устройство, и сервер: без
+   * `expo-apple-authentication` окна не будет, а без настроенной аудитории на
+   * сервере токен всё равно отвергнут — обещать в таком случае нечего.
+   */
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      if (!(await isAppleSignInAvailable())) return;
+      let providers: readonly string[] = [];
+      try {
+        providers = await listSeedBindingProviders();
+      } catch {
+        return;
+      }
+      if (!alive || !providers.includes('apple')) return;
+      setAppleBindReady(true);
+      const hint = await scopedKvGet(APPLE_BINDING_HINT_KEY);
+      if (alive) setAppleBound(hint === '1');
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  /**
+   * Привязать слова к Apple ID.
+   *
+   * Пароль спрашивается первым и по-настоящему: им же шифруется конверт, и
+   * ошибиться в нём сейчас — значит однажды не открыть его вовсе. Дальше
+   * системное окно Apple; отказ в нём — не ошибка, ругаться на него нельзя.
+   */
+  const submitBindApple = async (): Promise<void> => {
+    setAppleBindBusy(true);
+    try {
+      const access = await unlockSensitiveAccess(appleBindPwd);
+      if (access === 'empty') { showError('Введите пароль'); return; }
+      if (access === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (access === 'rejected') { await showPasswordRejected(); return; }
+      const mnemonic = await getStoredMnemonic();
+      if (!mnemonic) { showError('Секретные слова недоступны на этом устройстве'); return; }
+      const identity = await signInWithApple();
+      if (!identity) return;
+      await putSeedBinding('apple', identity.idToken, mnemonic, appleBindPwd);
+      await scopedKvSet(APPLE_BINDING_HINT_KEY, '1');
+      setAppleBound(true);
+      setAppleBindModal(false);
+      showSuccess('Секретные слова привязаны к Apple ID');
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось привязать секретные слова'));
+    } finally {
+      setAppleBindBusy(false);
+      setAppleBindPwd('');
+    }
+  };
+
+  /**
+   * Отвязать. Пароль здесь не нужен — сервер и так не откроет конверт, — а вот
+   * вход через Apple нужен: удалять чужую запись по одной просьбе нельзя.
+   */
+  const handleUnbindApple = useCallback(() => {
+    showConfirm({
+      title: 'Отвязать Apple ID',
+      message: 'Копия секретных слов на сервере будет удалена. Сами слова на устройстве останутся.',
+      actions: [
+        {
+          label: 'Отвязать',
+          destructive: true,
+          onPress: () => {
+            void (async () => {
+              setAppleBindBusy(true);
+              try {
+                const identity = await signInWithApple();
+                if (!identity) return;
+                const removed = await deleteSeedBinding('apple', identity.idToken);
+                await scopedKvSet(APPLE_BINDING_HINT_KEY, '0');
+                setAppleBound(false);
+                showSuccess(removed ? 'Apple ID отвязан' : 'Привязки на сервере не было');
+              } catch (e) {
+                showError(userErrorText(e, 'Не удалось отвязать Apple ID'));
+              } finally {
+                setAppleBindBusy(false);
+              }
+            })();
+          },
+        },
+        { label: 'Отмена', cancel: true },
+      ],
+    });
+  }, []);
 
   const confirmLogout = useCallback(() => {
     if (!onLogout || logoutBusy) return;
@@ -1742,6 +1860,34 @@ function SettingsScreenImpl({
         </View>
       ) : null}
 
+      {appleBindReady && hasAppPassword ? (
+        <AppPressable
+          style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+          android_ripple={{ color: colors.ripple }}
+          onPress={() => {
+            if (appleBindBusy) return;
+            if (appleBound) { handleUnbindApple(); return; }
+            setAppleBindPwd('');
+            setAppleBindModal(true);
+          }}
+          disabled={appleBindBusy}
+          testID="settings_bind_apple"
+        >
+          <Ionicons name="logo-apple" size={22} color={colors.text} />
+          <View style={styles.rowBody}>
+            <Text style={styles.label}>{appleBound ? 'Слова привязаны к Apple ID' : 'Привязать слова к Apple ID'}</Text>
+            <Text style={styles.desc}>
+              {appleBound
+                ? 'Восстановить аккаунт можно входом через Apple ID и паролем приложения. Нажмите, чтобы отвязать.'
+                : 'Запасной путь, если секретные слова потеряны: копия уйдёт на сервер шифртекстом, и без пароля приложения её не открыть — ни серверу, ни Apple.'}
+            </Text>
+          </View>
+          {appleBindBusy
+            ? <ActivityIndicator color={colors.textMuted} />
+            : <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />}
+        </AppPressable>
+      ) : null}
+
       <Text style={styles.sectionTitle}>Автоблокировка</Text>
       <View style={styles.card}>
         <View style={styles.switchRow}>
@@ -2312,6 +2458,34 @@ function SettingsScreenImpl({
                 {bioBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Включить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }}>
+                <Text style={styles.pwdCancel}>Отмена</Text>
+              </AppPressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Привязка секретных слов к Apple ID */}
+      <Modal visible={appleBindModal} transparent animationType="fade" onRequestClose={() => { setAppleBindModal(false); setAppleBindPwd(''); }}>
+        <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
+          <View style={styles.pwdModalBg}>
+            <View style={styles.pwdModalBox}>
+              <Text style={styles.modalTitle}>Привязать к Apple ID</Text>
+              <Text style={styles.desc}>
+                Введите пароль приложения — им шифруются слова перед отправкой. Тот же пароль понадобится при восстановлении: сервер конверт не открывает.
+              </Text>
+              <PasswordField
+                value={appleBindPwd}
+                onChange={setAppleBindPwd}
+                onComplete={() => { void submitBindApple(); }}
+                disabled={appleBindBusy}
+                placeholder="Пароль приложения"
+                testID="apple_binding_password_input"
+              />
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy}>
+                {appleBindBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Продолжить</Text>}
+              </AppPressable>
+              <AppPressable onPress={() => { setAppleBindModal(false); setAppleBindPwd(''); }}>
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>

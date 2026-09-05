@@ -170,7 +170,7 @@ export function decryptCloudVaultArchive(
   }
 }
 
-function cloudBaseUrl(): string | null {
+export function cloudBaseUrl(): string | null {
   const config = getConfigSync().cloudBackup;
   if (!config?.enabled || !config.baseUrl) return null;
   return config.baseUrl.replace(/\/+$/, '');
