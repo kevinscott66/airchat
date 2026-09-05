@@ -8,10 +8,16 @@
  * истории живут сутки и смотрятся плитками) и «что я у себя убрал» (архив).
  * Общего у них — только автор.
  *
- * Важная честность про охват. Лента AirChat не серверная: у каждого лежит
- * только то, что до него доехало. Стена показывает записи автора, дошедшие до
- * ЭТОГО устройства, — не «все его публикации». Поэтому пустая стена — это не
- * «он ничего не публиковал», и подпись под пустым списком говорит именно так.
+ * Важная честность про охват. Сервер ленту не раздаёт: чужие записи приходят
+ * доставкой, и у каждого лежит только то, что до него дошло. Стена показывает
+ * записи автора, полученные ЭТИМ аккаунтом, — не «все его публикации».
+ * Поэтому пустая стена — это не «он ничего не публиковал», и подпись под
+ * пустым списком говорит именно так (`profilePostsEmpty`).
+ *
+ * Про «этот телефон» подписи больше не говорят (v4.32.600): полученная лента
+ * целиком уезжает в облачную копию аккаунта и открывается на любом устройстве
+ * владельца. Привязка к телефону осталась только у самой истории — она живёт
+ * сутки и раздаётся в момент публикации.
  *
  * Архив — отдельный режим и только свой: это записи, которые владелец убрал из
  * своей ленты у себя. Чужого архива не существует.
@@ -61,6 +67,8 @@ import {
 } from '../../../../core/social/storyAlbums';
 import { storyAlbumUriFromName } from '../../../../core/media/storyAlbumFiles';
 import { ALBUM_TITLE_MAX, albumCountLabel, albumTitleProblem } from '../../storyAlbumsModel';
+import { profilePostsEmptyNote } from './profilePostsEmpty';
+import type { ProfilePostsMode } from './profilePostsMode';
 import {
   listArchivedFeedPosts,
   loadFeedPosts,
@@ -68,7 +76,7 @@ import {
 } from '../../../../core/social/feedService';
 import type { FeedPostRow } from '../../../../core/storage/feedStorage';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
-import { loadConfig } from '../../../../core/config';
+import { getConfigSync, loadConfig } from '../../../../core/config';
 import { dayMonthShortTime } from '../../../../core/time/ruDateTime';
 import { UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
 import { log } from '../../../../core/logger';
@@ -84,8 +92,7 @@ type AlbumDraft =
   | { kind: 'create'; story: StoryRow | null }
   | { kind: 'rename'; id: string };
 
-/** Режим полосы: три разных вопроса к одному автору. */
-export type ProfilePostsMode = 'wall' | 'stories' | 'archive';
+export type { ProfilePostsMode } from './profilePostsMode';
 
 /**
  * ProfilePostsPane — сам раздел, без окна вокруг (v4.32.577).
@@ -355,15 +362,14 @@ export function ProfilePostsPane({
     })();
   }, [draft, draftProblem, draftText, ownerProfileId, reloadAlbums, putIntoAlbum]);
 
-  const emptyNote = useMemo(() => {
-    if (mode === 'archive') {
-      return 'В архиве пусто. Сюда попадают записи, которые вы убрали из своей ленты.';
-    }
-    if (mode === 'stories') {
-      return 'Историй нет. Они живут сутки, и видно только те, что дошли до этого телефона.';
-    }
-    return 'Здесь пусто. Лента хранится на устройстве: видно только те записи автора, которые дошли до этого телефона.';
-  }, [mode]);
+  const emptyNote = useMemo(
+    () => profilePostsEmptyNote({
+      mode,
+      isSelf,
+      accountSync: !!getConfigSync().cloudBackup?.enabled,
+    }),
+    [mode, isSelf]
+  );
 
   const renderPost = useCallback((p: FeedPostRow) => {
     const uris = media[p.id] ?? [];
