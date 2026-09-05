@@ -1,0 +1,20 @@
+[Unit]
+Description=AirChat cloud vault: обновление таблицы «IP → страна» из файлов RIR
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=airchat-vault
+Environment=CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault
+ExecStart=/usr/bin/node /opt/airchat-cloud-vault/tools/build-geoip.js
+# Сборщик пишет через временный файл и переименование, поэтому сервису
+# перезапуск не нужен: таблица читается с диска и подхватится сама.
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/airchat-cloud-vault

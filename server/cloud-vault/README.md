@@ -48,8 +48,9 @@ from one seed isolated while sharing one account cursor namespace on the server.
 
 - `POST /v1/sync/:accountId/push` accepts up to 100 encrypted mutations.
 - `POST /v1/sync/:accountId/pull` returns up to 100 mutations after `cursor`.
-- `POST /v1/sync/:accountId/devices` lists registered devices, coarse Cloudflare
-  country/city metadata and client-reported model/OS/app version.
+- `POST /v1/sync/:accountId/devices` lists registered devices, a coarse country
+  (plus a city when a CDN in front supplies one) and client-reported model/OS/app
+  version.
 - `POST /v1/sync/:accountId/devices/revoke` revokes another device.
 - `POST /v1/sync/:accountId/username/claim` takes `@name` for `ownerProfileId`,
   `.../username/release` gives it back, and the unsigned
@@ -146,3 +147,27 @@ which survives revoking the device. `POST /v1/sync/:accountId/devices` returns
 that trail next to the device list: an enrollment with no matching device is how
 the owner learns that someone used their seed phrase and cleaned up after
 themselves.
+
+### Where the country of a session comes from
+
+The device list shows a country so that the owner can spot a session that is not
+theirs. It used to come only from Cloudflare's `cf-ipcountry` header, which is
+absent whenever nothing sits in front of the service — the header then never
+arrived and every device read as an unknown region.
+
+Resolution now happens on this machine, from a table built out of the public
+`delegated-*-extended-latest` files of the five RIRs. No account, no licence key,
+and — the point — no third party learns a user's address: the server already sees
+the connection it is answering, and nothing leaves it.
+
+```
+node tools/build-geoip.js       # writes geoip-country.bin into CLOUD_VAULT_DIR
+```
+
+The file is a runtime artefact, not a source: it is absent from the repository
+and from the image, and without it the field simply stays empty. `deploy/`
+carries a systemd service and a weekly timer that rebuild it in place; the
+builder writes through a temporary file and renames, so the running service
+never reads a half-written table. Country here is the *registered* country of an
+address block, which for a hosting provider can differ from where the machine
+physically stands.
