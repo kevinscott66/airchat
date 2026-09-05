@@ -194,6 +194,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
    */
   const [appleBinding, setAppleBinding] = useState<SeedBindingEnvelope | null>(null);
   const [appleReady, setAppleReady] = useState(false);
+  const [cloudReady, setCloudReady] = useState(false);
 
   /**
    * v4.32.376: в это же поле вставляют зашифрованную резервную копию — ту, что
@@ -282,6 +283,10 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // v4.32.596. Облако в сборке может быть не настроено вовсе (в публичной
+      // веб-сборке адреса нет), и тогда экран не должен спрашивать пароль от
+      // копии, которой неоткуда взяться.
+      if (!cancelled) setCloudReady(isCloudVaultConfigured());
       // Кнопку рисуем, только если вход есть и на телефоне, и на сервере.
       // Мёртвая кнопка хуже отсутствующей: она обещает и не делает.
       if (!(await isAppleSignInAvailable())) return;
@@ -341,6 +346,27 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     }
   };
 
+  /**
+   * v4.32.596. Раньше пустой пароль просто пропускал облачный шаг молча:
+   * ключи уже сохранены, экран закрывается, и человек оказывается в пустом
+   * аккаунте с правильным DID — ни переписки, ни профиля, ни юзернейма. Со
+   * стороны это выглядит как «вошёл не в свой аккаунт», хотя аккаунт тот
+   * самый, просто без содержимого. Поэтому — прямой вопрос до, а не догадки
+   * после.
+   */
+  const confirmKeysOnly = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      Alert.alert(
+        'AirChat',
+        'Без пароля приложения вернутся только ключи: переписка, профиль и юзернейм останутся на сервере. Продолжить?',
+        [
+          { text: 'Отмена', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Продолжить', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+
   const handleRestore = async (): Promise<void> => {
     if (isBackupPaste) {
       await handleRestoreFromBackup();
@@ -363,6 +389,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       );
       return;
     }
+    if (cloudReady && !cloudPwd && !(await confirmKeysOnly())) return;
     setBusy(true);
     try {
       const pair = await restoreFromMnemonic(trimmed);
@@ -623,7 +650,14 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   testID="backup_password_input"
                 />
               ) : null}
-              {!isBackupPaste ? (
+              {!isBackupPaste && !cloudReady ? (
+                <Text style={styles.encHint}>
+                  В этой сборке облачное хранилище не настроено: вернутся только ключи. Переписка,
+                  профиль и юзернейм хранятся на сервере и появятся после входа в приложении с
+                  настроенным адресом.
+                </Text>
+              ) : null}
+              {!isBackupPaste && cloudReady ? (
                 <>
                   <Text style={styles.encHint}>
                     {appleBinding

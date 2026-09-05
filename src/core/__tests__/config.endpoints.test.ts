@@ -187,9 +187,24 @@ describe('адрес облачной копии из переменной сб�
     delete process.env[ENV];
   });
 
-  it('без переменной остаётся заглушка из файла — она и была причиной', async () => {
+  it('без переменной облако выключено, а не указывает на заглушку', async () => {
+    // v4.32.596. Раньше заглушка из git доезжала до эффективного конфига:
+    // она разбирается, она https, общее правило её пропускало — и
+    // isCloudVaultConfigured() отвечал «настроено» про хост, которого нет.
+    // Виднее всего это было в веб-сборке: восстановление секретными словами
+    // обещало облако и отдавало пустой аккаунт с правильным DID.
     const cfg = await freshConfig().loadConfig();
-    expect(cfg.cloudBackup?.baseUrl).toBe('https://agents.example.com:8443/cloud-vault');
+    expect(cfg.cloudBackup).toEqual({ enabled: false, baseUrl: '' });
+  });
+
+  it('заглушку гасит только заводское значение — свой адрес человека остаётся', async () => {
+    // Правило про зарезервированные имена живёт в bundledConfig и к
+    // переопределению из Documents не применяется: там example.com пишут
+    // осознанно, и подменять человеку его выбор нечем.
+    const cfg = await loadWithOverride({
+      cloudBackup: { enabled: true, baseUrl: 'https://cloud.example.com' },
+    });
+    expect(cfg.cloudBackup).toEqual({ enabled: true, baseUrl: 'https://cloud.example.com' });
   });
 
   it('переменная сборки заменяет заглушку', async () => {

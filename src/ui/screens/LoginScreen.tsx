@@ -181,7 +181,7 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
         >
           <View style={styles.inner} testID="login_screen">
             <Text style={styles.title}>AirChat</Text>
-            <Text style={styles.sub}>Локальные ключи готовы (сеть не обязательна)</Text>
+            <Text style={styles.sub}>Ключи на месте. Осталось имя, под которым вас увидят собеседники — его можно поменять в профиле.</Text>
             {did ? (
               <Text style={styles.did} testID="user_did">
                 Ваш адрес: {shortIdentity(did, 20)}

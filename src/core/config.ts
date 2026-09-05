@@ -478,22 +478,49 @@ async function readUserOverride(): Promise<Partial<AppConfig>> {
 }
 
 /**
+ * Имена, которые по RFC 2606 и RFC 6761 зарезервированы под примеры и никогда
+ * не будут ничьим настоящим сервером.
+ *
+ * Нужны ровно для одного: узнать заглушку из git в bundledConfig ниже.
+ * К адресу, который вписал человек, правило не применяется — его выбор его
+ * дело, и example.com в своём файле он пишет осознанно.
+ */
+const RESERVED_HOSTS = new Set(['example.com', 'example.org', 'example.net']);
+const RESERVED_SUFFIXES = ['.example.com', '.example.org', '.example.net', '.example', '.invalid', '.test'];
+
+function isPlaceholderHost(raw: string): boolean {
+  let host: string;
+  try {
+    host = new URL(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (RESERVED_HOSTS.has(host)) return true;
+  return RESERVED_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
+/**
  * Заводской конфиг сборки: `assets/config.json` плюс адрес облачной копии из
  * переменной сборки (v4.32.541).
  *
- * В git на месте адреса лежит заглушка `agents.example.com` — и именно она
- * уезжала в сборку, поэтому восстановление из облака молча не работало: путь
- * синхронизации закрыт проверкой `cloudBackup.enabled`, а она гаснет сама,
- * когда адрес негодный. Настоящий адрес в публичный репозиторий класть
- * незачем, поэтому он приходит из `EXPO_PUBLIC_CLOUD_VAULT_URL` — тем же
- * способом, что и DSN в core/errorHandler.
+ * В git на месте адреса лежит заглушка `agents.example.com`. Настоящий адрес
+ * в публичный репозиторий класть незачем, поэтому он приходит из
+ * `EXPO_PUBLIC_CLOUD_VAULT_URL` — тем же способом, что и DSN в
+ * core/errorHandler.
+ *
+ * v4.32.596. Сборка без переменной оставалась с заглушкой, и это молчало не
+ * так, как ожидалось: заглушка разбирается, она https, общее правило её
+ * пропускало — `enabled` оставался true, `isCloudVaultConfigured()` отвечал
+ * «настроено», а запросы уходили на хост, которого не существует. Больнее
+ * всего это било по восстановлению секретными словами в веб-сборке:
+ * приложение обещало облако и отдавало пустой аккаунт с правильным DID.
+ * Поэтому заглушка приравнивается к «адреса нет»: честное «облака в этой
+ * сборке нет» лучше, чем ожидание ответа от несуществующего сервера.
  *
  * Переменная отвечает на вопрос «куда», а не «включать ли»: флаг `enabled`
  * остаётся из файла, и сборка с выключённой облачной копией не включится от
  * одной переменной. Негодное значение переменной здесь не отсеивается —
- * его отсеет общее правило в normalizeEndpoints и запишет в журнал; тихо
- * подставить обратно заглушку было бы хуже: адрес-заглушка так же нерабочий,
- * но выглядит как настроенный.
+ * его отсеет общее правило в normalizeEndpoints и запишет в журнал.
  *
  * `require` оставлен внутри: три пути сборки конфига полагаются на то, что он
  * бросает, когда файла в сборке нет.
@@ -504,8 +531,14 @@ function bundledConfig(): AppConfig {
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_CLOUD_VAULT_URL
       ? process.env.EXPO_PUBLIC_CLOUD_VAULT_URL
       : '';
-  if (!fromEnv) return bundled;
-  return { ...bundled, cloudBackup: { ...bundled.cloudBackup, enabled: !!bundled.cloudBackup?.enabled, baseUrl: fromEnv } };
+  if (fromEnv) {
+    return { ...bundled, cloudBackup: { ...bundled.cloudBackup, enabled: !!bundled.cloudBackup?.enabled, baseUrl: fromEnv } };
+  }
+  if (bundled.cloudBackup?.baseUrl && isPlaceholderHost(bundled.cloudBackup.baseUrl)) {
+    log.warn('config_cloud_backup_placeholder');
+    return { ...bundled, cloudBackup: { ...bundled.cloudBackup, enabled: false, baseUrl: '' } };
+  }
+  return bundled;
 }
 
 export async function loadConfig(): Promise<AppConfig> {

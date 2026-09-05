@@ -26,9 +26,18 @@ import {
 export function EmojiPanel({
   onEmoji,
   colors,
+  bottomInset = 0,
 }: {
   onEmoji: (emoji: string) => void;
   colors: ReturnType<typeof useTheme>['colors'];
+  /**
+   * v4.32.596. Высота плавающей панели вкладок. Раньше её резервировал
+   * composer своим marginBottom, а панель эмодзи открывалась ПОД этим
+   * отступом: между полем ввода и поиском эмодзи зияла чёрная полоса, а
+   * нижние ряды эмодзи уходили под панель вкладок. Отступ принадлежит тому,
+   * кто стоит последним, — когда панель открыта, это она.
+   */
+  bottomInset?: number;
 }): React.ReactElement {
   const [catIdx, setCatIdx] = useState(0);
   const [skinTarget, setSkinTarget] = useState<string | null>(null);
@@ -90,7 +99,7 @@ export function EmojiPanel({
   );
 
   return (
-    <View style={[epStyles.root, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+    <View style={[epStyles.root, { height: EMOJI_PANEL_HEIGHT + bottomInset, paddingBottom: bottomInset, backgroundColor: colors.surface, borderTopColor: colors.border }]}>
       {/* Skin tone picker popover */}
       {skinTarget !== null ? (
         <AppPressable
@@ -172,8 +181,11 @@ export function EmojiPanel({
   );
 }
 
+/** Высота самой панели, без места под плавающие вкладки. */
+const EMOJI_PANEL_HEIGHT = 280;
+
 const epStyles = StyleSheet.create({
-  root: { height: 280, borderTopWidth: StyleSheet.hairlineWidth },
+  root: { height: EMOJI_PANEL_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth },
   searchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
   catRow: { maxHeight: 44, borderBottomWidth: StyleSheet.hairlineWidth },
   catTab: { paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 2, borderBottomColor: 'transparent' },

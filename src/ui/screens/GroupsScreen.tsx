@@ -4260,7 +4260,7 @@ function GroupChatScreen({
               </Text>
             </AppPressable>
           ) : null}
-          <View style={[gcStyles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: tabInset }]}>
+          <View style={[gcStyles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: grpEmojiPanelVisible ? 0 : tabInset }]}>
             {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
                 с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
                 Группы не поддерживают live-location, onShareLiveLocation опускается. */}
@@ -4398,6 +4398,7 @@ function GroupChatScreen({
             <EmojiPanel
               onEmoji={(emoji) => { setText((t) => t + emoji); }}
               colors={colors}
+              bottomInset={tabInset}
             />
           ) : null}
         </View>

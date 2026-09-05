@@ -3773,7 +3773,7 @@ function ChatThreadView({
             </View>
           </View>
         ) : null}
-        <View style={[s.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: tabInset, display: isSelecting ? 'none' : 'flex' }]}>
+        <View style={[s.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: showEmojiPanel && !isSelecting ? 0 : tabInset, display: isSelecting ? 'none' : 'flex' }]}>
           {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
               с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
               Long-press оставляем shortcut-ом на системный picker галереи. */}
@@ -3911,6 +3911,7 @@ function ChatThreadView({
               setMsg(`${before}${emoji}${after}`);
             }}
             colors={colors}
+            bottomInset={tabInset}
           />
         ) : null}
       </View>
