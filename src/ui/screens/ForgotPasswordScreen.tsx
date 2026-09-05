@@ -13,7 +13,7 @@ import { SafeScreen } from '../components/SafeScreen';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { primaryInk, radius } from '../theme';
+import { formColumn, primaryInk, radius } from '../theme';
 
 type Props = {
   onSuccess: () => void;
@@ -29,7 +29,16 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
     flex: { flex: 1 },
-    scroll: { padding: 20, paddingBottom: 40 },
+    // Тот же потолок ширины, что у экранов заведения аккаунта: это тот же
+    // разговор с человеком без аккаунта, и поле со словами с кнопкой «сбросить»
+    // не должны растягиваться на всю ширину окна браузера.
+    scroll: {
+      padding: 20,
+      paddingBottom: 40,
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
+    },
     title: {
       fontSize: 22,
       fontWeight: '700' as const,

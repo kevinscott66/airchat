@@ -13,7 +13,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { primaryInk, radius } from '../theme';
+import { formColumn, primaryInk, radius } from '../theme';
 import {
   generateMnemonicAndStore,
   getStoredMnemonic,
@@ -53,11 +53,35 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       paddingVertical: 40,
       justifyContent: 'center' as const,
     },
-    restoreInner: { backgroundColor: c.background },
+    // v4.32.590. Колонка формы не тянется во всю ширину окна.
+    //
+    // Три экрана заведения аккаунта верстались под телефон, где «во всю
+    // ширину» — это 350 точек. В окне браузера на MacBook и на iPad в альбоме
+    // те же кнопки растягивало на всю страницу: подпись в середине, а полоса
+    // нажатия от края до края, и описание одной лентой в полтораста знаков.
+    // Потолок ширины один на все три шага — иначе колонка прыгала бы при
+    // переходе «начало → восстановление».
+    column: {
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
+    },
+    restoreInner: {
+      backgroundColor: c.background,
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
+    },
     flex: { flex: 1, backgroundColor: c.background },
     center: { flex: 1, padding: 24, justifyContent: 'center' as const, backgroundColor: c.background },
     scroll: { flex: 1, backgroundColor: c.background },
-    scrollContent: { padding: 20, paddingBottom: 40 },
+    scrollContent: {
+      padding: 20,
+      paddingBottom: 40,
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
+    },
     backRow: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
@@ -341,29 +365,32 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       <SafeScreen>
       <View style={styles.center} testID="onboarding_welcome" collapsable={false}>
         <LoadingOverlay visible={busy} message="Генерация ключей…" />
-        <AirChatWordmark height={26} style={styles.wordmark} />
-        <Text style={styles.sub}>
-          Чат с защитой сообщений. Секретные слова (24 слова) — ваш ключ восстановления. Без них на новом
-          устройстве восстановить доступ нельзя.
-        </Text>
-        <AppPressable
-          style={styles.btn}
-          onPress={createNewBtn.onPress}
-          disabled={createNewBtn.loading}
-          testID="btn_create_new"
-        >
-          <Text style={styles.btnText}>Создать новый аккаунт</Text>
-        </AppPressable>
-        <AppPressable
-          style={styles.btnSecondary}
-          onPress={handleWelcomeRestore}
-          disabled={busy}
-          testID="btn_restore"
-        >
-          {/* v4.32.376: копия — второй способ, и до этой версии её было некуда
-              загрузить. Кнопка не должна обещать только один из двух. */}
-          <Text style={styles.btnTextDark}>Восстановить аккаунт</Text>
-        </AppPressable>
+        {/* Затемнение выше — на весь экран, форма ниже — в колонке. */}
+        <View style={styles.column}>
+          <AirChatWordmark height={26} style={styles.wordmark} />
+          <Text style={styles.sub}>
+            Чат с защитой сообщений. Секретные слова (24 слова) — ваш ключ восстановления. Без них на новом
+            устройстве восстановить доступ нельзя.
+          </Text>
+          <AppPressable
+            style={styles.btn}
+            onPress={createNewBtn.onPress}
+            disabled={createNewBtn.loading}
+            testID="btn_create_new"
+          >
+            <Text style={styles.btnText}>Создать новый аккаунт</Text>
+          </AppPressable>
+          <AppPressable
+            style={styles.btnSecondary}
+            onPress={handleWelcomeRestore}
+            disabled={busy}
+            testID="btn_restore"
+          >
+            {/* v4.32.376: копия — второй способ, и до этой версии её было некуда
+                загрузить. Кнопка не должна обещать только один из двух. */}
+            <Text style={styles.btnTextDark}>Восстановить аккаунт</Text>
+          </AppPressable>
+        </View>
       </View>
       </SafeScreen>
     );
