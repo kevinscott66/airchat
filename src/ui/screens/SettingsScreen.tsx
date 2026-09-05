@@ -882,7 +882,7 @@ function SettingsScreenImpl({
       if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
       if (result === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
-      if (!mnemonic) { showError('Seed-фраза не найдена'); return; }
+      if (!mnemonic) { showError('Секретные слова не найдены'); return; }
       setSeedPhrase(mnemonic);
     } finally { setSeedBusy(false); }
   }, [seedPwdInput]);
@@ -904,7 +904,7 @@ function SettingsScreenImpl({
       if (unlocked === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
       if (unlocked === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
-      if (!mnemonic) { showError('Seed-фраза не найдена'); return; }
+      if (!mnemonic) { showError('Секретные слова не найдены'); return; }
       await uploadCloudVault(mnemonic, cloudPasswordInput);
       setCloudPasswordModal(false);
       setCloudPasswordInput('');
@@ -932,7 +932,7 @@ function SettingsScreenImpl({
       if (restored > 0) {
         showSuccess(`Восстановлено сообщений: ${restored}. Перезапустите приложение.`);
       } else {
-        showError('Копия не импортирована: проверьте seed-фразу и убедитесь, что история на этом устройстве пуста.');
+        showError('Копия не импортирована: проверьте секретные слова и убедитесь, что история на этом устройстве пуста.');
       }
     } catch (e) {
       showError(userErrorText(e, 'Не удалось импортировать историю'));
@@ -1212,6 +1212,7 @@ function SettingsScreenImpl({
           iconName="archive-outline"
           hue="ice"
           label="Резервная копия"
+          badge="Секретные слова и копия истории"
           onPress={openBackupBtn.onPress}
         />
       </View>
@@ -2112,7 +2113,7 @@ function SettingsScreenImpl({
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </AppPressable>
 
-      <Text style={styles.sectionTitle}>Seed-фраза</Text>
+      <Text style={styles.sectionTitle}>Секретные слова</Text>
       <AppPressable
         style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
         android_ripple={{ color: colors.ripple }}
@@ -2120,7 +2121,7 @@ function SettingsScreenImpl({
       >
         <Ionicons name="key-outline" size={22} color={colors.text} />
         <View style={styles.rowBody}>
-          <Text style={styles.label}>Показать seed-фразу</Text>
+          <Text style={styles.label}>Показать секретные слова</Text>
           <Text style={styles.desc}>24 слова — единственный способ восстановить аккаунт</Text>
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
@@ -2419,7 +2420,7 @@ function SettingsScreenImpl({
           <View style={styles.pwdModalBg}>
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Резервная копия</Text>
-              <Text style={[styles.desc, { marginBottom: 12 }]}>Раздел защищён паролем приложения: в нём seed-фраза и облачная копия.</Text>
+              <Text style={[styles.desc, { marginBottom: 12 }]}>Раздел защищён паролем приложения: в нём секретные слова и облачная копия.</Text>
               <PasswordField
                 value={backupPwdInput}
                 onChange={setBackupPwdInput}
@@ -2616,7 +2617,7 @@ function SettingsScreenImpl({
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
             <View style={styles.pwdModalBox}>
-              <Text style={styles.modalTitle}>Seed-фраза</Text>
+              <Text style={styles.modalTitle}>Секретные слова</Text>
               {seedPhrase ? (
                 <>
                   <Text style={[styles.desc, { marginBottom: 12, color: colors.error }]}>Запишите эти слова. Не показывайте никому.</Text>
@@ -2630,7 +2631,7 @@ function SettingsScreenImpl({
                 </>
               ) : (
                 <>
-                  <Text style={[styles.desc, { marginBottom: 12 }]}>Введите пароль приложения для просмотра seed-фразы:</Text>
+                  <Text style={[styles.desc, { marginBottom: 12 }]}>Введите пароль приложения, чтобы увидеть секретные слова:</Text>
                   <PasswordField
                     value={seedPwdInput}
                     onChange={setSeedPwdInput}

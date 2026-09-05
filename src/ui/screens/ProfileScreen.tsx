@@ -16,7 +16,6 @@ import { AppPressable } from '../components/AppPressable';
 import { AppModal as Modal } from '../components/AppModal';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { appleColorEmojiTextStyle } from '../emojiStyles';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import QRCode from 'react-native-qrcode-svg';
@@ -28,7 +27,6 @@ import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { loadFeedPosts } from '../../core/social/feedService';
 import {
   exportEncryptedBackup,
-  getStoredMnemonic,
   hasStoredMnemonic,
 } from '../../core/backup/seedPhrase';
 import { listStarredMessages, setMessageStarred, setGroupMessageStarred, type StarredMessageEntry } from '../../core/storage/local';
@@ -45,11 +43,6 @@ import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { ownAvatarUri, saveOwnAvatar } from '../../core/identity/ownAvatar';
 import { refreshAvatarTable } from '../../core/social/avatarRegistry';
 import { broadcastMyProfile, markProfileChanged } from '../../core/social/profileSync';
-import { authGuard } from '../../core/security/authGuard';
-import {
-  SENSITIVE_NO_PASSWORD_TEXT,
-  unlockSensitiveAccess,
-} from '../../core/security/sensitiveAccess';
 import { VerifiedMark } from '../components/VerifiedMark';
 import { GlassSurface } from '../components/GlassSurface';
 import { ProfileEditModal } from '../components/modals/profile/ProfileEditModal';
@@ -59,8 +52,8 @@ import { SafeScreen } from '../components/SafeScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WallpaperBackground } from '../components/WallpaperBackground';
 import { defaultWallpaper, feedGround } from '../wallpapers';
-import { showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
-import { accentOnFill, avatarShape, BRAND_X, font, glass, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, withAlpha, type AppColors } from '../theme';
+import { showSuccess } from '../components/userFeedback';
+import { accentOnFill, avatarShape, BRAND_X, font, glass, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, TOUCH_TARGET_MIN, withAlpha, type AppColors } from '../theme';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { safeExternalUrl } from '../../core/net/externalLink';
@@ -149,18 +142,13 @@ function ProfileScreenImpl({
    */
   const [badge, setBadge] = useState<VerificationClaim | null>(null);
   const [peer, setPeer] = useState<string | null>(null);
-  const [seedModal, setSeedModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
-  const [seedWords, setSeedWords] = useState<string[]>([]);
   const [hasSeed, setHasSeed] = useState(false);
   const [exportPwd, setExportPwd] = useState('');
   const [exportModal, setExportModal] = useState(false);
   const [busy, _setBusy] = useState(false);
-  const [seedPwdModal, setSeedPwdModal] = useState(false);
-  const [seedPwd, setSeedPwd] = useState('');
-  const [seedPwdBusy, setSeedPwdBusy] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [postCount, setPostCount] = useState(0);
   const [contactCount, setContactCount] = useState(0);
@@ -325,15 +313,6 @@ function ProfileScreenImpl({
   // v4.32.32: live-обновление счётчика контактов при add/rename/delete.
   // Без этого контактов можно добавить в модалке, закрыть её, а цифра в карточке
   // «Контакты» на Профиле останется старой до перезагрузки вкладки.
-  // v4.32.169: auto-close seed modal after 60s so words don't remain on-screen
-  // indefinitely. Also clears the state on unmount/close so re-opening requires
-  // re-auth rather than flashing the previous session's words.
-  useEffect(() => {
-    if (!seedModal) return;
-    const t = setTimeout(() => { setSeedModal(false); setSeedWords([]); }, 60_000);
-    return () => clearTimeout(t);
-  }, [seedModal]);
-
   useEffect(() => {
     // v4.32.189 (Round-19 #6): alive guard — listContacts resolves after
     // unmount on fast nav, triggering setContactCount on an unmounted
@@ -376,54 +355,6 @@ function ProfileScreenImpl({
   const copyDid = async (): Promise<void> => {
     await Clipboard.setStringAsync(did);
     showSuccess(COPIED_ID);
-  };
-
-  const showSeedWordsModal = async (): Promise<void> => {
-    const m = await getStoredMnemonic();
-    if (!m) return;
-    setSeedWords(m.trim().split(/\s+/));
-    setSeedModal(true);
-  };
-
-  const openSeed = async (): Promise<void> => {
-    const ok = await hasStoredMnemonic();
-    if (!ok) {
-      Alert.alert('AirChat', 'Секретные слова не сохранены на этом устройстве.');
-      return;
-    }
-    // v4.32.548: пароль обязателен. Раньше при незаданном пароле слова
-    // показывались сразу — вторая дверь к той же seed-фразе, что и в
-    // «Настройки → Резервная копия», см. sensitiveAccess.
-    if (!(await authGuard.hasPassword())) {
-      Alert.alert('AirChat', SENSITIVE_NO_PASSWORD_TEXT);
-      return;
-    }
-    setSeedPwd('');
-    setSeedPwdModal(true);
-  };
-
-  const submitSeedPwd = async (): Promise<void> => {
-    if (!seedPwd.trim()) {
-      showError('Введите пароль');
-      return;
-    }
-    setSeedPwdBusy(true);
-    try {
-      const result = await unlockSensitiveAccess(seedPwd);
-      if (result === 'no_password') {
-        Alert.alert('AirChat', SENSITIVE_NO_PASSWORD_TEXT);
-        return;
-      }
-      if (result !== 'ok') {
-        await showPasswordRejected();
-        return;
-      }
-      setSeedPwdModal(false);
-      setSeedPwd('');
-      await showSeedWordsModal();
-    } finally {
-      setSeedPwdBusy(false);
-    }
   };
 
   const pickAvatar = async (): Promise<void> => {
@@ -503,8 +434,6 @@ function ProfileScreenImpl({
   // ── useAsyncButton wrappers — prevent double-tap on async actions ────────────
   const copyDidBtn = useAsyncButton(copyDid, { throttleMs: 300 });
   const pickAvatarBtn = useAsyncButton(pickAvatar, { throttleMs: 300 });
-  const openSeedBtn = useAsyncButton(openSeed, { throttleMs: 300 });
-  const submitSeedPwdBtn = useAsyncButton(submitSeedPwd, { throttleMs: 300 });
   const runExportBtn = useAsyncButton(runExport, { throttleMs: 300 });
 
   return (
@@ -573,13 +502,28 @@ function ProfileScreenImpl({
           ) : null}
 
           <Text style={styles.userIdLabel}>Ваш адрес для связи</Text>
-          <AppPressable style={styles.userIdBox} onPress={copyDidBtn.onPress} testID="user_did">
-            <Text style={styles.userIdText} numberOfLines={1}>
-              {shortDid}
-            </Text>
-            <Ionicons name="copy-outline" size={18} color={colors.textSecondary} />
-          </AppPressable>
-          <Text style={styles.userIdHint}>Нажмите, чтобы скопировать. Нужен для добавления вручную.</Text>
+          {/* v4.32.602: QR-код стоит вплотную к «скопировать». Это две руки
+              одного действия — отдать свой адрес человеку рядом: кому-то удобнее
+              переслать строку, кому-то навести камеру. Пока QR жил отдельной
+              карточкой ниже, связь между ним и адресом приходилось угадывать. */}
+          <View style={styles.userIdRow}>
+            <AppPressable style={styles.userIdBox} onPress={copyDidBtn.onPress} testID="user_did">
+              <Text style={styles.userIdText} numberOfLines={1}>
+                {shortDid}
+              </Text>
+              <Ionicons name="copy-outline" size={18} color={colors.textSecondary} />
+            </AppPressable>
+            <AppPressable
+              style={styles.userIdQrBtn}
+              onPress={() => setShowQrModal(true)}
+              testID="btn_my_qr"
+              accessibilityRole="button"
+              accessibilityLabel="Мой QR-код"
+            >
+              <Ionicons name="qr-code" size={20} color={colors.accent} />
+            </AppPressable>
+          </View>
+          <Text style={styles.userIdHint}>Нажмите, чтобы скопировать, или покажите QR-код — друг добавит вас, не набирая адрес.</Text>
         </View>
 
         {/* «О себе»: подчёркнутым рисуется РОВНО то, что дверь согласна
@@ -711,6 +655,7 @@ function ProfileScreenImpl({
                 });
               },
             },
+            { id: 'contacts', label: 'Контакты', icon: 'people-outline', hint: contactCount > 0 ? String(contactCount) : null, onPress: () => setContactsVisible(true) },
             { id: 'archive', label: 'Архив публикаций', icon: 'archive-outline', hint: null, onPress: () => setPostsMode('archive') },
           ] as const).map((pl) => (
             <AppPressable
@@ -727,46 +672,6 @@ function ProfileScreenImpl({
             </AppPressable>
           ))}
         </ScrollView>
-
-        <View style={styles.actionsGrid}>
-          <AppPressable style={styles.actionCard} onPress={() => setShowQrModal(true)}>
-            <View style={styles.actionIcon}>
-              <Ionicons name="qr-code" size={28} color={colors.accent} />
-            </View>
-            <Text style={styles.actionTitle}>Мой QR-код</Text>
-            <Text style={styles.actionDesc}>Покажите другу для добавления</Text>
-          </AppPressable>
-
-          <AppPressable style={styles.actionCard} onPress={openSeedBtn.onPress} testID="btn_backup_seed">
-            <View style={styles.actionIcon}>
-              <Ionicons name="shield-checkmark" size={28} color={colors.accent} />
-            </View>
-            <Text style={styles.actionTitle}>Секретные слова</Text>
-            <Text style={styles.actionDesc}>Для восстановления аккаунта</Text>
-          </AppPressable>
-
-          <AppPressable style={styles.actionCard} onPress={() => setCallLogVisible(true)}>
-            <View style={styles.actionIcon}>
-              <Ionicons name="call" size={28} color={colors.accent} />
-            </View>
-            <Text style={styles.actionTitle}>Звонки</Text>
-            <Text style={styles.actionDesc}>История звонков</Text>
-          </AppPressable>
-          {/* v4.32.30: VK-style «Контакты» — четвёртая карточка в сетке быстрого доступа. */}
-          <AppPressable
-            style={styles.actionCard}
-            onPress={() => setContactsVisible(true)}
-            testID="btn_profile_contacts"
-          >
-            <View style={styles.actionIcon}>
-              <Ionicons name="people" size={28} color={colors.accent} />
-            </View>
-            <Text style={styles.actionTitle}>Контакты</Text>
-            <Text style={styles.actionDesc}>
-              {contactCount > 0 ? `Всего: ${contactCount}` : 'Добавьте первого'}
-            </Text>
-          </AppPressable>
-        </View>
 
         {accountAgeLabel ? (
           <View style={{ alignItems: 'center', marginBottom: 8 }}>
@@ -795,6 +700,14 @@ function ProfileScreenImpl({
         ) : null}
 
         <Text style={styles.sectionTitle}>Ещё</Text>
+        {/* v4.32.602: журнал звонков — редкая справка, а не быстрое действие.
+            В сетке он занимал четверть экрана рядом с «поделиться собой»; здесь
+            он стоит там, где его и ищут, — в списке разделов. */}
+        <AppPressable style={styles.settingRow} onPress={() => setCallLogVisible(true)} testID="btn_call_log">
+          <Ionicons name="call-outline" size={22} color={colors.text} />
+          <Text style={styles.settingText}>Звонки</Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+        </AppPressable>
         {onOpenSettings ? (
           <AppPressable style={styles.settingRow} onPress={onOpenSettings}>
             <Ionicons name="settings-outline" size={22} color={colors.text} />
@@ -824,49 +737,6 @@ function ProfileScreenImpl({
             <Text style={styles.infoText}>Собеседники в локальной сети обнаруживаются автоматически по Wi-Fi LAN.</Text>
           ) : null}
         </View>
-
-        <Modal visible={seedPwdModal} transparent animationType="fade" testID="seed_password_modal" onRequestClose={() => setSeedPwdModal(false)}>
-          {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
-          <KeyboardAvoidingView
-            style={styles.exportKav}
-            behavior="padding"
-            keyboardVerticalOffset={0}
-          >
-            <View style={styles.modalBg}>
-              <View style={styles.modalBox}>
-                <Text style={styles.modalTitle}>Пароль приложения</Text>
-                <Text style={styles.modalHint}>Чтобы показать секретные слова, введите пароль</Text>
-                <TextInput
-                  style={styles.input}
-                  secureTextEntry
-                  value={seedPwd}
-                  onChangeText={setSeedPwd}
-                  placeholder="Пароль"
-                  placeholderTextColor={colors.textMuted}
-                  editable={!seedPwdBusy}
-                  testID="seed_view_password_input"
-                />
-                <AppPressable
-                  style={styles.btn}
-                  onPress={submitSeedPwdBtn.onPress}
-                  disabled={seedPwdBusy}
-                  testID="seed_view_password_ok"
-                >
-                  <Text style={styles.btnText}>{seedPwdBusy ? '…' : 'Показать'}</Text>
-                </AppPressable>
-                <AppPressable
-                  style={styles.linkBtn}
-                  onPress={() => {
-                    setSeedPwdModal(false);
-                    setSeedPwd('');
-                  }}
-                >
-                  <Text style={styles.linkText}>Отмена</Text>
-                </AppPressable>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </Modal>
 
         <Modal visible={showQrModal} transparent animationType="fade" onRequestClose={() => setShowQrModal(false)}>
           <View style={styles.modalBg}>
@@ -1052,30 +922,6 @@ function ProfileScreenImpl({
                   );
                 })}
               </ScrollView>
-            </View>
-          </View>
-        </Modal>
-
-        <Modal visible={seedModal} transparent animationType="fade" onRequestClose={() => { setSeedModal(false); setSeedWords([]); }}>
-          <View style={styles.modalBg} testID="seed_modal">
-            <View style={styles.modalBox}>
-              <Text style={styles.modalTitle}>Секретные слова для восстановления</Text>
-              <Text style={styles.modalWarning}>
-                <Text style={[styles.modalWarning, appleColorEmojiTextStyle()]}>⚠️</Text>
-                {' '}
-                Это ваш ключ к аккаунту. Запишите на бумаге и храните в надёжном месте!
-              </Text>
-              <ScrollView style={styles.seedScroll} testID="seed_words">
-                {seedWords.map((w, i) => (
-                  <View key={`${i}-${w}`} style={styles.seedRow}>
-                    <Text style={styles.seedNum}>{i + 1}</Text>
-                    <Text style={styles.seedWord}>{w}</Text>
-                  </View>
-                ))}
-              </ScrollView>
-              <AppPressable style={styles.btn} onPress={() => { setSeedModal(false); setSeedWords([]); }} testID="btn_close_modal">
-                <Text style={styles.btnText}>Я сохранил(а), закрыть</Text>
-              </AppPressable>
             </View>
           </View>
         </Modal>
@@ -1284,7 +1130,9 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
     padding: 0,
   },
   userIdLabel: { color: c.textSecondary, fontSize: sf(13), marginTop: 16 },
+  userIdRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   userIdBox: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 8,
@@ -1294,7 +1142,19 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: c.border,
-    maxWidth: '100%',
+  },
+  // Квадрат в рост соседней плашки: цель не меньше пальца, а рамка та же, что
+  // у адреса, — обе двери ведут к одному и тому же.
+  userIdQrBtn: {
+    marginTop: 8,
+    width: TOUCH_TARGET_MIN,
+    height: TOUCH_TARGET_MIN,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
   },
   userIdText: { color: c.text, fontSize: sf(13), flex: 1, marginRight: 8 },
   userIdHint: { color: c.textMuted, fontSize: sf(font.xs), marginTop: 8, textAlign: 'center', paddingHorizontal: 8 },
@@ -1331,24 +1191,6 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
     gap: 24,
     marginTop: 8,
   },
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  actionCard: {
-    width: '48%',
-    backgroundColor: c.surface,
-    borderRadius: radius.lg,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: c.border,
-    minWidth: 140,
-  },
-  actionIcon: { marginBottom: 8 },
-  actionTitle: { color: c.text, fontWeight: '700', fontSize: sf(15) },
-  actionDesc: { color: c.textMuted, fontSize: sf(12), marginTop: 4 },
   exportBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1402,7 +1244,6 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
     borderColor: c.border,
   },
   modalTitle: { color: c.text, fontWeight: '700', fontSize: sf(17), marginBottom: 8 },
-  modalWarning: { color: c.warning, fontSize: sf(13), marginBottom: 12 },
   modalHint: { color: c.textSecondary, fontSize: sf(13), marginBottom: 12, textAlign: 'center' },
   // v4.32.418: код лежал прямо на поверхности модалки — в тёмной теме без
   // светлого поля тишины, которого требует декодер. Белая плашка здесь не
@@ -1415,10 +1256,6 @@ function makeStyles(c: AppColors, sf: (base: number) => number) { return StyleSh
     backgroundColor: QR_CODE.fill,
     marginVertical: 12,
   },
-  seedScroll: { maxHeight: 280, marginBottom: 12 },
-  seedRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  seedNum: { width: 28, color: c.textMuted, fontSize: sf(13) },
-  seedWord: { color: c.text, fontSize: sf(15) },
   input: {
     borderWidth: 1,
     borderColor: c.border,
