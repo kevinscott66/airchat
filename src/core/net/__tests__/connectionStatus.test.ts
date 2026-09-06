@@ -108,6 +108,28 @@ describe('проводка', () => {
     expect(offline).toBeGreaterThan(connection);
   });
 
+  it('обещанная задержка показа совпадает с той, что даёт опрос', () => {
+    // Худший случай: состояние сменилось сразу после опроса. Первый опрос
+    // замечает смену через POLL_MS, и с этого мгновения отсчитывается порог —
+    // но проверяют его только опросы, поэтому порог 1500 мс перекрывается не на
+    // нём, а на следующем.
+    const POLL_MS = 1_000;
+    let shownAt: number | null = null;
+    const changedAt = 0;
+    let since: number | null = null;
+    for (let t = POLL_MS; t <= 10_000 && shownAt === null; t += POLL_MS) {
+      // Первый опрос после смены её и замечает.
+      if (since === null && t > changedAt) since = t;
+      if (since !== null && settledStatus('connecting', t - since) === 'connecting') shownAt = t;
+    }
+    expect(shownAt).toBe(3_000);
+
+    const doc = read('ui/components/ConnectionStatus.tsx');
+    const head = doc.slice(0, doc.indexOf('const POLL_MS'));
+    expect(head).toContain('не позже чем через три');
+    expect(head).not.toContain('две с');
+  });
+
   it('полоска берёт слова у модели, а не пишет их заново', () => {
     const ui = read('ui/components/ConnectionStatus.tsx');
     expect(ui).toContain("'Соединение…'");
