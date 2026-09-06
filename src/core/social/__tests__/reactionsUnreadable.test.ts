@@ -68,7 +68,7 @@ describe('чтение столбца с реакциями', () => {
   });
 
   it('запрет записи в непрочитанный столбец не тронут', () => {
-    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n}\n');
+    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n// ─── Groups & Channels');
     expect(body).toContain("return { ok: false, reason: 'unreadable' };");
     expect(body.indexOf("reason: 'unreadable'")).toBeLessThan(body.indexOf('SET reactions = ?'));
   });

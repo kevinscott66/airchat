@@ -37,7 +37,7 @@ import {
   persistDek,
 } from './localEncryption';
 import { bytesEqualConstTime, deriveLocalDekFromMnemonic } from './dekDerivation';
-import { reactionScopeSql, type ReactionScope } from './reactionScope';
+import { reactionScopeSql, type ReactionScope, type ReactionScopeSql } from './reactionScope';
 import { anyChanged } from './writeEcho';
 import {
   foundResult,
@@ -5367,48 +5367,81 @@ export async function toggleReaction(
     const d = await db();
     const { table, where, params } = reactionScopeSql(messageId, scope);
     const dek = await getOrCreateDataEncryptionKey();
-    const row = await d.getFirstAsync<{ reactions: string | null }>(
-      `SELECT reactions FROM ${table} WHERE ${where}`,
-      params
-    );
-    if (!row) return { ok: false, reason: 'missing' };
-    // v4.32.544: столбец, который не открылся нашим ключом, раньше приходил
-    // сюда пустой строкой — неотличимо от «реакций не было». Из неё
-    // получалась пустая карта, к ней добавлялась одна новая реакция, и запись
-    // ниже стирала ВСЕ прежние. Необратимо: старый шифртекст перетёрт.
-    const cell = readAtRestCell(row.reactions, dek);
-    if (!mayOverwrite(cell)) {
-      log.warn('reaction_column_unreadable', { group: isGroup });
-      return { ok: false, reason: 'unreadable' };
+    const txn = await beginImmediate(d);
+    let result: ReactionWriteResult;
+    try {
+      result = await applyReactionInTx(d, dek, { table, where, params }, { emoji, actorKey, on, isGroup });
+      await txn.commit();
+    } catch (inner) {
+      try { await txn.rollback(); } catch { /* ignore */ }
+      throw inner;
     }
-    const map = parseReactionMap(cellTextOrNull(cell));
-    // v4.32.509: до этой версии число различных эмодзи на одном сообщении
-    // ничем не ограничивалось. Сам эмодзи проверяется белым списком
-    // (reactionEnvelope), а количество ключей — нет: участник, приславший
-    // несколько тысяч разных валидных эмодзи, раздувал ячейку в базе и вешал
-    // отрисовку пузыря у всех остальных. Потолки живут в reactionMapPolicy.
-    const applied = applyReaction(map, emoji, actorKey, on);
-    if (!applied) {
-      // v4.32.608: какой именно потолок отказал — «своих реакций уже восемь»
-      // человек лечит сам, «на сообщении их слишком много» не лечит никак.
-      const limit = reactionAddRefusal(map, emoji, actorKey);
-      log.warn('reaction_rejected_limit', { group: isGroup, limit, actor: actorKey.slice(0, 8) });
-      return { ok: false, reason: limit === 'actor' ? 'ownLimit' : 'limit' };
-    }
-    const next = applied.on;
-    const json = serializeReactionMap(applied.map);
-    // group_messages всю жизнь писали сюда '{}' вместо NULL — сохраняем как
-    // было, чтобы не менять поведение чтения на той стороне.
-    await d.runAsync(
-      `UPDATE ${table} SET reactions = ? WHERE ${where}`,
-      [encryptAtRestNullable(isGroup ? (json ?? '{}') : json, dek), ...params]
-    );
-    emitChatWrites();
-    return { ok: true, on: next };
+    if (result.ok) emitChatWrites();
+    return result;
   } catch (e) {
     log.warn('toggle_reaction_failed', { group: isGroup, err: e instanceof Error ? e.message : String(e) });
     return { ok: false, reason: 'failed' };
   }
+}
+
+/**
+ * v4.32.615: SELECT-then-UPDATE над списком, который правят обе стороны.
+ *
+ * Между чтением и записью стоит await за ключом шифрования, а входящие
+ * разбираются без ожидания (`void this.handlePubsubLine(...)` в messaging.ts).
+ * Две посылки по одному сообщению читают один и тот же список, обе дописывают
+ * в него СВОЁ, и вторая запись стирает первую: реакция собеседника пропадает,
+ * прочитавший исчезает из списка, зритель сторис не засчитывается. Ошибки при
+ * этом никто не видит — обе операции сообщают об успехе.
+ *
+ * BEGIN IMMEDIATE ставит второго читателя за первым — как это давно сделано в
+ * touchConversation и touchGroupConversation.
+ */
+async function applyReactionInTx(
+  d: SQLite.SQLiteDatabase,
+  dek: Uint8Array,
+  sql: ReactionScopeSql,
+  req: { emoji: string; actorKey: string; on: boolean | 'toggle'; isGroup: boolean }
+): Promise<ReactionWriteResult> {
+  const { table, where, params } = sql;
+  const { emoji, actorKey, on, isGroup } = req;
+  const row = await d.getFirstAsync<{ reactions: string | null }>(
+    `SELECT reactions FROM ${table} WHERE ${where}`,
+    params
+  );
+  if (!row) return { ok: false, reason: 'missing' };
+  // v4.32.544: столбец, который не открылся нашим ключом, раньше приходил
+  // сюда пустой строкой — неотличимо от «реакций не было». Из неё
+  // получалась пустая карта, к ней добавлялась одна новая реакция, и запись
+  // ниже стирала ВСЕ прежние. Необратимо: старый шифртекст перетёрт.
+  const cell = readAtRestCell(row.reactions, dek);
+  if (!mayOverwrite(cell)) {
+    log.warn('reaction_column_unreadable', { group: isGroup });
+    return { ok: false, reason: 'unreadable' };
+  }
+  const map = parseReactionMap(cellTextOrNull(cell));
+  // v4.32.509: до этой версии число различных эмодзи на одном сообщении
+  // ничем не ограничивалось. Сам эмодзи проверяется белым списком
+  // (reactionEnvelope), а количество ключей — нет: участник, приславший
+  // несколько тысяч разных валидных эмодзи, раздувал ячейку в базе и вешал
+  // отрисовку пузыря у всех остальных. Потолки живут в reactionMapPolicy.
+  const applied = applyReaction(map, emoji, actorKey, on);
+  if (!applied) {
+    // v4.32.608: какой именно потолок отказал — «своих реакций уже восемь»
+    // человек лечит сам, «на сообщении их слишком много» не лечит никак.
+    const limit = reactionAddRefusal(map, emoji, actorKey);
+    log.warn('reaction_rejected_limit', { group: isGroup, limit, actor: actorKey.slice(0, 8) });
+    return { ok: false, reason: limit === 'actor' ? 'ownLimit' : 'limit' };
+  }
+  const next = applied.on;
+  const json = serializeReactionMap(applied.map);
+  // group_messages всю жизнь писали сюда '{}' вместо NULL — сохраняем как
+  // было, чтобы не менять поведение чтения на той стороне.
+  await d.runAsync(
+    `UPDATE ${table} SET reactions = ? WHERE ${where}`,
+    [encryptAtRestNullable(isGroup ? (json ?? '{}') : json, dek), ...params]
+  );
+  return { ok: true, on: next };
 }
 
 // ─── Groups & Channels ────────────────────────────────────────────────────────
@@ -6434,38 +6467,58 @@ export async function markGroupMessageSeen(
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
-    const row = await d.getFirstAsync<{ seen_by: string | null }>(
-      'SELECT seen_by FROM group_messages WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
-      [msgId, groupId, ownerProfileId]
-    );
-    if (!row) return;
-    // v4.32.189 (Round-19 #3): guard against corrupt/non-array seen_by.
-    // If a prior partial write stored `{}`, `current.includes` would throw
-    // and no row would ever be marked seen; if it stored anything else
-    // truthy, `push` on a non-array writes back broken JSON.
-    // v4.32.544: непрочитанный столбец больше не выглядит как «никто не
-    // читал». Раньше список прочитавших в этом случае перезаписывался одним
-    // нынешним читателем.
-    const seenCell = readAtRestCell(row.seen_by, dek);
-    if (!mayOverwrite(seenCell)) {
-      log.warn('group_seen_by_unreadable', {});
-      return;
+    // Серийность списка прочитавших — см. applyReactionInTx.
+    const txn = await beginImmediate(d);
+    let changed = false;
+    try {
+      changed = await recordGroupSeenInTx(d, dek, { msgId, groupId, ownerProfileId, viewerPubB64 });
+      await txn.commit();
+    } catch (inner) {
+      try { await txn.rollback(); } catch { /* ignore */ }
+      throw inner;
     }
-    // v4.32.591: разбор один на все списки ключей — см. social/viewerList.
-    const current = parseViewerList(cellTextOrNull(seenCell)).viewers;
-    if (current.includes(viewerPubB64)) return; // already recorded
-    // v4.32.201 (Round-31 #1): cap seen_by at 1000 to prevent a hostile
-    // group member spamming receipts from spoofed pubkeys bloating the row.
-    if (current.length >= 1000) return;
-    current.push(viewerPubB64);
-    await d.runAsync(
-      'UPDATE group_messages SET seen_by = ? WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
-      [encryptAtRestString(JSON.stringify(current), dek), msgId, groupId, ownerProfileId]
-    );
-    emitChatWrites();
+    if (changed) emitChatWrites();
   } catch (e) {
     log.warn('mark_group_message_seen_failed', { err: e instanceof Error ? e.message : String(e) });
   }
+}
+
+/** Дописать читателя в список. `true` — список действительно изменился. */
+async function recordGroupSeenInTx(
+  d: SQLite.SQLiteDatabase,
+  dek: Uint8Array,
+  req: { msgId: string; groupId: string; ownerProfileId: number; viewerPubB64: string }
+): Promise<boolean> {
+  const { msgId, groupId, ownerProfileId, viewerPubB64 } = req;
+  const row = await d.getFirstAsync<{ seen_by: string | null }>(
+    'SELECT seen_by FROM group_messages WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
+    [msgId, groupId, ownerProfileId]
+  );
+  if (!row) return false;
+  // v4.32.189 (Round-19 #3): guard against corrupt/non-array seen_by.
+  // If a prior partial write stored `{}`, `current.includes` would throw
+  // and no row would ever be marked seen; if it stored anything else
+  // truthy, `push` on a non-array writes back broken JSON.
+  // v4.32.544: непрочитанный столбец больше не выглядит как «никто не
+  // читал». Раньше список прочитавших в этом случае перезаписывался одним
+  // нынешним читателем.
+  const seenCell = readAtRestCell(row.seen_by, dek);
+  if (!mayOverwrite(seenCell)) {
+    log.warn('group_seen_by_unreadable', {});
+    return false;
+  }
+  // v4.32.591: разбор один на все списки ключей — см. social/viewerList.
+  const current = parseViewerList(cellTextOrNull(seenCell)).viewers;
+  if (current.includes(viewerPubB64)) return false; // already recorded
+  // v4.32.201 (Round-31 #1): cap seen_by at 1000 to prevent a hostile
+  // group member spamming receipts from spoofed pubkeys bloating the row.
+  if (current.length >= 1000) return false;
+  current.push(viewerPubB64);
+  await d.runAsync(
+    'UPDATE group_messages SET seen_by = ? WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
+    [encryptAtRestString(JSON.stringify(current), dek), msgId, groupId, ownerProfileId]
+  );
+  return true;
 }
 
 export type GroupStats = {
@@ -7209,11 +7262,29 @@ export async function countActiveStoriesByAuthor(
 export async function markStoryViewed(storyId: string, viewerPubB64: string, ownerProfileId?: number): Promise<void> {
   const d = await db();
   const pid = ownerProfileId ?? (await import('../identity/profileManager')).profileManager.getActiveProfile()?.id ?? 1;
+  const dek = await getOrCreateDataEncryptionKey();
+  // Серийность списка зрителей — см. applyReactionInTx.
+  const txn = await beginImmediate(d);
+  try {
+    await recordStoryViewInTx(d, dek, { storyId, viewerPubB64, pid });
+    await txn.commit();
+  } catch (inner) {
+    try { await txn.rollback(); } catch { /* ignore */ }
+    throw inner;
+  }
+}
+
+/** Дописать зрителя в список сторис. Вызывать только внутри открытой транзакции. */
+async function recordStoryViewInTx(
+  d: SQLite.SQLiteDatabase,
+  dek: Uint8Array,
+  req: { storyId: string; viewerPubB64: string; pid: number }
+): Promise<void> {
+  const { storyId, viewerPubB64, pid } = req;
   const row = await d.getFirstAsync<{ viewed_by: string | null }>(
     'SELECT viewed_by FROM stories WHERE id = ? AND owner_profile_id = ?', [storyId, pid]
   );
   if (!row) return;
-  const dek = await getOrCreateDataEncryptionKey();
   // v4.32.544: то же, что с реакциями и прочитавшими, — непрочитанный столбец
   // не повод объявить, что сторис никто не смотрел, и переписать список одним
   // нынешним зрителем.

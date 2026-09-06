@@ -2,7 +2,7 @@
  * Две записи разом больше не отменяют друг друга (v4.32.615).
  *
  * Дефект. Соединение с базой одно на весь процесс, ручных `BEGIN IMMEDIATE` в
- * local.ts девятнадцать, очереди между ними не было. Транзакции одного
+ * local.ts было девятнадцать, очереди между ними не было. Транзакции одного
  * соединения в SQLite не вкладываются: пока открыта первая, второй `BEGIN`
  * отвечает «cannot start a transaction within a transaction». Открытие стоит
  * перед `try` во всех девятнадцати местах, поэтому отказ уносил вызов целиком,
@@ -207,12 +207,12 @@ describe('храповик: транзакцию открывает только
     expect(CODE).toMatch(/execAsync\('BEGIN IMMEDIATE;'\)/);
   });
 
-  it('все девятнадцать мест зовут помощника и все закрывают транзакцию', () => {
-    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(19);
-    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(19);
-    // Фиксаций двадцать: touchGroupConversation фиксирует ещё и на раннем
+  it('все двадцать два места зовут помощника и все закрывают транзакцию', () => {
+    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(22);
+    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(22);
+    // Фиксаций двадцать три: touchGroupConversation фиксирует ещё и на раннем
     // выходе, иначе транзакция уехала бы за пределы вызова.
-    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(20);
+    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(23);
   });
 
   it('помощник ждёт предшественника до BEGIN, а не после', () => {

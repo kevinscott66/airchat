@@ -144,10 +144,10 @@ describe('слой чтения групп', () => {
 describe('разбор списка ключей в одном месте', () => {
   it('оба пути записи спрашивают тот же модуль', () => {
     const src = LOCAL();
-    const seen = slice(src, 'export async function markGroupMessageSeen(', '\nexport ');
+    const seen = slice(src, 'async function recordGroupSeenInTx(', '\nexport ');
     expect(seen).toMatch(/const current = parseViewerList\(cellTextOrNull\(seenCell\)\)\.viewers/);
     expect(seen).not.toMatch(/JSON\.parse\(storedSeenBy\)/);
-    const viewed = slice(src, 'export async function markStoryViewed(', '\n}');
+    const viewed = slice(src, 'async function recordStoryViewInTx(', '\n}');
     expect(viewed).toMatch(/const viewers = parseViewerList\(cellTextOrNull\(viewedCell\)\)\.viewers/);
     expect(viewed).not.toMatch(/JSON\.parse\(plain\)/);
   });
@@ -158,8 +158,8 @@ describe('разбор списка ключей в одном месте', () =
 
   it('запись по-прежнему отказывается трогать непрочитанный столбец', () => {
     const src = LOCAL();
-    expect(slice(src, 'export async function markGroupMessageSeen(', '\nexport ')).toMatch(/if \(!mayOverwrite\(seenCell\)\)/);
-    expect(slice(src, 'export async function markStoryViewed(', '\n}')).toMatch(/if \(!mayOverwrite\(viewedCell\)\)/);
+    expect(slice(src, 'async function recordGroupSeenInTx(', '\nexport ')).toMatch(/if \(!mayOverwrite\(seenCell\)\)/);
+    expect(slice(src, 'async function recordStoryViewInTx(', '\n}')).toMatch(/if \(!mayOverwrite\(viewedCell\)\)/);
   });
 });
 

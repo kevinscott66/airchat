@@ -78,12 +78,12 @@ describe('текст отказа', () => {
 
 describe('запись в свою базу', () => {
   it('ни один выход не возвращает безмолвный null', () => {
-    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n}\n');
+    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n// ─── Groups & Channels');
     expect(body.split('\n').filter((l) => l.trim() === 'return null;')).toEqual([]);
   });
 
   it('каждая из причин названа своим словом', () => {
-    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n}\n');
+    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n// ─── Groups & Channels');
     expect(body).toContain("return { ok: false, reason: 'missing' };");
     expect(body).toContain("return { ok: false, reason: 'unreadable' };");
     expect(body).toContain("return { ok: false, reason: limit === 'actor' ? 'ownLimit' : 'limit' };");
@@ -92,7 +92,7 @@ describe('запись в свою базу', () => {
   });
 
   it('отказ по непрочитанному столбцу стоит ДО записи', () => {
-    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n}\n');
+    const body = slice(LOCAL(), 'export async function toggleReaction(', '\n// ─── Groups & Channels');
     expect(body.indexOf("reason: 'unreadable'")).toBeLessThan(body.indexOf('SET reactions = ?'));
   });
 

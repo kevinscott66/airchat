@@ -44,9 +44,9 @@ function methodBody(src: string, head: string): string {
   return rest.slice(0, end);
 }
 
-const TOGGLE = (): string => bodyOf(LOCAL, 'export async function toggleReaction(');
-const SEEN = (): string => bodyOf(LOCAL, 'export async function markGroupMessageSeen(');
-const STORY = (): string => bodyOf(LOCAL, 'export async function markStoryViewed(');
+const TOGGLE = (): string => bodyOf(LOCAL, 'async function applyReactionInTx(');
+const SEEN = (): string => bodyOf(LOCAL, 'async function recordGroupSeenInTx(');
+const STORY = (): string => bodyOf(LOCAL, 'async function recordStoryViewInTx(');
 const ADD_R = (): string => methodBody(FEED, '  async addReaction(');
 const RM_R = (): string => methodBody(FEED, '  async removeReaction(');
 const UPD_C = (): string => methodBody(FEED, '  async updateCommentReactions(');
