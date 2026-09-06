@@ -30,6 +30,7 @@ import {
 import { shouldShareLastSeenWith, parseLastSeenVisibility, type LastSeenVisibility } from './presencePolicy';
 import { privacyPrefTryGetFor } from '../settings/privacyPrefs';
 import { canReachPeer } from './sendGate';
+import { acceptControlTs } from './controlWatermark';
 import {
   PRESENCE_PREF_PREFIX,
   encodePresencePrefEnvelope,
@@ -196,6 +197,12 @@ export async function handleIncomingLastSeenPref(
   // вызывающего, а не у работающей службы: адресат просьбы — владелец пары
   // ключей, которой конверт расшифрован, и он мог перестать быть видимым,
   // пока сообщение шло.
+  // v4.32.615: повтор старого конверта откатывал состояние. Окно приёма — 30
+  // суток, а единственной защитой от повтора был Set в памяти, гибнущий при
+  // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
+  // появится строка с его messageId. Отметка времени монотонна для каждой
+  // пары «профиль — собеседник» (см. controlWatermark.ts).
+  if (!(await acceptControlTs('presence', senderPubB64, ownerProfileId, env.ts))) return true;
   setPeerLastSeenAllowedFor(ownerProfileId, senderPubB64, env.show);
   log.info('presence_pref_applied', { from: senderPubB64.slice(0, 12), show: env.show });
   return true;

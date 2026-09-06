@@ -32,6 +32,7 @@ import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from 
 import { log } from '../logger';
 import { SYS_LINE_PREFIX } from './sysLineGuard';
 import { setCopyGuard, setPeerCopyGuardFor } from './copyGuard';
+import { acceptControlTs } from './controlWatermark';
 import {
   COPY_GUARD_PREFIX,
   encodeCopyGuardEnvelope,
@@ -133,6 +134,12 @@ export async function handleIncomingCopyGuard(
   if (!text.startsWith(COPY_GUARD_PREFIX)) return false;
   const env = decodeCopyGuardEnvelope(text);
   if (!env || !senderPubB64) return true;
+  // v4.32.615: повтор старого конверта откатывал состояние. Окно приёма — 30
+  // суток, а единственной защитой от повтора был Set в памяти, гибнущий при
+  // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
+  // появится строка с его messageId. Отметка времени монотонна для каждой
+  // пары «профиль — собеседник» (см. controlWatermark.ts).
+  if (!(await acceptControlTs('copyguard', senderPubB64, ownerPid, env.ts))) return true;
   // Переписка определяется ПОДПИСАННЫМ отправителем: иначе любой контакт
   // запирал бы чужой разговор. Профиль-владелец приходит от службы переписки —
   // активным к этому моменту может быть уже другой (v4.32.481).

@@ -14,6 +14,7 @@
  * Плюс обе стороны видят системную строку «кто и что включил».
  */
 import { setConversationDisappearTimer, saveChatMessage } from '../storage/local';
+import { acceptControlTs } from './controlWatermark';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
 import { log } from '../logger';
@@ -143,6 +144,12 @@ export async function handleIncomingDisappear(
   if (!env || !senderPubB64) return true;
   // Профиль-владелец — от службы переписки (v4.32.481).
   const pid = ownerPid;
+  // v4.32.615: повтор старого конверта откатывал состояние. Окно приёма — 30
+  // суток, а единственной защитой от повтора был Set в памяти, гибнущий при
+  // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
+  // появится строка с его messageId. Отметка времени монотонна для каждой
+  // пары «профиль — собеседник» (см. controlWatermark.ts).
+  if (!(await acceptControlTs('disappear', senderPubB64, pid, env.ts))) return true;
   // Разговор определяется ПОДПИСАННЫМ отправителем DM: иначе любой контакт
   // включал бы автоудаление в чужой переписке.
   await setConversationDisappearTimer(senderPubB64, pid, env.ms);
