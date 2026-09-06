@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import notifee from '@notifee/react-native';
 import { promptMessageReminder } from '../utils/messageReminder';
+import { scheduledLabel } from '../utils/plural';
 import { AppPressable } from '../components/AppPressable';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
@@ -3513,7 +3514,7 @@ function ChatThreadView({
           >
             <Ionicons name="time-outline" size={14} color={colors.accent} style={{ marginRight: 6 }} />
             <Text style={{ flex: 1, color: colors.accent, fontSize: 13 }}>
-              {scheduledMsgs.length} запланированных сообщений
+              {scheduledLabel(scheduledMsgs.length)}
             </Text>
             <Ionicons name="chevron-forward" size={14} color={colors.accent} />
           </AppPressable>

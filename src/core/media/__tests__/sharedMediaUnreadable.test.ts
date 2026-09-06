@@ -93,8 +93,11 @@ describe('строка галереи с непрочитанной ячейко
     const src = fs.readFileSync(path.join(__dirname, '..', 'sharedMediaScan.ts'), 'utf8');
     const imports = src.match(/^import .*$/gm) ?? [];
     expect(imports).toEqual(["import { pluralRu } from '../storage/ruPlural';"]);
+    // v4.32.614: правило окончаний живёт в core/text/ruPlural и больше нигде.
+    // Здешняя подпись — обёртка над ним, и это её единственная зависимость:
+    // ни базы, ни ключей, ни отрисовки в счёте окончания по-прежнему нет.
     const plural = fs.readFileSync(path.join(__dirname, '..', '..', 'storage', 'ruPlural.ts'), 'utf8');
-    expect(/^import\s/m.test(plural)).toBe(false);
+    expect(plural.match(/^import .*$/gm)).toEqual(["import { ruPlural } from '../text/ruPlural';"]);
   });
 });
 

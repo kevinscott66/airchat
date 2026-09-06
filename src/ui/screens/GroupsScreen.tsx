@@ -265,7 +265,7 @@ const GRP_RECENTLY_DELETED_TTL_MS = 7 * 86_400_000;
 // v4.32.227 (BUG-11): корректная русская плюрализация. Раньше всегда выводилось
 // «N участников» → «1 участников». Единый источник правды теперь в
 // ../utils/plural; реэкспортируем здесь для обратной совместимости.
-import { ruPlural, membersLabel, subscribersLabel } from '../utils/plural';
+import { ruPlural, membersLabel, subscribersLabel, scheduledLabel } from '../utils/plural';
 import { ambiguityMessage, memberLabel, resolveMember } from '../utils/memberLookup';
 import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
@@ -4384,7 +4384,7 @@ function GroupChatScreen({
             >
               <Ionicons name="time-outline" size={16} color={colors.accent} />
               <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '600' }}>
-                {grpScheduledMsgs.length} запланированных
+                {scheduledLabel(grpScheduledMsgs.length)}
               </Text>
             </AppPressable>
           ) : null}

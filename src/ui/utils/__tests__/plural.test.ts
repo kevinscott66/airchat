@@ -4,7 +4,7 @@
  * Правило трёх форм ошибаются чаще всего на 11–14 (там форма как у «пять»,
  * хотя последняя цифра 1–4) и на 111/112 — их и проверяем отдельно.
  */
-import { membersLabel, ruPlural, subscribersLabel, votesLabel } from '../plural';
+import { devicesLabel, membersLabel, ruPlural, scheduledLabel, subscribersLabel, votesLabel } from '../plural';
 
 const FORMS: [string, string, string] = ['голос', 'голоса', 'голосов'];
 
@@ -51,6 +51,21 @@ describe('готовые подписи', () => {
     expect(votesLabel(2)).toBe('2 голоса');
     expect(votesLabel(5)).toBe('5 голосов');
     expect(votesLabel(11)).toBe('11 голосов');
+  });
+
+  it('devicesLabel', () => {
+    expect(devicesLabel(1)).toBe('1 устройство');
+    expect(devicesLabel(2)).toBe('2 устройства');
+    expect(devicesLabel(5)).toBe('5 устройств');
+    expect(devicesLabel(21)).toBe('21 устройство');
+  });
+
+  it('scheduledLabel склоняет и прилагательное, и существительное', () => {
+    expect(scheduledLabel(1)).toBe('1 запланированное сообщение');
+    expect(scheduledLabel(2)).toBe('2 запланированных сообщения');
+    expect(scheduledLabel(5)).toBe('5 запланированных сообщений');
+    expect(scheduledLabel(11)).toBe('11 запланированных сообщений');
+    expect(scheduledLabel(21)).toBe('21 запланированное сообщение');
   });
 
   it('membersLabel и subscribersLabel', () => {

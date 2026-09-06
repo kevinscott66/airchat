@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { runWithConcurrency } from '../../core/utils/runWithConcurrency';
 import { useTabRef } from '../TabRefContext';
+import { devicesLabel } from '../utils/plural';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import Constants from 'expo-constants';
 import {
@@ -1812,7 +1813,7 @@ function SettingsScreenImpl({
             <Ionicons name="wifi-outline" size={22} color={lanPeerCount > 0 ? colors.accent : colors.textMuted} style={{ marginRight: 10 }} />
             <View style={styles.rowBody}>
               <Text style={styles.label}>Wi-Fi LAN</Text>
-              <Text style={styles.desc}>{lanPeerCount > 0 ? `${lanPeerCount} устройств в сети` : 'Нет устройств рядом'}</Text>
+              <Text style={styles.desc}>{lanPeerCount > 0 ? `${devicesLabel(lanPeerCount)} в сети` : 'Нет устройств рядом'}</Text>
             </View>
             <StatusBadge tone={lanPeerCount > 0 ? 'accent' : 'muted'} text={lanPeerCount > 0 ? String(lanPeerCount) : '0'} />
           </View>

@@ -72,10 +72,26 @@ describe('копий правила больше нет', () => {
     };
     const files = walk(SRC);
     expect(files.length).toBeGreaterThan(100);
+    // v4.32.614: сторож смотрел на одно имя — `ruPlural`, — и четвёртая копия
+    // проехала мимо него, назвавшись `pluralRu`. Теперь ловится любое имя со
+    // словом «plural», а разрешено ему быть обёрткой: файл, который зовёт
+    // общее правило, копией не является.
+    const DEFINES = /function\s+\w*[Pp]lural\w*\s*\(/;
+    const USES_HOME = /from '[^']*text\/ruPlural'/;
     const offenders = files
       .map((f) => ({ key: f.slice(SRC.length + 1), src: readFileSync(f, 'utf8') }))
-      .filter((f) => f.key !== HOME && /function ruPlural\s*\(/.test(f.src))
+      .filter((f) => f.key !== HOME && DEFINES.test(f.src) && !USES_HOME.test(f.src))
       .map((f) => f.key);
     expect(offenders).toEqual([]);
+
+    // v4.32.614: и вторая половина той же беды — счётчик, к которому слово
+    // приписано одной формой. «1 участников», «1 устройств в сети», «1
+    // запланированных» человек видит на самом обычном числе, а не на 111.
+    const HARDCODED = /\}\s*(участник\w*|устройств\w*|запланированн\w*|подписчик\w*|голос\w*)\b/;
+    const stuck = files
+      .map((f) => ({ key: f.slice(SRC.length + 1), src: readFileSync(f, 'utf8') }))
+      .filter((f) => HARDCODED.test(f.src))
+      .map((f) => f.key);
+    expect(stuck).toEqual([]);
   });
 });

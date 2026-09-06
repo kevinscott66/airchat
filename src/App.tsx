@@ -48,6 +48,7 @@ import { parseAppLink } from './core/net/appLink';
 import { setAppLinkHandler } from './core/net/appLinkRouter';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
+import { membersLabel } from './ui/utils/plural';
 import { AppNotifyHost } from './ui/components/AppNotifyHost';
 import { LoginScreen } from './ui/screens/LoginScreen';
 import { FeedScreen } from './ui/screens/FeedScreen';
@@ -1027,7 +1028,7 @@ function MainTabs({
             requireApproval ? 'Запрос на вступление' : 'Присоединиться к группе',
             requireApproval
               ? `Группа "${safeName}" требует одобрения администратора. Отправить запрос?`
-              : `"${safeName}" — ${payload.members.length} участников`,
+              : `"${safeName}" — ${membersLabel(payload.members.length)}`,
             [
               { text: 'Отмена', style: 'cancel' },
               {
