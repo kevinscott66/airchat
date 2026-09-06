@@ -2952,8 +2952,40 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
     const txn = await beginImmediate(d);
     try {
       await d.runAsync(
-        `INSERT OR REPLACE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview, transport)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        /*
+         * v4.32.615: было INSERT OR REPLACE, а REPLACE в SQLite — это снос
+         * строки и вставка новой. Колонки, которых нет в списке, получали
+         * значение по умолчанию: reactions и edited_at обнулялись, starred и
+         * forwarded_from — тоже. Список тут короче таблицы на четыре колонки,
+         * и добавлены они позже миграциями (edited_at, reactions,
+         * forwarded_from, starred), а список остался прежним.
+         *
+         * Сносило это не редкость, а обычный ход дел: повтор из очереди
+         * (retrySend сохраняет статус 'delivered' полями из конверта) стирал
+         * реакцию, уже приехавшую на это сообщение, снимал «Избранное» и
+         * убирал метку правки вместе с самой правкой — текст возвращался из
+         * конверта. При межустройственной синхронизации потеря шла в обе
+         * стороны: получившее устройство обнуляло свою строку, отпечаток
+         * расходился с сохранённой головой, и следующий проход отправлял
+         * обнулённую строку обратно автору реакции.
+         *
+         * ON CONFLICT DO UPDATE трогает ровно перечисленное. Образец — рядом,
+         * в applySyncGroupMessage: у групповых сообщений это сделано так с
+         * самого начала.
+         */
+        `INSERT INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview, transport)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (id, owner_profile_id) DO UPDATE SET
+           contact_pub_b64 = excluded.contact_pub_b64,
+           cid = excluded.cid,
+           text = excluded.text,
+           direction = excluded.direction,
+           status = excluded.status,
+           media_cids = excluded.media_cids,
+           created_at = excluded.created_at,
+           reply_to_id = excluded.reply_to_id,
+           reply_to_preview = excluded.reply_to_preview,
+           transport = excluded.transport`,
         [
           row.id,
           row.contactPubB64,
@@ -2966,9 +2998,9 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
           ownerPid,
           row.replyToId ?? null,
           replyEnc,
-          // v4.32.563: INSERT OR REPLACE переписывает строку целиком. Не
-          // перечислить маршрут здесь — значит стирать его при первом же
-          // сохранении нового статуса, то есть всегда.
+          // v4.32.563: upsert переписывает перечисленные столбцы. Не
+          // перечислить маршрут здесь (и в DO UPDATE выше) — значит стирать
+          // его при первом же сохранении нового статуса, то есть всегда.
           row.transport ?? null,
         ]
       );
@@ -3094,8 +3126,26 @@ export async function importRawChatMessageRows(
     try {
       for (const r of sanitized) {
         await d.runAsync(
-          `INSERT OR REPLACE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          /*
+           * v4.32.615: то же, что и в upsertChatMessage, — REPLACE сносил
+           * строку целиком. Здесь список ещё короче: в нём нет и transport.
+           * Восстановление из копии и приём чужой ревизии при синхронизации
+           * сбрасывали реакции, «Избранное» и метку правки у каждого
+           * сообщения, которое уже было на устройстве, — притом что в самой
+           * копии эти поля есть (выгрузка идёт через SELECT *).
+           */
+          `INSERT INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (id, owner_profile_id) DO UPDATE SET
+             contact_pub_b64 = excluded.contact_pub_b64,
+             cid = excluded.cid,
+             text = excluded.text,
+             direction = excluded.direction,
+             status = excluded.status,
+             media_cids = excluded.media_cids,
+             created_at = excluded.created_at,
+             reply_to_id = excluded.reply_to_id,
+             reply_to_preview = excluded.reply_to_preview`,
           [
             r.id,
             r.contact_pub_b64,

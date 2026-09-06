@@ -28,13 +28,18 @@ describe('столбец маршрута', () => {
     expect(body).toContain('catch');
   });
 
-  it('без столбца в INSERT OR REPLACE маршрут стирался бы при смене статуса', () => {
+  it('без столбца в списке upsert маршрут стирался бы при смене статуса', () => {
     const up = LOCAL.slice(LOCAL.indexOf('export async function upsertChatMessage'));
     const stmt = up.slice(0, up.indexOf('COMMIT'));
     expect(stmt).toContain('reply_to_preview, transport)');
     expect(stmt).toContain('row.transport ?? null');
+    // v4.32.615: INSERT OR REPLACE заменён на ON CONFLICT DO UPDATE, поэтому
+    // маршрут теперь должен стоять в двух местах — в списке вставки и в
+    // списке обновления. Пропустить его во втором так же губительно, как
+    // раньше было пропустить в первом.
+    expect(stmt).toContain('transport = excluded.transport');
     // Плейсхолдеров ровно столько же, сколько столбцов.
-    const cols = (stmt.match(/INSERT OR REPLACE INTO chat_messages \(([^)]+)\)/) as RegExpMatchArray)[1];
+    const cols = (stmt.match(/INSERT INTO chat_messages \(([^)]+)\)/) as RegExpMatchArray)[1];
     const vals = (stmt.match(/VALUES \(([^)]+)\)/) as RegExpMatchArray)[1];
     expect(vals.split(',').length).toBe(cols.split(',').length);
   });
