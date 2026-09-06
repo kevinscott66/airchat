@@ -877,6 +877,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // v4.32.612: публикацию по ссылке может понадобиться сначала забрать с
   // сервера. Это сеть, и молчать всё это время нельзя.
   const [linkLoading, setLinkLoading] = useState(false);
+  /** Token последнего отработанного перехода по ссылке — чтобы не повторять его. */
+  const handledJumpTokenRef = useRef<number | null>(null);
   const [queueLen, setQueueLen] = useState(0);
   const [optimisticPosts, setOptimisticPosts] = useState<FeedPostRow[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
@@ -2471,7 +2473,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
    */
   useEffect(() => {
     const postId = postJump?.postId;
-    if (!postId) return;
+    const token = postJump?.token;
+    if (!postId || !token) return;
+    // v4.32.614: одно нажатие — один переход. Личность loadFeed меняется, когда
+    // доезжает адрес шлюза: gateway приходит из loadConfig уже после первого
+    // рендера, а loadFeed объявлен от него. Без этой отметки переход по ссылке
+    // отрабатывал дважды — два запроса к серверу за одной и той же записью и
+    // два открытия комментариев на одно нажатие. Отметка идёт по token, а он
+    // у каждого нажатия свой.
+    if (handledJumpTokenRef.current === token) return;
+    handledJumpTokenRef.current = token;
     let alive = true;
     void (async () => {
       try {
@@ -2491,7 +2502,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         try {
           fetched = await fetchPostByLink(postId);
         } finally {
-          if (alive) setLinkLoading(false);
+          // v4.32.614: раньше здесь стояло `alive`, то есть отметка этого
+          // запуска эффекта. Если человек нажимал вторую ссылку, пока грузилась
+          // первая, старый запуск объявлялся мёртвым и оверлей не гасил никто:
+          // новый запуск находил запись в базе и выходил, не трогая флаг.
+          // Оверлей общий на экран, поэтому и гасить его нужно по живости
+          // экрана, а не запуска.
+          if (isMountedRef.current) setLinkLoading(false);
         }
         if (!alive) return;
         if (fetched) {
@@ -2500,17 +2517,17 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           return;
         }
         log.info('feed_post_link_missing', { post: postId.slice(0, 24) });
-        showError('Публикация не найдена — возможно, она удалена или автор не открывал к ней доступ по ссылке');
+        showError(t('feed.linkMissing'));
       } catch (e) {
         if (!alive) return;
         log.warn('feed_post_link_failed', { err: rawErrorText(e) });
-        showError('Не удалось открыть публикацию');
+        showError(t('feed.linkFailed'));
       }
     })();
     return () => {
       alive = false;
     };
-  }, [postJump?.token, postJump?.postId, openComments, loadFeed]);
+  }, [postJump?.token, postJump?.postId, openComments, loadFeed, t]);
 
   const closeComments = useCallback(() => {
     setCommentPostId(null);
@@ -2930,11 +2947,17 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     if (item.authorDid !== did) return;
     void publishPostLinkCopy(pair, item.id).then((ok) => {
       if (ok) return;
-      // Молчать нельзя: со стороны автора ссылка выглядит скопированной, а у
+      // Молчать нельзя: со стороны автора ссылка выглядит готовой, а у
       // получателя не откроется — ровно та жалоба, с которой всё началось.
-      showError(`${COPIED_LINK}, но выложить публикацию не удалось: у того, у кого её ещё нет, она не откроется`);
+      //
+      // v4.32.614: отсюда убран зачин «Ссылка скопирована». Эта же функция
+      // зовётся из «поделиться», где в буфер обмена ничего не клали, — то
+      // есть половину времени зачин был неправдой; а в «скопировать ссылку»
+      // он просто повторял тост, показанный секундой раньше, и выходило два
+      // сообщения, спорящих друг с другом.
+      showError(t('feed.linkPublishFailed'));
     }).catch(() => { /* ошибка уже показана выше */ });
-  }, [pair, did]);
+  }, [pair, did, t]);
 
   const handleNativeShare = useCallback((item: FeedPostRow) => {
     if (!mayRepublishFeedPost(item)) {
@@ -3051,7 +3074,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         {/* Полноэкранный оверлей только вне модалки — иначе дублируется с кнопкой «Публикация…». */}
         <LoadingOverlay
           visible={publishing || linkLoading}
-          message={publishing ? t('feed.sending') : 'Загружаем публикацию…'}
+          message={publishing ? t('feed.sending') : t('feed.linkLoading')}
         />
         {/* v4.32.36: компактный header — убраны subtitle (лишние 2 строки) и idRow
             (DID дублируется в Профиле). Это поднимает первый пост ближе к верху
@@ -4314,9 +4337,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   {/* v4.32.606: ссылка на публикацию. Раньше её нельзя было
                       получить нигде: «поделиться» отдавало отрывок текста, и
                       вернуться к самой записи было не по чему. */}
+                  {/* v4.32.614: копию на сервер кладёт только автор — чужую
+                      запись подписать нечем. Значит, ссылка на чужую запись
+                      откроется лишь у тех, у кого она и так есть, и обещать
+                      человеку большее нельзя. */}
                   {row('link-outline', t('feed.menuCopyLink'), () => {
                     shareLinkCopy(p);
-                    void Clipboard.setStringAsync(buildPostLink(p.id).web).then(() => showSuccess(COPIED_LINK));
+                    void Clipboard.setStringAsync(buildPostLink(p.id).web)
+                      .then(() => showSuccess(isSelfP ? COPIED_LINK : t('feed.linkCopiedForeign')));
                   })}
                   {hasText ? (
                     isTranslatedP
