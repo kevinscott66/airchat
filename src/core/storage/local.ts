@@ -4023,10 +4023,18 @@ export async function deleteChatMessage(id: string, ownerProfileId: number): Pro
       [id, ownerProfileId],
       doomed,
     );
-    await d.runAsync('DELETE FROM chat_messages WHERE id = ? AND owner_profile_id = ?', [
+    const res = await d.runAsync('DELETE FROM chat_messages WHERE id = ? AND owner_profile_id = ?', [
       id,
       ownerProfileId,
     ]);
+    // v4.32.615: то же, что в updateChatMessageText. Ответ «удалено» при нуле
+    // удалённых строк доходит до sendDeleteTombstone, а оттуда — до обещания
+    // «удалено у вас». Подчищать после несуществующей строки нечего: doomed
+    // пуст, а следы опроса без самого сообщения и так сироты.
+    if (!anyChanged(res)) {
+      log.warn('chat_message_delete_no_row', { id: id.slice(0, 8), pid: ownerProfileId });
+      return false;
+    }
     await deletePollArtifacts(d, [id], ownerProfileId);
     await dropOrphanBlobCache(doomed);
     emitChatWrites();
@@ -4125,10 +4133,20 @@ export async function updateChatMessageText(
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
     const textEnc = encryptAtRestString(newText, dek);
-    await d.runAsync(
+    const res = await d.runAsync(
       'UPDATE chat_messages SET text = ?, edited_at = ? WHERE id = ? AND owner_profile_id = ?',
       [textEnc, Date.now(), id, ownerProfileId]
     );
+    // v4.32.615: результат запроса не смотрели, и «ни одной строки не подошло»
+    // возвращалось как успех — ровно так же, как настоящая правка. Групповой
+    // близнец (updateGroupMessageText) считает строки с v4.32.371; здесь
+    // проверки не было, и editMessage строил на этом ответе своё сообщение
+    // человеку: «Сообщение изменено у вас, но собеседнику отправить не
+    // удалось» показывалось и тогда, когда у себя не изменилось ничего.
+    if (!anyChanged(res)) {
+      log.warn('chat_message_edit_no_row', { id: id.slice(0, 8), pid: ownerProfileId });
+      return false;
+    }
     emitChatWrites();
     return true;
   } catch (e) {
