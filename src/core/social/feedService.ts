@@ -2084,6 +2084,35 @@ async function buildOwnPostEnvelope(
 }
 
 /**
+ * Убрать копию, если публикации на устройстве уже нет (v4.32.614).
+ *
+ * Запрос к серверу живёт до PUBLIC_POST_TIMEOUT_MS, а конверт подписывается
+ * ДО него. Между «поделиться» и ответом сервера помещается целое удаление:
+ * `deleteFeedPost` стирает строку, шлёт контактам `feed_delete` и просит
+ * сервер убрать копию — а наш PUT приходит следом и кладёт её обратно. Дальше
+ * убирать её было некому: у удаления свой запрос уже прошёл успешно, и в
+ * очередь повторов оно ничего не поставило. Ссылка после этого открывала
+ * запись, которой нет ни у автора, ни у контактов, — и открывала кому угодно.
+ *
+ * Порядок в `deleteFeedPost` таков, что вторая сторона гонки закрыта им же:
+ * строка удаляется РАНЬШЕ запроса к серверу. Значит, если наша проверка
+ * прошла раньше их `deletePost`, их запрос уйдёт позже нашего PUT и уберёт
+ * копию; а если позже — публикации мы уже не увидим и уберём копию сами.
+ *
+ * `true` — публикации нет, копию убрали или поставили в очередь повторов.
+ */
+async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  const s = await ensureStorage();
+  if (await s.getPost(postId)) return false;
+  log.warn('public_post_copy_outlived_post', { postId: postId.slice(0, 24) });
+  const myDid = publicKeyToDidKey(pair.publicKey);
+  if (!(await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId)))) {
+    await queueLinkCopyDelete(pair, postId);
+  }
+  return true;
+}
+
+/**
  * Выложить копию своей публикации, чтобы ссылка на неё открывалась у того, у
  * кого записи нет. Зовётся при «скопировать ссылку» и «поделиться».
  *
@@ -2096,7 +2125,10 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
   try {
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
-    return await putPublicPostCopy(pair, payload);
+    const ok = await putPublicPostCopy(pair, payload);
+    // Пока копия шла на сервер, публикацию могли удалить — тогда она не «выложена».
+    if (ok && await dropCopyIfPostGone(pair, postId)) return false;
+    return ok;
   } catch (e) {
     log.warn('public_post_share_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
     return false;
@@ -2122,7 +2154,9 @@ export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string):
     if (!(await publicPostCopyExists(postId))) return true;
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
-    return await putPublicPostCopy(pair, payload);
+    const ok = await putPublicPostCopy(pair, payload);
+    if (ok) await dropCopyIfPostGone(pair, postId);
+    return ok;
   } catch (e) {
     log.warn('public_post_refresh_failed', {
       postId: postId.slice(0, 24),
