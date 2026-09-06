@@ -1,0 +1,181 @@
+/**
+ * Отложенные события ленты: реакция, правка и голос, приехавшие раньше поста.
+ *
+ * Дефект (v4.32.615). Реакция, правка, голос и просмотр отбрасывались, если
+ * публикации, к которой они относятся, у получателя ещё нет: addReaction
+ * возвращала `false` («поста нет»), а feed_edit/feed_poll_vote выходили по
+ * `feed_edit_unknown_post` / `feed_poll_vote_unknown_post`. Повтора у них не
+ * бывает: в addAndBroadcastReaction прямо написано, что очереди повторов у
+ * реакции нет, — то есть событие пропадало навсегда.
+ *
+ * Порядок доставки не гарантирован ничем. Пост доходит до третьего лица через
+ * пересылку по цепочке (до трёх переходов), реакция на него — напрямую от
+ * поставившего, и это два независимых пути с разной задержкой. Отдельно
+ * складывается переигрывание накопленного за двенадцать часов: там порядок
+ * задаёт очередь отправителя, а не время события.
+ *
+ * Решение — маленькая полка: событие без публикации откладывается, а когда
+ * публикация приходит, всё отложенное по её номеру применяется по возрастанию
+ * времени. Полка ограничена со всех сторон, потому что её наполняет чужой
+ * подписанный конверт: номер публикации придумывает отправитель, и завалить
+ * полку ссылками на несуществующие публикации может кто угодно из контактов.
+ *
+ * Просмотры (`feed_view`) сюда не кладутся намеренно: их много (у заметной
+ * публикации — тысячи), а ценность каждого — единица в счётчике. По той же
+ * причине их не пересылают по цепочке. Комментарии тоже: у них своя очередь
+ * повторов, которая шлёт конверт заново до получаса, и отложить их — значит
+ * держать одно и то же в двух местах.
+ */
+import type { FeedEnvelopePayload } from './feedTransport';
+
+/** Сколько живёт отложенное событие. Дольше суток пост уже не придёт. */
+export const DEFERRED_TTL_MS = 24 * 60 * 60 * 1000;
+/** Сколько разных публикаций держим на полке. */
+export const DEFERRED_MAX_POSTS = 32;
+/** Сколько событий на одну публикацию. */
+export const DEFERRED_MAX_PER_POST = 24;
+
+export type DeferredType = 'feed_reaction' | 'feed_edit' | 'feed_poll_vote';
+
+export const DEFERRABLE: readonly DeferredType[] = ['feed_reaction', 'feed_edit', 'feed_poll_vote'];
+
+export type DeferredEvent = {
+  type: DeferredType;
+  authorDid: string;
+  ts: number;
+  data: unknown;
+};
+
+export type DeferredBucket = {
+  /** Время последнего пополнения — по нему вытесняется самая старая полка. */
+  at: number;
+  events: DeferredEvent[];
+};
+
+export type DeferredStore = Record<string, DeferredBucket>;
+
+/** Можно ли отложить событие этого рода. */
+export function isDeferrable(type: string): type is DeferredType {
+  return (DEFERRABLE as readonly string[]).includes(type);
+}
+
+/**
+ * Ячейка события: два события с одной ячейкой — это одно и то же действие,
+ * и держать оба незачем. Правка у публикации одна на автора и разрешается по
+ * времени, поэтому её ячейка не зависит ни от чего, кроме рода события.
+ */
+export function deferredSlot(e: DeferredEvent): string {
+  const d = (e.data ?? {}) as { emoji?: unknown; optionIndex?: unknown; remove?: unknown };
+  if (e.type === 'feed_edit') return 'edit';
+  if (e.type === 'feed_reaction') return `r|${e.authorDid}|${String(d.emoji ?? '')}`;
+  return `v|${e.authorDid}|${String(d.optionIndex ?? '')}`;
+}
+
+/** Событие из проверенного конверта. `null` — род не откладывается. */
+export function deferredFromPayload(payload: FeedEnvelopePayload): DeferredEvent | null {
+  if (!isDeferrable(payload.type)) return null;
+  return { type: payload.type, authorDid: payload.authorDid, ts: payload.ts, data: payload.data };
+}
+
+/** Форма записи с полки — она пролежала на диске и могла быть чем угодно. */
+function validEvent(v: unknown): v is DeferredEvent {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const e = v as DeferredEvent;
+  return (
+    isDeferrable(e.type) &&
+    typeof e.authorDid === 'string' &&
+    e.authorDid.length > 0 &&
+    e.authorDid.length <= 256 &&
+    Number.isSafeInteger(e.ts) &&
+    e.ts >= 0 &&
+    !!e.data &&
+    typeof e.data === 'object' &&
+    !Array.isArray(e.data)
+  );
+}
+
+/** Разбор полки с диска: всё непонятное молча выбрасывается. */
+export function parseDeferredStore(raw: string | null | undefined): DeferredStore {
+  if (!raw) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: DeferredStore = {};
+  for (const [postId, bucket] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!postId || postId.length > 128) continue;
+    if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) continue;
+    const b = bucket as DeferredBucket;
+    if (!Number.isSafeInteger(b.at) || b.at < 0) continue;
+    if (!Array.isArray(b.events)) continue;
+    const events = b.events.filter(validEvent).slice(0, DEFERRED_MAX_PER_POST);
+    if (events.length === 0) continue;
+    out[postId] = { at: b.at, events };
+  }
+  return out;
+}
+
+/** Снять просроченное. Возвращает новую полку. */
+export function pruneDeferred(store: DeferredStore, now: number): DeferredStore {
+  const out: DeferredStore = {};
+  for (const [postId, bucket] of Object.entries(store)) {
+    const events = bucket.events.filter((e) => now - e.ts < DEFERRED_TTL_MS);
+    if (events.length > 0) out[postId] = { at: bucket.at, events };
+  }
+  return out;
+}
+
+/**
+ * Положить событие на полку.
+ *
+ * Порядок вытеснения: сначала просроченное, потом — внутри публикации — самое
+ * старое событие, и только потом целая полка самой давно не пополнявшейся
+ * публикации. Новое событие всегда проходит: иначе первый же заваливший полку
+ * контакт закрыл бы её для всех остальных.
+ */
+export function addDeferred(
+  store: DeferredStore,
+  postId: string,
+  event: DeferredEvent,
+  now: number
+): DeferredStore {
+  const next = pruneDeferred(store, now);
+  const bucket = next[postId] ?? { at: now, events: [] };
+  const slot = deferredSlot(event);
+  const kept = bucket.events.filter((e) => deferredSlot(e) !== slot || e.ts > event.ts);
+  // Ячейка занята более свежим событием — новое уже неактуально.
+  const events = kept.length === bucket.events.length && kept.some((e) => deferredSlot(e) === slot)
+    ? kept
+    : [...kept, event];
+  events.sort((a, b) => a.ts - b.ts);
+  next[postId] = {
+    at: now,
+    events: events.slice(Math.max(0, events.length - DEFERRED_MAX_PER_POST)),
+  };
+  const ids = Object.keys(next);
+  if (ids.length > DEFERRED_MAX_POSTS) {
+    ids
+      .filter((id) => id !== postId)
+      .sort((a, b) => next[a].at - next[b].at)
+      .slice(0, ids.length - DEFERRED_MAX_POSTS)
+      .forEach((id) => { delete next[id]; });
+  }
+  return next;
+}
+
+/** Снять с полки всё по этой публикации — по возрастанию времени. */
+export function takeDeferred(
+  store: DeferredStore,
+  postId: string,
+  now: number
+): { store: DeferredStore; events: DeferredEvent[] } {
+  const pruned = pruneDeferred(store, now);
+  const bucket = pruned[postId];
+  if (!bucket) return { store: pruned, events: [] };
+  const rest = { ...pruned };
+  delete rest[postId];
+  return { store: rest, events: [...bucket.events].sort((a, b) => a.ts - b.ts) };
+}

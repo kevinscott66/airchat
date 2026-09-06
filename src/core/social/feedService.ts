@@ -25,6 +25,13 @@ import { isPlainCid } from '../cid';
 import { log } from '../logger';
 import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { feedViewSentKey } from '../storage/kvKeys';
+import {
+  addDeferred,
+  deferredFromPayload,
+  parseDeferredStore,
+  takeDeferred,
+  type DeferredStore,
+} from './feedDeferred';
 import { kvGet, kvSet, kvDelete, kvGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
 import {
   INLINE_MEDIA_PREFIX,
@@ -2294,6 +2301,579 @@ export async function deleteFeedPostLocal(postId: string): Promise<void> {
  * payload.authorDid === senderDid. delete/edit дополнительно проверяют что
  * пост принадлежит автору события (нельзя удалить чужой пост).
  */
+/**
+ * Полка отложенных событий ленты — привязка к профилю и к хранилищу.
+ *
+ * Ключ профильный: полка сверяется с публикациями активного профиля, и общая
+ * на всех запись означала бы, что реакция из одного аккаунта применится в
+ * другом при первом же совпадении номера публикации.
+ *
+ * Отказ записи здесь ничего не ломает: полка — не данные, а вторая попытка.
+ * Худшее, что бывает при отказе, — событие потеряно ровно так же, как теряется
+ * сейчас, до этой полки.
+ */
+const DEFERRED_KEY_PREFIX = 'feed_deferred_v1:p';
+
+async function loadDeferred(pid: number): Promise<DeferredStore> {
+  return parseDeferredStore(await kvGet(`${DEFERRED_KEY_PREFIX}${pid}`));
+}
+
+async function saveDeferred(pid: number, store: DeferredStore): Promise<void> {
+  const key = `${DEFERRED_KEY_PREFIX}${pid}`;
+  try {
+    if (Object.keys(store).length === 0) await kvDelete(key);
+    else await kvSet(key, JSON.stringify(store));
+  } catch (e) {
+    log.warn('feed_deferred_save_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** Отложить событие, для которого публикации ещё нет. */
+async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promise<void> {
+  const event = deferredFromPayload(payload);
+  if (!event) return;
+  await saveDeferred(pid, addDeferred(await loadDeferred(pid), payload.postId, event, Date.now()));
+  log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+}
+
+/**
+ * Отложить снятие только тогда, когда по этой публикации уже что-то лежит.
+ *
+ * Снятие реакции проверить негде: removeReaction на неизвестной публикации
+ * молча ничего не делает и отличить «публикации нет» от «реакции не было» по
+ * ней нельзя. Но важен здесь один случай — реакция поставлена и снята до
+ * прихода публикации: без этого снятие потеряется, а отложенная постановка
+ * применится, и получатель увидит реакцию, которой автор уже нет. Если полка
+ * по публикации пуста, откладывать нечего.
+ */
+async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number): Promise<void> {
+  const store = await loadDeferred(pid);
+  if (!store[payload.postId]) return;
+  const event = deferredFromPayload(payload);
+  if (!event) return;
+  await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
+  log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+}
+
+/**
+ * Применить всё отложенное по публикации, которая только что появилась.
+ *
+ * Полка очищается ДО применения: событие, которое роняет применение, не должно
+ * оставаться и падать снова при каждой следующей публикации.
+ */
+async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promise<void> {
+  const taken = takeDeferred(await loadDeferred(pid), postId, Date.now());
+  if (taken.events.length === 0) return;
+  await saveDeferred(pid, taken.store);
+  for (const event of taken.events) {
+    try {
+      await applyFeedEnvelope(
+        { type: event.type, postId, authorDid: event.authorDid, ts: event.ts, data: event.data } as FeedEnvelopePayload,
+        s,
+        pid,
+      );
+    } catch (e) {
+      log.warn('feed_deferred_apply_failed', {
+        type: event.type,
+        postId: postId.slice(0, 24),
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  log.info('feed_deferred_applied', { postId: postId.slice(0, 24), n: taken.events.length });
+}
+
+/**
+ * Применить разобранный конверт ленты к хранилищу.
+ *
+ * Выделено из receiveFeedEnvelope в v4.32.615: то же самое тело нужно и на
+ * втором пути — когда событие, пролежавшее на полке отложенных, применяется
+ * после прихода своей публикации. Разбор, проверка подписи, отсев по
+ * заглушённым авторам и пересылка по цепочке остаются снаружи: у отложенного
+ * события всё это уже было пройдено, когда оно приехало впервые.
+ *
+ * `false` — род конверта неизвестен; вызывающий в этом случае не трогает UI,
+ * ровно как и до выделения.
+ */
+async function applyFeedEnvelope(
+  payload: FeedEnvelopePayload,
+  s: FeedStorage,
+  envelopePid: number,
+): Promise<boolean> {
+  switch (payload.type) {
+    case 'feed_post': {
+      const d = feedEnvelopeData<FeedPostData>(payload);
+      if (!d) break;
+      // v4.32.191 (Round-21 #3): cap untrusted feed_post fields so a
+      // single peer can't bloat SQLite + kvStore with a 50MB post.
+      // v4.32.527: потолок общий с публикацией. Прежние 8 000 были меньше
+      // разрешённых автору 10 000 — законный длинный пост терял хвост у
+      // каждого получателя, и автор об этом не узнавал.
+      const postText = clampFeedPostText(d.text);
+      if (postText !== null) d.text = postText;
+      const postName = clampFeedAuthorName(d.authorName);
+      if (postName !== null) d.authorName = postName;
+      // v4.32.614: фотографии и их типы разбираются парой, а документ без
+      // принятых байтов в список не попадает вовсе — см. feedInlineAttachments.
+      const inlineMedia = sanitizeInlineMedia(d.media, d.mediaMime);
+      const inlineDocs = sanitizeInlineDocuments(d.documents);
+      // Синтетические mediaCids как `inline:<mime>;<i>:<postId>` — так UI отличит inline-медиа
+      // от старых IPFS-CID и сможет отрендерить base64 напрямую.
+      const mediaCids = inlineMedia.media.length > 0
+        ? inlineMedia.media.map((_, i) => `inline:${inlineMedia.mediaMime[i]};${i}:${payload.postId}`)
+        : null;
+      // v4.32.48: документы — метаданные в таблицу feed.documents, base64 в kvStore.
+      const docsMeta = inlineDocs.meta.length > 0 ? inlineDocs.meta : null;
+      // v4.32.614: номер публикации придумывает отправитель, а имена ключей
+      // вложений собраны из одного лишь номера. Без этой сверки чужой
+      // подписанный конверт с уже занятым номером подменял картинки под
+      // чужой публикацией (строку savePost бы не тронул, а байты — да).
+      const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
+      if (guard !== 'ok') {
+        log.warn('feed_post_write_refused', {
+          postId: payload.postId.slice(0, 24),
+          authorDid: payload.authorDid.slice(0, 32),
+          reason: guard,
+        });
+        break;
+      }
+      await s.savePost({
+        id: payload.postId,
+        authorDid: payload.authorDid,
+        authorName: d.authorName || null,
+        text: d.text,
+        mediaCids,
+        timestamp: payload.ts,
+        read: 0,
+        cid: null,
+        documents: docsMeta,
+      });
+      // Сохранить сам base64 отдельно (для рендера). TODO v4.32.25: отдельная таблица feed_media.
+      // Пока кладём в kvStore по ключу inline:<postId>:<i>.
+      for (let i = 0; i < inlineMedia.media.length; i++) {
+        // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
+        // фотографии останется пустым — reconcileOrphanInlineMedia потом
+        // подчистит ссылку. Но узнать о нём надо: раньше kvSet гасил
+        // ошибку молча, и «пустая картинка у контакта» не имела следа.
+        if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, inlineMedia.media[i]))) {
+          log.warn('feed_inline_media_receive_save_failed', {
+            postId: payload.postId.slice(0, 24),
+            idx: i,
+          });
+        }
+      }
+      // v4.32.48: сохранить base64 документов в kvStore (для последующего «Скачать/Поделиться»).
+      // v4.32.614: номер ключа считается по УЖЕ отфильтрованному списку — он
+      // же лёг в строку поста, и разъехаться они теперь не могут.
+      for (let i = 0; i < inlineDocs.data.length; i++) {
+        if (!(await kvSetInlineAttachment(`feed_inline_doc:${payload.postId}:${i}`, inlineDocs.data[i]))) {
+          log.warn('feed_inline_doc_receive_save_failed', {
+            postId: payload.postId.slice(0, 24),
+            idx: i,
+            err: 'kv_write_failed',
+          });
+        }
+      }
+      // v4.32.615: публикация появилась — применить всё, что её ждало.
+      await drainDeferred(payload.postId, s, envelopePid);
+      log.info('feed_post_received', { postId: payload.postId.slice(0, 24), authorDid: payload.authorDid.slice(0, 32), docsN: inlineDocs.meta.length });
+      // v4.32.92: in-app banner для новых постов контактов.
+      emitFeedNotify({
+        kind: 'post',
+        authorDid: payload.authorDid,
+        authorName: d.authorName ?? null,
+        preview: (d.text ?? '').slice(0, 80) || '(медиа)',
+      });
+      break;
+    }
+    case 'feed_reaction': {
+      const d = feedEnvelopeData<FeedReactionData>(payload);
+      if (!d) break;
+      // v4.32.191 (Round-21 #4): cap emoji string — a peer can send a 1MB
+      // "emoji" to bloat post_reactions. Real emoji fit in ≤16 chars.
+      if (typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16) break;
+      if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
+      if (d.remove) {
+        await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
+        await deferFeedEventIfPending(payload, envelopePid);
+        log.info('feed_unreaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
+      } else {
+        const stored = await s.addReaction(payload.postId, d.emoji, payload.authorDid);
+        // v4.32.615: публикации ещё нет — реакция не пропадает, а ждёт её.
+        // Повторов у реакции нет вовсе (см. addAndBroadcastReaction), а порядок
+        // доставки не гарантирован: публикация может идти к третьему лицу по
+        // цепочке пересылок, а реакция на неё — напрямую от поставившего.
+        if (!stored) await deferFeedEvent(payload, envelopePid);
+        log.info('feed_reaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji, stored });
+      }
+      break;
+    }
+    case 'feed_comment_reaction': {
+      const d = feedEnvelopeData<FeedCommentReactionData>(payload);
+      if (!d) break;
+      if (
+        typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
+        typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128 ||
+        typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16 ||
+        (d.remove !== undefined && typeof d.remove !== 'boolean')
+      ) break;
+      const meta = await s.getCommentMeta(d.commentId);
+      if (!meta || meta.postId !== payload.postId) break;
+      const reactions: Record<string, string[]> = meta.reactions ? { ...meta.reactions } : {};
+      const existing = Array.isArray(reactions[d.emoji]) ? reactions[d.emoji] : [];
+      if (d.remove) {
+        const remaining = existing.filter((did) => did !== payload.authorDid);
+        if (remaining.length > 0) reactions[d.emoji] = remaining;
+        else delete reactions[d.emoji];
+      } else {
+        if (!existing.includes(payload.authorDid)) {
+          // v4.32.608: потолки те же, что у поста и у сообщения, включая
+          // личный — без него один отправитель занимал все ключи чужого
+          // комментария в одиночку.
+          const limit = reactionAddRefusal(reactions, d.emoji, payload.authorDid);
+          if (limit) {
+            log.info('feed_comment_reaction_rejected_limit', { commentId: d.commentId.slice(0, 16), limit });
+            break;
+          }
+          reactions[d.emoji] = [...existing, payload.authorDid];
+        }
+      }
+      await s.updateCommentReactions(d.commentId, reactions);
+      log.info('feed_comment_reaction_received', {
+        postId: payload.postId.slice(0, 16),
+        commentId: d.commentId.slice(0, 16),
+        emoji: d.emoji,
+        remove: d.remove === true,
+      });
+      break;
+    }
+    case 'feed_comment': {
+      const d = feedEnvelopeData<FeedCommentData>(payload);
+      if (!d) break;
+      // v4.32.191 (Round-21 #1+#2): strict shape validation + orphan-postId
+      // rejection so an attacker can't spam comments pointing at nonexistent
+      // posts to bloat feed_comments unboundedly.
+      if (typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128) break;
+      if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
+      // v4.32.527: 2 000, как и в форме ответа. Прежние 8 000 были вчетверо
+      // больше того, что вообще может отправить честный клиент, — этот запас
+      // оставался только тому, кто собирает конверт руками.
+      const commentText = clampFeedCommentText(d.text);
+      if (commentText === null) break;
+      d.text = commentText;
+      const commentName = clampFeedAuthorName(d.authorName);
+      if (commentName !== null) d.authorName = commentName;
+      try {
+        const exists = await s.getPost(payload.postId);
+        if (!exists) {
+          log.info('feed_comment_rejected_orphan', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
+          break;
+        }
+      } catch { /* fall through — addComment will still enforce FK if set */ }
+      const commentStored = await s.addComment({
+        id: d.commentId,
+        postId: payload.postId,
+        authorDid: payload.authorDid,
+        authorName: d.authorName || null,
+        text: d.text,
+        timestamp: payload.ts,
+      });
+      // v4.32.581: баннер только на действительно новый комментарий. Повтор
+      // конверта здесь — обычное дело: очередь комментариев при частичной
+      // доставке шлёт его заново всем контактам, повторяя попытки до
+      // получаса. Раньше каждая попытка поднимала баннер на один и тот же
+      // уже прочитанный комментарий. Второй случай — надгробие, приехавшее
+      // раньше комментария: в ленту он не попадал, а баннер о нём был, и по
+      // нажатию человек не находил ничего.
+      if (!commentStored) {
+        log.debug('feed_comment_duplicate_skip', { commentId: d.commentId.slice(0, 16) });
+        break;
+      }
+      log.info('feed_comment_received', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
+      // v4.32.92: banner только если это комментарий под постом контакта, которого я вижу
+      // (не под моим — авторство поста сложнее проверить без доп. lookup). Простейший
+      // вариант: показываем всегда, App-уровень суппрессит при tab === 'feed'.
+      emitFeedNotify({
+        kind: 'comment',
+        authorDid: payload.authorDid,
+        authorName: d.authorName ?? null,
+        preview: (d.text ?? '').slice(0, 80),
+        postId: payload.postId,
+      });
+      break;
+    }
+    case 'feed_comment_delete': {
+      // v4.32.162: распространённое удаление комментария. Auth: отправитель envelope'а
+      // должен быть автором комментария ИЛИ автором поста (модерация в своей ленте).
+      // v4.32.163 P2#3: если комментарий ещё не дошёл (out-of-order delivery), пишем
+      // tombstone с postId из envelope'а — опоздавший `feed_comment` увидит его в
+      // addComment() и не воскреснет.
+      const d = feedEnvelopeData<FeedCommentDeleteData>(payload);
+      if (!d) break;
+      if (
+        typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
+        typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128
+      ) break;
+      const meta = await s.getCommentMeta(d.commentId);
+      if (!meta) {
+        // Without the comment row, only the post author can be authenticated.
+        // Never let an arbitrary peer plant a tombstone for a future comment.
+        const post = await s.getPost(payload.postId);
+        const isPostAuthor = !!post && post.authorDid === payload.authorDid;
+        if (!isPostAuthor) break;
+        await s.addCommentTombstone(d.commentId, payload.postId);
+        log.info('feed_comment_delete_tombstone_preemptive', {
+          commentId: d.commentId.slice(0, 24),
+          postId: payload.postId.slice(0, 16),
+          sender: payload.authorDid.slice(0, 24),
+        });
+        break;
+      }
+      if (meta.postId !== payload.postId) break;
+      const post = await s.getPost(meta.postId);
+      const isCommentAuthor = meta.authorDid === payload.authorDid;
+      const isPostAuthor = !!post && post.authorDid === payload.authorDid;
+      if (!isCommentAuthor && !isPostAuthor) {
+        log.warn('feed_comment_delete_auth_mismatch', {
+          commentId: d.commentId.slice(0, 24),
+          commentAuthor: meta.authorDid.slice(0, 24),
+          sender: payload.authorDid.slice(0, 24),
+        });
+        break;
+      }
+      await s.deleteComment(d.commentId);
+      log.info('feed_comment_delete_received', { commentId: d.commentId.slice(0, 24), postId: meta.postId.slice(0, 16) });
+      emitFeedUpdate();
+      break;
+    }
+    case 'feed_repost': {
+      const d = feedEnvelopeData<FeedRepostData>(payload);
+      if (!d) break;
+      // v4.32.199 (Round-29 #4): cap all untrusted fields. Parity with
+      // feed_post inline-doc validation at line ~1546; previously an
+      // attacker could ship 1000 inline media blobs per repost envelope
+      // or megabyte-long strings bloating SQLite+kv on every receiver.
+      const safeText = typeof d.text === 'string' ? d.text.slice(0, 8_000) : '';
+      const safeAuthorName = typeof d.authorName === 'string' ? d.authorName.slice(0, 128) : null;
+      const safeOrigAuthorName = typeof d.originalAuthorName === 'string' ? d.originalAuthorName.slice(0, 128) : d.originalAuthorName;
+      // v4.32.614: номер публикации придумывает отправитель, а имена ключей
+      // вложений собраны из одного лишь номера. Без этой сверки чужой
+      // подписанный конверт с уже занятым номером подменял картинки под
+      // чужой публикацией (строку savePost бы не тронул, а байты — да).
+      const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
+      if (guard !== 'ok') {
+        log.warn('feed_post_write_refused', {
+          postId: payload.postId.slice(0, 24),
+          authorDid: payload.authorDid.slice(0, 32),
+          reason: guard,
+        });
+        break;
+      }
+      let mediaCids: string[] | null = null;
+      if (Array.isArray(d.originalMedia)) {
+        mediaCids = d.originalMedia
+          .filter(isPlainCid)
+          .slice(0, 10);
+        if (mediaCids.length === 0) mediaCids = null;
+      }
+      if (Array.isArray(d.originalMediaBase64) && d.originalMediaBase64.length > 0) {
+        const newCids: string[] = [];
+        const cappedBlobs = d.originalMediaBase64.slice(0, 10);
+        for (let i = 0; i < cappedBlobs.length; i++) {
+          const data = cappedBlobs[i];
+          if (!isInlineBase64(data, 2 * 1024 * 1024)) continue;
+          // v4.32.614: тип уходит в `data:`-адрес, и запятая внутри него
+          // сделала бы хвост типа самим содержимым. Проверка длиной этого не
+          // ловила — см. feedInlineAttachments.
+          const mime = safeInlineMime(d.originalMediaBase64Mime?.[i]);
+          // v4.32.341: ссылка добавлялась до записи байтов и оставалась даже
+          // тогда, когда запись не удалась, — репост показывал пустую плитку
+          // без надежды когда-нибудь наполниться. Порядок обратный.
+          if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, data))) {
+            log.warn('feed_repost_inline_media_save_failed', {
+              postId: payload.postId.slice(0, 24),
+              idx: i,
+            });
+            continue;
+          }
+          newCids.push(`inline:${mime};${i}:${payload.postId}`);
+        }
+        if (newCids.length > 0) mediaCids = newCids;
+      }
+      await s.savePost({
+        id: payload.postId,
+        authorDid: payload.authorDid,
+        authorName: safeAuthorName,
+        text: safeText,
+        mediaCids,
+        timestamp: payload.ts,
+        read: 0,
+        cid: null,
+        repostOf: d.originalPostId,
+        repostAuthorName: safeOrigAuthorName,
+        repostAuthorDid: d.originalAuthorDid,
+      });
+      await drainDeferred(payload.postId, s, envelopePid);
+      log.info('feed_repost_received', { postId: payload.postId.slice(0, 24), mediaN: mediaCids?.length ?? 0 });
+      break;
+    }
+    case 'feed_delete': {
+      // v4.32.29: auth-check — удалять можно только СВОЙ пост. Раньше любой контакт мог
+      // подписать feed_delete{postId: чужой} и стереть чужой пост локально у всех.
+      const existing = await s.getPost(payload.postId);
+      if (!existing) {
+        // v4.32.546: раньше здесь был просто выход, и «удалить у всех»
+        // проигрывало гонку с доставкой самого поста: конверт `feed_post`
+        // приходил следом (ретрай автора, второй транспорт, переигранное
+        // окно ретеншена) и публикация оставалась у получателя навсегда.
+        // Надгробие запоминает удаление до того, как пост появился.
+        await s.savePostTombstone(payload.postId, payload.authorDid, payload.ts);
+        log.info('feed_delete_tombstoned', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      if (existing.authorDid !== payload.authorDid) {
+        log.warn('feed_delete_auth_mismatch', {
+          postId: payload.postId.slice(0, 24),
+          owner: existing.authorDid.slice(0, 24),
+          attacker: payload.authorDid.slice(0, 24),
+        });
+        break;
+      }
+      await cleanupInlinePayloads(payload.postId);
+      await s.deletePost(payload.postId);
+      log.info('feed_delete_received', { postId: payload.postId.slice(0, 24) });
+      break;
+    }
+    case 'feed_edit': {
+      const d = feedEnvelopeData<FeedEditData>(payload);
+      if (!d) break;
+      // v4.32.29: auth-check — редактировать можно только свой пост.
+      const existing = await s.getPost(payload.postId);
+      if (!existing) {
+        await deferFeedEvent(payload, envelopePid);
+        log.info('feed_edit_unknown_post', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      if (existing.authorDid !== payload.authorDid) {
+        log.warn('feed_edit_auth_mismatch', {
+          postId: payload.postId.slice(0, 24),
+          owner: existing.authorDid.slice(0, 24),
+          attacker: payload.authorDid.slice(0, 24),
+        });
+        break;
+      }
+      // v4.32.65: last-write-wins по ts envelope'а. Если у нас уже есть более
+      // свежая правка (пришла раньше, но edited_at/timestamp новее) — дропаем
+      // старый envelope. Защита от out-of-order доставки при multi-device edit.
+      const lastEditTs = existing.editedAt ?? existing.timestamp;
+      if (payload.ts < lastEditTs) {
+        log.info('feed_edit_stale_skipped', {
+          postId: payload.postId.slice(0, 24),
+          envelopeTs: payload.ts,
+          localLastEditTs: lastEditTs,
+        });
+        break;
+      }
+      // v4.32.527: единственное место, где текст из реле шёл в базу вообще
+      // без проверки — ни типа, ни длины. Транспорт оставляет на конверт
+      // около двух мегабайт, а у каждой правки свой ts, то есть свой ключ
+      // дедупликации: одну и ту же строку можно было раздувать повторно.
+      if (!isEditableFeedText(d.newText)) {
+        // Тип поля в FeedEditData объявлен строкой, поэтому длину здесь
+        // TypeScript уже считает недостижимой — но пришло-то оно из сети,
+        // и объявление о содержимом конверта ничего не знает.
+        log.warn('feed_edit_bad_text', {
+          postId: payload.postId.slice(0, 24),
+          type: typeof (d as { newText?: unknown }).newText,
+          len: String((d as { newText?: unknown }).newText ?? '').length,
+        });
+        break;
+      }
+      await s.updatePostText(payload.postId, d.newText, payload.ts);
+      log.info('feed_edit_received', { postId: payload.postId.slice(0, 24) });
+      break;
+    }
+    case 'feed_poll_vote': {
+      // v4.32.51: голос в опросе. До этого setPollVote писал только локально у
+      // голосующего — остальные получатели видели у себя счётчик "Всего: 1" (только
+      // свой голос). Теперь envelope переносит {postId, optionIndex, remove?} всем
+      // контактам автора голоса, receiver пишет у себя в poll_votes через setPollVote.
+      const d = feedEnvelopeData<FeedPollVoteData>(payload);
+      if (!d) break;
+      const existing = await s.getPost(payload.postId);
+      if (!existing) {
+        await deferFeedEvent(payload, envelopePid);
+        log.info('feed_poll_vote_unknown_post', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      if (!existing.text || !existing.text.startsWith(POLL_PREFIX)) {
+        log.warn('feed_poll_vote_not_poll', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      const poll = parsePollText(existing.text);
+      if (!poll) {
+        log.warn('feed_poll_vote_parse_failed', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      // v4.32.133 (AUDIT P2): require integer. A float optionIndex would pass
+      // `typeof === 'number'` + bounds check but get silently cast when
+      // written to the INTEGER column, corrupting tallies on receivers.
+      if (!Number.isInteger(d.optionIndex) || d.optionIndex < 0 || d.optionIndex >= poll.options.length) {
+        log.warn('feed_poll_vote_bad_index', { postId: payload.postId.slice(0, 24), idx: d.optionIndex });
+        break;
+      }
+      // Для учёта голоса нам нужен pubB64 голосующего, а пришёл DID. Конвертируем.
+      const voterPk = parseDidKey(payload.authorDid);
+      if (!voterPk) {
+        log.warn('feed_poll_vote_bad_did', { did: payload.authorDid.slice(0, 24) });
+        break;
+      }
+      const voterPubB64 = Buffer.from(voterPk).toString('base64');
+      const pid = envelopePid;
+      if (d.remove) {
+        await deletePollVote(payload.postId, voterPubB64, d.optionIndex, pid);
+        log.info('feed_poll_unvote_received', { postId: payload.postId.slice(0, 24), idx: d.optionIndex });
+      } else {
+        await setPollVote(payload.postId, voterPubB64, d.optionIndex, pid, poll.allowMultiple);
+        log.info('feed_poll_vote_received', { postId: payload.postId.slice(0, 24), idx: d.optionIndex, multi: poll.allowMultiple });
+      }
+      break;
+    }
+    case 'feed_view': {
+      // v4.32.68: входящий просмотр. Sender — viewer (payload.authorDid).
+      // Envelope адресно приходит автору (notifyFeedPostViewed шлёт с onlyDids=[authorDid]),
+      // но в теории может прийти и сюда по другому маршруту. Записываем viewer'а
+      // безусловно — UI при показе счётчика сам проверит, что пост принадлежит активному
+      // профилю. parseAndVerifyFeedEnvelope уже проверил что senderDid === authorDid,
+      // поэтому нельзя «вписать» чужой просмотр от имени кого-то другого.
+      const existing = await s.getPost(payload.postId);
+      if (!existing) {
+        log.info('feed_view_unknown_post', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      // Self-view — не считаем (viewer === автор поста). Дополнительная защита
+      // к guard'у в notifyFeedPostViewed (авторы своих постов envelope не шлют).
+      if (existing.authorDid === payload.authorDid) {
+        log.info('feed_view_self_skip', { postId: payload.postId.slice(0, 24) });
+        break;
+      }
+      const d = feedEnvelopeData<FeedViewData>(payload);
+      if (!d) break;
+      const viewerName = (d.viewerName ?? '').trim().slice(0, 80) || null;
+      await s.recordView(payload.postId, payload.authorDid, viewerName, payload.ts);
+      log.info('feed_view_received', {
+        postId: payload.postId.slice(0, 24),
+        viewer: payload.authorDid.slice(0, 24),
+      });
+      break;
+    }
+    default:
+      log.warn('feed_envelope_unknown_type', { type: (payload as FeedEnvelopePayload).type });
+      return false;
+  }
+  return true;
+}
+
 export async function receiveFeedEnvelope(
   frame: Uint8Array,
   senderDid: string,
@@ -2421,466 +3001,7 @@ export async function receiveFeedEnvelope(
       return;
     }
 
-    switch (payload.type) {
-      case 'feed_post': {
-        const d = feedEnvelopeData<FeedPostData>(payload);
-        if (!d) break;
-        // v4.32.191 (Round-21 #3): cap untrusted feed_post fields so a
-        // single peer can't bloat SQLite + kvStore with a 50MB post.
-        // v4.32.527: потолок общий с публикацией. Прежние 8 000 были меньше
-        // разрешённых автору 10 000 — законный длинный пост терял хвост у
-        // каждого получателя, и автор об этом не узнавал.
-        const postText = clampFeedPostText(d.text);
-        if (postText !== null) d.text = postText;
-        const postName = clampFeedAuthorName(d.authorName);
-        if (postName !== null) d.authorName = postName;
-        // v4.32.614: фотографии и их типы разбираются парой, а документ без
-        // принятых байтов в список не попадает вовсе — см. feedInlineAttachments.
-        const inlineMedia = sanitizeInlineMedia(d.media, d.mediaMime);
-        const inlineDocs = sanitizeInlineDocuments(d.documents);
-        // Синтетические mediaCids как `inline:<mime>;<i>:<postId>` — так UI отличит inline-медиа
-        // от старых IPFS-CID и сможет отрендерить base64 напрямую.
-        const mediaCids = inlineMedia.media.length > 0
-          ? inlineMedia.media.map((_, i) => `inline:${inlineMedia.mediaMime[i]};${i}:${payload.postId}`)
-          : null;
-        // v4.32.48: документы — метаданные в таблицу feed.documents, base64 в kvStore.
-        const docsMeta = inlineDocs.meta.length > 0 ? inlineDocs.meta : null;
-        // v4.32.614: номер публикации придумывает отправитель, а имена ключей
-        // вложений собраны из одного лишь номера. Без этой сверки чужой
-        // подписанный конверт с уже занятым номером подменял картинки под
-        // чужой публикацией (строку savePost бы не тронул, а байты — да).
-        const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
-        if (guard !== 'ok') {
-          log.warn('feed_post_write_refused', {
-            postId: payload.postId.slice(0, 24),
-            authorDid: payload.authorDid.slice(0, 32),
-            reason: guard,
-          });
-          break;
-        }
-        await s.savePost({
-          id: payload.postId,
-          authorDid: payload.authorDid,
-          authorName: d.authorName || null,
-          text: d.text,
-          mediaCids,
-          timestamp: payload.ts,
-          read: 0,
-          cid: null,
-          documents: docsMeta,
-        });
-        // Сохранить сам base64 отдельно (для рендера). TODO v4.32.25: отдельная таблица feed_media.
-        // Пока кладём в kvStore по ключу inline:<postId>:<i>.
-        for (let i = 0; i < inlineMedia.media.length; i++) {
-          // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
-          // фотографии останется пустым — reconcileOrphanInlineMedia потом
-          // подчистит ссылку. Но узнать о нём надо: раньше kvSet гасил
-          // ошибку молча, и «пустая картинка у контакта» не имела следа.
-          if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, inlineMedia.media[i]))) {
-            log.warn('feed_inline_media_receive_save_failed', {
-              postId: payload.postId.slice(0, 24),
-              idx: i,
-            });
-          }
-        }
-        // v4.32.48: сохранить base64 документов в kvStore (для последующего «Скачать/Поделиться»).
-        // v4.32.614: номер ключа считается по УЖЕ отфильтрованному списку — он
-        // же лёг в строку поста, и разъехаться они теперь не могут.
-        for (let i = 0; i < inlineDocs.data.length; i++) {
-          if (!(await kvSetInlineAttachment(`feed_inline_doc:${payload.postId}:${i}`, inlineDocs.data[i]))) {
-            log.warn('feed_inline_doc_receive_save_failed', {
-              postId: payload.postId.slice(0, 24),
-              idx: i,
-              err: 'kv_write_failed',
-            });
-          }
-        }
-        log.info('feed_post_received', { postId: payload.postId.slice(0, 24), authorDid: payload.authorDid.slice(0, 32), docsN: inlineDocs.meta.length });
-        // v4.32.92: in-app banner для новых постов контактов.
-        emitFeedNotify({
-          kind: 'post',
-          authorDid: payload.authorDid,
-          authorName: d.authorName ?? null,
-          preview: (d.text ?? '').slice(0, 80) || '(медиа)',
-        });
-        break;
-      }
-      case 'feed_reaction': {
-        const d = feedEnvelopeData<FeedReactionData>(payload);
-        if (!d) break;
-        // v4.32.191 (Round-21 #4): cap emoji string — a peer can send a 1MB
-        // "emoji" to bloat post_reactions. Real emoji fit in ≤16 chars.
-        if (typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16) break;
-        if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
-        if (d.remove) {
-          await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
-          log.info('feed_unreaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
-        } else {
-          const stored = await s.addReaction(payload.postId, d.emoji, payload.authorDid);
-          log.info('feed_reaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji, stored });
-        }
-        break;
-      }
-      case 'feed_comment_reaction': {
-        const d = feedEnvelopeData<FeedCommentReactionData>(payload);
-        if (!d) break;
-        if (
-          typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
-          typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128 ||
-          typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16 ||
-          (d.remove !== undefined && typeof d.remove !== 'boolean')
-        ) break;
-        const meta = await s.getCommentMeta(d.commentId);
-        if (!meta || meta.postId !== payload.postId) break;
-        const reactions: Record<string, string[]> = meta.reactions ? { ...meta.reactions } : {};
-        const existing = Array.isArray(reactions[d.emoji]) ? reactions[d.emoji] : [];
-        if (d.remove) {
-          const remaining = existing.filter((did) => did !== payload.authorDid);
-          if (remaining.length > 0) reactions[d.emoji] = remaining;
-          else delete reactions[d.emoji];
-        } else {
-          if (!existing.includes(payload.authorDid)) {
-            // v4.32.608: потолки те же, что у поста и у сообщения, включая
-            // личный — без него один отправитель занимал все ключи чужого
-            // комментария в одиночку.
-            const limit = reactionAddRefusal(reactions, d.emoji, payload.authorDid);
-            if (limit) {
-              log.info('feed_comment_reaction_rejected_limit', { commentId: d.commentId.slice(0, 16), limit });
-              break;
-            }
-            reactions[d.emoji] = [...existing, payload.authorDid];
-          }
-        }
-        await s.updateCommentReactions(d.commentId, reactions);
-        log.info('feed_comment_reaction_received', {
-          postId: payload.postId.slice(0, 16),
-          commentId: d.commentId.slice(0, 16),
-          emoji: d.emoji,
-          remove: d.remove === true,
-        });
-        break;
-      }
-      case 'feed_comment': {
-        const d = feedEnvelopeData<FeedCommentData>(payload);
-        if (!d) break;
-        // v4.32.191 (Round-21 #1+#2): strict shape validation + orphan-postId
-        // rejection so an attacker can't spam comments pointing at nonexistent
-        // posts to bloat feed_comments unboundedly.
-        if (typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128) break;
-        if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
-        // v4.32.527: 2 000, как и в форме ответа. Прежние 8 000 были вчетверо
-        // больше того, что вообще может отправить честный клиент, — этот запас
-        // оставался только тому, кто собирает конверт руками.
-        const commentText = clampFeedCommentText(d.text);
-        if (commentText === null) break;
-        d.text = commentText;
-        const commentName = clampFeedAuthorName(d.authorName);
-        if (commentName !== null) d.authorName = commentName;
-        try {
-          const exists = await s.getPost(payload.postId);
-          if (!exists) {
-            log.info('feed_comment_rejected_orphan', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
-            break;
-          }
-        } catch { /* fall through — addComment will still enforce FK if set */ }
-        const commentStored = await s.addComment({
-          id: d.commentId,
-          postId: payload.postId,
-          authorDid: payload.authorDid,
-          authorName: d.authorName || null,
-          text: d.text,
-          timestamp: payload.ts,
-        });
-        // v4.32.581: баннер только на действительно новый комментарий. Повтор
-        // конверта здесь — обычное дело: очередь комментариев при частичной
-        // доставке шлёт его заново всем контактам, повторяя попытки до
-        // получаса. Раньше каждая попытка поднимала баннер на один и тот же
-        // уже прочитанный комментарий. Второй случай — надгробие, приехавшее
-        // раньше комментария: в ленту он не попадал, а баннер о нём был, и по
-        // нажатию человек не находил ничего.
-        if (!commentStored) {
-          log.debug('feed_comment_duplicate_skip', { commentId: d.commentId.slice(0, 16) });
-          break;
-        }
-        log.info('feed_comment_received', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
-        // v4.32.92: banner только если это комментарий под постом контакта, которого я вижу
-        // (не под моим — авторство поста сложнее проверить без доп. lookup). Простейший
-        // вариант: показываем всегда, App-уровень суппрессит при tab === 'feed'.
-        emitFeedNotify({
-          kind: 'comment',
-          authorDid: payload.authorDid,
-          authorName: d.authorName ?? null,
-          preview: (d.text ?? '').slice(0, 80),
-          postId: payload.postId,
-        });
-        break;
-      }
-      case 'feed_comment_delete': {
-        // v4.32.162: распространённое удаление комментария. Auth: отправитель envelope'а
-        // должен быть автором комментария ИЛИ автором поста (модерация в своей ленте).
-        // v4.32.163 P2#3: если комментарий ещё не дошёл (out-of-order delivery), пишем
-        // tombstone с postId из envelope'а — опоздавший `feed_comment` увидит его в
-        // addComment() и не воскреснет.
-        const d = feedEnvelopeData<FeedCommentDeleteData>(payload);
-        if (!d) break;
-        if (
-          typeof d.commentId !== 'string' || d.commentId.length === 0 || d.commentId.length > 128 ||
-          typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128
-        ) break;
-        const meta = await s.getCommentMeta(d.commentId);
-        if (!meta) {
-          // Without the comment row, only the post author can be authenticated.
-          // Never let an arbitrary peer plant a tombstone for a future comment.
-          const post = await s.getPost(payload.postId);
-          const isPostAuthor = !!post && post.authorDid === payload.authorDid;
-          if (!isPostAuthor) break;
-          await s.addCommentTombstone(d.commentId, payload.postId);
-          log.info('feed_comment_delete_tombstone_preemptive', {
-            commentId: d.commentId.slice(0, 24),
-            postId: payload.postId.slice(0, 16),
-            sender: payload.authorDid.slice(0, 24),
-          });
-          break;
-        }
-        if (meta.postId !== payload.postId) break;
-        const post = await s.getPost(meta.postId);
-        const isCommentAuthor = meta.authorDid === payload.authorDid;
-        const isPostAuthor = !!post && post.authorDid === payload.authorDid;
-        if (!isCommentAuthor && !isPostAuthor) {
-          log.warn('feed_comment_delete_auth_mismatch', {
-            commentId: d.commentId.slice(0, 24),
-            commentAuthor: meta.authorDid.slice(0, 24),
-            sender: payload.authorDid.slice(0, 24),
-          });
-          break;
-        }
-        await s.deleteComment(d.commentId);
-        log.info('feed_comment_delete_received', { commentId: d.commentId.slice(0, 24), postId: meta.postId.slice(0, 16) });
-        emitFeedUpdate();
-        break;
-      }
-      case 'feed_repost': {
-        const d = feedEnvelopeData<FeedRepostData>(payload);
-        if (!d) break;
-        // v4.32.199 (Round-29 #4): cap all untrusted fields. Parity with
-        // feed_post inline-doc validation at line ~1546; previously an
-        // attacker could ship 1000 inline media blobs per repost envelope
-        // or megabyte-long strings bloating SQLite+kv on every receiver.
-        const safeText = typeof d.text === 'string' ? d.text.slice(0, 8_000) : '';
-        const safeAuthorName = typeof d.authorName === 'string' ? d.authorName.slice(0, 128) : null;
-        const safeOrigAuthorName = typeof d.originalAuthorName === 'string' ? d.originalAuthorName.slice(0, 128) : d.originalAuthorName;
-        // v4.32.614: номер публикации придумывает отправитель, а имена ключей
-        // вложений собраны из одного лишь номера. Без этой сверки чужой
-        // подписанный конверт с уже занятым номером подменял картинки под
-        // чужой публикацией (строку savePost бы не тронул, а байты — да).
-        const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
-        if (guard !== 'ok') {
-          log.warn('feed_post_write_refused', {
-            postId: payload.postId.slice(0, 24),
-            authorDid: payload.authorDid.slice(0, 32),
-            reason: guard,
-          });
-          break;
-        }
-        let mediaCids: string[] | null = null;
-        if (Array.isArray(d.originalMedia)) {
-          mediaCids = d.originalMedia
-            .filter(isPlainCid)
-            .slice(0, 10);
-          if (mediaCids.length === 0) mediaCids = null;
-        }
-        if (Array.isArray(d.originalMediaBase64) && d.originalMediaBase64.length > 0) {
-          const newCids: string[] = [];
-          const cappedBlobs = d.originalMediaBase64.slice(0, 10);
-          for (let i = 0; i < cappedBlobs.length; i++) {
-            const data = cappedBlobs[i];
-            if (!isInlineBase64(data, 2 * 1024 * 1024)) continue;
-            // v4.32.614: тип уходит в `data:`-адрес, и запятая внутри него
-            // сделала бы хвост типа самим содержимым. Проверка длиной этого не
-            // ловила — см. feedInlineAttachments.
-            const mime = safeInlineMime(d.originalMediaBase64Mime?.[i]);
-            // v4.32.341: ссылка добавлялась до записи байтов и оставалась даже
-            // тогда, когда запись не удалась, — репост показывал пустую плитку
-            // без надежды когда-нибудь наполниться. Порядок обратный.
-            if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, data))) {
-              log.warn('feed_repost_inline_media_save_failed', {
-                postId: payload.postId.slice(0, 24),
-                idx: i,
-              });
-              continue;
-            }
-            newCids.push(`inline:${mime};${i}:${payload.postId}`);
-          }
-          if (newCids.length > 0) mediaCids = newCids;
-        }
-        await s.savePost({
-          id: payload.postId,
-          authorDid: payload.authorDid,
-          authorName: safeAuthorName,
-          text: safeText,
-          mediaCids,
-          timestamp: payload.ts,
-          read: 0,
-          cid: null,
-          repostOf: d.originalPostId,
-          repostAuthorName: safeOrigAuthorName,
-          repostAuthorDid: d.originalAuthorDid,
-        });
-        log.info('feed_repost_received', { postId: payload.postId.slice(0, 24), mediaN: mediaCids?.length ?? 0 });
-        break;
-      }
-      case 'feed_delete': {
-        // v4.32.29: auth-check — удалять можно только СВОЙ пост. Раньше любой контакт мог
-        // подписать feed_delete{postId: чужой} и стереть чужой пост локально у всех.
-        const existing = await s.getPost(payload.postId);
-        if (!existing) {
-          // v4.32.546: раньше здесь был просто выход, и «удалить у всех»
-          // проигрывало гонку с доставкой самого поста: конверт `feed_post`
-          // приходил следом (ретрай автора, второй транспорт, переигранное
-          // окно ретеншена) и публикация оставалась у получателя навсегда.
-          // Надгробие запоминает удаление до того, как пост появился.
-          await s.savePostTombstone(payload.postId, payload.authorDid, payload.ts);
-          log.info('feed_delete_tombstoned', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        if (existing.authorDid !== payload.authorDid) {
-          log.warn('feed_delete_auth_mismatch', {
-            postId: payload.postId.slice(0, 24),
-            owner: existing.authorDid.slice(0, 24),
-            attacker: payload.authorDid.slice(0, 24),
-          });
-          break;
-        }
-        await cleanupInlinePayloads(payload.postId);
-        await s.deletePost(payload.postId);
-        log.info('feed_delete_received', { postId: payload.postId.slice(0, 24) });
-        break;
-      }
-      case 'feed_edit': {
-        const d = feedEnvelopeData<FeedEditData>(payload);
-        if (!d) break;
-        // v4.32.29: auth-check — редактировать можно только свой пост.
-        const existing = await s.getPost(payload.postId);
-        if (!existing) {
-          log.info('feed_edit_unknown_post', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        if (existing.authorDid !== payload.authorDid) {
-          log.warn('feed_edit_auth_mismatch', {
-            postId: payload.postId.slice(0, 24),
-            owner: existing.authorDid.slice(0, 24),
-            attacker: payload.authorDid.slice(0, 24),
-          });
-          break;
-        }
-        // v4.32.65: last-write-wins по ts envelope'а. Если у нас уже есть более
-        // свежая правка (пришла раньше, но edited_at/timestamp новее) — дропаем
-        // старый envelope. Защита от out-of-order доставки при multi-device edit.
-        const lastEditTs = existing.editedAt ?? existing.timestamp;
-        if (payload.ts < lastEditTs) {
-          log.info('feed_edit_stale_skipped', {
-            postId: payload.postId.slice(0, 24),
-            envelopeTs: payload.ts,
-            localLastEditTs: lastEditTs,
-          });
-          break;
-        }
-        // v4.32.527: единственное место, где текст из реле шёл в базу вообще
-        // без проверки — ни типа, ни длины. Транспорт оставляет на конверт
-        // около двух мегабайт, а у каждой правки свой ts, то есть свой ключ
-        // дедупликации: одну и ту же строку можно было раздувать повторно.
-        if (!isEditableFeedText(d.newText)) {
-          // Тип поля в FeedEditData объявлен строкой, поэтому длину здесь
-          // TypeScript уже считает недостижимой — но пришло-то оно из сети,
-          // и объявление о содержимом конверта ничего не знает.
-          log.warn('feed_edit_bad_text', {
-            postId: payload.postId.slice(0, 24),
-            type: typeof (d as { newText?: unknown }).newText,
-            len: String((d as { newText?: unknown }).newText ?? '').length,
-          });
-          break;
-        }
-        await s.updatePostText(payload.postId, d.newText, payload.ts);
-        log.info('feed_edit_received', { postId: payload.postId.slice(0, 24) });
-        break;
-      }
-      case 'feed_poll_vote': {
-        // v4.32.51: голос в опросе. До этого setPollVote писал только локально у
-        // голосующего — остальные получатели видели у себя счётчик "Всего: 1" (только
-        // свой голос). Теперь envelope переносит {postId, optionIndex, remove?} всем
-        // контактам автора голоса, receiver пишет у себя в poll_votes через setPollVote.
-        const d = feedEnvelopeData<FeedPollVoteData>(payload);
-        if (!d) break;
-        const existing = await s.getPost(payload.postId);
-        if (!existing) {
-          log.info('feed_poll_vote_unknown_post', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        if (!existing.text || !existing.text.startsWith(POLL_PREFIX)) {
-          log.warn('feed_poll_vote_not_poll', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        const poll = parsePollText(existing.text);
-        if (!poll) {
-          log.warn('feed_poll_vote_parse_failed', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        // v4.32.133 (AUDIT P2): require integer. A float optionIndex would pass
-        // `typeof === 'number'` + bounds check but get silently cast when
-        // written to the INTEGER column, corrupting tallies on receivers.
-        if (!Number.isInteger(d.optionIndex) || d.optionIndex < 0 || d.optionIndex >= poll.options.length) {
-          log.warn('feed_poll_vote_bad_index', { postId: payload.postId.slice(0, 24), idx: d.optionIndex });
-          break;
-        }
-        // Для учёта голоса нам нужен pubB64 голосующего, а пришёл DID. Конвертируем.
-        const voterPk = parseDidKey(payload.authorDid);
-        if (!voterPk) {
-          log.warn('feed_poll_vote_bad_did', { did: payload.authorDid.slice(0, 24) });
-          break;
-        }
-        const voterPubB64 = Buffer.from(voterPk).toString('base64');
-        const pid = envelopePid;
-        if (d.remove) {
-          await deletePollVote(payload.postId, voterPubB64, d.optionIndex, pid);
-          log.info('feed_poll_unvote_received', { postId: payload.postId.slice(0, 24), idx: d.optionIndex });
-        } else {
-          await setPollVote(payload.postId, voterPubB64, d.optionIndex, pid, poll.allowMultiple);
-          log.info('feed_poll_vote_received', { postId: payload.postId.slice(0, 24), idx: d.optionIndex, multi: poll.allowMultiple });
-        }
-        break;
-      }
-      case 'feed_view': {
-        // v4.32.68: входящий просмотр. Sender — viewer (payload.authorDid).
-        // Envelope адресно приходит автору (notifyFeedPostViewed шлёт с onlyDids=[authorDid]),
-        // но в теории может прийти и сюда по другому маршруту. Записываем viewer'а
-        // безусловно — UI при показе счётчика сам проверит, что пост принадлежит активному
-        // профилю. parseAndVerifyFeedEnvelope уже проверил что senderDid === authorDid,
-        // поэтому нельзя «вписать» чужой просмотр от имени кого-то другого.
-        const existing = await s.getPost(payload.postId);
-        if (!existing) {
-          log.info('feed_view_unknown_post', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        // Self-view — не считаем (viewer === автор поста). Дополнительная защита
-        // к guard'у в notifyFeedPostViewed (авторы своих постов envelope не шлют).
-        if (existing.authorDid === payload.authorDid) {
-          log.info('feed_view_self_skip', { postId: payload.postId.slice(0, 24) });
-          break;
-        }
-        const d = feedEnvelopeData<FeedViewData>(payload);
-        if (!d) break;
-        const viewerName = (d.viewerName ?? '').trim().slice(0, 80) || null;
-        await s.recordView(payload.postId, payload.authorDid, viewerName, payload.ts);
-        log.info('feed_view_received', {
-          postId: payload.postId.slice(0, 24),
-          viewer: payload.authorDid.slice(0, 24),
-        });
-        break;
-      }
-      default:
-        log.warn('feed_envelope_unknown_type', { type: (payload as FeedEnvelopePayload).type });
-        return;
-    }
+    if (!(await applyFeedEnvelope(payload, s, envelopePid))) return;
 
     emitFeedUpdate();
   } catch (e) {

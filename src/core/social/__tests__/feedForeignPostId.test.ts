@@ -20,10 +20,12 @@ const SERVICE = fs.readFileSync(path.join(__dirname, '..', 'feedService.ts'), 'u
 
 /** Тело одной ветки switch: от `case '<name>': {` до строки с закрывающей скобкой той же глубины. */
 function caseBody(src: string, name: string): string {
-  const head = `      case '${name}': {`;
+  // v4.32.615: switch переехал из receiveFeedEnvelope в applyFeedEnvelope и
+  // потерял два пробела отступа — глубина ветки теперь четыре, а не шесть.
+  const head = `    case '${name}': {`;
   const start = src.indexOf(head);
   expect(start).toBeGreaterThanOrEqual(0);
-  const end = src.indexOf('\n      }\n', start);
+  const end = src.indexOf('\n    }\n', start);
   expect(end).toBeGreaterThan(start);
   return src.slice(start, end);
 }
