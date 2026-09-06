@@ -87,6 +87,9 @@ jest.mock('../localEncryption', () => ({
   resetDataEncryptionKeyCache: jest.fn(),
 }));
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import { FeedStorage, type FeedPostRow } from '../feedStorage';
 
 const AUTHOR = 'did:key:zAuthor';
@@ -178,6 +181,22 @@ describe('надгробие адресное', () => {
     await s.savePostTombstone(PID, AUTHOR, 500);
     await s.upsertSyncPost({ ...post(PID, OTHER), read: 0, reactions: null } as FeedPostRow);
     expect(mockFeed).toHaveLength(1);
+  });
+});
+
+describe('индексы надгробий', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'feedStorage.ts'), 'utf8');
+
+  it('по deleted_at индекса нет — читателя у него не появилось', () => {
+    // Чистки надгробий нет и не планируется, а SELECT'ы идут по post_id.
+    expect(SRC).not.toContain('CREATE INDEX IF NOT EXISTS idx_fpt_at');
+    expect(SRC).toContain('DROP INDEX IF EXISTS idx_fpt_at;');
+  });
+
+  it('и не появился запрос, которому такой индекс был бы нужен', () => {
+    for (const m of SRC.matchAll(/feed_post_tombstones[\s\S]{0,160}/g)) {
+      expect(m[0]).not.toMatch(/(WHERE|ORDER BY)[\s\S]{0,60}deleted_at/);
+    }
   });
 });
 

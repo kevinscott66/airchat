@@ -248,3 +248,16 @@ test('username directory publishes the profile key only with its own proof', asy
   // Свободного имени в справочнике нет вовсе.
   assert.equal(db.lookupUsername('directory_two'), null);
 });
+
+test('справка по имени описана у своего маршрута, а не у чужого', () => {
+  // Комментарий к `/v1/username/:username` объясняет единственный запрос
+  // реестра без подписи и то, что ответ раскрывает ключ профиля. После
+  // v4.32.612 между ним и маршрутом вклинилась выкладка публикаций, и читатель
+  // получал разбор ответов taken/pub над кодом, который отдаёт конверт поста.
+  const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  const doc = src.indexOf(' * Справка по имени');
+  const route = src.indexOf("app.get('/v1/username/:username'");
+  assert.ok(doc > 0, 'комментарий на месте');
+  assert.ok(route > doc, 'маршрут ниже комментария');
+  assert.ok(!src.slice(doc, route).includes('app.'), 'между ними нет другого маршрута');
+});

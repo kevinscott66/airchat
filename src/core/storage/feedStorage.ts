@@ -261,7 +261,12 @@ export class FeedStorage {
             author_did TEXT NOT NULL,
             deleted_at INTEGER NOT NULL
           );
-          CREATE INDEX IF NOT EXISTS idx_fpt_at ON feed_post_tombstones(deleted_at);
+          -- v4.32.614: индекс по deleted_at заводили под будущую чистку надгробий.
+          -- Чистки нет: надгробие весит десятки байт, а ошибка в чистке воскрешает
+          -- удалённую запись — ровно то, ради чего надгробия и заведены. Таблицу
+          -- читают только по post_id, он же первичный ключ, так что индекс лишь
+          -- удорожал вставку. IF EXISTS убирает его и там, где он уже создан.
+          DROP INDEX IF EXISTS idx_fpt_at;
           CREATE TABLE IF NOT EXISTS feed_post_views (
             post_id TEXT NOT NULL,
             viewer_did TEXT NOT NULL,
