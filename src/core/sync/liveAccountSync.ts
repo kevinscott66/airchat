@@ -44,6 +44,7 @@ import { log } from '../logger';
 import { feedCommentIsHeldFromSync, feedPostIsHeldFromSync } from '../social/feedPostGuard';
 import { heldEntityCount, presentEntityKeys, pushableEntities } from './entityHold';
 import { syncAccountOnce } from './accountSync';
+import { markAccountSyncEnd, markAccountSyncStart } from '../net/connectionStatus';
 import { base64UrlToUtf8, bytesToBase64Url, utf8ToBase64Url } from '../utils/base64url';
 import type { SyncEntityKind, SyncMutation, SyncPushResponse } from './syncProtocol';
 import type { KeyPairBytes } from '../crypto/keyManager';
@@ -636,7 +637,13 @@ export function syncActiveAccount(
   ownerProfileId: number,
 ): Promise<void> {
   const previous = locks.get(ownerProfileId) ?? Promise.resolve();
-  const current = previous.catch(() => {}).then(() => runLiveSync(mnemonic, pair, ownerProfileId)).catch((error) => {
+  // v4.32.610: отметка ставится вокруг САМОГО прохода, а не вокруг ожидания
+  // очереди. Иначе «Обновление…» висело бы всё время, пока заход стоит за
+  // предыдущим, — то есть говорило бы о работе, которая ещё не началась.
+  const current = previous.catch(() => {}).then(() => {
+    markAccountSyncStart();
+    return runLiveSync(mnemonic, pair, ownerProfileId).finally(markAccountSyncEnd);
+  }).catch((error) => {
     log.warn('live_sync_failed', {
       ownerProfileId,
       err: error instanceof Error ? error.message : String(error),

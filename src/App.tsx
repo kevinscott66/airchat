@@ -86,6 +86,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeScreen } from './ui/components/SafeScreen';
 import { VpnStatusBanner } from './ui/components/VpnStatusBanner';
 import { OfflineStatus } from './ui/components/OfflineStatus';
+import { ConnectionStatus } from './ui/components/ConnectionStatus';
 import { StoragePressureBanner } from './ui/components/StoragePressureBanner';
 import {
   maybeStartEmbeddedVpn,
@@ -1905,6 +1906,9 @@ function AppShell({
       {/* v4.32.300: выше очереди отправки — «место кончилось» объясняет и её
           длину тоже: на переполненном диске в неё не попадает ничего. */}
       <StoragePressureBanner />
+      {/* v4.32.610: «Соединение…»/«Обновление…» — прямо над очередью отправки:
+          это и есть объяснение, почему очередь стоит на месте. */}
+      <ConnectionStatus />
       <OfflineStatus />
       {children}
     </View>
