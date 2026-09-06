@@ -208,6 +208,33 @@ export async function getPublicPostFrame(postId: string): Promise<Uint8Array | n
 }
 
 /**
+ * Лежит ли копия на сервере — не скачивая саму копию (v4.32.614).
+ *
+ * Нужна правке. Обновлять копию можно только у той записи, которую автор уже
+ * отдал наружу сам: положить её по правке записи, ссылку на которую никто не
+ * копировал, значит выложить наружу то, чего человек не выкладывал.
+ *
+ * HEAD, а не GET: ответ нужен один — есть или нет, — а тело копии доходит до
+ * двух мегабайт. Ничего нового о владельце это не сообщает: копия и так
+ * открыта всякому, у кого есть ссылка, ради чего она и лежит.
+ */
+export async function publicPostCopyExists(postId: string): Promise<boolean> {
+  const base = cloudBaseUrl();
+  if (!base) return false;
+  if (!isPublicPostId(postId)) return false;
+  try {
+    return await fetchPublicPost(
+      `${base}/v1/post/${encodeURIComponent(postId)}`,
+      { method: 'HEAD' },
+      async (response) => response.ok,
+    );
+  } catch (e) {
+    log.warn('public_post_head_error', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
+/**
  * Снять копию. Зовётся из удаления поста: пока копия лежит, ссылка открывает
  * то, что автор уже стёр у себя и у контактов.
  */

@@ -1858,12 +1858,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       if (!newText) { showError(t('feed.textEmpty')); return; }
       if (publishLockRef.current) return;
       publishLockRef.current = true;
-      void editFeedPost(pair, editingPost.id, newText).then(() => {
+      void editFeedPost(pair, editingPost.id, newText).then((outcome) => {
         publishLockRef.current = false;
         setDraft('');
         setEditingPost(null);
         setModalOpen(false);
         void loadFeed();
+        // v4.32.614: правка разошлась по контактам, а копия для ссылки на
+        // сервере осталась прежней. Отдавший ссылку обязан это знать сам, а не
+        // от того, кому он её отдал.
+        if (outcome.linkCopyStale) showError(t('feed.linkCopyStale'));
       }).catch((e: unknown) => {
         publishLockRef.current = false;
         showError(userErrorText(e, 'Не удалось изменить запись'));

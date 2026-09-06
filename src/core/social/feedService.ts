@@ -87,6 +87,7 @@ import {
   putPublicPostCopy,
   getPublicPostFrame,
   deletePublicPostCopy,
+  publicPostCopyExists,
   publicPostStoreAvailable,
 } from './publicPost';
 
@@ -2114,6 +2115,35 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
 }
 
 /**
+ * Обновить копию по ссылке после правки (v4.32.614).
+ *
+ * Правка расходилась только по контактам, а копия на сервере оставалась той,
+ * какой её выложили. Ссылка после этого отдавала прежнюю редакцию — включая ту
+ * самую строку, ради удаления которой человек и полез править. Ссылку он при
+ * этом уже кому-то отдал: иначе копии бы не было.
+ *
+ * Копия не заводится, а именно обновляется: если её нет, значит запись наружу
+ * не отдавали, и класть её туда по одной лишь правке нельзя.
+ *
+ * `true` — «расхождения нет»: либо копию обновили, либо обновлять было нечего.
+ */
+export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  if (!publicPostStoreAvailable()) return true;
+  try {
+    if (!(await publicPostCopyExists(postId))) return true;
+    const payload = await buildOwnPostEnvelope(pair, postId);
+    if (!payload) return false;
+    return await putPublicPostCopy(pair, payload);
+  } catch (e) {
+    log.warn('public_post_refresh_failed', {
+      postId: postId.slice(0, 24),
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
+}
+
+/**
  * Открыть публикацию по ссылке, когда её нет на устройстве.
  *
  * Кадр уходит на тот же приёмный путь, что и у сети: подпись проверяется
@@ -3712,13 +3742,26 @@ export async function broadcastPollVote(
 }
 
 /**
+ * Чем закончилась правка помимо самой правки (v4.32.614).
+ *
+ * `linkCopyStale` — копия по ссылке на сервере есть, но обновить её не вышло:
+ * ссылка продолжает отдавать прежнюю редакцию, и человек вправе узнать об этом
+ * сразу, а не от того, кому он эту ссылку отдал.
+ */
+export type FeedEditOutcome = { linkCopyStale: boolean };
+
+/**
  * Редактировать свой пост + разослать feed_edit.
  * v4.32.47: auth-guard — перед локальным UPDATE и бродкастом проверяем что постом
  * владеет текущий DID. До этого любой клиент мог вызвать `editFeedPost(pair, чужой_id, ...)`
  * и у себя на экране подменить текст чужого поста (бродкаст получатели отбрасывали через
  * auth-check в `receiveFeedEnvelope`, но локально UPDATE проходил).
  */
-export async function editFeedPost(pair: KeyPairBytes, postId: string, newText: string): Promise<void> {
+export async function editFeedPost(
+  pair: KeyPairBytes,
+  postId: string,
+  newText: string,
+): Promise<FeedEditOutcome> {
   const trimmed = (newText ?? '').trim();
   if (!trimmed) throw new Error('Текст не может быть пустым');
   if (trimmed.length > FEED_POST_MAX_CHARS) {
@@ -3755,6 +3798,7 @@ export async function editFeedPost(pair: KeyPairBytes, postId: string, newText: 
     data,
   };
   await signAndBroadcastFeedEnvelope(pair, payload);
+  return { linkCopyStale: !(await refreshPublicPostCopy(pair, postId)) };
 }
 
 /**
