@@ -526,7 +526,30 @@ function isPlaceholderHost(raw: string): boolean {
  * бросает, когда файла в сборке нет.
  */
 function bundledConfig(): AppConfig {
-  const bundled = require('../../assets/config.json') as AppConfig;
+  const raw = require('../../assets/config.json') as AppConfig;
+  // v4.32.611. Адрес relay приходит тем же способом и по той же причине, что и
+  // адрес облачной копии: своего сервера в публичном репозитории быть не
+  // должно. Сборка без переменной остаётся на публичном ntfy.sh — она рабочая,
+  // просто накопленное там живёт 12 часов вместо тридцати суток.
+  //
+  // Одно и то же значение кладётся в обе половины пары нарочно: писать адрес
+  // дважды — способ однажды разойтись, а разбор (serverBaseUrl) сам переводит
+  // https в wss и сохраняет путь, которым сервер живёт за прокси.
+  const relayFromEnv =
+    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_RELAY_URL
+      ? process.env.EXPO_PUBLIC_RELAY_URL
+      : '';
+  const bundled: AppConfig = relayFromEnv
+    ? {
+        ...raw,
+        internet: {
+          ...raw.internet,
+          enabled: raw.internet?.enabled ?? true,
+          relayBase: relayFromEnv,
+          wsBase: relayFromEnv,
+        },
+      }
+    : raw;
   const fromEnv =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_CLOUD_VAULT_URL
       ? process.env.EXPO_PUBLIC_CLOUD_VAULT_URL

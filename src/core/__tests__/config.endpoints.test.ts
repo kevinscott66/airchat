@@ -112,6 +112,49 @@ describe('адреса ретранслятора из конфига', () => {
   });
 });
 
+/**
+ * v4.32.611. Свой relay держит сообщения тридцать суток вместо двенадцати
+ * часов, но его адреса в публичном репозитории нет: он приходит переменной
+ * сборки, как и адрес облачной копии. Проверяется здесь то же, что и там, —
+ * что переменная доходит до готового конфига и что пара адресов не разъезжается.
+ */
+describe('адрес ретранслятора из переменной сборки', () => {
+  const saved = process.env.EXPO_PUBLIC_RELAY_URL;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.EXPO_PUBLIC_RELAY_URL;
+    else process.env.EXPO_PUBLIC_RELAY_URL = saved;
+  });
+
+  it('переменная задаёт обе половины пары, а не одну', async () => {
+    process.env.EXPO_PUBLIC_RELAY_URL = 'https://vault.example.com/relay';
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.internet?.relayBase).toBe('https://vault.example.com/relay');
+    expect(cfg.internet?.wsBase).toBe('wss://vault.example.com/relay');
+  });
+
+  it('без переменной сборка остаётся на публичном ntfy.sh, а не без адреса', async () => {
+    delete process.env.EXPO_PUBLIC_RELAY_URL;
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.internet?.relayBase).toBe('https://ntfy.sh');
+  });
+
+  it('свой адрес из airchat-config.json важнее адреса сборки', async () => {
+    // Переменная отвечает на вопрос «куда по умолчанию», а не «куда всегда»:
+    // человек, вписавший свой сервер, должен остаться на нём.
+    process.env.EXPO_PUBLIC_RELAY_URL = 'https://vault.example.com/relay';
+    const cfg = await loadWithOverride({ internet: { enabled: true, relayBase: 'https://mine.example.com' } });
+    expect(cfg.internet?.relayBase).toBe('https://mine.example.com');
+    expect(cfg.internet?.wsBase).toBe('wss://mine.example.com');
+  });
+
+  it('негодная переменная не оставляет сборку без ретранслятора', async () => {
+    process.env.EXPO_PUBLIC_RELAY_URL = 'file:///etc/passwd';
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.internet?.relayBase).toBe('https://ntfy.sh');
+    expect(cfg.internet?.wsBase).toBe('wss://ntfy.sh');
+  });
+});
+
 describe('адрес сигнального сервера из конфига', () => {
   it('wss:// приводится к https:// — по этому же адресу ходит fetch', async () => {
     // socket.io принимает wss://, а fetch на `${base}/register-token` — нет:
