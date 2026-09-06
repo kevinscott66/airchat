@@ -17,10 +17,12 @@
  * Сервер её проверяет у себя, но получатель ссылки проверяет её ещё раз сам —
  * кадр приходит на общий приёмный путь ленты, тот же, что и у сети.
  */
-import { ed25519 } from '@noble/curves/ed25519.js';
+import { Buffer } from 'buffer';
+import { randomBytes } from '@noble/hashes/utils.js';
 import { cloudBaseUrl } from '../backup/cloudVault';
-import { signJson } from '../crypto/signature';
-import { ED25519_SIGNATURE_BYTES, publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
+import { signJson, verifySignedJson } from '../crypto/signature';
+import { publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
+import { bytesToBase64Url } from '../utils/base64url';
 import { FEED_ENVELOPE_MAGIC, FEED_ENVELOPE_MAX_BYTES } from './feedTransport';
 import { log } from '../logger';
 import type { KeyPairBytes } from '../crypto/keyManager';
@@ -39,14 +41,55 @@ export function publicPostStoreAvailable(): boolean {
   return cloudBaseUrl() !== null;
 }
 
-async function fetchPublicPost(url: string, init: RequestInit): Promise<Response> {
+/**
+ * Запрос с общим сроком на весь обмен, включая чтение тела (v4.32.614).
+ *
+ * Раньше таймер снимался, как только вернулись заголовки, а `response.json()`
+ * оставался без всякого предела: сервер, отдающий первый килобайт и потом
+ * молчащий, держал вызывающего до самого разрыва соединения. Поэтому работа с
+ * ответом делается внутри, а не после.
+ */
+async function fetchPublicPost<T>(
+  url: string,
+  init: RequestInit,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
   const controller = typeof AbortController === 'undefined' ? null : new AbortController();
   const timeout = setTimeout(() => controller?.abort(), PUBLIC_POST_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+    const response = await fetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+    return await read(response);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Намерение записи — вторая, короткая подпись рядом с конвертом (v4.32.614).
+ *
+ * Сам конверт подписан, но он в неизменном виде есть у всех, кому пост дошёл
+ * по ленте, и отдаётся всякому, кто открыл ссылку. Значит, его подпись говорит
+ * только «это написал такой-то», но не «такой-то хочет положить это сюда
+ * сейчас». Без второй подписи чужую публикацию мог выложить любой получатель,
+ * сохранённый ответ сервера можно было отправить обратно и воскресить уже
+ * удалённую копию, а старую редакцию — положить поверх новой.
+ *
+ * Разовое число сервер гасит у себя, поэтому повторить тот же запрос нельзя
+ * даже в пределах окна расхождения часов.
+ */
+async function buildPostIntent(
+  pair: KeyPairBytes,
+  postId: string,
+  act: 'put' | 'del',
+): Promise<{ payload: string; signature: string }> {
+  return signJson(pair, {
+    v: 1,
+    act,
+    postId,
+    ts: Date.now(),
+    nonce: bytesToBase64Url(randomBytes(16)),
+    publicKeyB64: publicKeyToB64(pair.publicKey),
+  });
 }
 
 /**
@@ -64,25 +107,38 @@ export async function putPublicPostCopy(
   if (!isPublicPostId(payload.postId)) return false;
   try {
     const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
-    if (signed.payload.length > FEED_ENVELOPE_MAX_BYTES) {
-      log.warn('public_post_too_large', { postId: payload.postId.slice(0, 24), bytes: signed.payload.length });
+    // v4.32.614: потолок сервера считается в БАЙТАХ (Buffer.byteLength), а
+    // `.length` у строки — в единицах UTF-16. На русском тексте это ровно
+    // вдвое меньше настоящего размера, так что проверка пропускала конверт,
+    // который сервер затем молча отвергал как слишком большой.
+    const payloadBytes = Buffer.byteLength(signed.payload, 'utf8');
+    if (payloadBytes > FEED_ENVELOPE_MAX_BYTES) {
+      log.warn('public_post_too_large', { postId: payload.postId.slice(0, 24), bytes: payloadBytes });
       return false;
     }
-    const response = await fetchPublicPost(`${base}/v1/post/${encodeURIComponent(payload.postId)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        payload: signed.payload,
-        signature: signed.signature,
-        authorPublicKeyB64: publicKeyToB64(pair.publicKey),
-      }),
-    });
-    if (!response.ok) {
-      log.warn('public_post_put_failed', { postId: payload.postId.slice(0, 24), status: response.status });
-      return false;
-    }
-    log.info('public_post_put_ok', { postId: payload.postId.slice(0, 24) });
-    return true;
+    const intent = await buildPostIntent(pair, payload.postId, 'put');
+    const ok = await fetchPublicPost(
+      `${base}/v1/post/${encodeURIComponent(payload.postId)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          payload: signed.payload,
+          signature: signed.signature,
+          authorPublicKeyB64: publicKeyToB64(pair.publicKey),
+          intent,
+        }),
+      },
+      async (response) => {
+        if (!response.ok) {
+          log.warn('public_post_put_failed', { postId: payload.postId.slice(0, 24), status: response.status });
+          return false;
+        }
+        return true;
+      },
+    );
+    if (ok) log.info('public_post_put_ok', { postId: payload.postId.slice(0, 24) });
+    return ok;
   } catch (e) {
     log.warn('public_post_put_error', { err: e instanceof Error ? e.message : String(e) });
     return false;
@@ -103,20 +159,39 @@ export async function getPublicPostFrame(postId: string): Promise<Uint8Array | n
   if (!base) return null;
   if (!isPublicPostId(postId)) return null;
   try {
-    const response = await fetchPublicPost(`${base}/v1/post/${encodeURIComponent(postId)}`, { method: 'GET' });
-    if (!response.ok) {
-      if (response.status !== 404) log.warn('public_post_get_failed', { postId: postId.slice(0, 24), status: response.status });
-      return null;
-    }
-    const body = await response.json() as { payload?: unknown; signature?: unknown; authorPublicKeyB64?: unknown };
+    const body = await fetchPublicPost(
+      `${base}/v1/post/${encodeURIComponent(postId)}`,
+      { method: 'GET' },
+      async (response) => {
+        if (!response.ok) {
+          if (response.status !== 404) log.warn('public_post_get_failed', { postId: postId.slice(0, 24), status: response.status });
+          return null;
+        }
+        return await response.json() as { payload?: unknown; signature?: unknown; authorPublicKeyB64?: unknown };
+      },
+    );
+    if (!body) return null;
     if (typeof body.payload !== 'string' || typeof body.signature !== 'string' || typeof body.authorPublicKeyB64 !== 'string') return null;
-    if (body.payload.length > FEED_ENVELOPE_MAX_BYTES) return null;
+    if (Buffer.byteLength(body.payload, 'utf8') > FEED_ENVELOPE_MAX_BYTES) return null;
     const pk = publicKeyFromB64(body.authorPublicKeyB64);
     if (!pk) return null;
-    const sig = new Uint8Array(Buffer.from(body.signature, 'base64'));
-    if (sig.length !== ED25519_SIGNATURE_BYTES) return null;
-    if (!ed25519.verify(sig, new TextEncoder().encode(body.payload), pk)) {
+    // v4.32.614: общая проверка подписи вместо своей копии ed25519.verify —
+    // она же сама считает длину подписи и разбирает нагрузку.
+    const parsed = await verifySignedJson(
+      pk,
+      { payload: body.payload, signature: body.signature },
+      FEED_ENVELOPE_MAX_BYTES,
+    );
+    if (!parsed) {
       log.warn('public_post_signature_invalid', { postId: postId.slice(0, 24) });
+      return null;
+    }
+    // v4.32.614: подпись подтверждает авторство, но не то, что нам отдали
+    // именно запрошенное. Без этой сверки сервер (или посредник) мог подменить
+    // ответ другой, настоящей и правильно подписанной публикацией того же
+    // автора — а открывший ссылку увидел бы её как содержимое своей ссылки.
+    if (parsed.postId !== postId) {
+      log.warn('public_post_id_mismatch', { postId: postId.slice(0, 24) });
       return null;
     }
     const json = JSON.stringify({ payload: body.payload, signature: body.signature });
@@ -145,16 +220,21 @@ export async function deletePublicPostCopy(
   if (!isPublicPostId(payload.postId)) return false;
   try {
     const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
-    const response = await fetchPublicPost(`${base}/v1/post/${encodeURIComponent(payload.postId)}/delete`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        payload: signed.payload,
-        signature: signed.signature,
-        authorPublicKeyB64: publicKeyToB64(pair.publicKey),
-      }),
-    });
-    return response.ok;
+    const intent = await buildPostIntent(pair, payload.postId, 'del');
+    return await fetchPublicPost(
+      `${base}/v1/post/${encodeURIComponent(payload.postId)}/delete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          payload: signed.payload,
+          signature: signed.signature,
+          authorPublicKeyB64: publicKeyToB64(pair.publicKey),
+          intent,
+        }),
+      },
+      async (response) => response.ok,
+    );
   } catch (e) {
     log.warn('public_post_delete_error', { err: e instanceof Error ? e.message : String(e) });
     return false;

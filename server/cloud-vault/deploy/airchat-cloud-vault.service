@@ -2,6 +2,14 @@
 Description=AirChat encrypted cloud vault
 After=network-online.target
 Wants=network-online.target
+# v4.32.614. Разбор большого тела стоит памяти в несколько раз больше самого
+# тела, а MemoryMax ниже верхнего потолка запроса: одно заведомо злое тело
+# службу всё-таки уронит, и предотвратить это, не сломав выкладку архива,
+# нечем. Значит, важно другое — чтобы она гарантированно вернулась. По
+# умолчанию systemd после пяти перезапусков за десять секунд оставляет юнит в
+# failed навсегда: недолгая помеха превращалась бы в отказ до ручного
+# вмешательства. Счётчик снят намеренно (ключ живёт в [Unit], не в [Service]).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -13,8 +21,8 @@ Environment=HOST=127.0.0.1
 Environment=PORT=3010
 Environment=CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault-example
 ExecStart=/opt/node-v22.14.0-linux-x64/bin/node /opt/airchat-cloud-vault-example/index.js
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=2
 NoNewPrivileges=true
 UMask=0077
 PrivateTmp=true

@@ -94,6 +94,8 @@ const MEDIA_GC_BATCH = Number.isSafeInteger(configuredMediaGcBatch) && configure
 const PUBLIC_POST_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const PUBLIC_POST_BODY_BYTES = 4 * 1024 * 1024;
 const POST_ID_RE = /^[A-Za-z0-9_\-.:]{1,128}$/;
+/** Намерение записи (см. verifyPostIntent) — короткий объект из шести полей. */
+const PUBLIC_POST_INTENT_MAX_BYTES = 1024;
 const configuredPublicPostQuota = Number(process.env.PUBLIC_POST_MAX_AUTHOR_BYTES);
 const PUBLIC_POST_MAX_AUTHOR_BYTES = Number.isSafeInteger(configuredPublicPostQuota) && configuredPublicPostQuota > 0
   ? configuredPublicPostQuota
@@ -207,12 +209,55 @@ app.use((req, res, next) => {
   if (bucket.count > RATE_LIMIT) return res.status(429).json({ error: 'rate_limited' });
   return next();
 });
+/**
+ * Потолок тела — по настоящему маршруту, а не по хвосту пути (v4.32.614).
+ *
+ * Было `req.path.endsWith('/push')`: восемьдесят мегабайт выдавалось любому
+ * адресу, оканчивающемуся на это слово, — в том числе несуществующему, где
+ * тело разбиралось целиком только затем, чтобы express ответил 404.
+ *
+ * Второе здесь же: разбор большого тела стоит памяти в несколько раз больше
+ * самого тела (замерено: 21 МБ мелких объектов дают около 130 МБ RSS), а у
+ * службы MemoryMax=384M. Одновременные большие запросы складываются, поэтому
+ * их пропускаем по одному, а остальным честно отвечаем 503 с retry-after.
+ * Это не защита от одного заведомо злого гиганта — от него спасает только
+ * гарантированный перезапуск (см. deploy/airchat-cloud-vault.service), — но
+ * она убирает самый дешёвый способ сложить память несколькими соединениями.
+ */
+const CLOUD_VAULT_PUT_PATH_RE = /^\/v1\/cloud-vault\/[^/]+$/;
+const SYNC_PUSH_PATH_RE = /^\/v1\/sync\/[^/]+\/push$/;
+const MEDIA_PUT_PATH_RE = /^\/v1\/sync\/[^/]+\/media\/put$/;
+const PUBLIC_POST_WRITE_PATH_RE = /^\/v1\/post\/[^/]+(?:\/delete)?$/;
+const LARGE_BODY_MAX_INFLIGHT = 1;
+let largeBodyInFlight = 0;
+
+function bodyLimitFor(req) {
+  if (req.method === 'PUT' && CLOUD_VAULT_PUT_PATH_RE.test(req.path)) return MAX_BODY_BYTES;
+  if (req.method !== 'POST') return DEFAULT_JSON_BODY_BYTES;
+  if (SYNC_PUSH_PATH_RE.test(req.path)) return SYNC_PUSH_BODY_BYTES;
+  if (MEDIA_PUT_PATH_RE.test(req.path)) return MEDIA_BODY_BYTES;
+  if (PUBLIC_POST_WRITE_PATH_RE.test(req.path)) return PUBLIC_POST_BODY_BYTES;
+  return DEFAULT_JSON_BODY_BYTES;
+}
+
 app.use((req, res, next) => {
-  let limit = DEFAULT_JSON_BODY_BYTES;
-  if (req.method === 'PUT' && req.path.startsWith('/v1/cloud-vault/')) limit = MAX_BODY_BYTES;
-  else if (req.path.endsWith('/push')) limit = SYNC_PUSH_BODY_BYTES;
-  else if (req.path.endsWith('/media/put')) limit = MEDIA_BODY_BYTES;
-  else if (req.path.startsWith('/v1/post/')) limit = PUBLIC_POST_BODY_BYTES;
+  const limit = bodyLimitFor(req);
+  const declared = Number(req.headers['content-length']);
+  const large = limit > DEFAULT_JSON_BODY_BYTES
+    && Number.isFinite(declared)
+    && declared > DEFAULT_JSON_BODY_BYTES;
+  if (!large) return express.json({ limit: `${limit}b` })(req, res, next);
+  if (largeBodyInFlight >= LARGE_BODY_MAX_INFLIGHT) {
+    res.set('retry-after', '5');
+    return res.status(503).json({ error: 'server_busy' });
+  }
+  largeBodyInFlight += 1;
+  let released = false;
+  res.on('close', () => {
+    if (released) return;
+    released = true;
+    largeBodyInFlight -= 1;
+  });
   return express.json({ limit: `${limit}b` })(req, res, next);
 });
 setInterval(() => {
@@ -222,14 +267,49 @@ setInterval(() => {
   }
 }, RATE_WINDOW_MS).unref();
 
-function canonicalize(value) {
+/**
+ * Потолок вложенности канонизации (v4.32.614).
+ *
+ * `canonicalize` рекурсивна, а `JSON.parse` — нет: тело `{"a":{"a":{"a":…`
+ * глубиной в пять тысяч уровней разбирается без единой жалобы, после чего
+ * первая же канонизация уходит в RangeError «Maximum call stack size
+ * exceeded». Пока это происходило в синхронном обработчике, express ловил
+ * бросок сам; но `PUT /v1/cloud-vault/:accountId` и `POST …/media/put`
+ * объявлены async, а express 4 промисов не ловит — бросок становился
+ * unhandledRejection, и node 22 по умолчанию убивает такой процесс. То есть
+ * один запрос без единой подписи гасил сервис целиком: и хранилище, и
+ * синхронизацию, и переписку.
+ *
+ * Шестьдесят четыре уровня — с большим запасом: самая глубокая настоящая
+ * нагрузка (пакет мутаций синхронизации) укладывается в шесть.
+ */
+const CANONICAL_MAX_DEPTH = 64;
+
+function canonicalize(value, depth = 0) {
   if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(canonicalize);
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  if (depth >= CANONICAL_MAX_DEPTH) throw new RangeError('canonical_depth_exceeded');
+  if (Array.isArray(value)) return value.map((item) => canonicalize(item, depth + 1));
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalize(value[key], depth + 1)]),
+  );
 }
 
 function stableStringify(value) {
   return JSON.stringify(canonicalize(value));
+}
+
+/**
+ * Каноническая форма или null. Все проверки подписи сверяют присланную строку
+ * с канонизацией разобранного объекта, и «канонизировать не удалось» для них —
+ * ровно то же самое, что «не совпало»: подпись не подтверждена. Отдельного
+ * кода ответа это не заслуживает, а вот падения — тем более.
+ */
+function safeStableStringify(value) {
+  try {
+    return stableStringify(value);
+  } catch {
+    return null;
+  }
 }
 
 function decodeBase64(value, maxBytes) {
@@ -311,7 +391,8 @@ function verifySignedPayload(rawPayload, signature) {
     return null;
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-  if (stableStringify(payload) !== rawPayload) return null;
+  const canonicalPayload = safeStableStringify(payload);
+  if (canonicalPayload === null || canonicalPayload !== rawPayload) return null;
   const publicKey = decodeBase64(payload.publicKeyB64, 32);
   const sig = decodeBase64(signature, 64);
   if (!publicKey || publicKey.length !== 32 || !sig || sig.length !== 64) return null;
@@ -1039,12 +1120,68 @@ function verifyPostEnvelope(body, expectedPostId, expectedTypes) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   // Тот же канонический вид, который подписывает клиент (signature.ts#signJson).
   // Без этой сверки одна и та же подпись подошла бы к нескольким записям JSON.
-  if (stableStringify(parsed) !== payload) return null;
+  const canonicalPost = safeStableStringify(parsed);
+  if (canonicalPost === null || canonicalPost !== payload) return null;
   if (!expectedTypes.includes(parsed.type)) return null;
   if (typeof parsed.postId !== 'string' || parsed.postId !== expectedPostId) return null;
   if (typeof parsed.authorDid !== 'string' || parsed.authorDid !== didKeyFromPublicKeyB64(authorPublicKeyB64)) return null;
   if (typeof parsed.ts !== 'number' || !Number.isSafeInteger(parsed.ts)) return null;
   return { parsed, payload, signature, authorPublicKeyB64 };
+}
+
+/**
+ * Право записать эту копию — здесь и сейчас (v4.32.614).
+ *
+ * Конверт ленты подписан автором, но он же в неизменном виде лежит у каждого,
+ * кому пост дошёл по сети, и отдаётся отсюда всякому, кто открыл ссылку. Одной
+ * подписи конверта поэтому мало: она подтверждает авторство содержимого, а не
+ * желание автора именно сейчас положить его сюда или снять отсюда. Из этого
+ * росли три разных беды, и все три закрываются одним:
+ *
+ *   — чужую копию мог выложить кто угодно, кому конверт дошёл по ленте: он
+ *     публиковал за автора то, что автор ссылкой делиться не собирался;
+ *   — сохранённый ответ GET можно было отправить обратно в POST и воскресить
+ *     копию, которую автор уже удалил;
+ *   — старую редакцию можно было положить поверх новой, откатив правку.
+ *
+ * Намерение — отдельная короткая подпись тем же ключом: что делаем, с каким
+ * постом, когда и с каким разовым числом. Окно времени то же, что у остальных
+ * подписанных запросов, разовое число гасится тем же `consumeNonce`, что и в
+ * синхронизации (пространство имён своё: у публикаций аккаунта здесь нет).
+ * Ключ намерения обязан совпасть с ключом, которым подписан сам конверт.
+ */
+function verifyPostIntent(body, expectedPostId, expectedAct, authorPublicKeyB64) {
+  const intent = body && typeof body === 'object' ? body.intent : null;
+  if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return null;
+  const { payload, signature } = intent;
+  if (typeof payload !== 'string' || payload.length === 0) return null;
+  if (Buffer.byteLength(payload, 'utf8') > PUBLIC_POST_INTENT_MAX_BYTES) return null;
+  if (typeof signature !== 'string' || !SIGNATURE_RE.test(signature)) return null;
+  const publicKey = decodeBase64(authorPublicKeyB64, 32);
+  const sig = decodeBase64(signature, 64);
+  if (!publicKey || publicKey.length !== 32 || !sig || sig.length !== 64) return null;
+  if (!ed25519.verify(sig, Buffer.from(payload, 'utf8'), publicKey)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const canonical = safeStableStringify(parsed);
+  if (canonical === null || canonical !== payload) return null;
+  if (parsed.v !== 1 || parsed.act !== expectedAct) return null;
+  if (typeof parsed.postId !== 'string' || parsed.postId !== expectedPostId) return null;
+  if (typeof parsed.publicKeyB64 !== 'string' || parsed.publicKeyB64 !== authorPublicKeyB64) return null;
+  if (typeof parsed.ts !== 'number' || !Number.isSafeInteger(parsed.ts)) return null;
+  if (Math.abs(Date.now() - parsed.ts) > MAX_CLOCK_SKEW_MS) return null;
+  if (typeof parsed.nonce !== 'string' || !NONCE_RE.test(parsed.nonce)) return null;
+  return parsed;
+}
+
+/** Разовые числа публикаций живут отдельно от аккаунтных: аккаунта здесь нет. */
+function postNonceScope(authorDid) {
+  return `post:${authorDid}`;
 }
 
 app.post('/v1/post/:postId', (req, res) => {
@@ -1054,7 +1191,12 @@ app.post('/v1/post/:postId', (req, res) => {
   // Репост — такая же запись ленты со своим id, и ссылку на него копируют так же.
   const envelope = verifyPostEnvelope(req.body, postId, ['feed_post', 'feed_repost']);
   if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
+  const intent = verifyPostIntent(req.body, postId, 'put', envelope.authorPublicKeyB64);
+  if (!intent) return res.status(400).json({ error: 'invalid_post_intent' });
   try {
+    if (!syncDb.consumeNonce(postNonceScope(envelope.parsed.authorDid), intent.nonce)) {
+      return res.status(409).json({ error: 'replayed_post_intent' });
+    }
     const result = syncDb.putPublicPost(
       postId,
       envelope.parsed.authorDid,
@@ -1104,7 +1246,12 @@ app.post('/v1/post/:postId/delete', (req, res) => {
   if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
   const envelope = verifyPostEnvelope(req.body, postId, ['feed_delete']);
   if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
+  const intent = verifyPostIntent(req.body, postId, 'del', envelope.authorPublicKeyB64);
+  if (!intent) return res.status(400).json({ error: 'invalid_post_intent' });
   try {
+    if (!syncDb.consumeNonce(postNonceScope(envelope.parsed.authorDid), intent.nonce)) {
+      return res.status(409).json({ error: 'replayed_post_intent' });
+    }
     const removed = syncDb.deletePublicPost(postId, envelope.parsed.authorDid);
     // Нечего удалять и удаляет не автор — снаружи одно и то же: иначе по коду
     // ответа можно было бы перебором узнавать, чей это пост.
@@ -1227,6 +1374,46 @@ app.post('/v1/seed-binding/delete', async (req, res) => {
   } catch {
     return res.status(500).json({ error: 'seed_binding_delete_failed' });
   }
+});
+
+/**
+ * Последний рубеж: ни один запрос не имеет права уронить службу (v4.32.614).
+ *
+ * Здесь три разных дыры сходятся в одну. Обработчик, объявленный async,
+ * express 4 не оборачивает: его отказ становится unhandledRejection, а node 22
+ * по умолчанию на этом завершает процесс. Обработчик синхронный express
+ * поймает, но ответит HTML-страницей с трассировкой стека — из блиндированного
+ * хранилища наружу этого выдавать нечего. И то же самое касается разбора тела:
+ * express.json бросает при переполнении потолка и при испорченном JSON.
+ *
+ * Поэтому: одно место, где любой отказ превращается в короткий JSON, и два
+ * подписчика процесса, которые пишут в журнал и оставляют службу жить —
+ * каждый маршрут и без того держит свою работу с базой в try/catch, и
+ * пережить один испорченный запрос честнее, чем оборвать всем остальным
+ * синхронизацию и переписку.
+ */
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600
+    ? err.status
+    : 500;
+  const error = status === 413
+    ? 'payload_too_large'
+    : (status >= 400 && status < 500 ? 'bad_request' : 'server_error');
+  // eslint-disable-next-line no-console
+  console.error('cloud-vault request failed', req?.method, req?.path, status, err?.message);
+  if (res.headersSent) return res.end();
+  noStore(res);
+  return res.status(status).json({ error });
+});
+
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('cloud-vault unhandled rejection', reason instanceof Error ? reason.message : reason);
+});
+process.on('uncaughtException', (error) => {
+  // eslint-disable-next-line no-console
+  console.error('cloud-vault uncaught exception', error?.message, error?.stack);
 });
 
 const port = Number(process.env.PORT) || 3010;

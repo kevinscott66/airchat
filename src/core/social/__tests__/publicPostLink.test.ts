@@ -25,7 +25,7 @@ import {
   FEED_ENVELOPE_MAX_AGE_MS,
   type FeedEnvelopePayload,
 } from '../feedTransport';
-import { getPublicPostFrame, putPublicPostCopy, isPublicPostId } from '../publicPost';
+import { deletePublicPostCopy, getPublicPostFrame, putPublicPostCopy, isPublicPostId } from '../publicPost';
 
 function identity(): { pair: { secretKey: Uint8Array; publicKey: Uint8Array }; did: string } {
   const { secretKey, publicKey } = ed25519.keygen();
@@ -106,6 +106,67 @@ describe('публикация по ссылке', () => {
       updatedAt: Date.now(),
     }), { status: 200 })) as unknown as typeof fetch;
     expect(await getPublicPostFrame(payload.postId)).toBeNull();
+  });
+
+  it('другая публикация того же автора вместо запрошенной не принимается', async () => {
+    // v4.32.614: подпись подтверждает только авторство. Сервер (или тот, кто
+    // им притворился) мог отдать на любую ссылку настоящий, правильно
+    // подписанный, но ЧУЖОЙ по номеру пост того же автора — и открывший
+    // ссылку увидел бы его как содержимое своей ссылки. Проверяется сверка
+    // номера внутри подписанного тела с тем, что просили.
+    const { pair, did } = identity();
+    const other = { ...expiredPost(did), postId: 'f_1788696219251_ffffffffffffffffffffffffffffffff' };
+    const signed = await signJson(pair, other as unknown as Record<string, unknown>);
+    globalThis.fetch = jest.fn(async () => new Response(JSON.stringify({
+      postId: 'f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246',
+      payload: signed.payload,
+      signature: signed.signature,
+      authorPublicKeyB64: Buffer.from(pair.publicKey).toString('base64'),
+      updatedAt: Date.now(),
+    }), { status: 200 })) as unknown as typeof fetch;
+    expect(await getPublicPostFrame('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBeNull();
+  });
+
+  it('запись и удаление копии подписаны разовым намерением', async () => {
+    // v4.32.614: без второго, короткого и одноразового подписанного намерения
+    // выложить чужую публикацию мог любой её получатель, а сохранённый ответ
+    // сервера отправлялся обратно и воскрешал уже удалённую копию.
+    const { pair, did } = identity();
+    const payload = expiredPost(did);
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = jest.fn(async (_url: unknown, init: { body?: string }) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    expect(await putPublicPostCopy(pair, payload)).toBe(true);
+    expect(await putPublicPostCopy(pair, payload)).toBe(true);
+    expect(await deletePublicPostCopy(pair, payload)).toBe(true);
+    expect(bodies).toHaveLength(3);
+
+    const intents = bodies.map((body) => {
+      const intent = body.intent as { payload?: unknown; signature?: unknown } | undefined;
+      expect(typeof intent?.payload).toBe('string');
+      expect(typeof intent?.signature).toBe('string');
+      const ok = ed25519.verify(
+        Buffer.from(String(intent!.signature), 'base64'),
+        Buffer.from(String(intent!.payload), 'utf8'),
+        pair.publicKey,
+      );
+      expect(ok).toBe(true);
+      return JSON.parse(String(intent!.payload)) as Record<string, unknown>;
+    });
+
+    expect(intents.map((i) => i.act)).toEqual(['put', 'put', 'del']);
+    for (const intent of intents) {
+      expect(intent.v).toBe(1);
+      expect(intent.postId).toBe(payload.postId);
+      expect(intent.publicKeyB64).toBe(Buffer.from(pair.publicKey).toString('base64'));
+      expect(Math.abs(Date.now() - Number(intent.ts))).toBeLessThan(60_000);
+    }
+    // Разовое число у каждой записи своё — иначе сервер погасил бы первое и
+    // отверг всё последующее, а повтор перестал бы отличаться от новой записи.
+    expect(new Set(intents.map((i) => i.nonce)).size).toBe(3);
   });
 
   it('id поста, который не уложить в путь URL, наружу не уходит', async () => {
