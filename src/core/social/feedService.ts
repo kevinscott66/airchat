@@ -932,85 +932,33 @@ async function republishQueuedItem(
     ageMs: retryAgeMs,
   });
 
-  // Собираем envelope с сохранёнными данными (тот же postId, тот же ts).
-  // v4.32.66: читаем base64 медиа напрямую из kvStore (`feed_inline_media:<postId>:<i>`),
-  // а не из item.imageBase64s. Это снимает нагрузку с очереди: теперь queue-JSON весит
-  // ~1KB на item вместо нескольких МБ, и `getFeedPublishQueueLength()` (60с tick в UI)
-  // больше не лочит SQLite на десятки секунд. Fallback на item.imageBase64s оставлен
-  // для старых items из версий до v4.32.66.
-  let media: string[] = [];
-  let mediaMime: string[] = [];
-  if (existing.mediaCids && existing.mediaCids.length > 0) {
-    for (let i = 0; i < existing.mediaCids.length; i++) {
-      const cid = existing.mediaCids[i];
-      // Парсим inline-CID формата `inline:<mime>;<i>:<postId>`.
-      const m = /^inline:([^;]+);\d+:/.exec(cid);
-      const mime = m ? m[1] : (item.imageMimes?.[i] ?? 'image/jpeg');
-      try {
-        const b64 = await kvGetInlineAttachment(`feed_inline_media:${item.postId}:${i}`);
-        if (b64 && b64.length > 0) {
-          media.push(b64);
-          mediaMime.push(mime);
-        }
-      } catch (e) {
-        log.warn('feed_queue_media_read_failed', {
-          postId: item.postId.slice(0, 24), idx: i,
-          err: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-  }
-  // Backward-compat: если kvStore пуст (старый item), используем payload из самого item.
-  if (media.length === 0 && item.imageBase64s && item.imageBase64s.length > 0) {
-    media = item.imageBase64s;
-    mediaMime = item.imageMimes ?? [];
-  }
-  // v4.32.554: очередь хранит только текст и mime, а тип записи узнаётся из
-  // самой строки ленты. Раньше репост из очереди уходил обычным постом: у
-  // получателя пропадала ссылка на оригинал и имя его автора. Теперь по
-  // repostOf собирается тот же конверт, что и при первой отправке.
-  const repostOf = typeof existing.repostOf === 'string' && existing.repostOf.length > 0
-    ? existing.repostOf
-    : null;
-  const repostAuthorDid = typeof existing.repostAuthorDid === 'string' && existing.repostAuthorDid.length > 0
-    ? existing.repostAuthorDid
-    : null;
-  let payload: FeedEnvelopePayload;
-  if (repostOf && repostAuthorDid) {
-    const repostData: FeedRepostData = {
-      kind: 'repost',
-      text: existing.text,
-      authorName: item.authorName,
-      originalPostId: repostOf,
-      originalAuthorDid: repostAuthorDid,
-      originalAuthorName: existing.repostAuthorName ?? null,
-      originalText: existing.text,
-      originalMedia: existing.mediaCids && existing.mediaCids.length > 0 ? existing.mediaCids : null,
-      originalMediaBase64: media.length > 0 ? media : undefined,
-      originalMediaBase64Mime: media.length > 0 ? mediaMime : undefined,
-    };
-    payload = {
-      type: 'feed_repost',
-      postId: item.postId,
-      authorDid: myDid,
-      ts: existing.timestamp,
-      data: repostData,
-    };
-  } else {
-    const postData: FeedPostData = {
-      kind: 'post',
-      text: item.text,
-      authorName: item.authorName,
-      media: media.length > 0 ? media : undefined,
-      mediaMime: media.length > 0 ? mediaMime : undefined,
-    };
-    payload = {
-      type: 'feed_post',
-      postId: item.postId,
-      authorDid: myDid,
-      ts: existing.timestamp, // важно: не новый Date.now — иначе у контактов дубликат во времени
-      data: postData,
-    };
+  // Конверт собирает та же функция, что и копию по ссылке: тот же postId, тот
+  // же ts, те же вложения.
+  //
+  // v4.32.614: до этой версии он собирался здесь заново, и с общей сборкой
+  // разошёлся трижды. Документы очередь не отправляла вовсе — после повтора у
+  // получателя оставалась запись без приложенных файлов. Текст брался из
+  // очереди, то есть в том виде, в каком запись выложили: правку, сделанную
+  // пока запись лежала в очереди, повтор молча отменял. И проверки на
+  // нечитаемые ячейки здесь не было — запись, которую не открывает ключ,
+  // уходила контактам заглушкой, подписанной нашим ключом.
+  //
+  // Запасной путь по item.imageBase64s остаётся: items версий до v4.32.66
+  // хранят фотографии в самой очереди, а не в kvStore.
+  const payload = await buildOwnPostEnvelope(pair, item.postId, {
+    base64: item.imageBase64s,
+    mimes: item.imageMimes,
+    authorName: item.authorName,
+  });
+  if (!payload) {
+    // Чужую запись отсеяли выше, значит остаётся нечитаемая. Следующая попытка
+    // её не откроет, поэтому попытку не тратим: item лежит нетронутым, пока не
+    // выйдет его срок.
+    log.warn('feed_queue_envelope_unavailable_kept', {
+      id: item.id,
+      postId: item.postId.slice(0, 24),
+    });
+    return { fullyDelivered: false, foreign: true };
   }
   // v4.32.67: передаём skip/only-фильтры чтобы не стрелять повторно в уже-доставленных.
   const skipDids = new Set(item.deliveredTo ?? []);
@@ -2006,7 +1954,11 @@ export async function getFeedPost(postId: string): Promise<FeedPostRow | null> {
 
 
 /**
- * Копия публикации для ссылки (v4.32.612).
+ * Конверт своей публикации — тот же, что ушёл бы контактам (v4.32.612).
+ *
+ * Отсюда его берут двое: копия для ссылки и повтор из очереди отправки
+ * (v4.32.614). Сборка одна намеренно: пока их было две, они разошлись по
+ * документам, по тексту после правки и по проверке нечитаемых ячеек.
  *
  * Ссылка вида `.../l/post/<id>` до этой версии открывалась только у того, у
  * кого публикация УЖЕ была, — то есть почти ни у кого: лента ходит по
@@ -2022,6 +1974,7 @@ export async function getFeedPost(postId: string): Promise<FeedPostRow | null> {
 async function buildOwnPostEnvelope(
   pair: KeyPairBytes,
   postId: string,
+  legacy?: { base64?: string[]; mimes?: string[]; authorName?: string },
 ): Promise<FeedEnvelopePayload | null> {
   const myDid = publicKeyToDidKey(pair.publicKey);
   const s = await ensureStorage();
@@ -2040,7 +1993,7 @@ async function buildOwnPostEnvelope(
   if (existing.mediaCids && existing.mediaCids.length > 0) {
     for (let i = 0; i < existing.mediaCids.length; i++) {
       const m = /^inline:([^;]+);\d+:/.exec(existing.mediaCids[i]);
-      const mime = m ? m[1] : 'image/jpeg';
+      const mime = m ? m[1] : (legacy?.mimes?.[i] ?? 'image/jpeg');
       const b64 = await kvGetInlineAttachment(`feed_inline_media:${postId}:${i}`);
       if (b64 && b64.length > 0) {
         media.push(b64);
@@ -2049,7 +2002,14 @@ async function buildOwnPostEnvelope(
     }
   }
 
-  const authorName = existing.authorName ?? '';
+  // v4.32.66 перенёс фотографии из очереди в kvStore. Items, слежавшиеся с
+  // более ранних версий, хранят их у себя — для них это единственный источник.
+  if (media.length === 0 && legacy?.base64 && legacy.base64.length > 0) {
+    media.push(...legacy.base64);
+    mediaMime.push(...(legacy.mimes ?? []));
+  }
+
+  const authorName = existing.authorName ?? legacy?.authorName ?? '';
   const repostOf = typeof existing.repostOf === 'string' && existing.repostOf.length > 0 ? existing.repostOf : null;
   const repostAuthorDid = typeof existing.repostAuthorDid === 'string' && existing.repostAuthorDid.length > 0
     ? existing.repostAuthorDid
