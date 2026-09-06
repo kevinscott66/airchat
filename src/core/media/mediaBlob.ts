@@ -426,13 +426,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
         log.info('blob_resolve_lan_cache', { id: ref.i.slice(0, 8), bytes: cipher.length });
       }
     }
-    // 2) Persistent VPS copy. It contains the same opaque ciphertext as the
-    // relay, so the account key still stays only in the E2E message ref.
-    if (!cipher && ref.i && !ref.u) {
-      cipher = await downloadCloudMediaCopy(ref.i);
-      if (cipher) log.info('blob_resolve_cloud', { id: ref.i.slice(0, 8), bytes: cipher.length });
-    }
-    // 3) Иначе — HTTP с relay (если url есть).
+    // 2) HTTP с relay (если url есть).
     if (!cipher && ref.u) {
       // v4.32.354: адрес выбирает отправитель, а открывает его наше устройство
       // само, при отрисовке чата. Без ограничения по хосту это маячок:
@@ -468,8 +462,19 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
         }
       }
     }
-    // The relay is preferred when a ref contains a URL. A slow/unavailable
-    // VPS must not make an otherwise healthy relay appear frozen.
+    // 3) Постоянная копия на сервере: тот же непрозрачный шифротекст, что и на
+    // релее, — ключ по-прежнему живёт только внутри E2E-конверта сообщения.
+    //
+    // Она идёт последней, и это важно в обе стороны. Релей отвечает быстрее, и
+    // медленный сервер не должен заставлять ждать там, где вложение доступно
+    // сразу. Но и без релея копия обязана быть спрошена: вложение на ntfy живёт
+    // часы, а сообщение — месяц, так что «зашёл через неделю» — это обычный
+    // случай, а не край.
+    //
+    // v4.32.614: раньше тот же вызов стоял ещё и ВЫШЕ, под условием `!ref.u`, —
+    // ровно то же самое, что делает эта ветка, потому что при отсутствии адреса
+    // ветка релея не выполняется вовсе. Разницы в поведении не было ни одной,
+    // кроме той, что при промахе запрос к серверу уходил дважды подряд.
     if (!cipher && ref.i) {
       cipher = await downloadCloudMediaCopy(ref.i);
       if (cipher) log.info('blob_resolve_cloud', { id: ref.i.slice(0, 8), bytes: cipher.length });

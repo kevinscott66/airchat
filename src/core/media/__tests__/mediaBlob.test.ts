@@ -21,6 +21,12 @@ let mockRelay: string | null = 'https://ntfy.sh';
 let mockConfiguredRelay = 'https://ntfy.sh';
 let mockTransportThrows = false;
 let mockMoveFails = false;
+/** Включена ли облачная копия в настройках. */
+let mockCloudEnabled = false;
+/** Сколько раз спросили постоянную копию на сервере. */
+let mockCloudCalls = 0;
+/** Что сервер отдаёт: null — копии нет. */
+let mockCloudBody: Uint8Array | null = null;
 
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
@@ -61,7 +67,25 @@ jest.mock('../../transport/internet/internetTransport', () => ({
   }),
 }));
 jest.mock('../../config', () => ({
-  getConfigSync: jest.fn(() => ({ internet: { relayBase: mockConfiguredRelay } })),
+  getConfigSync: jest.fn(() => ({
+    internet: { relayBase: mockConfiguredRelay },
+    cloudBackup: { enabled: mockCloudEnabled },
+  })),
+}));
+jest.mock('../../backup/seedPhrase', () => ({
+  getMnemonicGeneration: jest.fn(() => 1),
+  getStoredMnemonic: jest.fn(async () => 'слова'),
+  deriveKeyPairFromMnemonic: jest.fn(() => ({ publicKey: new Uint8Array(32), secretKey: new Uint8Array(64) })),
+}));
+jest.mock('../../sync/syncApi', () => ({
+  uploadSyncMedia: jest.fn(async () => undefined),
+  downloadSyncMedia: jest.fn(async () => {
+    mockCloudCalls++;
+    return mockCloudBody;
+  }),
+}));
+jest.mock('../../transport/lan/lanBlob', () => ({
+  lanBlobCachedPath: jest.fn(async () => null),
 }));
 // v4.32.427: заглушены только две функции. Константы берутся настоящие —
 // иначе SYMMETRIC_KEY_BYTES приезжает undefined, проверка длины ключа
@@ -102,6 +126,9 @@ beforeEach(() => {
   mockConfiguredRelay = 'https://ntfy.sh';
   mockTransportThrows = false;
   mockMoveFails = false;
+  mockCloudEnabled = false;
+  mockCloudCalls = 0;
+  mockCloudBody = null;
   mockFetch = jest.fn(async () => okResponse(CIPHER_B64));
   (global as unknown as { fetch: unknown }).fetch = mockFetch;
 });
@@ -168,6 +195,55 @@ describe('resolveBlobToLocalFile: куда позволено идти за вл
     mockFiles.set(dest, 'уже лежит');
     await expect(resolveBlobToLocalFile(ref, 'jpg')).resolves.toBe(dest);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveBlobToLocalFile: постоянная копия на сервере', () => {
+  /**
+   * Копия спрашивается один раз, а не дважды (v4.32.614).
+   *
+   * До этого раунда тот же вызов стоял в двух местах подряд: сначала под
+   * условием «адреса релея нет», потом безусловно. При отсутствии адреса ветка
+   * релея между ними не выполняется вовсе, так что второе условие целиком
+   * покрывало первое, — и на каждый промах уходило два одинаковых запроса к
+   * серверу. Промах здесь обычное дело: чат рисует вложения пачкой, и это
+   * ровно тот случай, когда лишний запрос удваивается на каждой картинке.
+   */
+  it('дескриптор без адреса релея спрашивает сервер один раз', async () => {
+    mockCloudEnabled = true;
+    mockCloudBody = null;
+    await expect(resolveBlobToLocalFile({ i: 'ab'.repeat(16), k: KEY_B64 }, 'jpg')).resolves.toBeNull();
+    expect(mockCloudCalls).toBe(1);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('копия отдаёт вложение, когда адреса релея нет', async () => {
+    mockCloudEnabled = true;
+    mockCloudBody = new Uint8Array([1, 2, 3, 4]);
+    await expect(
+      resolveBlobToLocalFile({ i: 'cd'.repeat(16), k: KEY_B64 }, 'jpg'),
+    ).resolves.toMatch(/^file:\/\/\/cache\/airchat_media_.+\.jpg$/);
+    expect(mockCloudCalls).toBe(1);
+  });
+
+  it('умерший релей не отменяет копию на сервере', async () => {
+    // Вложение на ntfy живёт часы, сообщение — месяц: «зашёл через неделю»
+    // упирается именно в эту ветку, и она обязана срабатывать при живом `u`.
+    mockCloudEnabled = true;
+    mockCloudBody = new Uint8Array([1, 2, 3, 4]);
+    mockFetch = jest.fn(async () => ({ ok: false, status: 404 }) as unknown as Response);
+    (global as unknown as { fetch: unknown }).fetch = mockFetch;
+    await expect(
+      resolveBlobToLocalFile({ i: 'ef'.repeat(16), u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg'),
+    ).resolves.not.toBeNull();
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockCloudCalls).toBe(1);
+  });
+
+  it('выключённая облачная копия не ходит на сервер вовсе', async () => {
+    mockCloudEnabled = false;
+    await expect(resolveBlobToLocalFile({ i: '01'.repeat(16), k: KEY_B64 }, 'jpg')).resolves.toBeNull();
+    expect(mockCloudCalls).toBe(0);
   });
 });
 
