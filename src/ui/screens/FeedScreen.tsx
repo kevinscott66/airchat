@@ -782,6 +782,8 @@ type Props = {
    * должен открыться дважды, а не «уже открывали».
    */
   postJump?: { postId: string; token: number } | null;
+  /** v4.32.609: своё имя в тексте — открыть собственный профиль (таб знает App). */
+  onOpenOwnProfile?: () => void;
 };
 
 function formatTime(ts: number): string {
@@ -825,7 +827,7 @@ function runGuardedOp(op: () => Promise<unknown>, fallback: string): void {
   })();
 }
 
-function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump }: Props): React.ReactElement {
+function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwnProfile, postJump }: Props): React.ReactElement {
   const { t } = useTranslation();
   // v4.32.16: `isActive` больше НЕ prop — читаем `tabRef.current === 'feed'` из Context.
   // React.memo видит стабильные props при setTab → bail-out → нет re-render'а тяжёлого
@@ -2649,11 +2651,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump 
         showError(mentionMissText(hit.status, bare));
         return;
       }
+      // v4.32.609: своё имя вело в собственную карточку — с «Добавить в
+      // контакты» и «Написать» самому себе. Своё место — профиль.
+      if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       setPeekAuthorDid(null);
       setPeekAuthorName(hit.displayName || bare);
       setPeekAuthorPub(hit.peerPubB64);
     })();
-  }, [t]);
+  }, [t, myPubB64, onOpenOwnProfile]);
 
   // v4.32.163 P2#5 fix: мемоизируем ListHeaderComponent — без этого он создаётся
   // новым JSX-элементом на каждый рендер FeedScreenImpl (каждый setCommentText,

@@ -1320,6 +1320,17 @@ function MainTabs({
     mountTab('settings');
     setTab('settings');
   }, [mountTab]);
+  /**
+   * Своё имя в тексте (v4.32.609). До этой версии нажатие на `@своё_имя`
+   * не делало РОВНО ничего: и переписка, и группа доходили до «это же я» и
+   * молча выходили. Молчание неотличимо от поломки — человек жмёт второй и
+   * третий раз, полагая, что не попал. Чужое имя ведёт к чужой карточке,
+   * значит своё обязано вести к своей: в собственный профиль.
+   */
+  const handleOpenOwnProfile = useCallback(() => {
+    mountTab('profile');
+    setTab('profile');
+  }, [mountTab]);
   const handleOpenProfiles = useCallback(() => {
     setProfileSelOpen(true);
   }, []);
@@ -1381,6 +1392,7 @@ function MainTabs({
               did={did}
               feedTick={feedTick}
               onOpenChatWithPeer={handleOpenChatWithPeer}
+              onOpenOwnProfile={handleOpenOwnProfile}
               postJump={postJump}
             />
           </ScreenSlot>
@@ -1392,6 +1404,7 @@ function MainTabs({
               peerJump={peerJump}
               popToListToken={chatPopToken}
               onConversationClosed={handleConversationClosed}
+              onOpenOwnProfile={handleOpenOwnProfile}
             />
           </ScreenSlot>
         ) : tab === 'chat' && mountingTab === 'chat' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_chat" /></View> : null}
@@ -1401,6 +1414,7 @@ function MainTabs({
               pair={pair}
               groupJump={groupJump ?? undefined}
               onOpenDm={handleOpenDmFromGroup}
+              onOpenOwnProfile={handleOpenOwnProfile}
             />
           </ScreenSlot>
         ) : tab === 'groups' && mountingTab === 'groups' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_groups" /></View> : null}

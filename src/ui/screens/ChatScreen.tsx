@@ -154,6 +154,8 @@ type Props = {
   // шапке, hardware BACK, либо pop-to-list по повторному тапу таба). App.tsx
   // сбрасывает «отработавший» peerJump, чтобы не съедать лишний back на списке.
   onConversationClosed?: () => void;
+  /** v4.32.609: своё имя в тексте — открыть собственный профиль (таб знает App). */
+  onOpenOwnProfile?: () => void;
 };
 
 import { PAGE, DM_SYS_PREFIX } from './chat-utils/constants';
@@ -785,6 +787,7 @@ function ChatThreadView({
   displayName,
   onBack,
   onOpenPeer,
+  onOpenOwnProfile,
   initialJumpMsgId,
   initialIntent,
 }: {
@@ -794,6 +797,8 @@ function ChatThreadView({
   onBack: () => void;
   /** v4.32.605: перейти в переписку с ДРУГИМ человеком — из карточки упомянутого. */
   onOpenPeer?: (pubB64: string, displayName: string) => void;
+  /** v4.32.609: нажатие на СВОЁ имя — уйти в собственный профиль. */
+  onOpenOwnProfile?: () => void;
   initialJumpMsgId?: string;
   /**
    * v4.32.568: чем открыть переписку. Приходит из карточки профиля: там есть
@@ -1041,11 +1046,11 @@ function ChatThreadView({
         showError(mentionMissText(hit.status, bare));
         return;
       }
-      if (hit.peerPubB64 === myPubB64) return;
+      if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       if (hit.peerPubB64 === peerB64) { setContactInfoVisible(true); return; }
       setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
     })();
-  }, [myPubB64, peerB64]);
+  }, [myPubB64, peerB64, onOpenOwnProfile]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);
   const [scheduledMsgs, setScheduledMsgs] = useState<ScheduledMessage[]>([]);
   const [openUnreadCount, setOpenUnreadCount] = useState(0);
@@ -4257,7 +4262,7 @@ function ChatThreadView({
 }
 
 // ─── Main ChatScreen export ───────────────────────────────────────────────────
-function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }: Props): React.ReactElement {
+function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed, onOpenOwnProfile }: Props): React.ReactElement {
   // v4.32.16: активность читается внутри ChatThreadView через useTabRef() — здесь prop не нужен.
   const [openPeer, setOpenPeer] = useState<
     { pubB64: string; displayName: string; jumpMsgId?: string; intent?: 'chat' | 'search' | 'starred' } | null
@@ -4320,6 +4325,7 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
           displayName={openPeer.displayName}
           initialIntent={openPeer.intent}
           onOpenPeer={(pubB64, name) => setOpenPeer({ pubB64, displayName: name })}
+          onOpenOwnProfile={onOpenOwnProfile}
           onBack={() => {
             setOpenPeer(null);
             setRefreshTick((t) => t + 1);

@@ -487,6 +487,7 @@ function GroupChatScreen({
   onBack,
   onOpenMembers,
   onOpenDm,
+  onOpenOwnProfile,
   initialSearchQuery,
   initialJumpMsgId,
 }: {
@@ -495,6 +496,8 @@ function GroupChatScreen({
   onBack: () => void;
   onOpenMembers: () => void;
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
+  /** v4.32.609: нажатие на СВОЁ имя — уйти в собственный профиль. */
+  onOpenOwnProfile?: () => void;
   initialSearchQuery?: string;
   /** v4.32.606: сообщение из ссылки `.../group/<id>/msg/<id>`. */
   initialJumpMsgId?: string;
@@ -1562,15 +1565,16 @@ function GroupChatScreen({
           showError(mentionMissText(hit.status, bare));
           return;
         }
-        if (hit.peerPubB64 === myPubB64) return;
+        if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
         setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
         return;
       }
-      // Своё упоминание карточку не открывает: собственный профиль и так свой.
-      if (hits[0].peerPubB64 === myPubB64) return;
+      // v4.32.609: своё упоминание ведёт в собственный профиль. Раньше здесь
+      // стоял молчаливый выход, и нажатие на своё имя выглядело поломкой.
+      if (hits[0].peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare });
     })();
-  }, [allMembers, pid, myPubB64]);
+  }, [allMembers, pid, myPubB64, onOpenOwnProfile]);
 
   useEffect(() => { void loadMessages(); }, [loadMessages]);
   // v4.32.16: gate через tabRef из Context. Prop isActive удалён — React.memo bail-out.
@@ -5586,6 +5590,8 @@ type Props = {
   groupJump?: { groupId: string; token: number; msgId?: string };
   /** Navigate to DM with a peer (crosses tab boundary — handled by App). */
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
+  /** v4.32.609: своё имя в тексте — открыть собственный профиль (таб знает App). */
+  onOpenOwnProfile?: () => void;
 };
 
 type NavState =
@@ -5609,7 +5615,7 @@ function GroupsScreenImpl(props: Props): React.ReactElement {
   );
 }
 
-function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElement {
+function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props): React.ReactElement {
   // v4.32.16: gate через tabRef из Context; prop isActive удалён — React.memo bail-out
   // на setTab → нет re-render'а тяжёлого JSX tree (5700 строк) → устраняет 2.2с блок.
   const tabRef = useTabRef();
@@ -5914,6 +5920,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
           onBack={() => setNav({ screen: 'list' })}
           onOpenMembers={() => setNav({ screen: 'members', group: nav.group })}
           onOpenDm={onOpenDm}
+          onOpenOwnProfile={onOpenOwnProfile}
           initialSearchQuery={nav.initialSearchQuery}
           initialJumpMsgId={nav.initialJumpMsgId}
         />
