@@ -104,6 +104,20 @@ const configuredPublicPostCount = Number(process.env.PUBLIC_POST_MAX_AUTHOR_POST
 const PUBLIC_POST_MAX_AUTHOR_POSTS = Number.isSafeInteger(configuredPublicPostCount) && configuredPublicPostCount > 0
   ? Math.min(configuredPublicPostCount, 100_000)
   : 1000;
+/**
+ * Общий потолок и срок хранения публичных копий (v4.32.614).
+ *
+ * Квоты выше считаются на автора, а автор — это did, то есть свежая пара
+ * ключей: тысяча ключей давала тысячу квот. Здесь потолок один на всех.
+ */
+const configuredPublicPostTotal = Number(process.env.PUBLIC_POST_MAX_TOTAL_BYTES);
+const PUBLIC_POST_MAX_TOTAL_BYTES = Number.isSafeInteger(configuredPublicPostTotal) && configuredPublicPostTotal > 0
+  ? configuredPublicPostTotal
+  : 8 * 1024 * 1024 * 1024;
+const configuredPublicPostTtlDays = Number(process.env.PUBLIC_POST_TTL_DAYS);
+const PUBLIC_POST_TTL_MS = Number.isSafeInteger(configuredPublicPostTtlDays) && configuredPublicPostTtlDays > 0
+  ? configuredPublicPostTtlDays * 24 * 60 * 60 * 1000
+  : 365 * 24 * 60 * 60 * 1000;
 const ACCOUNT_LOCK_TIMEOUT_MS = 15_000;
 const ACCOUNT_LOCK_STALE_MS = 60_000;
 
@@ -857,6 +871,28 @@ const mediaGcTimer = setInterval(() => {
 }, Math.max(MEDIA_DELETE_GRACE_MS, 15 * 60 * 1000));
 mediaGcTimer.unref?.();
 
+/** Уборка публичных копий: просроченные по сроку и самые давние сверх потолка. */
+function runPublicPostGc(now = Date.now()) {
+  const result = syncDb.gcPublicPosts({
+    now,
+    ttlMs: PUBLIC_POST_TTL_MS,
+    maxTotalBytes: PUBLIC_POST_MAX_TOTAL_BYTES,
+  });
+  if (result.expired || result.evicted) {
+    console.log('cloud-vault public post gc', result.expired, 'expired,', result.evicted, 'evicted');
+  }
+  return result;
+}
+
+const publicPostGcTimer = setInterval(() => {
+  try {
+    runPublicPostGc();
+  } catch (error) {
+    console.error('cloud-vault public post gc failed', error?.message || error);
+  }
+}, 60 * 60 * 1000);
+publicPostGcTimer.unref?.();
+
 /** Store opaque E2E ciphertext for a blob id; the VPS never sees the key. */
 app.post('/v1/sync/:accountId/media/put', async (req, res) => {
   noStore(res);
@@ -1456,4 +1492,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, syncDb, runMediaGc, verifySignedPayload, validateSyncRequest, resolveEffectiveAccountId, accountCreationAllowed };
+module.exports = { app, server, syncDb, runMediaGc, runPublicPostGc, verifySignedPayload, validateSyncRequest, resolveEffectiveAccountId, accountCreationAllowed };

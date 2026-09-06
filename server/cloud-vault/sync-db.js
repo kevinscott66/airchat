@@ -21,6 +21,16 @@ const DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const MAX_CIPHERTEXT_BYTES = 512 * 1024;
 const DEFAULT_MAX_ACTIVE_DEVICES = 8;
 /**
+ * Сколько имён вообще может держать один аккаунт (v4.32.614).
+ *
+ * Запись в реестр идёт парой «аккаунт + ownerProfileId», а ownerProfileId
+ * выбирает сам клиент из диапазона 0..1 000 000 — то есть прежде один аккаунт
+ * мог занять хоть весь справочник. Профилей на устройстве не больше четырёх
+ * (MAX_PROFILES), запас взят вдвое: освобождение при удалении профиля
+ * отправляется «в один конец» и может не дойти.
+ */
+const MAX_USERNAMES_PER_ACCOUNT = 8;
+/**
  * Подключение нового устройства — самая громкая операция в аккаунте: после неё
  * у чужого телефона есть вся переписка. Подписывается она сид-ключом, то есть
  * сид-фраза и есть пропуск, и это правильно — иначе потерянный телефон означал
@@ -304,6 +314,10 @@ class SyncDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_public_posts_author
         ON public_posts (author_did, updated_at DESC);
+      -- Для уборки: она ходит по всей таблице в порядке давности, а не
+      -- внутри одного автора (v4.32.614).
+      CREATE INDEX IF NOT EXISTS idx_public_posts_updated
+        ON public_posts (updated_at);
     `);
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
@@ -590,6 +604,16 @@ class SyncDatabase {
       this.db.prepare(
         'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username_key <> ?',
       ).run(accountId, profileId, key);
+      // Потолок на аккаунт. Жёсткий отказ на пределе запер бы честного
+      // человека с брошенными записями удалённых профилей, поэтому имя
+      // занимается всегда, а лишнее — своё же самое старое — уходит.
+      const held = this.db.prepare(
+        `SELECT username_key AS usernameKey FROM sync_usernames
+         WHERE account_id = ? AND username_key <> ? ORDER BY claimed_at ASC, username_key ASC`,
+      ).all(accountId, key);
+      for (let i = 0; i < held.length - (MAX_USERNAMES_PER_ACCOUNT - 1); i += 1) {
+        this.db.prepare('DELETE FROM sync_usernames WHERE username_key = ?').run(held[i].usernameKey);
+      }
       this.db.prepare(`
         INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at, profile_public_key)
         VALUES (?, ?, ?, ?, ?)
@@ -743,6 +767,55 @@ class SyncDatabase {
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };
+  }
+
+  /**
+   * Уборка публичных копий (v4.32.614).
+   *
+   * Квота была только на автора: 1000 публикаций и 64 МБ. Но автор здесь —
+   * это did, то есть свежая пара ключей, которую делают бесплатно и сколько
+   * угодно раз. Тысяча ключей — тысяча квот, и место на диске кончалось
+   * раньше, чем срабатывал хоть один потолок.
+   *
+   * Сначала уходит просроченное по времени последней правки, потом — самое
+   * давнее, пока общий объём не уложится в потолок. Порядок «сначала срок,
+   * потом объём» важен: иначе под давлением чужого мусора вылетали бы живые
+   * ссылки, хотя рядом лежат заведомо забытые.
+   */
+  gcPublicPosts(options = {}) {
+    const now = Number.isSafeInteger(options.now) ? options.now : Date.now();
+    const ttlMs = Number.isSafeInteger(options.ttlMs) ? options.ttlMs : 365 * 24 * 60 * 60 * 1000;
+    const maxTotalBytes = Number.isSafeInteger(options.maxTotalBytes)
+      ? options.maxTotalBytes
+      : 8 * 1024 * 1024 * 1024;
+    const batch = Number.isSafeInteger(options.batch) && options.batch > 0 ? options.batch : 500;
+    let expired = 0;
+    let evicted = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      expired = this.db.prepare('DELETE FROM public_posts WHERE updated_at < ?')
+        .run(now - ttlMs).changes || 0;
+      let total = Number(
+        this.db.prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM public_posts').get()?.bytes || 0,
+      );
+      while (total > maxTotalBytes) {
+        const oldest = this.db.prepare(
+          'SELECT post_id AS postId, bytes FROM public_posts ORDER BY updated_at ASC LIMIT ?',
+        ).all(batch);
+        if (oldest.length === 0) break;
+        for (const row of oldest) {
+          this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(row.postId);
+          total -= Number(row.bytes) || 0;
+          evicted += 1;
+          if (total <= maxTotalBytes) break;
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { expired, evicted };
   }
 
   /** Снять копию. Возвращает false, если её нет либо просит не автор. */

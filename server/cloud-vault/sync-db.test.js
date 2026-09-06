@@ -657,3 +657,78 @@ test('account epoch is stable for a live account and changes when it is recreate
   assert.deepEqual(db.ensureAccount(accountId, 'owner-e'), { ok: true });
   assert.notEqual(db.accountEpoch(accountId), epoch);
 });
+
+test('один аккаунт не может занять больше восьми имён', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const account = 'v'.repeat(32);
+  assert.deepEqual(db.ensureAccount(account, 'owner-v'), { ok: true });
+
+  // ownerProfileId выбирает клиент, поэтому «занять весь справочник» стоило бы
+  // ровно столько же запросов, сколько имён нужно захватить.
+  for (let profileId = 0; profileId < 20; profileId += 1) {
+    assert.deepEqual(
+      db.claimUsername(account, profileId, `squat${profileId}`),
+      { ok: true, username: `squat${profileId}` },
+    );
+  }
+  const held = db.db
+    .prepare('SELECT COUNT(*) AS n FROM sync_usernames WHERE account_id = ?')
+    .get(account).n;
+  assert.equal(held, 8);
+
+  // Последнее имя занято — на пределе отказа нет, иначе человек с брошенными
+  // записями удалённых профилей не смог бы переименоваться.
+  assert.deepEqual(
+    { ...db.lookupUsername('squat19') },
+    { accountId: account, profileId: 19, profilePublicKeyB64: null },
+  );
+
+  // Уходит самое старое. Двадцать захватов выше уложились в одну миллисекунду,
+  // поэтому возраст задаётся явно.
+  db.db.prepare('UPDATE sync_usernames SET claimed_at = 1 WHERE username_key = ?')
+    .run(db.usernameKey('squat19'));
+  assert.deepEqual(db.claimUsername(account, 21, 'newest'), { ok: true, username: 'newest' });
+  assert.equal(db.lookupUsername('squat19'), null);
+  assert.equal(db.lookupUsername('newest').profileId, 21);
+
+  // Чужое имя потолок не трогает: вытесняются только собственные записи.
+  const other = 'w'.repeat(32);
+  assert.deepEqual(db.ensureAccount(other, 'owner-w'), { ok: true });
+  assert.deepEqual(db.claimUsername(other, 1, 'founder'), { ok: true, username: 'founder' });
+  assert.deepEqual(db.claimUsername(account, 20, 'anything'), { ok: true, username: 'anything' });
+  assert.equal(db.lookupUsername('founder').accountId, other);
+});
+
+test('публичные копии убираются по сроку и по общему потолку', (t) => {
+  const { db, dir } = makeDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const put = (postId, did, at, filler) => {
+    assert.deepEqual(
+      db.putPublicPost(postId, did, `key-${did}`, 'x'.repeat(filler), 'sig', { now: at }),
+      { ok: true, bytes: filler + 3 },
+    );
+  };
+
+  // Квота считается на автора, а автор — это did: своя пара ключей на каждую
+  // публикацию обходит её целиком.
+  for (let i = 0; i < 12; i += 1) put(`fresh-${i}`, `did-${i}`, now, 1000);
+  put('stale', 'did-stale', now - 40 * day, 1000);
+
+  assert.deepEqual(
+    db.gcPublicPosts({ now, ttlMs: 30 * day, maxTotalBytes: 1024 * 1024 }),
+    { expired: 1, evicted: 0 },
+  );
+  assert.equal(db.getPublicPost('stale'), null);
+  assert.ok(db.getPublicPost('fresh-0'));
+
+  // Потолок общий: под него уходят самые давние по последней правке.
+  const result = db.gcPublicPosts({ now, ttlMs: 30 * day, maxTotalBytes: 5 * 1003 });
+  assert.equal(result.expired, 0);
+  assert.equal(result.evicted, 7);
+  const left = db.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS bytes FROM public_posts').get();
+  assert.equal(left.n, 5);
+  assert.ok(left.bytes <= 5 * 1003);
+});
