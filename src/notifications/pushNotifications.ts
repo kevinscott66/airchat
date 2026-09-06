@@ -6,7 +6,7 @@ import { log } from '../core/logger';
 import { vibrationFor } from './vibrationPattern';
 import { getMessagingService, subscribeInAppNotifications } from '../core/social/messaging';
 import { setGroupMessageNotifyCallback } from '../core/social/groupMessaging';
-import { kvGet } from '../core/storage/local';
+import { kvGet, kvSet } from '../core/storage/local';
 import { isMuted } from '../core/notifications/muteStore';
 import { sanitizeDisplayName } from '../core/social/sysLineGuard';
 import { listContacts } from '../core/social/contacts';
@@ -21,6 +21,8 @@ import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenI
 import { CALL_PUSH_KIND } from './callPush';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
 import { peerIdFromDid, signPushPayload } from './pushEnvelope';
+import { SELF_PEER_MIRROR_KEY } from './pushSenderTag';
+import { didForSenderTag } from './senderTagLookup';
 import type { PushKind } from './pushKind';
 
 // v4.32.165: channel ID bumped to _v2 — Android кеширует importance per-channel,
@@ -359,7 +361,12 @@ export class PushNotificationService {
           log.debug('push_bad_cid', { t: typeof remoteMessage.data?.cid });
           return;
         }
-        const { cid, contactDid } = intent;
+        // v4.32.614: ретранслятор присылает метку отправителя вместо DID —
+        // через Google и Apple открытый DID больше не едет (см. pushSenderTag).
+        // Разворачиваем её по своим контактам; поле contactDid остаётся ради
+        // уведомлений от ещё не обновлённого ретранслятора.
+        const cid = intent.cid;
+        const contactDid = intent.contactDid ?? (await didForSenderTag(intent.senderTag));
         await getMessagingService()?.handlePushOpen(cid, contactDid);
         // v4.32.477: сам показ переехал в showDmBanner — тот же баннер нужен и
         // сообщению, приехавшему мимо push. Тела у push-ветки нет: расшифровка
@@ -560,6 +567,15 @@ export class PushNotificationService {
     if (!signedPeerId || (Platform.OS !== 'android' && Platform.OS !== 'ios' && Platform.OS !== 'web')) {
       log.warn('push_register_unsupported', { platform: Platform.OS });
       return;
+    }
+    // v4.32.614: тот же peerId нужен фоновому обработчику, чтобы развернуть
+    // метку отправителя (см. pushSenderTag). Спросить его там не у кого:
+    // личность лежит в SecureStore, а он при запертом телефоне не отвечает.
+    // Зеркало необязательное — без него баннер будет безымянным, но будет.
+    try {
+      await kvSet(SELF_PEER_MIRROR_KEY, signedPeerId);
+    } catch {
+      /* зеркало необязательно */
     }
     // v4.32.179 (Round-9): bounded timeout — signaling may be unreachable; without this
     // fetch can hang indefinitely, blocking init promise chain on cold start.

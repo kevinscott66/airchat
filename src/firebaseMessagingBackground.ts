@@ -75,6 +75,25 @@ async function showIncomingCallBanner(callId: string, contactDid?: string): Prom
   });
 }
 
+/**
+ * Кто отправитель этого push (v4.32.614).
+ *
+ * Ретранслятор больше не кладёт открытый DID в нагрузку чужого push-сервиса:
+ * вместо него едет метка, которую разворачивают перебором своих контактов
+ * (см. notifications/pushSenderTag). Поле `contactDid` читается по-прежнему —
+ * ретранслятор обновляется не одновременно с приложением, и уведомление от
+ * старого сервера должно вести туда же, куда вело раньше.
+ *
+ * Не развернулось — не беда: баннер здесь и так безличный, а нажатие откроет
+ * список переписок вместо нужной ветки. Хуже было бы промолчать.
+ */
+async function senderDidOf(intent: { contactDid?: string; senderTag?: string }): Promise<string | undefined> {
+  if (intent.contactDid) return intent.contactDid;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { didForSenderTag } = require('./notifications/senderTagLookup') as typeof import('./notifications/senderTagLookup');
+  return didForSenderTag(intent.senderTag);
+}
+
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const messaging = require('@react-native-firebase/messaging').default;
@@ -85,7 +104,7 @@ try {
     const call = parseCallOpenIntent(remoteMessage.data);
     if (call) {
       try {
-        await showIncomingCallBanner(call.callId, call.contactDid);
+        await showIncomingCallBanner(call.callId, await senderDidOf(call));
       } catch (e) {
         log.warn('bg_call_notify_failed', { err: e instanceof Error ? e.message : String(e) });
       }
@@ -95,7 +114,8 @@ try {
     // v4.32.558: одна проверка на все три пути — см. notifications/openIntent.
     const intent = parseChatOpenIntent(remoteMessage.data);
     if (!intent) return;
-    const { cid, contactDid } = intent;
+    const cid = intent.cid;
+    const contactDid = await senderDidOf(intent);
     try {
       // v4.32.248: фоновый обработчик не спрашивал настройки вообще —
       // выключенные уведомления, «Не беспокоить», отключённые звук и вибрация

@@ -8,6 +8,19 @@ const crypto = require('crypto');
 const { createPushRoutes, createTokenRegistry, createSendLimiter } = require('../push');
 
 const ANDROID_TOKEN = 'c'.repeat(140);
+
+/**
+ * Метка отправителя, вычисленная независимо от самого сервера: копия правила,
+ * а не вызов проверяемой функции. Клиент считает её тем же выражением, см.
+ * src/notifications/pushSenderTag.ts.
+ */
+function expectedSenderTag(targetPeerId, senderPeerId) {
+  return crypto
+    .createHash('sha256')
+    .update(`airchat-push-sender-v1|${targetPeerId}|${senderPeerId}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+}
 const IOS_TOKEN = 'd'.repeat(140);
 
 function makeIdentity() {
@@ -155,11 +168,14 @@ test('sends a data-only message to Android', async () => {
     assert.equal(sent[0].entry.platform, 'android');
     assert.deepEqual(sent[0].data, {
       cid: 'bafyreiabc123',
-      contactDid: 'did:key:z6MkExample',
+      senderTag: expectedSenderTag(peer.peerId, me.peerId),
       kind: 'dm',
     });
     // Ни имени, ни текста: баннер собирается на устройстве получателя.
     assert.equal(JSON.stringify(sent[0].data).includes('AirChat'), false);
+    // v4.32.614: и ни DID отправителя — через Google и Apple он больше не
+    // едет, иначе посредник читал бы граф переписки с настоящими именами.
+    assert.equal(JSON.stringify(sent[0].data).includes('did:key'), false);
   });
 });
 
@@ -182,9 +198,56 @@ test('звонок проходит проверку вида и доезжае�
     assert.equal(sent.length, 1);
     assert.deepEqual(sent[0].data, {
       cid: 'a1b2c3d4e5f60718',
-      contactDid: 'did:key:z6MkExample',
+      senderTag: expectedSenderTag(peer.peerId, me.peerId),
       kind: 'call',
     });
+  });
+});
+
+test('метка отправителя своя у каждого получателя', async () => {
+  const me = makeIdentity();
+  const first = makeIdentity();
+  const second = makeIdentity();
+  await withRoutes({}, async ({ post, routes, sent }) => {
+    routes.registry.set(first.peerId, ANDROID_TOKEN, 'android', Date.now());
+    routes.registry.set(second.peerId, IOS_TOKEN, 'ios', Date.now());
+    for (const target of [first, second]) {
+      await post('/send-push', me.sign({
+        cid: 'bafyreiabc123',
+        kind: 'dm',
+        senderDid: 'did:key:z6MkExample',
+        senderPeerId: me.peerId,
+        targetPeerId: target.peerId,
+        ts: Date.now(),
+      }));
+    }
+    assert.equal(sent.length, 2);
+    // Соль — ключ получателя. Без неё метка одного отправителя была бы одна на
+    // всех, и посредник связал бы двух его собеседников по совпадению меток —
+    // а список DID открыт, так что и развернул бы её перебором.
+    assert.notEqual(sent[0].data.senderTag, sent[1].data.senderTag);
+  });
+});
+
+test('метка одна и та же у одной и той же пары', async () => {
+  const me = makeIdentity();
+  const peer = makeIdentity();
+  await withRoutes({}, async ({ post, routes, sent }) => {
+    routes.registry.set(peer.peerId, ANDROID_TOKEN, 'android', Date.now());
+    for (const cid of ['bafyreiabc123', 'bafyreiabc456']) {
+      await post('/send-push', me.sign({
+        cid,
+        kind: 'dm',
+        senderDid: 'did:key:z6MkExample',
+        senderPeerId: me.peerId,
+        targetPeerId: peer.peerId,
+        ts: Date.now(),
+      }));
+    }
+    assert.equal(sent.length, 2);
+    // Иначе получатель не узнал бы в метке своего собеседника: он разворачивает
+    // её перебором контактов, а перебор опирается на неизменность.
+    assert.equal(sent[0].data.senderTag, sent[1].data.senderTag);
   });
 });
 

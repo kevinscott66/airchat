@@ -38,6 +38,34 @@ const {
 const createTokenRegistry = createMemoryTokenRegistry;
 
 const MAX_BODY_BYTES = 8 * 1024;
+
+/**
+ * Метка отправителя для чужого push-сервиса (v4.32.614).
+ *
+ * Дефект. В нагрузку FCM клался `contactDid: claim.senderDid` — открытый DID
+ * отправителя. Дальше эта строка идёт через Google (а на iOS и через Apple),
+ * которым токен получателя и так говорит, чей это телефон. DID в AirChat
+ * публичен и разрешается в имя: по нему находится профиль, юзернейм и лента.
+ * То есть посредник получал готовый список «кто и когда пишет этому человеку»
+ * с настоящими именами — ровно ту метаинформацию, ради сокрытия которой
+ * мессенджер и шифрует переписку.
+ *
+ * Метка — усечённый sha256 от пары «получатель, отправитель». Посредник видит
+ * непрозрачные 128 бит; получатель узнаёт в них своего собеседника, потому что
+ * знает и свой ключ, и ключи контактов (см. notifications/pushSenderTag).
+ *
+ * Соль — ключ получателя, и это важно: без неё метка была бы одинаковой у всех
+ * получателей одного отправителя, а список DID открыт, и радужная таблица по
+ * нему строится за один проход. С солью посреднику нужно сперва узнать, чей
+ * это телефон в терминах AirChat, — а именно этого сопоставления у него и нет.
+ */
+function senderTagFor(targetPeerId, senderPeerId) {
+  return crypto
+    .createHash('sha256')
+    .update(`airchat-push-sender-v1|${targetPeerId}|${senderPeerId}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+}
 const MAX_DEVICE_TOKEN_LENGTH = 4096;
 const MAX_CID_LENGTH = 128;
 const MAX_DID_LENGTH = 256;
@@ -394,12 +422,14 @@ function createPushRoutes(options = {}) {
       return;
     }
     try {
-      // Веб получает пустой push: cid и did остаются здесь. Через чужой
+      // Веб получает пустой push: cid и метка остаются здесь. Через чужой
       // push-сервис не проходит ничего — баннер собирает страница, когда её
       // откроют (см. webpush).
+      //
+      // v4.32.614: вместо DID отправителя уходит метка, см. senderTagFor.
       const outcome = await sender.send(entry, {
         cid: claim.cid,
-        contactDid: claim.senderDid,
+        senderTag: senderTagFor(claim.targetPeerId, claim.senderPeerId),
         kind: claim.kind,
       });
       if (outcome === 'stale') registry.delete(claim.targetPeerId);

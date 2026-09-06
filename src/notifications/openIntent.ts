@@ -41,7 +41,8 @@
  *
  * Модуль намеренно ни от чего не зависит: его зовут и из дерева компонентов, и
  * из фонового обработчика, который живёт в отдельном запуске JS и не должен
- * тянуть за собой ни базу, ни транспорт, ни notifee.
+ * тянуть за собой ни базу, ни транспорт, ни notifee. Ни одного импорта здесь
+ * нет и не должно появиться — за этим следит храповик в тестах.
  *
  * ── v4.32.560 ───────────────────────────────────────────────────────────────
  *
@@ -70,6 +71,12 @@ export interface ChatOpenIntent {
   cid: string;
   /** DID собеседника; в старых уведомлениях его может не быть. */
   contactDid?: string;
+  /**
+   * Метка отправителя вместо DID (v4.32.614). Ретранслятор больше не кладёт
+   * DID в нагрузку чужого push-сервиса — см. pushSenderTag. Разворачивает её
+   * получатель по своим контактам; здесь она едет как есть.
+   */
+  senderTag?: string;
 }
 
 /** Открыть группу или канал. */
@@ -101,6 +108,8 @@ export interface CallOpenIntent {
   callId: string;
   /** DID звонящего; нужен, чтобы показать, кто звонит. */
   contactDid?: string;
+  /** Метка звонящего вместо DID (v4.32.614), см. ChatOpenIntent.senderTag. */
+  senderTag?: string;
 }
 
 /** Куда ведёт нажатие. Разные ветки открывают разные экраны. */
@@ -144,6 +153,26 @@ function contactDidOf(data: Record<string, unknown>): string | undefined {
 }
 
 /**
+/**
+ * Форма метки отправителя (v4.32.614): 32 знака нижнего регистра — первые 128
+ * бит sha256, см. pushSenderTag. Правило вычисления живёт там, а форма здесь,
+ * потому что модуль обязан оставаться без импортов, а проверяют её оба.
+ */
+export const SENDER_TAG_SHAPE = /^[0-9a-f]{32}$/;
+
+/**
+ * Метка отправителя, если она годной формы.
+ *
+ * v4.32.614: ровно то, что теперь приезжает вместо DID. Поле `contactDid`
+ * читается по-прежнему — сборка приложения обновляется не одновременно с
+ * ретранслятором, и уведомление от старого сервера должно вести туда же.
+ */
+function senderTagOf(data: Record<string, unknown>): string | undefined {
+  const raw = data.senderTag;
+  return typeof raw === 'string' && SENDER_TAG_SHAPE.test(raw) ? raw : undefined;
+}
+
+/**
  * Разбирает `data` уведомления в намерение.
  *
  * Данные приходят из сети и недостоверны: всё, что попадёт в запрос к базе или
@@ -170,7 +199,11 @@ export function parseOpenIntent(data: Record<string, unknown> | null | undefined
   const rawCid = data.cid;
   if (typeof rawCid !== 'string' || !CID_SHAPE.test(rawCid)) return null;
   const contactDid = contactDidOf(data);
-  return contactDid ? { kind: 'chat', cid: rawCid, contactDid } : { kind: 'chat', cid: rawCid };
+  const senderTag = senderTagOf(data);
+  const chat: ChatOpenIntent = { kind: 'chat', cid: rawCid };
+  if (contactDid) chat.contactDid = contactDid;
+  if (senderTag) chat.senderTag = senderTag;
+  return chat;
 }
 
 /**
@@ -186,7 +219,11 @@ export function parseCallOpenIntent(
   const rawId = data.cid;
   if (typeof rawId !== 'string' || !CID_SHAPE.test(rawId)) return null;
   const did = contactDidOf(data);
-  return did ? { kind: 'call', callId: rawId, contactDid: did } : { kind: 'call', callId: rawId };
+  const senderTag = senderTagOf(data);
+  const call: CallOpenIntent = { kind: 'call', callId: rawId };
+  if (did) call.contactDid = did;
+  if (senderTag) call.senderTag = senderTag;
+  return call;
 }
 
 /**
