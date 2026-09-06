@@ -49,6 +49,12 @@ import {
   clampFeedPostText,
   isEditableFeedText,
 } from './feedTextLimit';
+import {
+  isInlineBase64,
+  safeInlineMime,
+  sanitizeInlineDocuments,
+  sanitizeInlineMedia,
+} from './feedInlineAttachments';
 import { multiTransportRouter } from '../transport/multiTransport';
 import { checkOnlineWrite } from '../sync/cachePolicy';
 import { offlineAction, shouldAttemptBroadcast } from '../sync/localFirstWrite';
@@ -2375,31 +2381,17 @@ export async function receiveFeedEnvelope(
         if (postText !== null) d.text = postText;
         const postName = clampFeedAuthorName(d.authorName);
         if (postName !== null) d.authorName = postName;
-        if (Array.isArray(d.media)) {
-          d.media = d.media
-            .filter((m): m is string => typeof m === 'string')
-            .slice(0, 10)
-            .filter((m) => m.length <= 3 * 1024 * 1024); // ~2MB decoded per base64
-        }
-        if (Array.isArray(d.documents)) {
-          d.documents = d.documents
-            .filter((doc) => doc && typeof doc === 'object')
-            .slice(0, 5)
-            .filter((doc) => typeof doc.data !== 'string' || doc.data.length <= 14 * 1024 * 1024); // ~10MB decoded
-        }
+        // v4.32.614: фотографии и их типы разбираются парой, а документ без
+        // принятых байтов в список не попадает вовсе — см. feedInlineAttachments.
+        const inlineMedia = sanitizeInlineMedia(d.media, d.mediaMime);
+        const inlineDocs = sanitizeInlineDocuments(d.documents);
         // Синтетические mediaCids как `inline:<mime>;<i>:<postId>` — так UI отличит inline-медиа
         // от старых IPFS-CID и сможет отрендерить base64 напрямую.
-        const mediaCids = d.media && d.media.length > 0
-          ? d.media.map((_, i) => `inline:${d.mediaMime?.[i] ?? 'application/octet-stream'};${i}:${payload.postId}`)
+        const mediaCids = inlineMedia.media.length > 0
+          ? inlineMedia.media.map((_, i) => `inline:${inlineMedia.mediaMime[i]};${i}:${payload.postId}`)
           : null;
         // v4.32.48: документы — метаданные в таблицу feed.documents, base64 в kvStore.
-        const docsMeta = d.documents && d.documents.length > 0
-          ? d.documents.map((doc) => ({
-              name: typeof doc.name === 'string' ? doc.name.slice(0, 200) : 'document',
-              mime: typeof doc.mime === 'string' ? doc.mime.slice(0, 100) : 'application/octet-stream',
-              size: typeof doc.size === 'number' ? doc.size : 0,
-            }))
-          : null;
+        const docsMeta = inlineDocs.meta.length > 0 ? inlineDocs.meta : null;
         // v4.32.614: номер публикации придумывает отправитель, а имена ключей
         // вложений собраны из одного лишь номера. Без этой сверки чужой
         // подписанный конверт с уже занятым номером подменял картинки под
@@ -2426,48 +2418,31 @@ export async function receiveFeedEnvelope(
         });
         // Сохранить сам base64 отдельно (для рендера). TODO v4.32.25: отдельная таблица feed_media.
         // Пока кладём в kvStore по ключу inline:<postId>:<i>.
-        if (d.media && d.media.length > 0) {
-          for (let i = 0; i < d.media.length; i++) {
-            // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
-            // фотографии останется пустым — reconcileOrphanInlineMedia потом
-            // подчистит ссылку. Но узнать о нём надо: раньше kvSet гасил
-            // ошибку молча, и «пустая картинка у контакта» не имела следа.
-            if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, d.media[i]))) {
-              log.warn('feed_inline_media_receive_save_failed', {
-                postId: payload.postId.slice(0, 24),
-                idx: i,
-              });
-            }
+        for (let i = 0; i < inlineMedia.media.length; i++) {
+          // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
+          // фотографии останется пустым — reconcileOrphanInlineMedia потом
+          // подчистит ссылку. Но узнать о нём надо: раньше kvSet гасил
+          // ошибку молча, и «пустая картинка у контакта» не имела следа.
+          if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, inlineMedia.media[i]))) {
+            log.warn('feed_inline_media_receive_save_failed', {
+              postId: payload.postId.slice(0, 24),
+              idx: i,
+            });
           }
         }
         // v4.32.48: сохранить base64 документов в kvStore (для последующего «Скачать/Поделиться»).
-        if (d.documents && d.documents.length > 0) {
-          for (let i = 0; i < d.documents.length; i++) {
-            try {
-              const data = d.documents[i].data;
-              // v4.32.194 (Round-24 #4): strict base64 charset check — peer
-              // can embed arbitrary bytes that later crash Buffer.from during
-              // decode. Length must be multiple of 4.
-              if (
-                typeof data === 'string' &&
-                data.length > 0 &&
-                data.length % 4 === 0 &&
-                /^[A-Za-z0-9+/]+={0,2}$/.test(data)
-              ) {
-                if (!(await kvSetInlineAttachment(`feed_inline_doc:${payload.postId}:${i}`, data))) {
-                  log.warn('feed_inline_doc_receive_save_failed', {
-                    postId: payload.postId.slice(0, 24),
-                    idx: i,
-                    err: 'kv_write_failed',
-                  });
-                }
-              }
-            } catch (e) {
-              log.warn('feed_inline_doc_receive_save_failed', { postId: payload.postId.slice(0, 24), idx: i, err: e instanceof Error ? e.message : String(e) });
-            }
+        // v4.32.614: номер ключа считается по УЖЕ отфильтрованному списку — он
+        // же лёг в строку поста, и разъехаться они теперь не могут.
+        for (let i = 0; i < inlineDocs.data.length; i++) {
+          if (!(await kvSetInlineAttachment(`feed_inline_doc:${payload.postId}:${i}`, inlineDocs.data[i]))) {
+            log.warn('feed_inline_doc_receive_save_failed', {
+              postId: payload.postId.slice(0, 24),
+              idx: i,
+              err: 'kv_write_failed',
+            });
           }
         }
-        log.info('feed_post_received', { postId: payload.postId.slice(0, 24), authorDid: payload.authorDid.slice(0, 32), docsN: d.documents?.length ?? 0 });
+        log.info('feed_post_received', { postId: payload.postId.slice(0, 24), authorDid: payload.authorDid.slice(0, 32), docsN: inlineDocs.meta.length });
         // v4.32.92: in-app banner для новых постов контактов.
         emitFeedNotify({
           kind: 'post',
@@ -2666,10 +2641,11 @@ export async function receiveFeedEnvelope(
           const cappedBlobs = d.originalMediaBase64.slice(0, 10);
           for (let i = 0; i < cappedBlobs.length; i++) {
             const data = cappedBlobs[i];
-            if (typeof data !== 'string' || data.length === 0 || data.length > 2 * 1024 * 1024) continue;
-            if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) continue;
-            const rawMime = d.originalMediaBase64Mime?.[i];
-            const mime = typeof rawMime === 'string' && rawMime.length <= 64 ? rawMime : 'application/octet-stream';
+            if (!isInlineBase64(data, 2 * 1024 * 1024)) continue;
+            // v4.32.614: тип уходит в `data:`-адрес, и запятая внутри него
+            // сделала бы хвост типа самим содержимым. Проверка длиной этого не
+            // ловила — см. feedInlineAttachments.
+            const mime = safeInlineMime(d.originalMediaBase64Mime?.[i]);
             // v4.32.341: ссылка добавлялась до записи байтов и оставалась даже
             // тогда, когда запись не удалась, — репост показывал пустую плитку
             // без надежды когда-нибудь наполниться. Порядок обратный.
