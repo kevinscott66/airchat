@@ -175,19 +175,51 @@ export function deriveKeyPairFromMnemonic(mnemonic: string): KeyPairBytes {
   return deriveKeyPairFromMnemonicForProfile(mnemonic, 0);
 }
 
+type LocalWrapKeyState =
+  | { state: 'ok'; key: Uint8Array }
+  | { state: 'absent' }
+  | { state: 'unreadable' };
+
+/**
+ * v4.32.615: «завести ключ обёртки» и «прочитать им» — разные операции.
+ *
+ * Дефект. `ensureLocalWrapKey` звали и на записи, и на ЧТЕНИИ v3-payload, и на
+ * любой негодной записи он молча заводил новый ключ ПОВЕРХ старого. После этого
+ * `MNEMONIC_ENC_PAYLOAD_KEY` не открыть уже ничем — seed-фраза потеряна
+ * безвозвратно, а наружу это выглядит как чистая установка: `hasStoredMnemonic`
+ * вернёт `false`, и человек уедет в онбординг, так и не узнав, что у него был
+ * аккаунт. Сигнала об этом тоже не было ни одного.
+ *
+ * Ровно этот случай `dekPolicy` для ключа базы трогать уже отказывается
+ * (`REFUSE('key_' + o.stored)`): «запись есть, но прочитать её нечем» — не то же
+ * самое, что «записи нет».
+ *
+ * Поэтому чтение (см. `tryDecryptLocalPayload`) ключ теперь не заводит и не
+ * перезаписывает: негодные байты остаются на устройстве — вдруг починятся
+ * (восстановление Keychain из копии, следующая версия приложения), — а в журнал
+ * уходит `seed_local_wrap_key_unusable`. Запись ключ по-прежнему заводит: она
+ * пишет payload следом за ним, терять там нечего.
+ */
+async function readLocalWrapKey(): Promise<LocalWrapKeyState> {
+  const existing = await SecureStore.getItemAsync(LOCAL_WRAP_KEY_KEY);
+  if (!existing) return { state: 'absent' };
+  try {
+    const buf = Buffer.from(existing, 'base64');
+    if (buf.length === SYMMETRIC_KEY_BYTES) return { state: 'ok', key: new Uint8Array(buf) };
+  } catch { /* ниже — 'unreadable' */ }
+  return { state: 'unreadable' };
+}
+
 /**
  * v4.32.132: ensure a device-local wrap key exists in SecureStore. Returns the
  * raw 32-byte key; generates one if missing. Never leaves SecureStore except
  * in memory during encrypt/decrypt.
+ *
+ * Только для путей записи — см. `readLocalWrapKey`.
  */
 async function ensureLocalWrapKey(): Promise<Uint8Array> {
-  const existing = await SecureStore.getItemAsync(LOCAL_WRAP_KEY_KEY);
-  if (existing) {
-    try {
-      const buf = Buffer.from(existing, 'base64');
-      if (buf.length === SYMMETRIC_KEY_BYTES) return new Uint8Array(buf);
-    } catch { /* fallthrough to regenerate */ }
-  }
+  const current = await readLocalWrapKey();
+  if (current.state === 'ok') return current.key;
   const fresh = randomBytes(SYMMETRIC_KEY_BYTES);
   await SecureStore.setItemAsync(LOCAL_WRAP_KEY_KEY, Buffer.from(fresh).toString('base64'));
   return fresh;
@@ -205,8 +237,13 @@ async function tryDecryptLocalPayload(raw: string): Promise<string | null> {
     let key: Uint8Array;
     if (p.v === 3) {
       // v3: password = device-local wrap key (binds payload to this device).
-      const wrap = await ensureLocalWrapKey();
-      key = pbkdf2(sha256, wrap, salt, { c: iters, dkLen: 32 });
+      // Читаем, но не заводим: новый ключ здесь означал бы потерю фразы.
+      const wrap = await readLocalWrapKey();
+      if (wrap.state !== 'ok') {
+        log.warn('seed_local_wrap_key_unusable', { state: wrap.state });
+        return null;
+      }
+      key = pbkdf2(sha256, wrap.key, salt, { c: iters, dkLen: 32 });
     } else if (p.v === 2) {
       // v2 legacy: password = constant info string.
       key = pbkdf2(sha256, LOCAL_WRAP_INFO, salt, { c: iters, dkLen: 32 });
