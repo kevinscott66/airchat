@@ -121,7 +121,9 @@ describe('ветка показа берёт бронь, а на отказе в
     const body = dmBannerBody();
     const reserve = body.indexOf('if (!notifyDedup.reserve(cid)) {');
     expect(reserve).toBeGreaterThan(-1);
-    expect(reserve).toBeLessThan(body.indexOf("kvGet('notify_preview')"));
+    // v4.32.614: настройка показа содержимого уехала в previewAllowed —
+    // вместе с вопросом о замке приложения. Порядок проверяется по вызову.
+    expect(reserve).toBeLessThan(body.indexOf('await previewAllowed();'));
     expect(reserve).toBeLessThan(body.indexOf('await notifee.displayNotification({'));
   });
 

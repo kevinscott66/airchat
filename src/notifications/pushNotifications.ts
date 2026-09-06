@@ -1,6 +1,7 @@
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import * as SecureStore from '../core/storage/secureStoreQueued';
 import { loadConfig } from '../core/config';
+import { authGuard } from '../core/security/authGuard';
 import { log } from '../core/logger';
 import { vibrationFor } from './vibrationPattern';
 import { getMessagingService, subscribeInAppNotifications } from '../core/social/messaging';
@@ -31,6 +32,30 @@ const CHANNEL_MESSAGES = 'airchat_messages_v2';
 const CHANNEL_MENTIONS = 'airchat_mentions_v2';
 const CHANNEL_CALLS = 'airchat_calls_v2';
 const CHANNEL_FEED = 'airchat_feed_v2';
+
+/**
+ * Показывать ли содержимое сообщения в баннере (v4.32.614).
+ *
+ * Условие было одно — настройка «Текст сообщений в уведомлениях». Замок
+ * приложения на баннеры не влиял вовсе: включённая автоблокировка закрывала
+ * переписку, а следующее же сообщение выкладывало имя собеседника и текст
+ * поверх запертого приложения. Замок ставят ровно от этого — от человека, у
+ * которого телефон уже в руках, — и обойти его хватало терпения дождаться
+ * баннера. `isSessionUnlocked` для этого и заведён, но его не звал никто.
+ *
+ * Пока замок заперт, баннер остаётся безличным: «Новое сообщение». Само
+ * уведомление никуда не девается — о сообщении человек узнаёт, — исчезает
+ * только содержимое, ровно как при выключенной настройке.
+ *
+ * Пока App не разобрался с паролем, сессия считается запертой. Неясность здесь
+ * решается в пользу закрытого баннера — в отличие от фоновых настроек (см.
+ * backgroundNotifyPrefs), где она решается в пользу показа: там ценой ошибки
+ * было молча съеденное сообщение, здесь — чужой текст на чужом экране.
+ */
+async function previewAllowed(): Promise<boolean> {
+  if ((await kvGet('notify_preview')) === 'false') return false;
+  return authGuard.isSessionUnlocked();
+}
 
 /**
  * v4.32.131 (AUDIT P2): dedupe push notifications by cid. Same message can
@@ -237,7 +262,7 @@ export class PushNotificationService {
             // Backward compat: если раньше было записано под другим kind — тоже глушим.
             if (effKind === 'group' && (await isMuted('channel', groupId))) return;
           }
-          const preview = (await kvGet('notify_preview')) !== 'false';
+          const preview = await previewAllowed();
           const vibrate = (await kvGet('notify_vibrate')) !== 'false';
           // v4.32.169: notify_sound toggle was dead — wire it to notifee sound option.
           const sound = (await kvGet('notify_sound')) !== 'false';
@@ -462,7 +487,7 @@ export class PushNotificationService {
         log.debug('push_notify_dedup', { cid: cid.slice(0, 16) });
         return;
       }
-      const preview = (await kvGet('notify_preview')) !== 'false';
+      const preview = await previewAllowed();
       const vibrate = (await kvGet('notify_vibrate')) !== 'false';
       const sound = (await kvGet('notify_sound')) !== 'false';
       // v4.32.220 (HIGH-4): resolve sender name locally from contacts store.
@@ -783,7 +808,7 @@ export async function notifyFeedEvent(opts: {
     // v4.32.239: «Показывать содержимое» глушило текст только у сообщений, а
     // публикации и комментарии всё равно уезжали на экран блокировки целиком,
     // вместе с именем автора. Настройка одна на все уведомления.
-    const preview = (await kvGet('notify_preview')) !== 'false';
+    const preview = await previewAllowed();
     await notifee.displayNotification({
       title: preview ? opts.title : 'AirChat',
       body: preview
