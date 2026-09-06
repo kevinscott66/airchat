@@ -795,6 +795,33 @@ export class FeedStorage {
     );
   }
 
+  /**
+   * Вправе ли `authorDid` записывать содержимое публикации `postId` (v4.32.614).
+   *
+   * `savePost` — это INSERT OR IGNORE, поэтому чужую СТРОКУ подменить нельзя.
+   * Но вложения лежат не в строке: base64 фотографий и документов уходит в kv
+   * по ключу `feed_inline_media:<postId>:<i>`, где имя собрано из одного лишь
+   * номера поста. Номер придумывает отправитель, и любой, чей подписанный
+   * конверт мы принимаем, мог прислать свой `feed_post` с ЧУЖИМ номером: строка
+   * оставалась прежней, а картинки под чужой публикацией подменялись его
+   * собственными. У репоста было ещё хуже — там байты писались до `savePost`.
+   *
+   * - `ok` — строки нет либо она того же автора (повтор и починка недоехавшего
+   *   вложения остаются возможными);
+   * - `foreign` — публикация с таким номером уже есть, и она чужая;
+   * - `tombstoned` — этот же автор её удалил, воскрешать нечего.
+   */
+  async postWriteGuard(postId: string, authorDid: string): Promise<'ok' | 'foreign' | 'tombstoned'> {
+    const d = await this.ensureDb();
+    if (await this.postTombstoned(d, postId, authorDid)) return 'tombstoned';
+    const row = await d.getFirstAsync<{ author_did: string }>(
+      'SELECT author_did FROM feed WHERE id = ?',
+      [postId]
+    );
+    if (row != null && row.author_did !== authorDid) return 'foreign';
+    return 'ok';
+  }
+
   /** Есть ли надгробие этого автора на этот post_id. */
   private async postTombstoned(
     d: SQLite.SQLiteDatabase,

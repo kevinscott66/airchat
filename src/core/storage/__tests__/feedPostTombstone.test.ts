@@ -107,6 +107,30 @@ beforeEach(() => {
   s = new FeedStorage(1);
 });
 
+describe('право писать содержимое публикации', () => {
+  // v4.32.614: вложения лежат в kv по ключу из одного лишь номера поста,
+  // поэтому чужой конверт с занятым номером подменял картинки под чужой
+  // записью. Строку savePost бы не тронул — а байты подменились бы.
+  it('свободный номер и повтор своего поста — можно', async () => {
+    expect(await s.postWriteGuard(PID, AUTHOR)).toBe('ok');
+    await s.savePost(post(PID, AUTHOR));
+    expect(await s.postWriteGuard(PID, AUTHOR)).toBe('ok');
+  });
+
+  it('занятый чужим автором номер — нельзя', async () => {
+    await s.savePost(post(PID, AUTHOR));
+    expect(await s.postWriteGuard(PID, OTHER)).toBe('foreign');
+  });
+
+  it('свой удалённый пост не воскрешается вложениями', async () => {
+    await s.savePost(post(PID, AUTHOR));
+    await s.deletePost(PID, 777);
+    expect(await s.postWriteGuard(PID, AUTHOR)).toBe('tombstoned');
+    // Надгробие адресное: чужому автору оно ничего не запрещает.
+    expect(await s.postWriteGuard(PID, OTHER)).toBe('ok');
+  });
+});
+
 describe('удаление ставит надгробие', () => {
   it('после deletePost запись об удалении остаётся с автором поста', async () => {
     await s.savePost(post(PID, AUTHOR));

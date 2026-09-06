@@ -541,6 +541,22 @@ function feedSeenMarkOrHas(key: string): boolean {
 }
 
 /**
+ * Забыть отметку (v4.32.614).
+ *
+ * Отметка ставится ДО разбора — иначе один и тот же конверт, приехавший двумя
+ * транспортами разом, обработался бы дважды. Но это же значило, что любая
+ * осечка посреди разбора была окончательной: запись в базу не прошла, конверт
+ * уже помечен, автор шлёт повтор — и повтор молча выбрасывается как дубль.
+ * Пост исчезал навсегда, притом что автор видел его доставленным.
+ *
+ * Плата за это — при осечке повтор может уйти соседям по ретрансляции второй
+ * раз. Счётчик прыжков её ограничивает, а потеря записи ничем не ограничена.
+ */
+function feedSeenForget(key: string): void {
+  feedSeenKeys.delete(key);
+}
+
+/**
  * v4.32.213 (Audit-42 C1): fast 32-bit FNV-1a hash over envelope.data for
  * dedup-key completeness. Without it, an author can sign two envelopes with
  * identical (type,postId,authorDid,ts) but different data payloads (e.g.
@@ -2322,6 +2338,9 @@ export async function receiveFeedEnvelope(
   // v4.32.133: recheck — a rebind can have run to completion during the
   // parseAndVerify await, swapping the storage context out from under us.
   if (feedRebinding || feedProfileGen !== genAtEntry) {
+    // Профиль переключился прямо посреди разбора — конверт не обработан ничем,
+    // и повтор обязан получить второй шанс (v4.32.614).
+    feedSeenForget(dedupKey);
     log.debug('feed_envelope_dropped_profile_switched');
     return;
   }
@@ -2338,6 +2357,7 @@ export async function receiveFeedEnvelope(
     // попавшийся профиль (см. её докблок).
     const envelopePid = currentProfileId;
     if (envelopePid == null) {
+      feedSeenForget(dedupKey);
       log.warn('feed_envelope_profile_unset', { type: payload.type });
       return;
     }
@@ -2380,6 +2400,19 @@ export async function receiveFeedEnvelope(
               size: typeof doc.size === 'number' ? doc.size : 0,
             }))
           : null;
+        // v4.32.614: номер публикации придумывает отправитель, а имена ключей
+        // вложений собраны из одного лишь номера. Без этой сверки чужой
+        // подписанный конверт с уже занятым номером подменял картинки под
+        // чужой публикацией (строку savePost бы не тронул, а байты — да).
+        const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
+        if (guard !== 'ok') {
+          log.warn('feed_post_write_refused', {
+            postId: payload.postId.slice(0, 24),
+            authorDid: payload.authorDid.slice(0, 32),
+            reason: guard,
+          });
+          break;
+        }
         await s.savePost({
           id: payload.postId,
           authorDid: payload.authorDid,
@@ -2608,6 +2641,19 @@ export async function receiveFeedEnvelope(
         const safeText = typeof d.text === 'string' ? d.text.slice(0, 8_000) : '';
         const safeAuthorName = typeof d.authorName === 'string' ? d.authorName.slice(0, 128) : null;
         const safeOrigAuthorName = typeof d.originalAuthorName === 'string' ? d.originalAuthorName.slice(0, 128) : d.originalAuthorName;
+        // v4.32.614: номер публикации придумывает отправитель, а имена ключей
+        // вложений собраны из одного лишь номера. Без этой сверки чужой
+        // подписанный конверт с уже занятым номером подменял картинки под
+        // чужой публикацией (строку savePost бы не тронул, а байты — да).
+        const guard = await s.postWriteGuard(payload.postId, payload.authorDid);
+        if (guard !== 'ok') {
+          log.warn('feed_post_write_refused', {
+            postId: payload.postId.slice(0, 24),
+            authorDid: payload.authorDid.slice(0, 32),
+            reason: guard,
+          });
+          break;
+        }
         let mediaCids: string[] | null = null;
         if (Array.isArray(d.originalMedia)) {
           mediaCids = d.originalMedia
@@ -2809,6 +2855,7 @@ export async function receiveFeedEnvelope(
 
     emitFeedUpdate();
   } catch (e) {
+    feedSeenForget(dedupKey);
     log.warn('feed_envelope_ingest_failed', { err: e instanceof Error ? e.message : String(e) });
   }
 }
