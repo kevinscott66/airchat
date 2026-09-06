@@ -40,6 +40,25 @@ export const MAX_REACTIONS_PER_ACTOR = 8;
 export const MAX_REACTION_KEYS = 64;
 
 /**
+ * Сколько участников может держать ОДИН эмодзи. Потолок жил в ленте
+ * (feedStorage) отдельным числом; с v4.32.608 он здесь, вместе с остальными,
+ * потому что правило у поста, комментария и сообщения одно.
+ */
+export const MAX_REACTION_ACTORS_PER_KEY = 512;
+
+/**
+ * Какой из потолков отказал:
+ *   • `actor`  — участник уже держит предельное число различных эмодзи;
+ *   • `keys`   — на записи уже предельное число различных эмодзи;
+ *   • `actors` — этот эмодзи уже держит предельное число участников.
+ *
+ * Первый называет вину самого нажавшего и лечится снятием своей же реакции;
+ * два других — про запись целиком, и человек с ними ничего не сделает.
+ * Поэтому текст отказа у них разный.
+ */
+export type ReactionLimit = 'actor' | 'keys' | 'actors';
+
+/**
  * Разбирает содержимое ячейки `reactions`. Мусор, не-объект, массив,
  * нестроковые ключи участников — всё это отбрасывается: карта возвращается
  * настолько, насколько её удалось понять.
@@ -82,12 +101,22 @@ export function actorHasReaction(map: ReactionMap, emoji: string, actorKey: stri
  * Разрешено ли ДОБАВИТЬ эту реакцию. Снятие не спрашивает разрешения никогда:
  * иначе упёршийся в потолок участник не смог бы убрать даже своё.
  */
+export function reactionAddRefusal(
+  map: ReactionMap,
+  emoji: string,
+  actorKey: string
+): ReactionLimit | null {
+  if (actorHasReaction(map, emoji, actorKey)) return null;
+  if (actorReactionCount(map, actorKey) >= MAX_REACTIONS_PER_ACTOR) return 'actor';
+  const users = Array.isArray(map[emoji]) ? map[emoji] : [];
+  if (users.length === 0 && Object.keys(map).length >= MAX_REACTION_KEYS) return 'keys';
+  if (users.length >= MAX_REACTION_ACTORS_PER_KEY) return 'actors';
+  return null;
+}
+
+/** Разрешено ли ДОБАВИТЬ — та же проверка, когда причина отказа не нужна. */
 export function canAddReaction(map: ReactionMap, emoji: string, actorKey: string): boolean {
-  if (actorHasReaction(map, emoji, actorKey)) return true;
-  if (actorReactionCount(map, actorKey) >= MAX_REACTIONS_PER_ACTOR) return false;
-  const isNewKey = !Array.isArray(map[emoji]) || map[emoji].length === 0;
-  if (isNewKey && Object.keys(map).length >= MAX_REACTION_KEYS) return false;
-  return true;
+  return reactionAddRefusal(map, emoji, actorKey) === null;
 }
 
 /**

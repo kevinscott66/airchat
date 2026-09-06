@@ -14,6 +14,7 @@ import { FEED_AT_REST_COLUMNS, parseJsonColumn, parseStringArrayColumn } from '.
 import { isSafeSqlIdentifier } from './atRestColumns';
 import { mayOverwrite, cellTextOrNull } from './atRestCell';
 import { unreadableFromCellState } from './unreadableText';
+import { applyReaction, parseReactionMap } from '../social/reactionMapPolicy';
 import {
   AT_REST_PREFIX,
   decryptAtRestNullable,
@@ -449,41 +450,43 @@ export class FeedStorage {
     );
   }
 
-  async addReaction(postId: string, emoji: string, authorDid: string): Promise<void> {
+  /**
+   * Ставит реакцию от лица `authorDid`. `false` — в базу ничего не записано:
+   * поста нет, столбец не открылся ключом или карта упёрлась в потолок.
+   *
+   * v4.32.608: потолки переехали в reactionMapPolicy — тот же свод, что у
+   * сообщений. До этой версии на посте ограничивалось общее число различных
+   * эмодзи (64) и число авторов на один эмодзи (512), а сколько эмодзи
+   * вправе навесить ОДИН человек — не ограничивалось ничем: один контакт мог
+   * в одиночку занять все 64 ключа и заодно раздуть строку. У сообщений
+   * такой потолок стоит с v4.32.509, у ленты его не было.
+   */
+  async addReaction(postId: string, emoji: string, authorDid: string): Promise<boolean> {
     const d = await this.ensureDb();
     const row = await d.getFirstAsync<{ reactions: string | null }>(
       'SELECT reactions FROM feed WHERE id = ?',
       [postId]
     );
-    if (!row) return; // post not found locally
+    if (!row) return false; // post not found locally
     const dek = await getOrCreateDataEncryptionKey();
-    let reactions: Record<string, string[]> = {};
     // v4.32.544: столбец, который не открылся ключом, раньше читался пустой
     // строкой — как «реакций не было». Дальше в него записывалась одна новая
     // реакция, и прежние пропадали безвозвратно.
     const cell = readAtRestCell(row.reactions, dek);
     if (!mayOverwrite(cell)) {
       log.warn('feed_reaction_column_unreadable', {});
-      return;
+      return false;
     }
-    const parsed = parseJsonColumn<unknown>(cellTextOrNull(cell));
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      reactions = parsed as Record<string, string[]>;
-    }
-    // v4.32.205 (Round-35 #1): cap distinct emoji keys at 64. A malicious peer
-    // could otherwise send 10_000 distinct "emoji" strings and bloat the row.
-    if (!reactions[emoji] && Object.keys(reactions).length >= 64) return;
-    if (!reactions[emoji]) reactions[emoji] = [];
-    // v4.32.205 (Round-35 #4): cap authors per emoji at 512.
-    if (!Array.isArray(reactions[emoji])) reactions[emoji] = [];
-    if (!reactions[emoji].includes(authorDid)) {
-      if (reactions[emoji].length >= 512) return;
-      reactions[emoji].push(authorDid);
+    const applied = applyReaction(parseReactionMap(cellTextOrNull(cell)), emoji, authorDid, true);
+    if (!applied) {
+      log.info('feed_reaction_rejected_limit', { postId: postId.slice(0, 16) });
+      return false;
     }
     await d.runAsync(
       'UPDATE feed SET reactions = ? WHERE id = ?',
-      [encryptAtRestString(JSON.stringify(reactions), dek), postId]
+      [encryptAtRestString(JSON.stringify(applied.map), dek), postId]
     );
+    return true;
   }
 
   async getReactions(postId: string): Promise<Record<string, string[]>> {

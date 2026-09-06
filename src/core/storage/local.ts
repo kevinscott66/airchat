@@ -97,7 +97,7 @@ import { isControlOnlyText, previewLabelForText } from '../social/messagePreview
 import { matchesSearch } from '../social/searchableText';
 import { countMembers } from '../social/groupRolePolicy';
 import { nameOrNull } from '../social/contactLabel';
-import { applyReaction, parseReactionMap, serializeReactionMap } from '../social/reactionMapPolicy';
+import { applyReaction, parseReactionMap, reactionAddRefusal, serializeReactionMap } from '../social/reactionMapPolicy';
 import { blobCacheIdsIn, isDecryptedBlobUri, voiceFileUrisIn } from '../media/blobRef';
 import {
   lostAddressCount,
@@ -5240,8 +5240,11 @@ export async function toggleReaction(
     // отрисовку пузыря у всех остальных. Потолки живут в reactionMapPolicy.
     const applied = applyReaction(map, emoji, actorKey, on);
     if (!applied) {
-      log.warn('reaction_rejected_limit', { group: isGroup, actor: actorKey.slice(0, 8) });
-      return { ok: false, reason: 'limit' };
+      // v4.32.608: какой именно потолок отказал — «своих реакций уже восемь»
+      // человек лечит сам, «на сообщении их слишком много» не лечит никак.
+      const limit = reactionAddRefusal(map, emoji, actorKey);
+      log.warn('reaction_rejected_limit', { group: isGroup, limit, actor: actorKey.slice(0, 8) });
+      return { ok: false, reason: limit === 'actor' ? 'ownLimit' : 'limit' };
     }
     const next = applied.on;
     const json = serializeReactionMap(applied.map);

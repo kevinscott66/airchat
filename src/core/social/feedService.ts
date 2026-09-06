@@ -37,6 +37,8 @@ import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
 import { listContacts } from './contacts';
 import { isAuthorMuted } from './mutedAuthors';
+import { reactionAddRefusal } from './reactionMapPolicy';
+import { reactionLimitError } from './reactionWrite';
 // v4.32.528: тип, в котором сбой чтения отличим от пустой ленты.
 import type { DbRead } from '../storage/readResult';
 import {
@@ -1655,7 +1657,13 @@ export async function addAndBroadcastReaction(
   const myDid = publicKeyToDidKey(pair.publicKey);
   // Save locally first
   const s = await ensureStorage();
-  await s.addReaction(postId, emoji, myDid);
+  // v4.32.608: запись может не состояться (потолок реакций, нет поста,
+  // нечитаемый столбец) — тогда рассылать нечего: у получателей появилось бы
+  // то, чего нет у нас.
+  if (!(await s.addReaction(postId, emoji, myDid))) {
+    log.info('feed_reaction_not_stored', { postId: postId.slice(0, 16) });
+    return;
+  }
   emitFeedUpdate();
 
   const online = await checkOnlineWrite();
@@ -2293,8 +2301,8 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
           await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
           log.info('feed_unreaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
         } else {
-          await s.addReaction(payload.postId, d.emoji, payload.authorDid);
-          log.info('feed_reaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
+          const stored = await s.addReaction(payload.postId, d.emoji, payload.authorDid);
+          log.info('feed_reaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji, stored });
         }
         break;
       }
@@ -2317,8 +2325,14 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
           else delete reactions[d.emoji];
         } else {
           if (!existing.includes(payload.authorDid)) {
-            if (!(d.emoji in reactions) && Object.keys(reactions).length >= 64) break;
-            if (existing.length >= 512) break;
+            // v4.32.608: потолки те же, что у поста и у сообщения, включая
+            // личный — без него один отправитель занимал все ключи чужого
+            // комментария в одиночку.
+            const limit = reactionAddRefusal(reactions, d.emoji, payload.authorDid);
+            if (limit) {
+              log.info('feed_comment_reaction_rejected_limit', { commentId: d.commentId.slice(0, 16), limit });
+              break;
+            }
             reactions[d.emoji] = [...existing, payload.authorDid];
           }
         }
@@ -3437,8 +3451,14 @@ export async function toggleAndBroadcastReaction(
   const alreadyReacted = !!existing?.reactions?.[emoji]?.includes(myDid);
   if (alreadyReacted) {
     await s.removeReaction(postId, emoji, myDid);
-  } else {
-    await s.addReaction(postId, emoji, myDid);
+  } else if (!(await s.addReaction(postId, emoji, myDid))) {
+    // v4.32.608: отказ потолком раньше был неотличим от успеха — эмодзи
+    // никуда не записывался, но улетал контактам и оставался на экране до
+    // перезагрузки ленты. Причину называем словами, снятие потолок не
+    // спрашивает никогда.
+    const limit = existing ? reactionAddRefusal(existing.reactions ?? {}, emoji, myDid) : null;
+    if (limit) throw reactionLimitError(limit, 'post');
+    throw new Error('Не удалось сохранить реакцию');
   }
   emitFeedUpdate();
 
@@ -3593,10 +3613,11 @@ export function toggleCommentReaction(
       if (remaining.length > 0) reactions[emoji] = remaining;
       else delete reactions[emoji];
     } else {
-      // v4.32.205 (Round-35 #2): cap distinct emoji keys at 64 and authors per
-      // emoji at 512. Without caps a hostile peer can bloat the comment row.
-      if (!(emoji in reactions) && Object.keys(reactions).length >= 64) return comments;
-      if (existing.length >= 512) return comments;
+      // v4.32.608: потолки переехали в reactionMapPolicy — тот же свод, что у
+      // поста и у сообщения. Прежде отказ возвращал прежний список молча:
+      // экран показывал, что ничего не произошло, и не говорил почему.
+      const limit = reactionAddRefusal(reactions, emoji, authorDid);
+      if (limit) throw reactionLimitError(limit, 'comment');
       reactions[emoji] = [...existing, authorDid];
     }
     await s.updateCommentReactions(commentId, reactions);

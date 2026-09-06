@@ -94,6 +94,7 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
+import { isReactionLimitError } from '../../core/social/reactionWrite';
 import { buildPostLink } from '../../core/net/appLink';
 import { COPIED_LINK } from '../clipboardText';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
@@ -2348,6 +2349,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump 
           setOptimisticPosts((prev) =>
             prev.map((p) => (p.id !== postId ? p : revertOptimisticReaction(p, emoji, did)))
           );
+          // v4.32.608: отказ потолком — не сбой сети, повторять его бесполезно.
+          // Эмодзи исчезает с экрана, и без строки человек не знает почему.
+          if (isReactionLimitError(e)) showError(e.message);
           log.warn('feed_reaction_failed', { err: rawErrorText(e) });
         }
       });
@@ -3891,7 +3895,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump 
                                     )
                                     .catch((e) => {
                                       log.warn('feed_comment_reaction_failed', { err: rawErrorText(e) });
-                                      showError(t('feed.reactionFailed'));
+                                      showError(userErrorText(e, t('feed.reactionFailed')));
                                     });
                                 }}
                                 accessibilityRole="button"
@@ -3917,7 +3921,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump 
                               )
                               .catch((e) => {
                                 log.warn('feed_comment_heart_failed', { err: rawErrorText(e) });
-                                showError(t('feed.likeFailed'));
+                                showError(userErrorText(e, t('feed.likeFailed')));
                               });
                           }}
                           style={{ padding: 4 }}

@@ -30,7 +30,7 @@ function slice(src: string, from: string, to: string): string {
   return src.slice(a, b);
 }
 
-const ALL: ReactionWriteFailure[] = ['missing', 'unreadable', 'limit', 'failed'];
+const ALL: ReactionWriteFailure[] = ['missing', 'unreadable', 'limit', 'ownLimit', 'failed'];
 
 describe('текст отказа', () => {
   it('у каждой причины он свой', () => {
@@ -50,6 +50,15 @@ describe('текст отказа', () => {
 
   it('потолок реакций не выдаётся за пропавшее сообщение', () => {
     expect(reactionWriteFailureText('limit')).not.toContain('не найдено');
+    expect(reactionWriteFailureText('ownLimit')).not.toContain('не найдено');
+  });
+
+  // v4.32.608: «слишком много реакций» — это два разных исхода. Свой потолок
+  // человек снимает сам; общий он не снимет никак, и звать его снимать —
+  // отправлять искать среди своих реакций то, чего там нет.
+  it('свой потолок зовёт снять реакцию, общий — нет', () => {
+    expect(reactionWriteFailureText('ownLimit')).toContain('снимите');
+    expect(reactionWriteFailureText('limit')).not.toContain('снимите');
   });
 
   it('про сбой базы не сказано «попробуйте ещё раз» там, где повтор не поможет', () => {
@@ -58,7 +67,12 @@ describe('текст отказа', () => {
   });
 
   it('правило живёт отдельно и ничего за собой не тянет', () => {
-    expect(WRITE()).not.toMatch(/^import /m);
+    // v4.32.608: единственный импорт — свод потолков, откуда берётся число в
+    // тексте. Ни react-native, ни журнала, ни хранилища здесь нет.
+    const imports = WRITE().split('\n').filter((l) => l.startsWith('import '));
+    expect(imports).toEqual([
+      "import { MAX_REACTIONS_PER_ACTOR, type ReactionLimit } from './reactionMapPolicy';",
+    ]);
   });
 });
 
@@ -68,11 +82,11 @@ describe('запись в свою базу', () => {
     expect(body.split('\n').filter((l) => l.trim() === 'return null;')).toEqual([]);
   });
 
-  it('каждая из четырёх причин названа своим словом', () => {
+  it('каждая из причин названа своим словом', () => {
     const body = slice(LOCAL(), 'export async function toggleReaction(', '\n}\n');
     expect(body).toContain("return { ok: false, reason: 'missing' };");
     expect(body).toContain("return { ok: false, reason: 'unreadable' };");
-    expect(body).toContain("return { ok: false, reason: 'limit' };");
+    expect(body).toContain("return { ok: false, reason: limit === 'actor' ? 'ownLimit' : 'limit' };");
     expect(body).toContain("return { ok: false, reason: 'failed' };");
     expect(body).toContain('return { ok: true, on: next };');
   });

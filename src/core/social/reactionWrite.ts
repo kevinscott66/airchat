@@ -17,11 +17,15 @@
  * конверт роняется молча, но в журнал должно попасть, почему именно), текст
  * читает человек — и меняться они будут по-разному.
  *
- * Модуль без импортов.
+ * v4.32.608: причин стало пять. Потолок «слишком много реакций» распался на
+ * две: общий на записи и личный — сколько разных эмодзи навесил сам нажавший.
+ * Смешивать их нельзя: от первого человек ничего сделать не может, а второй
+ * снимается его же собственной реакцией, и текст обязан это сказать.
  */
+import { MAX_REACTIONS_PER_ACTOR, type ReactionLimit } from './reactionMapPolicy';
 
 /** Отчего запись реакции не состоялась. */
-export type ReactionWriteFailure = 'missing' | 'unreadable' | 'limit' | 'failed';
+export type ReactionWriteFailure = 'missing' | 'unreadable' | 'limit' | 'ownLimit' | 'failed';
 
 /** Итог записи реакции в свою базу: либо новое состояние, либо названная причина. */
 export type ReactionWriteResult = { ok: true; on: boolean } | { ok: false; reason: ReactionWriteFailure };
@@ -39,8 +43,50 @@ export function reactionWriteFailureText(reason: ReactionWriteFailure): string {
     case 'unreadable':
       return 'Реакции этого сообщения не удалось прочитать: их не открывает ключ этого устройства';
     case 'limit':
-      return 'На этом сообщении уже слишком много разных реакций';
+      return reactionLimitText('keys', 'message');
+    case 'ownLimit':
+      return reactionLimitText('actor', 'message');
     case 'failed':
       return 'Не удалось сохранить реакцию';
   }
+}
+
+/** На чём стоит реакция — от этого зависит только слово в тексте. */
+export type ReactionSubject = 'message' | 'post' | 'comment';
+
+const SUBJECT_IN: Record<ReactionSubject, string> = {
+  message: 'сообщении',
+  post: 'посте',
+  comment: 'комментарии',
+};
+
+/**
+ * Текст потолка. Личный называет число — иначе «слишком много» не подсказывает
+ * человеку, что делать; общий числа не называет, потому что складывается из
+ * чужих действий и трогать его нажавшему нечем.
+ */
+export function reactionLimitText(limit: ReactionLimit, subject: ReactionSubject): string {
+  const where = SUBJECT_IN[subject];
+  if (limit === 'actor') {
+    return `На этом ${where} у вас уже ${MAX_REACTIONS_PER_ACTOR} разных реакций — снимите одну, чтобы поставить новую`;
+  }
+  return `На этом ${where} уже слишком много разных реакций`;
+}
+
+/**
+ * Отказ потолком как ошибка — для путей, которые возвращают не результат, а
+ * бросок (реакция на пост и на комментарий). Не подкласс `Error`: под Hermes
+ * наследование от встроенных типов ломает `instanceof`, а признак на самом
+ * объекте работает везде одинаково.
+ */
+export type ReactionLimitError = Error & { reactionLimit: ReactionLimit };
+
+export function reactionLimitError(limit: ReactionLimit, subject: ReactionSubject): ReactionLimitError {
+  const e = new Error(reactionLimitText(limit, subject)) as ReactionLimitError;
+  e.reactionLimit = limit;
+  return e;
+}
+
+export function isReactionLimitError(e: unknown): e is ReactionLimitError {
+  return e instanceof Error && typeof (e as { reactionLimit?: unknown }).reactionLimit === 'string';
 }
