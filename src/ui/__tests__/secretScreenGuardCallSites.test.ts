@@ -17,6 +17,7 @@ import { join } from 'path';
 const screens = join(__dirname, '..', 'screens');
 const onboarding = readFileSync(join(screens, 'OnboardingScreen.tsx'), 'utf8');
 const forgot = readFileSync(join(screens, 'ForgotPasswordScreen.tsx'), 'utf8');
+const settings = readFileSync(join(screens, 'SettingsScreen.tsx'), 'utf8');
 const guard = readFileSync(join(__dirname, '..', 'components', 'SecretScreenGuard.tsx'), 'utf8');
 
 /** Отрезок исходника вокруг testID — там и должна стоять обёртка. */
@@ -35,6 +36,13 @@ describe('секретные слова закрыты щитом от сним�
 
   it('поле ввода слов при восстановлении — под щитом', () => {
     expect(around(onboarding, 'seed_input', 1200, 200)).toContain('<SecretScreenGuard>');
+  });
+
+  it('показ слов в настройках — под щитом', () => {
+    // v4.32.614: тот же кадр, что и при заведении аккаунта, и путь к нему
+    // короче — «Настройки → Безопасность → Показать».
+    expect(settings).toContain("import { SecretScreenGuard } from '../components/SecretScreenGuard';");
+    expect(settings).toContain('<SecretScreenGuard style={styles.seedBox} testID="settings_seed_words">');
   });
 
   it('поле ввода слов при забытом пароле — под щитом', () => {

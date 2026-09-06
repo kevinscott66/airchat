@@ -3,6 +3,7 @@ import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { runWithConcurrency } from '../../core/utils/runWithConcurrency';
 import { useTabRef } from '../TabRefContext';
 import { devicesLabel } from '../utils/plural';
+import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import Constants from 'expo-constants';
 import {
@@ -2634,7 +2635,15 @@ function SettingsScreenImpl({
               {seedPhrase ? (
                 <>
                   <Text style={[styles.desc, { marginBottom: 12, color: colors.error }]}>Запишите эти слова. Не показывайте никому.</Text>
-                  <View style={styles.seedBox}><Text style={styles.seedText}>{seedPhrase}</Text></View>
+                  {/* v4.32.614: те же двадцать четыре слова, что и при заведении
+                      аккаунта, — и там они с v4.32.581 под щитом, а здесь стояли
+                      открыто. Путь сюда короче любого другого: «Настройки →
+                      Безопасность → Показать», без единого предупреждения о
+                      записи экрана. На Android их снимало любое приложение с
+                      выданным разрешением на запись, на iOS — обычный снимок. */}
+                  <SecretScreenGuard style={styles.seedBox} testID="settings_seed_words">
+                    <Text style={styles.seedText}>{seedPhrase}</Text>
+                  </SecretScreenGuard>
                   {/* v4.32.314: копия с истечением — буфер обмена читают клавиатура,
                       системный менеджер буфера и связка с компьютером, а из этих слов
                       восстанавливается личность целиком. Подробности в clipboardSecret. */}
