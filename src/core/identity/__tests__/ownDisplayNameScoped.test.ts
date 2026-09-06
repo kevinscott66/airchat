@@ -127,7 +127,11 @@ describe('карточка целиком читается по номеру п�
 describe('приём группового конверта не спрашивает активный профиль', () => {
   it('groupMessaging больше не зовёт версию без номера профиля', () => {
     expect(groupSrc).not.toMatch(/await getOwnDisplayName\(\)/);
-    expect(groupSrc).toContain("import { getOwnDisplayNameFor } from '../identity/ownProfile';");
+    // v4.32.605: проверяется ввоз именно профильного геттера, а не буква в
+    // букву вся строка импорта: рядом с ним из того же файла приехал
+    // `getOwnUsernameFor` (упоминание по `@username` в группах), и правило о
+    // номере профиля от этого не изменилось.
+    expect(groupSrc).toMatch(/import \{[^}]*\bgetOwnDisplayNameFor\b[^}]*\} from '\.\.\/identity\/ownProfile';/);
   });
 
   it('все пять мест приёма спрашивают имя владельца', () => {

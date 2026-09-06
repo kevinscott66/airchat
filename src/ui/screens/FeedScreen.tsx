@@ -39,6 +39,9 @@ import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT } f
 import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
+import { lookupMention } from '../../core/social/mentionLookup';
+import { collectHashtags } from '../../core/text/entities';
+import { normalizeUsername } from '../../core/identity/username';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 import { AppModal } from '../components/AppModal';
 import * as Network from 'expo-network';
@@ -476,6 +479,7 @@ interface FeedPostItemProps {
   // версии подписывала «Без имени» — при том, что имя было на экране рядом.
   onPeekAuthor: (authorDid: string, authorName?: string | null) => void;
   onHashtagPress: (tag: string) => void;
+  onMentionPress: (mention: string) => void;
   onMediaPress: (urls: string[], idx: number) => void;
   onDocumentPress: (postId: string, idx: number, name: string, mime: string) => void | Promise<void>;
   onReactionPress: (postId: string, emoji: string) => void;
@@ -495,7 +499,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
     item, isSelf, styles, colors,
     mediaUrls, commentCount, viewCount, translatedText, feedSearch,
     pair, myPubB64, feedTick,
-    onMarkRead, onLongPressPost, onPeekAuthor, onHashtagPress,
+    onMarkRead, onLongPressPost, onPeekAuthor, onHashtagPress, onMentionPress,
     onMediaPress, onDocumentPress, onReactionPress, onReactionLongPress,
     onAddReactionPress, onRepostPress, onRepostLongPress, onCommentsPress,
     onViewersPress, onBookmarkToggle, onShareToChat, onNativeShare,
@@ -590,7 +594,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
         return (
           <>
             {bodyText.length > 0 ? (
-              <RichText text={bodyText} style={[styles.body, bodyFont]} onHashtagPress={onHashtagPress} searchTerm={feedSearch.trim() || undefined} host={item.read === 0 ? colors.surfaceHigh : colors.surface} />
+              <RichText text={bodyText} style={[styles.body, bodyFont]} onHashtagPress={onHashtagPress} onMentionPress={onMentionPress} searchTerm={feedSearch.trim() || undefined} host={item.read === 0 ? colors.surfaceHigh : colors.surface} />
             ) : null}
             {geo ? (
               <View style={{ marginTop: 8 }}>
@@ -890,7 +894,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
   const [activeHashtag, setActiveHashtag] = useState<string | null>(null);
   const [feedEmojiSuggestions, setFeedEmojiSuggestions] = useState<{ key: string; emoji: string }[]>([]);
   const [hashtagSuggestions, setHashtagSuggestions] = useState<string[]>([]);
-  const [mentionSuggestions, setMentionSuggestions] = useState<{ name: string; did: string }[]>([]);
+  /**
+   * v4.32.605: `insert` — то, что реально попадёт в текст. Это канонический
+   * `@username`, если он у контакта есть: отображаемое имя бывает из двух
+   * слов, а упоминание в тексте кончается на первом пробеле.
+   */
+  const [mentionSuggestions, setMentionSuggestions] = useState<{ name: string; did: string; insert: string }[]>([]);
   const [bookmarkFilter, setBookmarkFilter] = useState(false);
   const [bookmarkedPosts, setBookmarkedPosts] = useState<FeedPostRow[]>([]);
   // v4.32.34: режим «Архив» — показывает только archived-посты, скрытые из основной ленты.
@@ -902,8 +911,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
   const [peekAuthorDid, setPeekAuthorDid] = useState<string | null>(null);
   /** Имя автора из публикации — подсказка карточке, если его нет в контактах. */
   const [peekAuthorName, setPeekAuthorName] = useState<string | null>(null);
+  /**
+   * v4.32.605: упоминание в тексте адресует человека именем, а не DID —
+   * находится он по адресной книге и открывается по открытому ключу. Та же
+   * карточка, что и у автора: два окна поверх друг друга iOS не покажет.
+   */
+  const [peekAuthorPub, setPeekAuthorPub] = useState<string | null>(null);
   const openPeekAuthor = useCallback((did: string, name?: string | null) => {
     setPeekAuthorName(name?.trim() || null);
+    setPeekAuthorPub(null);
     setPeekAuthorDid(did);
   }, []);
   const myPubB64 = useMemo(() => Buffer.from(pair.publicKey).toString('base64'), [pair]);
@@ -1086,9 +1102,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
    */
   const authorPeek = (
     <UserProfilePeek
-      visible={peekAuthorDid !== null}
-      onClose={() => { setPeekAuthorDid(null); setPeekAuthorName(null); }}
+      visible={peekAuthorDid !== null || peekAuthorPub !== null}
+      onClose={() => { setPeekAuthorDid(null); setPeekAuthorPub(null); setPeekAuthorName(null); }}
       peerDid={peekAuthorDid}
+      peerPubB64={peekAuthorPub}
       fallbackName={peekAuthorName}
       pair={pair}
       onOpenChat={
@@ -2011,9 +2028,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
   const trendingHashtags = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of allPosts) {
-      const matches = (p.text ?? '').match(/#([a-zа-яё0-9_]+)/gi) ?? [];
-      for (const tag of matches) {
-        const t = tag.toLowerCase();
+      for (const t of collectHashtags(p.text ?? '')) {
         counts.set(t, (counts.get(t) ?? 0) + 1);
       }
     }
@@ -2550,6 +2565,41 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     }
   }, [pair, t]);
 
+  /**
+   * Тег в комментарии закрывает обсуждение: фильтр применяется к самой
+   * ленте, а лента под открытым во весь экран тредом не видна.
+   */
+  const handleHashtagPress = useCallback((tag: string) => {
+    setCommentPostId(null);
+    setActiveHashtag((prev) => (prev === tag ? null : tag));
+    setFeedSearch('');
+  }, []);
+
+  /**
+   * v4.32.605: имя в тексте было просто цветным словом — нажатие не делало
+   * ничего. Теперь оно ищется в адресной книге (сначала по неизменяемому
+   * username, потом по именам) и открывает ту же карточку, что и имя автора.
+   */
+  const handleMentionPress = useCallback((mention: string) => {
+    void (async () => {
+      const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
+      if (!bare) return;
+      let hit: Awaited<ReturnType<typeof lookupMention>>;
+      try {
+        hit = await lookupMention(bare, profileManager.getActiveProfile()?.id ?? 1);
+      } catch (e) {
+        log.warn('feed_mention_lookup_failed', { err: rawErrorText(e) });
+        showError(t('feed.mentionLookupFailed'));
+        return;
+      }
+      if (hit.status === 'none') { showError(t('feed.mentionNotFound', { name: bare })); return; }
+      if (hit.status === 'ambiguous') { showError(t('feed.mentionAmbiguous', { name: bare })); return; }
+      setPeekAuthorDid(null);
+      setPeekAuthorName(hit.displayName || bare);
+      setPeekAuthorPub(hit.peerPubB64);
+    })();
+  }, [t]);
+
   // v4.32.163 P2#5 fix: мемоизируем ListHeaderComponent — без этого он создаётся
   // новым JSX-элементом на каждый рендер FeedScreenImpl (каждый setCommentText,
   // каждый new message и т.д.), FlatList видит смену header ref и перерисовывает
@@ -2599,7 +2649,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
             </View>
           </AppPressable>
           {commentPost.text ? (
-            <Text style={cmStyles.pinnedBody}>{commentPost.text}</Text>
+            <RichText
+              text={commentPost.text}
+              style={cmStyles.pinnedBody}
+              onHashtagPress={handleHashtagPress}
+              onMentionPress={handleMentionPress}
+            />
           ) : null}
           {/* v4.32.573: снимков публикации в шапке обсуждения не было вовсе.
               Открыв комментарии к фотографии, человек видел подпись и пустое
@@ -2640,7 +2695,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
         </View>
       </View>
     );
-  }, [commentPost, did, cmStyles, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor]);
+  }, [commentPost, did, cmStyles, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor, handleHashtagPress, handleMentionPress]);
 
   useEffect(() => {
     if (bookmarkFilter) {
@@ -2692,11 +2747,6 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
       archiveLoadingMore.current = false;
     }
   }, [archiveFilter, archiveOffset, archiveHasMore]);
-
-  const handleHashtagPress = useCallback((tag: string) => {
-    setActiveHashtag((prev) => (prev === tag ? null : tag));
-    setFeedSearch('');
-  }, []);
 
   // Stage C.3: stable per-item callbacks so FeedPostItem's memo actually holds.
   // Each wrapper takes the item/id explicitly so useCallback deps reference
@@ -2801,6 +2851,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     onLongPressPost: handleLongPressPost,
     onPeekAuthor: openPeekAuthor,
     onHashtagPress: handleHashtagPress,
+    onMentionPress: handleMentionPress,
     onMediaPress: openFeedMedia,
     onDocumentPress: openFeedDocument,
     onReactionPress: handleReaction,
@@ -2819,6 +2870,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     onLongPressPost: handleLongPressPost,
     onPeekAuthor: openPeekAuthor,
     onHashtagPress: handleHashtagPress,
+    onMentionPress: handleMentionPress,
     onMediaPress: openFeedMedia,
     onDocumentPress: openFeedDocument,
     onReactionPress: handleReaction,
@@ -2838,6 +2890,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     onLongPressPost: (it: FeedPostRow) => handlersRef.current.onLongPressPost(it),
     onPeekAuthor: (d: string, n?: string | null) => handlersRef.current.onPeekAuthor(d, n),
     onHashtagPress: (t: string) => handlersRef.current.onHashtagPress(t),
+    onMentionPress: (m: string) => handlersRef.current.onMentionPress(m),
     onMediaPress: (urls: string[], idx: number) => handlersRef.current.onMediaPress(urls, idx),
     onDocumentPress: (id: string, idx: number, name: string, mime: string) => handlersRef.current.onDocumentPress(id, idx, name, mime),
     onReactionPress: (id: string, emoji: string) => handlersRef.current.onReactionPress(id, emoji),
@@ -3308,8 +3361,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                           const q = htMatch[1].toLowerCase();
                           const allTags = new Set<string>();
                           for (const p of allPosts) {
-                            const matches = (p.text ?? '').match(/#([a-zа-яё0-9_]+)/gi) ?? [];
-                            matches.forEach((t) => allTags.add(t.toLowerCase()));
+                            for (const t of collectHashtags(p.text ?? '')) allTags.add(t);
                           }
                           const suggestions = [...allTags].filter((t) => t.slice(1).startsWith(q) && t.slice(1) !== q).slice(0, 12);
                           setHashtagSuggestions(suggestions);
@@ -3321,8 +3373,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                         if (mentionMatch) {
                           const q = mentionMatch[1].toLowerCase();
                           const matches = allContacts
-                            .filter((c) => c.displayName && c.displayName.toLowerCase().includes(q))
-                            .map((c) => ({ name: c.displayName ?? '', did: c.peerPublicKey }))
+                            .filter((c) => (
+                              (c.displayName && c.displayName.toLowerCase().includes(q)) ||
+                              (c.peerUsername && c.peerUsername.toLowerCase().includes(q))
+                            ))
+                            .map((c) => ({
+                              name: c.displayName || c.peerUsername || '',
+                              did: c.peerPublicKey,
+                              insert: normalizeUsername(c.peerUsername) ?? c.displayName ?? '',
+                            }))
+                            .filter((m) => m.insert !== '')
                             .slice(0, 8);
                           setMentionSuggestions(matches);
                         } else {
@@ -3523,11 +3583,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                     style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surface, maxHeight: 44 }}
                     contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 6, gap: 6 }}
                   >
-                    {mentionSuggestions.map(({ name, did }) => (
+                    {mentionSuggestions.map(({ name, did, insert }) => (
                       <AppPressable
                         key={did}
                         onPress={() => {
-                          const newText = draft.replace(/@([a-zа-яё0-9_.]*)$/i, `@${name} `);
+                          const newText = draft.replace(/@([a-zа-яё0-9_.]*)$/i, `@${insert} `);
                           setDraft(newText);
                           setMentionSuggestions([]);
                         }}
@@ -3753,7 +3813,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                         {feedCommentIsUnreadable(c) ? (
                           <Text style={[cmStyles.commentText, commentFont, cmStyles.commentUnreadable]}>{UNREADABLE_COMMENT_TEXT}</Text>
                         ) : (
-                          <Text style={[cmStyles.commentText, commentFont]}>{c.text}</Text>
+                          <RichText
+                            text={c.text}
+                            style={[cmStyles.commentText, commentFont]}
+                            onHashtagPress={handleHashtagPress}
+                            onMentionPress={handleMentionPress}
+                          />
                         )}
                         {/* Reaction pills row */}
                         {Object.keys(cReactions).length > 0 ? (

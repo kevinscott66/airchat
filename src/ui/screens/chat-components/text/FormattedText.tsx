@@ -13,11 +13,17 @@ export function FormattedText({
   style,
   numberOfLines,
   isOutgoing,
+  onMentionPress,
 }: {
   text: string;
   style?: object;
   numberOfLines?: number;
   isOutgoing?: boolean;
+  /**
+   * v4.32.605: имя в личной переписке рисовалось обычным текстом. Теперь оно
+   * выделено и открывает карточку — как и в ленте, и в группах.
+   */
+  onMentionPress?: (mention: string) => void;
 }): React.ReactElement {
   const { colors } = useTheme();
   // v4.32.411: подложка `code`-врезки задавалась серым под 20 % — она не
@@ -41,7 +47,7 @@ export function FormattedText({
   const segments = useMemo(() => parseFormattedSegments(safe), [safe]);
   const hasFormatting =
     segments.length <= MAX_RENDER_SEGMENTS &&
-    segments.some((s) => s.bold || s.italic || s.code || s.url || s.spoiler || s.strikethrough);
+    segments.some((s) => s.bold || s.italic || s.code || s.url || s.spoiler || s.strikethrough || (s.mention && !!onMentionPress));
   if (!hasFormatting) {
     return <Text style={style} numberOfLines={numberOfLines}>{safe}</Text>;
   }
@@ -53,6 +59,15 @@ export function FormattedText({
             key={idx}
             style={{ color: linkColor, textDecorationLine: 'underline' }}
             onPress={() => openExternal(seg.url, 'chat_text_link')}
+          >
+            {seg.text}
+          </Text>
+        ) : seg.mention && onMentionPress ? (
+          <Text
+            key={idx}
+            accessibilityRole="link"
+            style={{ color: linkColor, fontWeight: '600' }}
+            onPress={() => onMentionPress(seg.text)}
           >
             {seg.text}
           </Text>

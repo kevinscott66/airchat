@@ -7,7 +7,7 @@ const COLLAPSE_CHAR_THRESHOLD = 500;
 // const COLLAPSE_LINE_LIMIT = 8;
 
 /** Long messages are collapsed with a "Показать больше" toggle. */
-export function CollapsibleMessageBlock({ text, baseStyle, isOutgoing }: { text: string; baseStyle?: object; isOutgoing?: boolean }): React.ReactElement {
+export function CollapsibleMessageBlock({ text, baseStyle, isOutgoing, onMentionPress }: { text: string; baseStyle?: object; isOutgoing?: boolean; onMentionPress?: (mention: string) => void }): React.ReactElement {
   // v4.32.411: «Показать больше» в своём пузыре писалось белым под 70 % —
   // 3.40:1 в светлой теме при пороге 4.5. Считаем от заливки пузыря.
   const bubble = useBubbleSurface(!!isOutgoing);
@@ -16,7 +16,7 @@ export function CollapsibleMessageBlock({ text, baseStyle, isOutgoing }: { text:
   if (!isLong || expanded) {
     return (
       <View>
-        <MessageBlock text={text} baseStyle={baseStyle} isOutgoing={isOutgoing} />
+        <MessageBlock text={text} baseStyle={baseStyle} isOutgoing={isOutgoing} onMentionPress={onMentionPress} />
         {isLong && expanded ? (
           <Text
             style={{ color: bubble.icon, fontSize: 13, marginTop: 4 }}
@@ -30,7 +30,7 @@ export function CollapsibleMessageBlock({ text, baseStyle, isOutgoing }: { text:
   const preview = text.slice(0, COLLAPSE_CHAR_THRESHOLD);
   return (
     <View>
-      <MessageBlock text={preview + '…'} baseStyle={baseStyle} isOutgoing={isOutgoing} />
+      <MessageBlock text={preview + '…'} baseStyle={baseStyle} isOutgoing={isOutgoing} onMentionPress={onMentionPress} />
       <Text
         style={{ color: bubble.icon, fontSize: 13, marginTop: 4 }}
         onPress={() => setExpanded(true)}

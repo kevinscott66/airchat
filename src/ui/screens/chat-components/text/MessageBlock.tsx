@@ -5,7 +5,7 @@ import { useBubbleSurface } from '../../../BubbleKindContext';
 import { mono, radius } from '../../../theme';
 
 /** Splits text by fenced code blocks (``` ... ```) and renders each part appropriately. */
-export function MessageBlock({ text, baseStyle, isOutgoing }: { text: string; baseStyle?: object; isOutgoing?: boolean }): React.ReactElement {
+export function MessageBlock({ text, baseStyle, isOutgoing, onMentionPress }: { text: string; baseStyle?: object; isOutgoing?: boolean; onMentionPress?: (mention: string) => void }): React.ReactElement {
   // v4.32.411: врезка кода заливалась 'rgba(0,0,0,0.25)', а текст в ней брался
   // из палитры. В светлой теме внутри СВОЕГО пузыря это тёмное по тёмному:
   // подложка уходила в синий, а буквы оставались почти чёрными.
@@ -13,7 +13,7 @@ export function MessageBlock({ text, baseStyle, isOutgoing }: { text: string; ba
   // Split on ``` boundaries
   const parts = text.split(/(```[\s\S]*?```)/);
   if (parts.length === 1) {
-    return <FormattedText text={text} style={baseStyle} isOutgoing={isOutgoing} />;
+    return <FormattedText text={text} style={baseStyle} isOutgoing={isOutgoing} onMentionPress={onMentionPress} />;
   }
   return (
     <View>
@@ -30,7 +30,7 @@ export function MessageBlock({ text, baseStyle, isOutgoing }: { text: string; ba
           );
         }
         if (!part) return null;
-        return <FormattedText key={idx} text={part} style={baseStyle} isOutgoing={isOutgoing} />;
+        return <FormattedText key={idx} text={part} style={baseStyle} isOutgoing={isOutgoing} onMentionPress={onMentionPress} />;
       })}
     </View>
   );

@@ -30,9 +30,9 @@ import { formatByteSize } from '../../../../core/media/byteSize';
 import { formatClockDuration } from '../../../time/durationLabel';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { COPIED_LINK } from '../../../clipboardText';
+import { collectUrls } from '../../../../core/text/entities';
 
 // ─── SharedMediaModal ─────────────────────────────────────────────────────────
-const URL_REGEX_SM = /https?:\/\/[^\s<>"]+/g;
 
 /**
  * v4.32.568: вкладок стало пять. Карточка профиля разводит «Файлы», «Музыку»
@@ -112,7 +112,7 @@ export function SharedMediaPane({
       for (const msg of msgs) {
         if (!msg.text) continue;
         // Extract URLs
-        const urls = msg.text.match(URL_REGEX_SM) ?? [];
+        const urls = collectUrls(msg.text);
         for (const url of urls) {
           if (!seenUrls.has(url)) {
             seenUrls.add(url);

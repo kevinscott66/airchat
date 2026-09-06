@@ -44,3 +44,16 @@ export function isMentionOf(text: string, username: string | null | undefined): 
   }
   return false;
 }
+
+/**
+ * Упомянут ли владелец ХОТЬ ОДНОГО из имён (v4.32.605).
+ *
+ * У человека два имени сразу: отображаемое, которое он меняет когда хочет, и
+ * канонический username, который закреплён за ним в общем реестре. Написать
+ * можно любое из них, а до этой версии счётчик упоминаний и push смотрели
+ * только на отображаемое — то есть обращение по неизменяемому адресу
+ * (`@username`) не доходило вовсе.
+ */
+export function isMentionOfAny(text: string, names: readonly (string | null | undefined)[]): boolean {
+  return names.some((n) => isMentionOf(text, n));
+}

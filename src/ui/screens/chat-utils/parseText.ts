@@ -1,7 +1,14 @@
 /**
  * Markdown-lite + URL segmentation (D.3.1 extract).
+ *
+ * v4.32.605: ссылки искались своим выражением `https?:\/\/[^\s]+`, а
+ * упоминания не искались вовсе. Выражение забирало точку и закрывающую скобку
+ * внутрь адреса: подчёркнуто было `https://example.com.`, и открывалось тоже
+ * оно — то есть не тот хост. Теперь разбор общий с лентой и группами
+ * (`core/text/entities`), и имя в тексте стало сегментом, который умеет
+ * открыть карточку.
  */
-const URL_REGEX = /https?:\/\/[^\s]+/g;
+import { findEntities } from '../../../core/text/entities';
 
 export type TextSegment = {
   text: string;
@@ -9,29 +16,39 @@ export type TextSegment = {
   italic?: boolean;
   code?: boolean;
   url?: string;
+  mention?: boolean;
   spoiler?: boolean;
   strikethrough?: boolean;
 };
 
-export function parseFormattedSegments(raw: string): TextSegment[] {
-  // First split by URLs, then parse markdown within non-URL parts
-  const urlMatches: { start: number; end: number; url: string }[] = [];
-  let m: RegExpExecArray | null;
-  URL_REGEX.lastIndex = 0;
-  while ((m = URL_REGEX.exec(raw)) !== null) {
-    urlMatches.push({ start: m.index, end: m.index + m[0].length, url: m[0] });
-  }
+/** Разметка ли это — то есть трогать ли внутренности сегмента. */
+function isMarked(seg: TextSegment): boolean {
+  return !!(seg.bold || seg.italic || seg.code || seg.spoiler || seg.strikethrough);
+}
 
-  if (urlMatches.length === 0) return parseMd(raw);
-
-  const result: TextSegment[] = [];
+/** Ссылки и упоминания внутри обычного текста. Теги в переписке не открываются. */
+function withEntities(raw: string): TextSegment[] {
+  const out: TextSegment[] = [];
   let pos = 0;
-  for (const { start, end, url } of urlMatches) {
-    if (start > pos) result.push(...parseMd(raw.slice(pos, start)));
-    result.push({ text: url, url });
-    pos = end;
+  for (const e of findEntities(raw)) {
+    if (e.kind === 'hashtag') continue;
+    if (e.start > pos) out.push({ text: raw.slice(pos, e.start) });
+    out.push(e.kind === 'url' ? { text: e.text, url: e.text } : { text: e.text, mention: true });
+    pos = e.end;
   }
-  if (pos < raw.length) result.push(...parseMd(raw.slice(pos)));
+  if (out.length === 0) return [{ text: raw }];
+  if (pos < raw.length) out.push({ text: raw.slice(pos) });
+  return out;
+}
+
+export function parseFormattedSegments(raw: string): TextSegment[] {
+  // Разметка разбирается первой: `**https://a.io**` — это жирный текст, а не
+  // ссылка в звёздочках.
+  const result: TextSegment[] = [];
+  for (const seg of parseMd(raw)) {
+    if (isMarked(seg)) { result.push(seg); continue; }
+    result.push(...withEntities(seg.text));
+  }
   return result;
 }
 

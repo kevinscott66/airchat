@@ -79,6 +79,7 @@ import { Buffer } from 'buffer';
 import { AppModal } from './AppModal';
 import { KeyboardHost } from './KeyboardHost';
 import { AppPressable } from './AppPressable';
+import { RichText } from './RichText';
 import { GlassSurface } from './GlassSurface';
 import { SheetShell } from './SheetShell';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
@@ -1010,13 +1011,14 @@ export function UserProfilePeek({
                     <Text style={[styles.hint, { color: colors.textSecondary }]}>
                       {identity.hint}
                     </Text>
+                    {/* v4.32.605: ссылка в «О себе» была обычным текстом —
+                        адрес видно, перейти нельзя. Разбор общий с лентой. */}
                     {identity.bio ? (
-                      <Text
-                        style={[styles.bio, { color: colors.text }]}
+                      <RichText
+                        text={identity.bio}
+                        style={{ ...styles.bio, color: colors.text }}
                         numberOfLines={4}
-                      >
-                        {identity.bio}
-                      </Text>
+                      />
                     ) : null}
                     {/* v4.32.575: GitHub и X. Раньше их видел только владелец —
                         привязка доказывалась на одном устройстве и никуда не

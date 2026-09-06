@@ -12,7 +12,7 @@
 import { readEnvelopeBody } from './envelopeBody';
 import { clampEnvelopeTs } from './envelopeTime';
 import { profileManager } from '../identity/profileManager';
-import { getOwnDisplayNameFor } from '../identity/ownProfile';
+import { getOwnDisplayNameFor, getOwnUsernameFor } from '../identity/ownProfile';
 import {
   listGroupMembers,
   getGroup,
@@ -47,7 +47,7 @@ import { isAdminRole, ownGroupRole, roleAfterCtl } from './ownGroupRole';
 import { displayNameOrNull, sanitizeDisplayName, stripSpoofedSysPrefix } from './sysLineGuard';
 import { previewLabelForText, truncateReplyPreview } from './messagePreview';
 import { sanitizeReplyRef } from './replyRef';
-import { isMentionOf } from './mentions';
+import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
 import { roleChangeSysText } from './groupRolePolicy';
 import { sanitizeMediaCids } from '../media/mediaCidPolicy';
@@ -546,7 +546,11 @@ export async function handleIncomingGroupEnvelope(
     }
     // v4.32.478: имя владельца сообщения (pid), а не того профиля, что открыт
     // на экране: приём идёт в фоне и активным может быть любой аккаунт.
-    const myUsername = (await getOwnDisplayNameFor(pid)) ?? '';
+    // v4.32.605: имён два — отображаемое и канонический username. Обращение
+    // по username до этой версии не поднимало ни счётчик, ни push: сравнение
+    // знало только первое имя, хотя именно username неизменяем и именно его
+    // человек даёт вместо «как меня записать».
+    const myNames = [await getOwnDisplayNameFor(pid), await getOwnUsernameFor(pid)];
     const kind: GroupKind = group.type === 'channel' ? 'channel' : 'group';
     // v4.32.255: раньше здесь был `.includes('@' + имя)` — он срабатывал внутри
     // более длинного имени (@аня внутри @анна) и на почтовом адресе
@@ -554,7 +558,7 @@ export async function handleIncomingGroupEnvelope(
     // isMentionOf. Плюс каналы: там нет реальных упоминаний, только рассылка
     // админа, — push это учитывал, а счётчик mention_count нет, и на канале
     // висел бейдж упоминаний.
-    const isMention = kind === 'group' && isMentionOf(env.text, myUsername);
+    const isMention = kind === 'group' && isMentionOfAny(env.text, myNames);
     // v4.32.256: «Анонимные посты» прятали имя только в ленте сообщений, а
     // список чатов показывал «Вася: текст» и push выносил то же имя на экран
     // блокировки. В самой строке имя сохраняется (иначе выключение настройки

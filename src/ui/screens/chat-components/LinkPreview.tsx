@@ -22,21 +22,30 @@ import {
   tooLargeToRead,
   type LinkPreviewCard,
 } from '../../../core/social/linkPreviewStore';
+import { findEntities } from '../../../core/text/entities';
 import {
   LINK_PREVIEW_INCOMING_KEY,
   parseIncomingLinkPreviewPref,
   shouldLoadLinkPreview,
 } from '../../../core/social/linkPreviewPolicy';
 
-const URL_RE = /https?:\/\/[^\s<>"']+/;
 // v4.32.540: не голая Map. Отмена загрузки больше не считается ответом об
 // адресе, сетевой сбой стоит попытку, а память имеет предел — см.
 // core/social/linkPreviewStore.
 const previewStore = createLinkPreviewStore();
 
+/**
+ * Первый адрес в тексте — тот же, что подчёркнут в пузыре (v4.32.605).
+ *
+ * Своё выражение здесь забирало точку в конце предложения, и карточка
+ * предпросмотра ходила за `https://example.com.` — то есть за другим хостом,
+ * чем открывала ссылка рядом.
+ */
 export function extractFirstUrl(text: string): string | null {
-  const m = URL_RE.exec(text);
-  return m ? m[0] : null;
+  for (const e of findEntities(text)) {
+    if (e.kind === 'url') return e.text;
+  }
+  return null;
 }
 
 /**

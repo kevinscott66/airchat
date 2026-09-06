@@ -6,6 +6,7 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import { Text, type TextStyle } from 'react-native';
+import { findEntities } from '../../core/text/entities';
 import { MAX_RENDER_SEGMENTS, sanitizeBodyForRender } from '../utils/renderText';
 import { useColors } from '../ThemeContext';
 import { inkOn, mono, nestedFill, radius, searchMark, spoilerPlate, type TintedIcon } from '../theme';
@@ -22,8 +23,31 @@ type Segment =
   | { kind: 'hashtag'; value: string }
   | { kind: 'mention'; value: string };
 
-const TOKEN_RE =
-  /(\*\*(.+?)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|~~([^~]+)~~|\|\|([^|]+)\|\||(https?:\/\/[^\s<>[\]"'()]+)|(#[\wА-Яа-яЁёÀ-ÿ-]+)|(@[\wА-Яа-яЁёÀ-ÿ.]+))/gu;
+const TOKEN_RE = /(\*\*(.+?)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|~~([^~]+)~~|\|\|([^|]+)\|\|)/gu;
+
+/**
+ * Ссылки, теги и упоминания внутри куска обычного текста.
+ *
+ * v4.32.605: три выражения — своё в ленте, своё в личных чатах, своё в
+ * группах — заменены общим разбором (`core/text/entities`). Здесь было ровно
+ * две ошибки: адрес забирал точку в конце предложения (`https://example.com.`
+ * — хост с точкой, переход не срабатывает), а имя забирало её же
+ * (`@bob.` → «bob.»), и такое упоминание не совпадало ни с кем.
+ */
+function withEntities(raw: string): Segment[] {
+  const out: Segment[] = [];
+  let pos = 0;
+  for (const e of findEntities(raw)) {
+    if (e.start > pos) out.push({ kind: 'text', value: raw.slice(pos, e.start) });
+    if (e.kind === 'url') out.push({ kind: 'url', value: e.text, href: e.text });
+    else if (e.kind === 'hashtag') out.push({ kind: 'hashtag', value: e.text });
+    else out.push({ kind: 'mention', value: e.text });
+    pos = e.end;
+  }
+  if (out.length === 0) return [{ kind: 'text', value: raw }];
+  if (pos < raw.length) out.push({ kind: 'text', value: raw.slice(pos) });
+  return out;
+}
 
 function parse(text: string): Segment[] {
   const segments: Segment[] = [];
@@ -31,12 +55,14 @@ function parse(text: string): Segment[] {
   let match: RegExpExecArray | null;
   TOKEN_RE.lastIndex = 0;
 
+  // Разметка разбирается первой — как и до общего разбора сущностей: в
+  // `**https://a.io**` побеждали звёздочки, и порядок здесь тот же.
   while ((match = TOKEN_RE.exec(text)) !== null) {
-    const [full, , boldDouble, boldSingle, italic, code, strikethrough, spoiler, url, hashtag, mention] = match;
+    const [full, , boldDouble, boldSingle, italic, code, strikethrough, spoiler] = match;
     const start = match.index;
 
     if (start > lastIndex) {
-      segments.push({ kind: 'text', value: text.slice(lastIndex, start) });
+      segments.push(...withEntities(text.slice(lastIndex, start)));
     }
 
     if (boldDouble) {
@@ -51,12 +77,6 @@ function parse(text: string): Segment[] {
       segments.push({ kind: 'strikethrough', value: strikethrough });
     } else if (spoiler) {
       segments.push({ kind: 'spoiler', value: spoiler });
-    } else if (url) {
-      segments.push({ kind: 'url', value: url, href: url });
-    } else if (hashtag) {
-      segments.push({ kind: 'hashtag', value: hashtag });
-    } else if (mention) {
-      segments.push({ kind: 'mention', value: mention });
     } else {
       segments.push({ kind: 'text', value: full });
     }
@@ -65,7 +85,7 @@ function parse(text: string): Segment[] {
   }
 
   if (lastIndex < text.length) {
-    segments.push({ kind: 'text', value: text.slice(lastIndex) });
+    segments.push(...withEntities(text.slice(lastIndex)));
   }
 
   return segments;
@@ -219,27 +239,34 @@ export function RichText({
                 {seg.value}
               </Text>
             );
+          // v4.32.605: без обработчика тег и имя рисуются обычным текстом.
+          // Цветное слово, которое ничем не отвечает на нажатие, — обещание,
+          // которого экран не держит.
           case 'hashtag':
-            return (
+            return onHashtagPress ? (
               <Text
                 key={i}
-                accessibilityRole={onHashtagPress ? 'link' : undefined}
+                accessibilityRole="link"
                 style={{ color: hashtagColor, fontWeight: '600' }}
-                onPress={onHashtagPress ? () => onHashtagPress(seg.value) : undefined}
+                onPress={() => onHashtagPress(seg.value)}
               >
                 {seg.value}
               </Text>
+            ) : (
+              <Text key={i}>{seg.value}</Text>
             );
           case 'mention':
-            return (
+            return onMentionPress ? (
               <Text
                 key={i}
-                accessibilityRole={onMentionPress ? 'link' : undefined}
+                accessibilityRole="link"
                 style={{ color: linkColor, fontWeight: '600' }}
-                onPress={onMentionPress ? () => onMentionPress(seg.value) : undefined}
+                onPress={() => onMentionPress(seg.value)}
               >
                 {seg.value}
               </Text>
+            ) : (
+              <Text key={i}>{seg.value}</Text>
             );
           default:
             return (

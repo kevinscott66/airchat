@@ -27,10 +27,10 @@ import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
 import { openExternal } from '../../../utils/openExternal';
 import { formatByteSize } from '../../../../core/media/byteSize';
 import { numericDate } from '../../../../core/time/ruDateTime';
+import { collectUrls } from '../../../../core/text/entities';
 
 const GRP_THUMB_SIZE = Math.floor(Dimensions.get('window').width / 3) - 2;
 
-const GRP_URL_RE_SM = /https?:\/\/[^\s<>"]+/g;
 
 // Причина у всех трёх вкладок одна, поэтому и текст один: разные формулировки
 // про «ссылки» и «файлы» намекали бы, что не прочиталось что-то одно.
@@ -99,7 +99,7 @@ export function GroupSharedMediaModal({
       const seenUrls = new Set<string>();
       for (const msg of msgs) {
         const t = msg.text ?? '';
-        const urls = t.match(GRP_URL_RE_SM) ?? [];
+        const urls = collectUrls(t);
         for (const url of urls) {
           if (!seenUrls.has(url)) { seenUrls.add(url); links.push({ url, createdAt: msg.createdAt }); }
         }

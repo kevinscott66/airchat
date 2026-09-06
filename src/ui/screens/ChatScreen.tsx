@@ -49,6 +49,7 @@ import { ChatQuickReactModal } from '../components/modals/chat/ChatQuickReactMod
 import { DmPollCreatorModal } from '../components/modals/chat/ChatPollCreatorModal';
 import { SharedMediaModal } from '../components/modals/chat/ChatSharedMediaModal';
 import { UserProfilePeek } from '../components/UserProfilePeek';
+import { lookupMention } from '../../core/social/mentionLookup';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -345,6 +346,7 @@ const MessageRow = React.memo(
     pair,
     translatedText,
     fontSizeOverride,
+    onMentionPress,
   }: {
     item: ChatMessageRow;
     gateway: string;
@@ -365,6 +367,8 @@ const MessageRow = React.memo(
     pair: KeyPairBytes;
     translatedText?: string;
     fontSizeOverride?: number;
+    /** v4.32.605: имя в тексте открывает карточку упомянутого. */
+    onMentionPress?: (mention: string) => void;
   }): React.ReactElement {
     const { colors, fontSize: themeFontSize } = useTheme();
     const msgFontSize = fontSizeOverride ?? themeFontSize;
@@ -629,13 +633,13 @@ const MessageRow = React.memo(
                   // остальное содержимое пузыря (пересланное, перевод,
                   // разделители) ветвилось по `isOut` правильно — не ветвилась
                   // ровно та строка, которую и читают.
-                  <CollapsibleMessageBlock text={displayText} baseStyle={[s.bubbleText, { color: bubble.ink.text, fontSize: msgFontSize }]} isOutgoing={isOut} />
+                  <CollapsibleMessageBlock text={displayText} baseStyle={[s.bubbleText, { color: bubble.ink.text, fontSize: msgFontSize }]} isOutgoing={isOut} onMentionPress={onMentionPress} />
                 )}
                 {translatedText ? (
                   <>
                     <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: bubble.hairline, marginVertical: 5 }} />
                     <Text style={{ fontSize: font.xs, color: bubble.ink.secondary, marginBottom: 2 }}>🌐 переведено</Text>
-                    <MessageBlock text={translatedText} baseStyle={[s.bubbleText, { color: bubble.ink.text, fontSize: msgFontSize - 1 }]} isOutgoing={isOut} />
+                    <MessageBlock text={translatedText} baseStyle={[s.bubbleText, { color: bubble.ink.text, fontSize: msgFontSize - 1 }]} isOutgoing={isOut} onMentionPress={onMentionPress} />
                   </>
                 ) : null}
                 {(() => {
@@ -779,6 +783,7 @@ function ChatThreadView({
   peerB64,
   displayName,
   onBack,
+  onOpenPeer,
   initialJumpMsgId,
   initialIntent,
 }: {
@@ -786,6 +791,8 @@ function ChatThreadView({
   peerB64: string;
   displayName: string;
   onBack: () => void;
+  /** v4.32.605: перейти в переписку с ДРУГИМ человеком — из карточки упомянутого. */
+  onOpenPeer?: (pubB64: string, displayName: string) => void;
   initialJumpMsgId?: string;
   /**
    * v4.32.568: чем открыть переписку. Приходит из карточки профиля: там есть
@@ -1006,6 +1013,32 @@ function ChatThreadView({
   const showScrollToBottomRef = useRef(false);
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const [contactInfoVisible, setContactInfoVisible] = useState(false);
+  /**
+   * v4.32.605: имя в тексте сообщения было обычным словом. Теперь оно ищется
+   * в адресной книге — сначала по неизменяемому username, потом по именам — и
+   * открывает карточку. Упоминание собеседника открывает ЕГО карточку, ту же,
+   * что и шапка: двух карточек одного человека в одном чате быть не должно.
+   */
+  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
+  const handleMentionPress = useCallback((mention: string) => {
+    void (async () => {
+      const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
+      if (!bare) return;
+      let hit: Awaited<ReturnType<typeof lookupMention>>;
+      try {
+        hit = await lookupMention(bare, profileManager.getActiveProfile()?.id ?? 1);
+      } catch (e) {
+        log.warn('chat_mention_lookup_failed', { err: rawErrorText(e) });
+        showError('Не удалось найти этого человека');
+        return;
+      }
+      if (hit.status === 'none') { showError(`@${bare} нет в ваших контактах`); return; }
+      if (hit.status === 'ambiguous') { showError(`Имя «${bare}» носят несколько контактов — откройте нужного в списке`); return; }
+      if (hit.peerPubB64 === myPubB64) return;
+      if (hit.peerPubB64 === peerB64) { setContactInfoVisible(true); return; }
+      setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
+    })();
+  }, [myPubB64, peerB64]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);
   const [scheduledMsgs, setScheduledMsgs] = useState<ScheduledMessage[]>([]);
   const [openUnreadCount, setOpenUnreadCount] = useState(0);
@@ -2985,6 +3018,7 @@ function ChatThreadView({
         pair={pair}
         translatedText={autoTranslate && msg.direction === 'in' ? translationCache[msg.id] : undefined}
         fontSizeOverride={chatFontSize ?? undefined}
+        onMentionPress={handleMentionPress}
       />
     );
   };
@@ -4104,6 +4138,17 @@ function ChatThreadView({
           человека расходились с каждой правкой. Всё, что было только в ней —
           ключ безопасности, заметка, «первое сообщение», выгрузка — переехало
           в карточку блоком про переписку. */}
+      {/* Карточка упомянутого — отдельная от карточки собеседника: человек в
+          тексте почти всегда третий. */}
+      <UserProfilePeek
+        visible={mentionPeek !== null}
+        peerPubB64={mentionPeek?.pub ?? null}
+        fallbackName={mentionPeek?.name ?? null}
+        pair={pair}
+        onClose={() => setMentionPeek(null)}
+        onOpenChat={(pub, name) => { setMentionPeek(null); onOpenPeer?.(pub, name); }}
+      />
+
       {peerB64 && !isSavedMessages ? (
         <UserProfilePeek
           visible={contactInfoVisible}
@@ -4270,6 +4315,7 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
           peerB64={openPeer.pubB64}
           displayName={openPeer.displayName}
           initialIntent={openPeer.intent}
+          onOpenPeer={(pubB64, name) => setOpenPeer({ pubB64, displayName: name })}
           onBack={() => {
             setOpenPeer(null);
             setRefreshTick((t) => t + 1);

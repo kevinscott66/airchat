@@ -42,7 +42,7 @@ import { GlassSurface } from '../components/GlassSurface';
 import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
-import { getOwnDisplayName } from '../../core/identity/ownProfile';
+import { getOwnDisplayName, getOwnUsername } from '../../core/identity/ownProfile';
 import { outwardName, shownName, shownNameOrNull } from '../../core/social/unreadableName';
 import {
   listGroups,
@@ -266,7 +266,12 @@ const GRP_RECENTLY_DELETED_TTL_MS = 7 * 86_400_000;
 // ../utils/plural; реэкспортируем здесь для обратной совместимости.
 import { ruPlural, membersLabel, subscribersLabel } from '../utils/plural';
 import { ambiguityMessage, memberLabel, resolveMember } from '../utils/memberLookup';
-import { isMentionOf } from '../../core/social/mentions';
+import { isMentionOfAny } from '../../core/social/mentions';
+import { resolveMention } from '../../core/social/mentionResolve';
+import { listContactsFor } from '../../core/social/contacts';
+import { normalizeUsername } from '../../core/identity/username';
+import { collectHashtags } from '../../core/text/entities';
+import { UserProfilePeek } from '../components/UserProfilePeek';
 import { canModerate } from '../../core/social/groupModerationPolicy';
 import { openMapAt } from '../utils/openExternal';
 import { roleChangeNoopText, roleChangeSysText, roleLabel, roleTone, sortMembersByRole, type AssignableRole } from '../../core/social/groupRolePolicy';
@@ -771,9 +776,17 @@ function GroupChatScreen({
     [myRole, adminOnlyPinning, group.type]
   );
   const [myDisplayName, setMyDisplayName] = useState('Я');
+  /**
+   * v4.32.605: имён у человека два — отображаемое и канонический username.
+   * Подсветка «меня упомянули» смотрела только на первое, то есть обращение по
+   * неизменяемому адресу (`@bob`) не подсвечивалось и не считалось.
+   */
+  const [myUsername, setMyUsername] = useState<string | null>(null);
   useEffect(() => {
     void getOwnDisplayName().then((n) => { if (n) setMyDisplayName(n); });
+    void getOwnUsername().then(setMyUsername);
   }, []);
+  const myMentionNames = useMemo(() => [myDisplayName, myUsername], [myDisplayName, myUsername]);
 
   // Pending join requests count (shown as badge on members button for admins)
   const [pendingJoinCount, setPendingJoinCount] = useState(0);
@@ -1399,24 +1412,53 @@ function GroupChatScreen({
       unreadable: hits.unreadable,
     };
   }, [mentionFilter, allMembers, myPubB64, everyoneSuggestion]);
+  /**
+   * Канонические имена участников — из адресной книги: в строке участника
+   * группы username не хранится. Пустая карта означает «имён не знаем», а не
+   * «их нет», поэтому подстановка честно откатывается на отображаемое имя.
+   */
+  const [memberUsernames, setMemberUsernames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    void listContactsFor(pid)
+      .then((cs) => {
+        if (!alive) return;
+        const map = new Map<string, string>();
+        for (const c of cs) {
+          const u = normalizeUsername(c.peerUsername);
+          if (u) map.set(c.peerPublicKey, u);
+        }
+        setMemberUsernames(map);
+      })
+      .catch((e) => log.warn('group_member_usernames_failed', { err: rawErrorText(e) }));
+    return () => { alive = false; };
+  }, [pid]);
+
   const mentionSuggestions = mentionHits.matched;
   const mentionSkipped = mentionFilter === null ? null : mentionSkippedNotice(mentionHits.unreadable);
 
+  /**
+   * v4.32.605: подсказка подставляет канонический `@username`, если он у
+   * участника есть. Отображаемое имя бывает из двух слов, а упоминание в
+   * тексте кончается на первом пробеле: «@Иван Петров» доходило получателю
+   * как «@Иван» — и не совпадало ни с кем, если Иванов двое. Username такой
+   * же неизменяемый адрес, как ключ, и пробелов в нём не бывает.
+   */
   const insertMention = useCallback((member: GroupMemberRow) => {
-    const name = member.displayName ?? shortIdentity(member.peerPubB64);
+    const canonical = memberUsernames.get(member.peerPubB64);
+    const name = canonical ?? member.displayName ?? shortIdentity(member.peerPubB64);
     const lastAt = text.lastIndexOf('@');
     const newText = text.slice(0, lastAt) + `@${name} `;
     setText(newText);
     setMentionFilter(null);
-  }, [text]);
+  }, [text, memberUsernames]);
 
   // ─── Hashtag suggestions ─────────────────────────────────────────────────────
   const grpHashtagSuggestions = useMemo(() => {
     if (hashtagFilter === null) return [];
     const counts = new Map<string, number>();
     for (const msg of messages) {
-      const tags = (msg.text ?? '').match(/#([a-zа-яё0-9_]+)/gi) ?? [];
-      for (const t of tags) counts.set(t.toLowerCase(), (counts.get(t.toLowerCase()) ?? 0) + 1);
+      for (const t of collectHashtags(msg.text ?? '')) counts.set(t, (counts.get(t) ?? 0) + 1);
     }
     return [...counts.keys()]
       .filter((t) => t.slice(1).startsWith(hashtagFilter) && t.slice(1) !== hashtagFilter)
@@ -1462,15 +1504,53 @@ function GroupChatScreen({
 
 
 
+  /**
+   * Нажатие на @упоминание (v4.32.605).
+   *
+   * До этой версии участник искался ровно одним сравнением отображаемого
+   * имени, а не найденный — молча ничего не делал: подчёркнутое имя под
+   * пальцем не отвечало, и понять, почему, было нельзя. Плюс канонический
+   * username (`@bob`) не резолвился вовсе, хотя это и есть неизменяемый адрес
+   * человека.
+   *
+   * Состав группы username не хранит (`GroupMemberRow`) — его знает адресная
+   * книга, куда его кладёт конверт профиля. Поэтому сперва спрашиваем её, и
+   * только потом сравниваем отображаемые имена. Отображаемое имя не уникально:
+   * если совпало несколько, выбрать за человека нельзя — об этом и говорим.
+   */
+  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
+
   const handleMentionPress = useCallback((name: string) => {
-    const member = allMembers.find((m) => (m.displayName ?? '').toLowerCase() === name.toLowerCase());
-    if (!member) return;
-    const displayName = member.displayName ?? name;
-    Alert.alert(displayName, '', [
-      { text: 'Написать в ЛС', onPress: () => onOpenDm?.(member.peerPubB64, displayName) },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
-  }, [allMembers, onOpenDm]);
+    void (async () => {
+      const bare = (name.startsWith('@') ? name.slice(1) : name).trim();
+      if (!bare) return;
+      const canonical = normalizeUsername(bare);
+      let byUsername: string | null = null;
+      if (canonical) {
+        try {
+          const contact = (await listContactsFor(pid))
+            .find((c) => normalizeUsername(c.peerUsername) === canonical);
+          byUsername = contact?.peerPublicKey ?? null;
+        } catch (e) {
+          log.warn('group_mention_lookup_failed', { err: rawErrorText(e) });
+        }
+      }
+      const hits = byUsername
+        ? allMembers.filter((m) => m.peerPubB64 === byUsername)
+        : resolveMention(bare, allMembers);
+      if (hits.length === 0) {
+        showError(`Участника @${bare} в этом чате нет`);
+        return;
+      }
+      if (hits.length > 1) {
+        showError(`Имя «${bare}» носят несколько участников — откройте нужного в списке`);
+        return;
+      }
+      // Своё упоминание карточку не открывает: собственный профиль и так свой.
+      if (hits[0].peerPubB64 === myPubB64) return;
+      setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare });
+    })();
+  }, [allMembers, pid, myPubB64]);
 
   useEffect(() => { void loadMessages(); }, [loadMessages]);
   // v4.32.16: gate через tabRef из Context. Prop isActive удалён — React.memo bail-out.
@@ -2830,7 +2910,7 @@ function GroupChatScreen({
     );
     const replyPreview = replyQuote.text;
     const isHighlighted = jumpHighlightId === item.id;
-    const isMentioned = !isMe && isMentionOf(item.text ?? '', myDisplayName);
+    const isMentioned = !isMe && isMentionOfAny(item.text ?? '', myMentionNames);
     const isSelectedMsg = selectedGrpIds.has(item.id);
     const highlightBgColor = isHighlighted
       // v4.32.414: янтарь вспышки был вписан руками — той самой копией
@@ -2979,7 +3059,7 @@ function GroupChatScreen({
                   // этом значит выдать её за ненаписанную. См. unreadableText.
                   <Text style={{ fontSize: 13, color: isMe ? meInk.text : colors.textMuted, fontStyle: 'italic', paddingHorizontal: 12, paddingTop: 6 }}>{UNREADABLE_MESSAGE_TEXT}</Text>
                 ) : item.text && item.text.trim() && item.text.trim() !== ' ' ? (
-                  <GrpMessageBlock text={item.text} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, paddingHorizontal: 12, paddingTop: 6, fontSize: msgFontSize }]} isMe={isMe} />
+                  <GrpMessageBlock text={item.text} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, paddingHorizontal: 12, paddingTop: 6, fontSize: msgFontSize }]} isMe={isMe} onMentionPress={handleMentionPress} />
                 ) : null}
               </View>
             )
@@ -3077,7 +3157,7 @@ function GroupChatScreen({
                         colors.textSecondary подобран под фон страницы — на
                         синем он читался как грязное пятно. Приведено к тому же
                         приглушённому белому, что и в личных чатах. */}
-                    <GrpMessageBlock text={translationCache[item.id]!} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.secondary : colors.textSecondary, fontSize: msgFontSize - 1 }]} isMe={isMe} />
+                    <GrpMessageBlock text={translationCache[item.id]!} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.secondary : colors.textSecondary, fontSize: msgFontSize - 1 }]} isMe={isMe} onMentionPress={handleMentionPress} />
                   </>
                 ) : null}
                 {(() => {
@@ -3894,7 +3974,7 @@ function GroupChatScreen({
             // одного `.includes('@' + имя)` — расходились на границах слова.
             // Теперь у всех троих один isMentionOf.
             const mentionMsgs = messages.filter(
-              (m) => m.senderPubB64 !== myPubB64 && isMentionOf(m.text ?? '', myDisplayName)
+              (m) => m.senderPubB64 !== myPubB64 && isMentionOfAny(m.text ?? '', myMentionNames)
             );
             if (mentionMsgs.length === 0) return null;
             const count = mentionMsgs.length;
@@ -4655,6 +4735,21 @@ function GroupChatScreen({
           канала, действия с сообщением, вложенные подменю). BACK/тап по подложке
           закрывают (onRequestClose + backdrop в ActionSheet). */}
       <ActionSheet state={actionSheet} onClose={() => setActionSheet(null)} />
+
+      {/* v4.32.605: @упоминание открывает карточку профиля приложения, а не
+          системный Alert с двумя кнопками — та же карточка, что в ленте и в
+          личной переписке. */}
+      <UserProfilePeek
+        visible={mentionPeek !== null}
+        onClose={() => setMentionPeek(null)}
+        peerPubB64={mentionPeek?.pub ?? null}
+        fallbackName={mentionPeek?.name ?? null}
+        pair={pair}
+        onOpenChat={(peerPubB64, displayName) => {
+          setMentionPeek(null);
+          onOpenDm?.(peerPubB64, displayName);
+        }}
+      />
     </View>
   );
 }

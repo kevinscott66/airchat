@@ -60,6 +60,7 @@ import { safeExternalUrl } from '../../core/net/externalLink';
 import { openExternal, openTypedExternal } from '../utils/openExternal';
 import { formatSpokenDuration } from '../time/durationLabel';
 import { shortIdentity } from '../identity/shortId';
+import { findEntities } from '../../core/text/entities';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
@@ -67,9 +68,23 @@ import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
 /**
  * Разбивает биографию на куски так, чтобы кандидаты в ссылки шли отдельными
  * элементами. Кандидат — ещё не ссылка: решает `safeExternalUrl`.
+ *
+ * v4.32.605: разбор общий с лентой, чатами и группами (`core/text/entities`).
+ * Своё выражение здесь забирало в адрес всё до пробела — вместе с точкой или
+ * скобкой в конце фразы, и «О себе» со ссылкой в конце предложения давало
+ * ссылку, которая не открывалась.
  */
 function splitBioParts(bio: string): string[] {
-  return bio.split(/(\S+:\/\/\S+)/g);
+  const parts: string[] = [];
+  let pos = 0;
+  for (const e of findEntities(bio)) {
+    if (e.kind !== 'url') continue;
+    parts.push(bio.slice(pos, e.start));
+    parts.push(e.text);
+    pos = e.end;
+  }
+  parts.push(bio.slice(pos));
+  return parts;
 }
 
 type Props = {

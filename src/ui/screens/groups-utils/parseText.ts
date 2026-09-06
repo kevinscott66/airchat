@@ -1,6 +1,14 @@
 /**
- * Markdown-lite + URL/mention segmentation for GroupsScreen (D.4.1 extract).
+ * Markdown-lite + URL/упоминания в группах (D.4.1 extract).
+ *
+ * v4.32.605: своё выражение `https?:\/\/[^\s]+|@[\w\u0400-\u04FF]+` заменено
+ * общим разбором (`core/text/entities`). Оно ошибалось дважды: забирало точку
+ * и закрывающую скобку внутрь адреса, и считало упоминанием хвост почтового
+ * адреса — `alice@bob.com` подсвечивался как `@bob`, хотя счётчик упоминаний
+ * (`social/mentions`) такую границу как раз проверял. Подсветка и счётчик
+ * теперь проверяют границу слова одинаково.
  */
+import { findEntities } from '../../../core/text/entities';
 
 export type GrpSeg = {
   text: string;
@@ -42,27 +50,32 @@ export function parseGrpMd(raw: string): GrpSeg[] {
   return r;
 }
 
+/** Разметка ли это — то есть трогать ли внутренности сегмента. */
+function isMarked(seg: GrpSeg): boolean {
+  return !!(seg.bold || seg.italic || seg.code || seg.spoiler || seg.strikethrough);
+}
+
+/** Ссылки и упоминания внутри обычного текста. Теги в группах не открываются. */
+function withEntities(raw: string): GrpSeg[] {
+  const out: GrpSeg[] = [];
+  let pos = 0;
+  for (const e of findEntities(raw)) {
+    if (e.kind === 'hashtag') continue;
+    if (e.start > pos) out.push({ text: raw.slice(pos, e.start) });
+    out.push(e.kind === 'url' ? { text: e.text, url: e.text } : { text: e.text, mention: true });
+    pos = e.end;
+  }
+  if (out.length === 0) return [{ text: raw }];
+  if (pos < raw.length) out.push({ text: raw.slice(pos) });
+  return out;
+}
+
 export function parseGroupFmtSegments(raw: string): GrpSeg[] {
-  const SPECIAL_REGEX = /https?:\/\/[^\s]+|@[\w\u0400-\u04FF]+/g;
-  const matches: { start: number; end: number; url?: string; mention?: boolean }[] = [];
-  let m: RegExpExecArray | null;
-  SPECIAL_REGEX.lastIndex = 0;
-  while ((m = SPECIAL_REGEX.exec(raw)) !== null) {
-    const text = m[0];
-    if (text.startsWith('@')) {
-      matches.push({ start: m.index, end: m.index + text.length, mention: true });
-    } else {
-      matches.push({ start: m.index, end: m.index + text.length, url: text });
-    }
+  // Разметка первой: `**@все**` — жирное слово, а не упоминание в звёздочках.
+  const result: GrpSeg[] = [];
+  for (const seg of parseGrpMd(raw)) {
+    if (isMarked(seg)) { result.push(seg); continue; }
+    result.push(...withEntities(seg.text));
   }
-  if (matches.length === 0) return parseGrpMd(raw);
-  const result: GrpSeg[] = []; let pos = 0;
-  for (const match of matches) {
-    if (match.start > pos) result.push(...parseGrpMd(raw.slice(pos, match.start)));
-    if (match.url) result.push({ text: match.url, url: match.url });
-    else result.push({ text: raw.slice(match.start, match.end), mention: true });
-    pos = match.end;
-  }
-  if (pos < raw.length) result.push(...parseGrpMd(raw.slice(pos)));
   return result;
 }
