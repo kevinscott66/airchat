@@ -83,3 +83,34 @@ describe('копирование ссылки на публикацию', () => 
     expect(typeof RU.feed.linkCopiedForeign).toBe('string');
   });
 });
+
+/**
+ * Лист «поделиться» открывается после того, как копия легла на сервер
+ * (v4.32.614).
+ *
+ * До этой версии выкладка копии запускалась и тут же бросалась, а лист
+ * открывался в ту же миллисекунду. Отправка ссылки из листа — один жест: пока
+ * конверт с фотографиями (до двух мегабайт) летел на сервер, ссылка уже была у
+ * получателя, и он видел «публикация не найдена». Это и есть та жалоба, с
+ * которой началась вся починка ссылок.
+ *
+ * Второе: на выкладку не было замка. Пока первое нажатие ничем себя не
+ * проявляло, второе шло следом и слало те же мегабайты заново.
+ */
+describe('выкладка копии перед отдачей ссылки', () => {
+  it('лист открывается после выкладки, а не рядом с ней', () => {
+    expect(SCREEN).toContain('void shareLinkCopy(item).then(() => { void Share.share({ message }); });');
+    expect(SCREEN).not.toContain('    shareLinkCopy(item);\n    void Share.share({ message });');
+  });
+
+  it('второе нажатие не шлёт те же вложения заново', () => {
+    expect(SCREEN).toContain('const linkCopyBusyRef = useRef(false);');
+    expect(SCREEN).toContain('if (linkCopyBusyRef.current) return false;');
+    expect(SCREEN).toContain('linkCopyBusyRef.current = true;');
+    expect(SCREEN).toContain('linkCopyBusyRef.current = false;');
+  });
+
+  it('выкладка отвечает вызывающему, чем кончилась', () => {
+    expect(SCREEN).toContain('const shareLinkCopy = useCallback(async (item: FeedPostRow): Promise<boolean> => {');
+  });
+});

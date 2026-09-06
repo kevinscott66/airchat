@@ -877,6 +877,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // v4.32.612: публикацию по ссылке может понадобиться сначала забрать с
   // сервера. Это сеть, и молчать всё это время нельзя.
   const [linkLoading, setLinkLoading] = useState(false);
+  /** Идёт ли выкладка копии прямо сейчас — второе нажатие слало бы её заново. */
+  const linkCopyBusyRef = useRef(false);
   /** Token последнего отработанного перехода по ссылке — чтобы не повторять его. */
   const handledJumpTokenRef = useRef<number | null>(null);
   const [queueLen, setQueueLen] = useState(0);
@@ -2947,10 +2949,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
    * можно было бы закрыть), поэтому она и уходит именно здесь: человек в этот
    * момент и так отдаёт запись наружу.
    */
-  const shareLinkCopy = useCallback((item: FeedPostRow) => {
-    if (item.authorDid !== did) return;
-    void publishPostLinkCopy(pair, item.id).then((ok) => {
-      if (ok) return;
+  const shareLinkCopy = useCallback(async (item: FeedPostRow): Promise<boolean> => {
+    if (item.authorDid !== did) return false;
+    // v4.32.614: второе нажатие не шлёт те же вложения заново. Конверт с
+    // фотографиями доходит до двух мегабайт, и два нажатия подряд — обычное
+    // дело, пока первое ничем себя не проявляет.
+    if (linkCopyBusyRef.current) return false;
+    linkCopyBusyRef.current = true;
+    try {
+      const ok = await publishPostLinkCopy(pair, item.id);
       // Молчать нельзя: со стороны автора ссылка выглядит готовой, а у
       // получателя не откроется — ровно та жалоба, с которой всё началось.
       //
@@ -2959,8 +2966,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       // есть половину времени зачин был неправдой; а в «скопировать ссылку»
       // он просто повторял тост, показанный секундой раньше, и выходило два
       // сообщения, спорящих друг с другом.
+      if (!ok) showError(t('feed.linkPublishFailed'));
+      return ok;
+    } catch {
       showError(t('feed.linkPublishFailed'));
-    }).catch(() => { /* ошибка уже показана выше */ });
+      return false;
+    } finally {
+      linkCopyBusyRef.current = false;
+    }
   }, [pair, did, t]);
 
   const handleNativeShare = useCallback((item: FeedPostRow) => {
@@ -2973,8 +2986,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     // было, вернуться к оригиналу — нет.
     const shareText = item.text ? item.text.slice(0, 200) : t('feed.mediaFallback');
     const message = `${outwardName(item.authorName, item.nameUnreadable, 'AirChat')}: ${shareText}\n${buildPostLink(item.id).web}`;
-    shareLinkCopy(item);
-    void Share.share({ message });
+    // v4.32.614: лист «поделиться» открывается ПОСЛЕ того, как копия легла на
+    // сервер. Раньше он открывался сразу, а копия в это время ещё летела:
+    // человек успевал отправить ссылку в один жест, и получатель видел
+    // «публикация не найдена» — ровно та жалоба, с которой всё началось.
+    // Если выложить не вышло, лист всё равно открывается: ссылка работает у
+    // тех, у кого запись уже есть, а о том, что остальным она не откроется,
+    // сказано отдельным сообщением.
+    void shareLinkCopy(item).then(() => { void Share.share({ message }); });
   }, [t, shareLinkCopy]);
 
   // v4.32.92: стабилизация handlers через ref — renderItem теперь не пересоздаётся
@@ -4346,7 +4365,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       откроется лишь у тех, у кого она и так есть, и обещать
                       человеку большее нельзя. */}
                   {row('link-outline', t('feed.menuCopyLink'), () => {
-                    shareLinkCopy(p);
+                    void shareLinkCopy(p);
                     void Clipboard.setStringAsync(buildPostLink(p.id).web)
                       .then(() => showSuccess(isSelfP ? COPIED_LINK : t('feed.linkCopiedForeign')));
                   })}
