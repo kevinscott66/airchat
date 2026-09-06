@@ -552,7 +552,9 @@ export class MessagingService {
       peerPublicKeyB64,
       limit,
       store: this.store,
-      importCid: (cid) => this.receiveCid(cid, peerPublicKeyB64),
+      // Обход DAG восстанавливает переписку в обе стороны, включая наши
+      // исходящие: здесь конверт от своего имени законен.
+      importCid: (cid) => this.receiveCid(cid, peerPublicKeyB64, true),
     });
   }
 
@@ -623,7 +625,25 @@ export class MessagingService {
     }
   }
 
-  async receiveCid(cid: string, peerPubKeyB64: string): Promise<void> {
+  /**
+   * Забрать конверт по CID (v4.32.615).
+   *
+   * `allowSelfAuthored` разделяет два разных источника CID, у которых
+   * совпадает только вход:
+   *
+   * — тема `airchat-dm-<оба did>` и push-уведомление приносят CID, который
+   *   положил туда собеседник. Конверт от МОЕГО имени оттуда — подделка: его
+   *   умеет собрать любой, у кого есть общий с нами ключ, то есть сам
+   *   собеседник, и ложится он в переписку строкой «отправлено мной» с
+   *   произвольной датой из конверта. Такие сюда не пускаем;
+   * — `syncHistoryFromPeer` обходит DAG профиля осознанно, по нашей же
+   *   команде, и восстанавливает переписку целиком — вместе с нашими
+   *   исходящими. Там свои конверты законны.
+   *
+   * Соседние два входа (`receiveDirectLanEnvelope`, `subscribeToSelfInbox`)
+   * отбрасывают self-echo с v4.32.120 — здесь этой проверки не было.
+   */
+  async receiveCid(cid: string, peerPubKeyB64: string, allowSelfAuthored = false): Promise<void> {
     if (cid.startsWith('fallback:')) {
       log.debug('receiveCid_skip_fallback_placeholder', { cid });
       return;
@@ -633,7 +653,7 @@ export class MessagingService {
       log.warn('msg_ipfs_missing', { cid });
       return;
     }
-    await this.persistIncomingFromEnvelope(em, peerPubKeyB64, cid);
+    await this.persistIncomingFromEnvelope(em, peerPubKeyB64, cid, undefined, allowSelfAuthored);
   }
 
   /** Входящий DM по локальной сети (mDNS + TCP), без CID в IPFS. */
@@ -761,9 +781,45 @@ export class MessagingService {
     peerPubKeyB64: string,
     cid: string,
     preDecryptedPt?: Uint8Array,
+    allowSelfAuthored = false,
   ): Promise<void> {
     const myDid = publicKeyToDidKey(this.pair.publicKey);
     if (em.senderDid !== myDid && em.recipientDid !== myDid) return;
+    // v4.32.615: конверт принадлежит ровно одной переписке — той, чьим ключом
+    // он расшифровывается. Значит его два DID обязаны быть нашим и DID того
+    // канала, откуда он пришёл; третьего быть не может.
+    //
+    // Раньше сверки не было, и `em.senderDid` шёл дальше как есть. Отсюда два
+    // разных исхода:
+    //
+    // 1. senderDid = наш собственный. Тогда `inbound` ложно, строка ложится
+    //    как «отправлено мной» с датой из конверта — то есть в любое место
+    //    истории, в том числе посреди старой переписки, — переписывает превью
+    //    в списке чатов и проходит мимо блок-листа: тот спрашивается под
+    //    `inbound`. Собрать такой конверт может собеседник: общий ключ у него
+    //    есть.
+    // 2. senderDid = DID третьего лица. Строка при этом ложится в переписку
+    //    того, чьим ключом расшифровали (правильную), а во всплывающую плашку
+    //    и дальше в уведомление уходит чужой DID: беззвучность и «этот чат
+    //    открыт» проверяются по нему, и нажатие открывает чужую переписку.
+    const peerDid = didFromPubB64(peerPubKeyB64);
+    if (!peerDid) {
+      log.warn('inbound_bad_peer_pub');
+      return;
+    }
+    const selfAuthored = em.senderDid === myDid;
+    if (selfAuthored && !allowSelfAuthored) {
+      log.warn('inbound_self_authored_rejected', { messageId: em.messageId.slice(0, 8) });
+      return;
+    }
+    if ((selfAuthored ? em.recipientDid : em.senderDid) !== peerDid) {
+      log.warn('inbound_did_not_channel_peer', {
+        messageId: em.messageId.slice(0, 8),
+        peer: peerDid.slice(-16),
+        sender: em.senderDid.slice(-16),
+      });
+      return;
+    }
     // v4.32.124 (AUDIT P0 #1): replay-window guard. Drops envelopes older than
     // ENVELOPE_MAX_AGE_MS or more than ENVELOPE_MAX_SKEW_MS in the future.
     // v4.32.214 (Audit-43 C1): em.timestamp is OUTER/unauthenticated — a relay
@@ -865,13 +921,8 @@ export class MessagingService {
       }
     }
 
-    const peerDid = didFromPubB64(peerPubKeyB64);
-    if (!peerDid) {
-      log.warn('inbound_bad_peer_pub');
-      return;
-    }
     const pairKey = dmPairKey(myDid, peerDid);
-    const inbound = em.senderDid !== myDid;
+    const inbound = !selfAuthored;
     const ownerPid = await this.ownerProfileId();
     // v4.32.491: блок-лист спрашивается ОДИН раз и до всей диспетчеризации.
     // Раньше он стоял только перед «печатает…» и перед сохранением текста, а
