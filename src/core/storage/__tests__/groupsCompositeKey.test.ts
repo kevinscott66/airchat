@@ -87,8 +87,8 @@ describe('миграция: четыре состояния диска посл�
   });
 
   it('пересборка целиком в одной транзакции', () => {
-    const begin = MIGRATION.indexOf('BEGIN IMMEDIATE;');
-    const commit = MIGRATION.indexOf('COMMIT;');
+    const begin = MIGRATION.indexOf('await beginImmediate(');
+    const commit = MIGRATION.indexOf('await txn.commit()');
     expect(begin).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(begin);
     // Внутри транзакции шаги идут в этом порядке и все четыре — до COMMIT.
@@ -105,7 +105,7 @@ describe('миграция: четыре состояния диска посл�
   });
 
   it('ошибка внутри — откат, а не полутаблица', () => {
-    expect(MIGRATION).toContain("ROLLBACK;");
+    expect(MIGRATION).toContain('await txn.rollback()');
     expect(MIGRATION).toContain('groups_migrate_failed');
   });
 

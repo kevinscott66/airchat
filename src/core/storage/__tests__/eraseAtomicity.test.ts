@@ -59,9 +59,9 @@ describe('eraseAtomically — единственный дом транзакци
 
   it('строки стираются между BEGIN IMMEDIATE и COMMIT', () => {
     const body = helperBody();
-    const begin = body.findIndex((l) => l.includes("execAsync('BEGIN IMMEDIATE')"));
+    const begin = body.findIndex((l) => l.includes('await beginImmediate('));
     const rows = body.findIndex((l) => l.includes('await rows();'));
-    const commit = body.findIndex((l) => l.includes("execAsync('COMMIT')"));
+    const commit = body.findIndex((l) => l.includes('await txn.commit()'));
     expect(begin).toBeGreaterThan(-1);
     expect(rows).toBeGreaterThan(begin);
     expect(commit).toBeGreaterThan(rows);
@@ -69,7 +69,7 @@ describe('eraseAtomically — единственный дом транзакци
 
   it('сбой откатывается и пробрасывается наверх', () => {
     const body = helperBody();
-    const rollback = body.findIndex((l) => l.includes("execAsync('ROLLBACK')"));
+    const rollback = body.findIndex((l) => l.includes('await txn.rollback()'));
     const thrown = body.findIndex((l) => l === 'throw e;');
     expect(rollback).toBeGreaterThan(-1);
     expect(thrown).toBeGreaterThan(rollback);
@@ -77,8 +77,8 @@ describe('eraseAtomically — единственный дом транзакци
 
   it('файлы сносятся только после COMMIT и после ROLLBACK-ветки', () => {
     const body = helperBody();
-    const commit = body.findIndex((l) => l.includes("execAsync('COMMIT')"));
-    const rollback = body.findIndex((l) => l.includes("execAsync('ROLLBACK')"));
+    const commit = body.findIndex((l) => l.includes('await txn.commit()'));
+    const rollback = body.findIndex((l) => l.includes('await txn.rollback()'));
     const files = body.findIndex((l) => l === 'await files();');
     expect(files).toBeGreaterThan(commit);
     expect(files).toBeGreaterThan(rollback);

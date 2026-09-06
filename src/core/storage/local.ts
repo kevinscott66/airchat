@@ -122,6 +122,87 @@ let dbOpenError: unknown = null;
 let dbOpenFailedAt = 0;
 const DB_REOPEN_COOLDOWN_MS = 2000;
 
+/**
+ * Очередь транзакций поверх единственного соединения (v4.32.615).
+ *
+ * Дефект. Соединение с базой здесь одно на весь процесс (dbPromise), ручных
+ * `BEGIN IMMEDIATE` по файлу девятнадцать, и никакой очереди между ними не
+ * было. В SQLite транзакции одного соединения не вкладываются: пока открыта
+ * первая, второй `BEGIN` отвечает «cannot start a transaction within a
+ * transaction». Открытие стоит ПЕРЕД try во всех девятнадцати местах, поэтому
+ * отказ уносил вызов целиком, не дойдя ни до одной записи:
+ *   — saveChatMessage, upsertChatMessage, saveSyncEntityHeads, import*
+ *     пробрасывали ошибку наверх — сообщение не сохранено;
+ *   — touchConversation и восемь миграций гасят её в log.warn — превью,
+ *     счётчик непрочитанного или целый шаг схемы пропадали молча.
+ *
+ * Сойтись этим вызовам есть где: saveChatMessage и touchConversation идут
+ * парой на каждое входящее сообщение, а сообщения приходят пачками — при
+ * переигрывании накопленного за двенадцать часов, при доставке двумя
+ * транспортами сразу, при разборе облачного снимка.
+ *
+ * Порядок здесь не «кто раньше начал», а «кто раньше попросил»: ожидающий
+ * получает соединение только после того, как предыдущий явно закрыл свою
+ * транзакцию — фиксацией или откатом. Закрытие идёт через finally, поэтому
+ * отказ самого COMMIT очередь не запирает.
+ *
+ * Чего это не лечит: одиночная запись мимо транзакции (просто `runAsync`) в
+ * очередь не встаёт и по-прежнему может лечь внутрь чужой открытой транзакции
+ * и уйти с её откатом. Это отдельный дефект того же корня.
+ *
+ * Штатного withTransactionAsync здесь мало намеренно: он не берёт IMMEDIATE,
+ * а ровно ради него транзакции и заводились — SELECT-then-UPDATE над
+ * счётчиками должен блокировать запись с самого начала, а не при первой
+ * попытке записать.
+ */
+let txQueue: Promise<void> = Promise.resolve();
+
+interface OpenTx {
+  /** Зафиксировать и отпустить очередь. */
+  commit(): Promise<void>;
+  /** Откатить и отпустить очередь. */
+  rollback(): Promise<void>;
+}
+
+async function beginImmediate(d: SQLite.SQLiteDatabase): Promise<OpenTx> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = txQueue;
+  txQueue = previous.then(() => held);
+  await previous;
+  try {
+    await d.execAsync('BEGIN IMMEDIATE;');
+  } catch (e) {
+    // Транзакцию открыть не удалось — держать очередь не за что.
+    release();
+    throw e;
+  }
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    release();
+  };
+  return {
+    async commit() {
+      try {
+        await d.execAsync('COMMIT;');
+      } finally {
+        close();
+      }
+    },
+    async rollback() {
+      try {
+        await d.execAsync('ROLLBACK;');
+      } finally {
+        close();
+      }
+    },
+  };
+}
+
 const LOCAL_DB_NAME = 'airchat_local.db';
 
 const MIGRATED_KV = 'local_crypto_migrated_v2';
@@ -717,7 +798,7 @@ async function ensureGroupsProfileScopedKey(database: SQLite.SQLiteDatabase): Pr
       return;
     }
 
-    await database.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(database);
     try {
       // INSERT без OR IGNORE: в старой таблице id — первичный ключ, значит
       // пара (id, owner_profile_id) заведомо уникальна, и «пропустить строку»
@@ -732,10 +813,10 @@ ${decls},
         DROP TABLE groups;
         ALTER TABLE groups_v2 RENAME TO groups;
       `);
-      await database.execAsync('COMMIT;');
+      await txn.commit();
       log.info('groups_migrated_to_composite_key', { cols: names.split(', ').length });
     } catch (inner) {
-      await database.execAsync('ROLLBACK;').catch(() => { /* ignore */ });
+      await txn.rollback().catch(() => { /* ignore */ });
       throw inner;
     }
   } catch (e) {
@@ -828,7 +909,7 @@ async function ensureMessageTableCompositeKey(
       return;
     }
 
-    await database.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(database);
     try {
       // INSERT без OR IGNORE: в старой таблице id — первичный ключ, значит
       // пара (id, owner_profile_id) заведомо уникальна, и «пропустить строку»
@@ -844,10 +925,10 @@ ${decls},
         ALTER TABLE ${tmp} RENAME TO ${table};
         ${index}
       `);
-      await database.execAsync('COMMIT;');
+      await txn.commit();
       log.info('messages_migrated_to_composite_key', { table, cols: names.split(', ').length });
     } catch (inner) {
-      await database.execAsync('ROLLBACK;').catch(() => { /* ignore */ });
+      await txn.rollback().catch(() => { /* ignore */ });
       throw inner;
     }
   } catch (e) {
@@ -893,7 +974,7 @@ async function ensureGroupMembersProfileScoped(database: SQLite.SQLiteDatabase):
       return; // чистая установка — таблицу создаст CREATE TABLE IF NOT EXISTS
     }
 
-    await database.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(database);
     try {
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS group_members_v2 (
@@ -913,10 +994,10 @@ async function ensureGroupMembersProfileScoped(database: SQLite.SQLiteDatabase):
         ALTER TABLE group_members_v2 RENAME TO group_members;
         CREATE INDEX IF NOT EXISTS idx_grp_members ON group_members (group_id, owner_profile_id);
       `);
-      await database.execAsync('COMMIT;');
+      await txn.commit();
       log.info('group_members_migrated_to_profile_scope');
     } catch (inner) {
-      await database.execAsync('ROLLBACK;').catch(() => { /* ignore */ });
+      await txn.rollback().catch(() => { /* ignore */ });
       throw inner;
     }
   } catch (e) {
@@ -961,7 +1042,7 @@ async function ensurePollVotesMultipleChoice(database: SQLite.SQLiteDatabase): P
 
     // States (A) and (C): do the migration inside a transaction so we
     // either finish cleanly or end up exactly where we started.
-    await database.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(database);
     try {
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS poll_votes_v2 (
@@ -976,9 +1057,9 @@ async function ensurePollVotesMultipleChoice(database: SQLite.SQLiteDatabase): P
         DROP TABLE poll_votes;
         ALTER TABLE poll_votes_v2 RENAME TO poll_votes;
       `);
-      await database.execAsync('COMMIT;');
+      await txn.commit();
     } catch (inner) {
-      await database.execAsync('ROLLBACK;').catch(() => { /* ignore */ });
+      await txn.rollback().catch(() => { /* ignore */ });
       throw inner;
     }
   } catch (e) {
@@ -1135,7 +1216,7 @@ async function ensureLocalCryptoMigration(database: SQLite.SQLiteDatabase): Prom
       'SELECT id, payload FROM outbox'
     );
 
-    await database.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(database);
     try {
       for (const m of msgs) {
         let t = m.text;
@@ -1162,10 +1243,10 @@ async function ensureLocalCryptoMigration(database: SQLite.SQLiteDatabase): Prom
         MIGRATED_KV,
         'true',
       ]);
-      await database.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await database.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -1208,7 +1289,7 @@ async function ensureGroupMemberNamesEncrypted(database: SQLite.SQLiteDatabase):
     const pending = rows.filter((r) => r.display_name && !r.display_name.startsWith(AT_REST_PREFIX));
     if (pending.length > 0) {
       const dek = await getOrCreateDataEncryptionKey();
-      await database.execAsync('BEGIN IMMEDIATE');
+      const txn = await beginImmediate(database);
       try {
         for (const r of pending) {
           await database.runAsync(
@@ -1216,10 +1297,10 @@ async function ensureGroupMemberNamesEncrypted(database: SQLite.SQLiteDatabase):
             [encryptAtRestString(r.display_name as string, dek), r.group_id, r.peer_pub_b64, r.owner_profile_id]
           );
         }
-        await database.execAsync('COMMIT');
+        await txn.commit();
       } catch (e) {
         try {
-          await database.execAsync('ROLLBACK');
+          await txn.rollback();
         } catch {
           /* ignore */
         }
@@ -1296,7 +1377,7 @@ async function encryptPlainColumnsOnce(
       if (rows.length === 0) continue;
       const dek = await getOrCreateDataEncryptionKey();
       const whereSql = spec.keys.map((k) => `${k} = ?`).join(' AND ');
-      await database.execAsync('BEGIN IMMEDIATE');
+      const txn = await beginImmediate(database);
       try {
         for (const r of rows) {
           await database.runAsync(
@@ -1307,10 +1388,10 @@ async function encryptPlainColumnsOnce(
             ]
           );
         }
-        await database.execAsync('COMMIT');
+        await txn.commit();
       } catch (e) {
         try {
-          await database.execAsync('ROLLBACK');
+          await txn.rollback();
         } catch {
           /* ignore */
         }
@@ -1578,13 +1659,13 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
 
     const { rewrapSecretKeyWithDek } = await import('../crypto/keyManager');
 
-    await database.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(database);
     try {
       await reencryptAtRest(database, stored, derived);
-      await database.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await database.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -1851,7 +1932,7 @@ export async function saveSyncEntityHeads(heads: readonly SyncEntityHead[]): Pro
     }
   }
   const d = await db();
-  await d.execAsync('BEGIN IMMEDIATE');
+  const txn = await beginImmediate(d);
   try {
     for (const head of heads) {
       await d.runAsync(
@@ -1875,9 +1956,9 @@ export async function saveSyncEntityHeads(heads: readonly SyncEntityHead[]): Pro
         ],
       );
     }
-    await d.execAsync('COMMIT');
+    await txn.commit();
   } catch (error) {
-    try { await d.execAsync('ROLLBACK'); } catch { /* ignore */ }
+    try { await txn.rollback(); } catch { /* ignore */ }
     throw error;
   }
 }
@@ -2821,7 +2902,7 @@ export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
     // выложить его начало в базу в читаемом виде.
     const replyEnc = encryptAtRestNullable(row.replyToPreview ?? null, dek);
     const ownerPid = row.ownerProfileId ?? 1;
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       await d.runAsync(
         `INSERT OR IGNORE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
@@ -2840,10 +2921,10 @@ export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
           replyEnc,
         ]
       );
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -2868,7 +2949,7 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
     const mediaEnc = encryptAtRestNullable(row.mediaCids, dek);
     const replyEnc = encryptAtRestNullable(row.replyToPreview ?? null, dek);
     const ownerPid = row.ownerProfileId ?? 1;
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       await d.runAsync(
         `INSERT OR REPLACE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview, transport)
@@ -2891,10 +2972,10 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
           row.transport ?? null,
         ]
       );
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -3009,7 +3090,7 @@ export async function importRawChatMessageRows(
   if (!sanitized.length) return 0;
   try {
     const d = await db();
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       for (const r of sanitized) {
         await d.runAsync(
@@ -3030,10 +3111,10 @@ export async function importRawChatMessageRows(
           ]
         );
       }
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -3104,7 +3185,7 @@ export async function rebuildConversationsFromMessages(ownerProfileId: number): 
       };
     });
     let created = 0;
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       for (const p of prepared) {
         const res = await d.runAsync(
@@ -3115,10 +3196,10 @@ export async function rebuildConversationsFromMessages(ownerProfileId: number): 
         );
         if (res.changes > 0) created += 1;
       }
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (err) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -3177,7 +3258,7 @@ export async function importConversationMetaRows(
   if (!rows.length) return 0;
   try {
     const d = await db();
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       for (const r of rows) {
         await d.runAsync(
@@ -3206,10 +3287,10 @@ export async function importConversationMetaRows(
           ]
         );
       }
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -3297,7 +3378,7 @@ export async function importGroupBackupRows(
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       for (const g of groups.rows) {
         await d.runAsync(
@@ -3341,10 +3422,10 @@ export async function importGroupBackupRows(
           [p.group_id, p.peer_pub_b64, p.role, p.display_name, p.joined_at, ownerProfileId]
         );
       }
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (e) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -3537,15 +3618,15 @@ export async function importDialogKvSnapshot(
   if (!sanitized.length) return 0;
   try {
     const d = await db();
-    await d.execAsync('BEGIN IMMEDIATE');
+    const txn = await beginImmediate(d);
     try {
       for (const e of sanitized) {
         await d.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [e.k, e.v]);
       }
-      await d.execAsync('COMMIT');
+      await txn.commit();
     } catch (err) {
       try {
-        await d.execAsync('ROLLBACK');
+        await txn.rollback();
       } catch {
         /* ignore */
       }
@@ -4280,7 +4361,7 @@ export async function touchConversation(
     // LAN + internet retry). Wrapping in BEGIN IMMEDIATE serialises
     // observers, so either both see "missing" and one INSERT wins cleanly,
     // or one sees the row the other just inserted and UPDATEs it.
-    await d.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(d);
     try {
       const existing = await d.getFirstAsync<{
         unread_count: number;
@@ -4333,9 +4414,9 @@ export async function touchConversation(
           [defaultDisappear, now, contactPubB64, ownerProfileId]
         );
       }
-      await d.execAsync('COMMIT;');
+      await txn.commit();
     } catch (inner) {
-      try { await d.execAsync('ROLLBACK;'); } catch { /* ignore */ }
+      try { await txn.rollback(); } catch { /* ignore */ }
       throw inner;
     }
     emitChatWrites();
@@ -4874,13 +4955,13 @@ async function eraseAtomically(
   rows: () => Promise<void>,
   files: () => Promise<void>
 ): Promise<void> {
-  await d.execAsync('BEGIN IMMEDIATE');
+  const txn = await beginImmediate(d);
   try {
     await rows();
-    await d.execAsync('COMMIT');
+    await txn.commit();
   } catch (e) {
     try {
-      await d.execAsync('ROLLBACK');
+      await txn.rollback();
     } catch {
       /* ignore */
     }
@@ -5812,14 +5893,14 @@ export async function touchGroupConversation(
     // concurrently (LAN + internet retry, or two senders). Both readers see
     // the same counters, both write old+1, one increment is lost. BEGIN
     // IMMEDIATE serialises writers so the second read sees the first update.
-    await d.execAsync('BEGIN IMMEDIATE;');
+    const txn = await beginImmediate(d);
     try {
       const existing = await d.getFirstAsync<{ unread_count: number; mention_count: number }>(
         'SELECT unread_count, mention_count FROM groups WHERE id = ? AND owner_profile_id = ?',
         [groupId, ownerProfileId]
       );
       if (!existing) {
-        await d.execAsync('COMMIT;');
+        await txn.commit();
         return;
       }
       const newUnread = incrementUnread ? existing.unread_count + 1 : existing.unread_count;
@@ -5829,9 +5910,9 @@ export async function touchGroupConversation(
          WHERE id = ? AND owner_profile_id = ?`,
         [Date.now(), previewEnc, newUnread, senderNameEnc, newMention, senderPubB64 ?? null, groupId, ownerProfileId]
       );
-      await d.execAsync('COMMIT;');
+      await txn.commit();
     } catch (inner) {
-      try { await d.execAsync('ROLLBACK;'); } catch { /* ignore */ }
+      try { await txn.rollback(); } catch { /* ignore */ }
       throw inner;
     }
     emitChatWrites();

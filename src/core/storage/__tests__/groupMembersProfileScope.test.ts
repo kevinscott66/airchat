@@ -87,10 +87,10 @@ describe('переезд существующих баз', () => {
     // Те же четыре состояния на диске, что у ensurePollVotesMultipleChoice.
     expect(mig).toContain("if (pkCols.includes('owner_profile_id')) return;");
     expect(mig).toContain("ALTER TABLE group_members_v2 RENAME TO group_members;");
-    expect(mig).toContain('BEGIN IMMEDIATE;');
-    expect(mig).toContain('ROLLBACK;');
+    expect(mig).toContain('await beginImmediate(');
+    expect(mig).toContain('await txn.rollback()');
     // DROP только внутри транзакции, вместе с копированием.
-    const tx = mig.slice(mig.indexOf('BEGIN IMMEDIATE;'), mig.indexOf('COMMIT;'));
+    const tx = mig.slice(mig.indexOf('await beginImmediate('), mig.indexOf('await txn.commit()'));
     expect(tx).toContain('INSERT OR IGNORE INTO group_members_v2');
     expect(tx.indexOf('INSERT OR IGNORE INTO group_members_v2')).toBeLessThan(
       tx.indexOf('DROP TABLE group_members;')
