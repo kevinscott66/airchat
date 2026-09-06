@@ -137,7 +137,10 @@ describe('BEFORE — как ломалось до правки', () => {
 });
 
 describe('App.tsx — проверка стоит до записи', () => {
-  const branch = APP.slice(APP.indexOf("parts[0] === 'join-group'"), APP.indexOf("if (parts[0] !== 'tab'"));
+  // v4.32.606: форму ссылки разбирает core/net/appLink, и ветка опознаётся по
+  // разобранному виду, а не по нулевому отрезку пути. Границы те же: от начала
+  // ветки приглашения до следующей ветки обработчика.
+  const branch = APP.slice(APP.indexOf("link.kind === 'joinGroup'"), APP.indexOf("if (link.kind === 'dm')"));
 
   it('ветка ссылки найдена целиком', () => {
     expect(branch.length).toBeGreaterThan(500);

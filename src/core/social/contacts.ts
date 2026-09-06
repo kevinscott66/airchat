@@ -21,6 +21,7 @@ import { log } from '../logger';
 import { publicKeyHash4 } from '../crypto/keyManager';
 import { profileManager } from '../identity/profileManager';
 import { parseDidKey } from '../identity/did';
+import { parseAppLink } from '../net/appLink';
 import { mergeExplicitContactRow } from './contactRowMerge';
 
 const PREFIX = 'contact:';
@@ -211,6 +212,9 @@ export type Contact = {
  * Принимает любую форму, в которой пользователь мог скопировать ID:
  *   • `did:key:z...`              — строка из QR-кода ProfileScreen
  *   • `airchat://contact/<did>`   — deep-link
+ *   • ссылка на профиль в любой из форм (v4.32.606): `airchat://u/<ключ>` и
+ *     `https://<адрес>/l/u/<ключ>`. Адрес не проверяется намеренно — ссылка,
+ *     выданная под прежним адресом, обязана читаться и после его смены.
  *   • чистый base64 raw public key (32 байта) — исторический формат ChatListScreen
  *   • строка с любыми пробелами/переносами вокруг
  *
@@ -220,6 +224,14 @@ export function parseContactId(input: string): Uint8Array | null {
   if (!input) return null;
   let s = input.trim();
   if (!s) return null;
+
+  // v4.32.606: ссылка на профиль (и на переписку — в ней тот же ключ).
+  // Стоит первой: разбор ссылки строгий, он либо узнаёт форму целиком, либо
+  // отдаёт null и не мешает разобрать строку остальным способам.
+  const link = parseAppLink(s);
+  if (link && (link.kind === 'contact' || link.kind === 'dm')) {
+    return publicKeyFromB64(link.peerPubB64);
+  }
 
   // Deep-link: airchat://contact/<did>
   if (s.startsWith('airchat://contact/')) {

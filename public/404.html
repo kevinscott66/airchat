@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Ссылка AirChat</title>
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <meta name="theme-color" content="#0B0B12" />
+    <!--
+      v4.32.606. GitHub Pages отдаёт эту страницу на любой адрес, которого нет
+      файлом, — а ссылки приложения (/l/post/…, /l/u/…, /l/dm/…) файлами и не
+      являются: сайт собран одной страницей. Раньше человек, получивший ссылку
+      и не имеющий приложения, видел «404».
+
+      Страница нарочно самостоятельная: ни шрифтов, ни скриптов извне. Она
+      обязана открыться у человека, который про AirChat ещё ничего не знает.
+
+      Переход в приложение НЕ делается сам. Автоматический переход на
+      airchat:// у того, у кого приложения нет, показывает системное окно
+      «Safari не может открыть страницу» — то есть ошибку вместо объяснения.
+      Поэтому здесь кнопка: её нажимает тот, кто знает, что приложение у него
+      есть.
+    -->
+    <style>
+      :root {
+        --bg: #0b0b12;
+        --surface: #14141f;
+        --border: #2e2e42;
+        --text: #ececf5;
+        --muted: #a6a6bd;
+        --primary: #6a56ee;
+        --accent: #9b8cff;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        -webkit-font-smoothing: antialiased;
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        background: rgba(20, 20, 31, 0.72);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 28px 24px;
+        text-align: center;
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+      .mark { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 16px; display: block; }
+      h1 { font-size: 20px; margin: 0 0 8px; font-weight: 600; }
+      p { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+      a.btn, a.link {
+        display: block;
+        text-decoration: none;
+        border-radius: 14px;
+        padding: 14px 18px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      a.btn { background: var(--primary); color: #fff; margin-bottom: 10px; }
+      a.link { color: var(--accent); border: 1px solid var(--border); margin-bottom: 10px; font-weight: 500; }
+      .foot { font-size: 13px; color: #7c7c96; margin: 14px 0 0; }
+      .foot a { color: #7c7c96; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <img class="mark" src="/icon-192.png" alt="" />
+      <h1 id="title">Ссылка AirChat</h1>
+      <p id="lead">Откройте её в приложении — или посмотрите в браузере.</p>
+      <a class="btn" id="open-app" href="/">Открыть в приложении</a>
+      <a class="link" id="open-web" href="/">Открыть в браузере</a>
+      <a class="link" href="/install/">Установить на iPhone</a>
+      <p class="foot">AirChat — переписка со сквозным шифрованием. <a href="/">О приложении</a></p>
+    </div>
+    <script>
+      (function () {
+        var path = window.location.pathname || '';
+        // Всё, что не наша ссылка, — обычная опечатка в адресе: сайт живёт
+        // одной страницей, и показывать на неё отдельную «404» незачем.
+        if (path.indexOf('/l/') !== 0) {
+          window.location.replace('/');
+          return;
+        }
+        var rest = path.slice(3).replace(/^\/+/, '') + (window.location.search || '');
+        var head = rest.split('/')[0];
+        var titles = {
+          post: ['Публикация в AirChat', 'Откройте её в приложении — или посмотрите в браузере.'],
+          dm: ['Переписка в AirChat', 'Ссылка ведёт к сообщению. Открыть его может только участник переписки.'],
+          group: ['Группа в AirChat', 'Ссылка ведёт к сообщению в группе. Открыть его может только участник.'],
+          u: ['Профиль в AirChat', 'Откройте профиль в приложении, чтобы написать человеку.'],
+          contact: ['Профиль в AirChat', 'Откройте профиль в приложении, чтобы написать человеку.'],
+          'join-group': ['Приглашение в группу', 'Вступить можно только из приложения — оно спросит подтверждение.'],
+          tab: ['AirChat', 'Ссылка открывает раздел приложения.']
+        };
+        var t = titles[head];
+        if (t) {
+          document.getElementById('title').textContent = t[0];
+          document.getElementById('lead').textContent = t[1];
+        }
+        // Схема приложения — для того, у кого оно уже стоит.
+        document.getElementById('open-app').setAttribute('href', 'airchat://' + rest);
+        // Веб-версия: адрес возвращается странице приложения запросом, а она
+        // восстанавливает его обратно в /l/… (см. public/index.html). Без
+        // этого GitHub Pages снова отдал бы эту же страницу.
+        document.getElementById('open-web').setAttribute('href', '/?l=' + encodeURIComponent(rest));
+      })();
+    </script>
+  </body>
+</html>

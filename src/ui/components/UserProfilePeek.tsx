@@ -110,7 +110,8 @@ import {
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { rawErrorText, userErrorText } from './userErrorText';
-import { COPY_ACTION, COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
+import { COPY_ACTION, COPY_ID_ACTION, COPIED_LINK } from '../clipboardText';
+import { buildContactLink } from '../../core/net/appLink';
 // v4.32.540: чужой профиль — обложка из набора обоев и постоянный
 // идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
 import { WallpaperBackground } from './WallpaperBackground';
@@ -526,8 +527,9 @@ export function UserProfilePeek({
   const handleCopyId = useCallback(async () => {
     if (!resolved) return;
     try {
-      await Clipboard.setStringAsync(resolved.did);
-      showSuccess(COPIED_ID);
+      // v4.32.606: ссылка, а не голый DID — её получатель может просто открыть.
+      await Clipboard.setStringAsync(buildContactLink(resolved.did).web);
+      showSuccess(COPIED_LINK);
     } catch {
       showError('Не удалось скопировать');
     }
@@ -539,7 +541,7 @@ export function UserProfilePeek({
       // У безымянного заглушка — тот же DID, обрезанный: в сообщении он
       // выглядел бы напечатанным дважды.
       const who = identity.named ? `AirChat: ${identity.title}\n` : 'AirChat\n';
-      await Share.share({ message: `${who}${resolved.did}` });
+      await Share.share({ message: `${who}${buildContactLink(resolved.did).web}` });
     } catch {
       /* user cancelled или share недоступен */
     }
@@ -1266,7 +1268,7 @@ export function UserProfilePeek({
         visible={qrOpen}
         onClose={() => setQrOpen(false)}
         title={displayName}
-        value={resolved.did}
+        value={buildContactLink(resolved.did).web}
       />
 
       {isSelf ? (

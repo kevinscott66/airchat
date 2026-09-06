@@ -43,6 +43,8 @@ import { ensureLocalStorageReadyForBoot, kvGet, subscribeChatWrites, purgeDisapp
 import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webStorageDiagnosis';
 import { dekFailureAdvice } from './core/storage/dekFailureAdvice';
 import { scheduleDialogBackupPersist } from './core/storage/dialogBackup';
+import { parseAppLink } from './core/net/appLink';
+import { setAppLinkHandler } from './core/net/appLinkRouter';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
 import { AppNotifyHost } from './ui/components/AppNotifyHost';
@@ -544,9 +546,17 @@ function MainTabs({
   const [profileSelOpen, setProfileSelOpen] = useState(false);
   const [activeProfileLabel, setActiveProfileLabel] = useState<string | null>(null);
   const [peerJump, setPeerJump] = useState<
-    { peer: string; token: number; intent?: 'chat' | 'search' | 'starred' } | null
+    { peer: string; token: number; intent?: 'chat' | 'search' | 'starred'; msgId?: string } | null
   >(null);
-  const [groupJump, setGroupJump] = useState<{ groupId: string; token: number } | null>(null);
+  const [groupJump, setGroupJump] = useState<{ groupId: string; token: number; msgId?: string } | null>(null);
+  /**
+   * v4.32.606: куда прыгать в ленте по ссылке на публикацию.
+   *
+   * Тот же приём, что у переписки и групп: объект с token, а не голый id.
+   * Иначе повторное нажатие той же ссылки не меняло бы состояние и экран
+   * никуда бы не переходил.
+   */
+  const [postJump, setPostJump] = useState<{ postId: string; token: number } | null>(null);
   // v4.32.228 (BUG-07): сигнал «вернуться к списку чатов из открытого диалога»
   // при повторном тапе по уже активному табу «Чаты» (поведение tap-active-tab→pop).
   const [chatPopToken, setChatPopToken] = useState(0);
@@ -963,7 +973,20 @@ function MainTabs({
   const lastDeepLinkTabUrlRef = useRef<{ url: string; at: number } | null>(null);
   useEffect(() => {
     const applyTabUrl = (url: string | null): void => {
-      if (!url?.startsWith('airchat:')) return;
+      if (!url) return;
+      /**
+       * v4.32.606: разбор ссылки живёт в core/net/appLink — вместе со сборкой
+       * и под тестами. Здесь он был написан руками и знал ровно две формы:
+       * `join-group` и `tab`. Всё остальное — а «Копировать ссылку» на
+       * сообщении выдаёт `dm/…/msg/…` с v4.32.256 — доходило до
+       * `if (parts[0] !== 'tab') return` и молча ничего не делало.
+       *
+       * Заодно принимается и https-форма: ссылка, отправленная человеку без
+       * приложения, открывается у него страницей, а у того, у кого приложение
+       * есть, — этим обработчиком.
+       */
+      const link = parseAppLink(url);
+      if (!link) return;
       // Dedup FIRST: на холодном старте getInitialURL() опрашивается несколько
       // раз подряд и отдаёт один и тот же URL, а следом может прийти событие
       // 'url' с ним же. Без защиты ветка join-group выстроила бы очередь из
@@ -979,22 +1002,19 @@ function MainTabs({
       const now = Date.now();
       if (prev && prev.url === url && now - prev.at < DEEP_LINK_DEDUP_MS) return;
       lastDeepLinkTabUrlRef.current = { url, at: now };
-      // v4.32.180 (Round-10 #6): bound URL/path length before split — defensive against crafted links.
-      if (url.length > 16384) return;
-      const path = url.replace(/^airchat:\/\//, '').split(/[?#]/)[0];
-      if (path.length > 8192) return;
-      const parts = path.split('/').filter(Boolean);
-      if (parts.length > 16) return;
+      // v4.32.180 (Round-10 #6): потолки на длину строки, отрезка и их число
+      // никуда не делись — они переехали в parseAppLink, где проверяются
+      // тестами. Сюда ссылка приходит уже разобранной по форме.
 
       // Handle group invite links: airchat://join-group/<base64>
-      if (parts[0] === 'join-group' && parts[1]) {
+      if (link.kind === 'joinGroup') {
         try {
           // v4.32.260: разбор и проверка формы недоверенной ссылки живут в
           // groupInviteLink — там же, где сборка, и покрыты тестами. Раньше всё
           // это лежало здесь в одном экземпляре, проверялось только глазами и
           // требовало поля members, которого основная кнопка приглашения не
           // клала — то есть отвергало собственные ссылки приложения.
-          const payload = parseGroupInviteLink(parts[1]);
+          const payload = parseGroupInviteLink(link.payload);
           if (!payload) throw new Error('invite_bad_shape');
           const pid = profileManager.getActiveProfile()?.id ?? 1;
           const requireApproval = payload.requireApproval;
@@ -1133,7 +1153,49 @@ function MainTabs({
         return;
       }
 
-      if (parts[0] !== 'tab' || !parts[1]) return;
+      if (link.kind === 'dm') {
+        recordUserActivity();
+        setPeerJump({ peer: link.peerPubB64, token: Date.now(), msgId: link.msgId });
+        mountTab('chat');
+        setTab('chat');
+        log.info('deep_link_dm', { msg: !!link.msgId });
+        return;
+      }
+
+      if (link.kind === 'group') {
+        recordUserActivity();
+        setGroupJump({ groupId: link.groupId, token: Date.now(), msgId: link.msgId });
+        mountTab('groups');
+        setTab('groups');
+        log.info('deep_link_group', { msg: !!link.msgId });
+        return;
+      }
+
+      /**
+       * Ссылка на профиль открывает переписку с этим человеком.
+       *
+       * Не «добавить в контакты»: добавление — согласие, и его принимает
+       * человек, а не ссылка. Экран переписки показывает карточку и кнопку
+       * добавления, то есть ведёт ровно туда, где решение и принимается.
+       */
+      if (link.kind === 'contact') {
+        recordUserActivity();
+        setPeerJump({ peer: link.peerPubB64, token: Date.now() });
+        mountTab('chat');
+        setTab('chat');
+        log.info('deep_link_contact');
+        return;
+      }
+
+      if (link.kind === 'post') {
+        recordUserActivity();
+        setPostJump({ postId: link.postId, token: Date.now() });
+        mountTab('feed');
+        setTab('feed');
+        log.info('deep_link_post');
+        return;
+      }
+
       const map: Record<string, TabName> = {
         feed: 'feed',
         chat: 'chat',
@@ -1144,13 +1206,17 @@ function MainTabs({
         profile: 'profile',
         settings: 'settings',
       };
-      const next = map[parts[1]];
+      const next = map[link.tab];
       if (!next) return;
       recordUserActivity();
       mountTab(next);
       setTab(next);
       log.info('deep_link_tab', { url, tab: next });
     };
+    // v4.32.606: тот же обработчик получает и ссылки, нажатые ВНУТРИ
+    // приложения — в тексте сообщения, в комментарии, в описании профиля.
+    // Иначе своя же ссылка уводила бы человека в браузер.
+    setAppLinkHandler(applyTabUrl);
     const sub = Linking.addEventListener('url', (e) => applyTabUrl(e.url));
     let cancelled = false;
     void (async () => {
@@ -1171,6 +1237,7 @@ function MainTabs({
     })();
     return () => {
       cancelled = true;
+      setAppLinkHandler(null);
       sub.remove();
     };
   }, [pair, mountTab]);
@@ -1314,6 +1381,7 @@ function MainTabs({
               did={did}
               feedTick={feedTick}
               onOpenChatWithPeer={handleOpenChatWithPeer}
+              postJump={postJump}
             />
           </ScreenSlot>
         ) : tab === 'feed' ? <View style={{ flex: 1 }}><LoadingScreen message="Открываем раздел…" testID="tab_mount_feed" /></View> : null}

@@ -161,6 +161,7 @@ import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { resolvePinned, togglePinAndSync, groupPinRefusalText, clearPinned, applyLocalPin, type PinnedEntry } from '../../core/social/groupPinSync';
 import { canPinInGroup, type PinRole } from '../../core/social/groupPinPolicy';
 import { buildGroupInviteLink } from '../../core/social/groupInviteLink';
+import { buildGroupLink, webForm } from '../../core/net/appLink';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX, normalizeOwnGroupDescription, normalizeOwnGroupName } from '../../core/social/groupNameRule';
 import { canSendToGroup, slowModeRemaining, slowModeSysLine, formatSlowMode, MAX_SLOWMODE_SECONDS, type SendRole } from '../../core/social/groupSendPolicy';
 import { isAdminRole, ownGroupRole } from '../../core/social/ownGroupRole';
@@ -486,6 +487,7 @@ function GroupChatScreen({
   onOpenMembers,
   onOpenDm,
   initialSearchQuery,
+  initialJumpMsgId,
 }: {
   group: GroupRow;
   pair: KeyPairBytes;
@@ -493,6 +495,8 @@ function GroupChatScreen({
   onOpenMembers: () => void;
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
   initialSearchQuery?: string;
+  /** v4.32.606: сообщение из ссылки `.../group/<id>/msg/<id>`. */
+  initialJumpMsgId?: string;
 }): React.ReactElement {
   const { colors, scheme, fontSize: themeFontSize } = useTheme();
   const tabInset = useTabBarInset();
@@ -2168,7 +2172,8 @@ function GroupChatScreen({
       ]);
     };
 
-    const msgLink = `airchat://group/${encodeURIComponent(group.id)}/msg/${encodeURIComponent(item.id)}`;
+    // v4.32.606: https-форма — она открывается и у того, у кого приложения нет.
+    const msgLink = buildGroupLink(group.id, item.id).web;
     const alreadyTranslated = grpManualTranslatedIds.has(item.id) && Boolean(translationCache[item.id]);
     const scheduleReminder = () => {
       const preview = item.text.startsWith('\x01') ? 'Медиасообщение' : isSysMsg ? parseGroupSysText(item.text) : item.text.slice(0, 40);
@@ -2753,6 +2758,28 @@ function GroupChatScreen({
       }).start(() => setJumpHighlightId(null));
     } catch { /* ignore */ }
   }, [displayGroupMessages, jumpHighlightAnim]);
+
+  /**
+   * Переход к сообщению из ссылки (v4.32.606).
+   *
+   * Один раз за открытие группы и только когда сообщение уже загружено: до
+   * этого scrollToReply не нашёл бы строки и промолчал бы, а ссылка выглядела
+   * бы сработавшей вхолостую. Задержка та же, что у перехода из поиска в
+   * переписке: список успевает разложиться до прокрутки.
+   */
+  const grpInitialJumpDoneRef = useRef(false);
+  useEffect(() => {
+    if (!initialJumpMsgId || grpInitialJumpDoneRef.current) return;
+    const found = displayGroupMessages.some((it) => {
+      const t = (it as GrpDateSepItem).type;
+      if (t === 'date_sep' || t === 'unread_sep') return false;
+      return (it as GroupMessageRow).id === initialJumpMsgId;
+    });
+    if (!found) return;
+    grpInitialJumpDoneRef.current = true;
+    const t = setTimeout(() => scrollToReply(initialJumpMsgId), 450);
+    return () => clearTimeout(t);
+  }, [displayGroupMessages, initialJumpMsgId, scrollToReply]);
 
   const closePinnedList = useCallback(() => setGrpPinnedListVisible(false), []);
   const handlePinnedJumpTo = useCallback((id: string, idx: number) => {
@@ -3616,7 +3643,8 @@ function GroupChatScreen({
                       // несёт токен, а колонка invite_link не шифруется и никем
                       // не читается (см. схему groups).
                       const showInviteSheet = async (token: string): Promise<void> => {
-                        const link = buildGroupInviteLink({
+                        // v4.32.606: наружу уходит https-форма той же ссылки.
+                        const link = webForm(buildGroupInviteLink({
                           id: group.id,
                           name: group.name,
                           type: group.type,
@@ -3624,7 +3652,7 @@ function GroupChatScreen({
                           requireApproval,
                           members: await listGroupMembers(group.id, pid),
                           token,
-                        });
+                        }));
                         openSheet('Пригласительная ссылка', link, [
                           {
                             text: COPY_ACTION,
@@ -4032,7 +4060,7 @@ function GroupChatScreen({
         onDelete={() => { if (quickReact) { deleteMsg(quickReact); setQuickReact(null); } }}
         onCopyLink={() => {
           if (!quickReact) return;
-          const link = `airchat://group/${encodeURIComponent(group.id)}/msg/${encodeURIComponent(quickReact.id)}`;
+          const link = buildGroupLink(group.id, quickReact.id).web;
           Clipboard.setString(link);
           showSuccess(COPIED_LINK);
           setQuickReact(null);
@@ -5168,7 +5196,7 @@ function GroupMembersScreen({
     // Оба вызывающих уже показывают «Не удалось собрать ссылку» по отказу.
     if (invite === null) throw new Error('group_invite_token_unavailable');
     announceInviteToken(invite.announced);
-    return buildGroupInviteLink({
+    return webForm(buildGroupInviteLink({
       id: group.id,
       name: group.name,
       type: group.type,
@@ -5176,7 +5204,7 @@ function GroupMembersScreen({
       requireApproval: group.requireApproval ?? false,
       members,
       token: invite.token,
-    });
+    }));
   }, [group.id, group.name, group.type, group.requireApproval, myPubB64, myName, members, pid]);
 
   return (
@@ -5539,14 +5567,14 @@ const gmStyles = StyleSheet.create({
 type Props = {
   pair?: KeyPairBytes;
   /** Jump directly to a specific group by ID (triggered from in-app notification banner). */
-  groupJump?: { groupId: string; token: number };
+  groupJump?: { groupId: string; token: number; msgId?: string };
   /** Navigate to DM with a peer (crosses tab boundary — handled by App). */
   onOpenDm?: (peerPubB64: string, displayName: string) => void;
 };
 
 type NavState =
   | { screen: 'list' }
-  | { screen: 'chat'; group: GroupRow; initialSearchQuery?: string }
+  | { screen: 'chat'; group: GroupRow; initialSearchQuery?: string; initialJumpMsgId?: string }
   | { screen: 'members'; group: GroupRow };
 
 /**
@@ -5730,7 +5758,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
       if (!alive) return;
       const target = lookupValue(result);
       if (target) {
-        setNav({ screen: 'chat', group: target });
+        setNav({ screen: 'chat', group: target, initialJumpMsgId: groupJump.msgId });
         return;
       }
       log.warn('ui_group_jump_unresolved', {
@@ -5824,7 +5852,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
           const invite = await ensureGroupInviteToken(g.id, pid, myPub);
           if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
           announceInviteToken(invite.announced);
-          const link = buildGroupInviteLink({
+          const link = webForm(buildGroupInviteLink({
             id: g.id,
             name: g.name,
             type: g.type,
@@ -5832,7 +5860,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
             requireApproval: g.requireApproval ?? false,
             members: await listGroupMembers(g.id, pid),
             token: invite.token,
-          });
+          }));
           void Share.share({ message: link, title: `Присоединиться к ${g.name}` });
         })(),
       }] : []),
@@ -5871,6 +5899,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm }: Props): React.ReactElem
           onOpenMembers={() => setNav({ screen: 'members', group: nav.group })}
           onOpenDm={onOpenDm}
           initialSearchQuery={nav.initialSearchQuery}
+          initialJumpMsgId={nav.initialJumpMsgId}
         />
       </SafeScreen>
     );

@@ -148,6 +148,7 @@
     "viewsN": "Просмотры · {{count}}",
     "menuReaction": "Реакция",
     "menuCopyText": "Копировать текст",
+    "menuCopyLink": "Копировать ссылку",
     "menuCopied": "Скопировано",
     "menuHideTranslation": "Скрыть перевод",
     "menuTranslate": "Перевести",

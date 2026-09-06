@@ -94,6 +94,8 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
+import { buildPostLink } from '../../core/net/appLink';
+import { COPIED_LINK } from '../clipboardText';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { readPlaceOnce } from '../../core/social/deviceLocation';
 import { locationFailureText } from '../../core/social/locationFailure';
@@ -772,6 +774,13 @@ type Props = {
    * переписке — но переключать вкладки может только App.
    */
   onOpenChatWithPeer?: (peer: string, intent?: 'chat' | 'search' | 'starred') => void;
+  /**
+   * v4.32.606: публикация из ссылки — открыть её тред.
+   *
+   * token, а не голый id: по одной и той же ссылке, нажатой дважды, экран
+   * должен открыться дважды, а не «уже открывали».
+   */
+  postJump?: { postId: string; token: number } | null;
 };
 
 function formatTime(ts: number): string {
@@ -815,7 +824,7 @@ function runGuardedOp(op: () => Promise<unknown>, fallback: string): void {
   })();
 }
 
-function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props): React.ReactElement {
+function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump }: Props): React.ReactElement {
   const { t } = useTranslation();
   // v4.32.16: `isActive` больше НЕ prop — читаем `tabRef.current === 'feed'` из Context.
   // React.memo видит стабильные props при setTab → bail-out → нет re-render'а тяжёлого
@@ -2438,6 +2447,42 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
     });
   }, [t]);
 
+  /**
+   * Публикация из ссылки (v4.32.606).
+   *
+   * Пост читается по id прямо из базы, а не ищется в загруженной ленте: лента
+   * держит первые сорок записей, и ссылка на публикацию месячной давности не
+   * нашла бы в ней ничего, притом что запись есть.
+   *
+   * Ненайденное называется своим именем. Публикация чужого человека попадает
+   * на устройство, только если она до него дошла, и «ничего не произошло» на
+   * нажатие ссылки — худший из ответов.
+   */
+  useEffect(() => {
+    const postId = postJump?.postId;
+    if (!postId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const post = await getFeedPost(postId);
+        if (!alive) return;
+        if (post) {
+          void openComments(post);
+          return;
+        }
+        log.info('feed_post_link_missing', { post: postId.slice(0, 24) });
+        showError('Публикация не найдена — возможно, она удалена или ещё не дошла до этого устройства');
+      } catch (e) {
+        if (!alive) return;
+        log.warn('feed_post_link_failed', { err: rawErrorText(e) });
+        showError('Не удалось открыть публикацию');
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [postJump?.token, postJump?.postId, openComments]);
+
   const closeComments = useCallback(() => {
     setCommentPostId(null);
     setCommentPost(null);
@@ -2839,8 +2884,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
       showError(UNREADABLE_POST_ACTION_TEXT);
       return;
     }
+    // v4.32.606: к отрывку добавилась ссылка на саму публикацию. Без неё
+    // «поделиться» отдавало текст без адреса: прочитать перескаженное можно
+    // было, вернуться к оригиналу — нет.
     const shareText = item.text ? item.text.slice(0, 200) : t('feed.mediaFallback');
-    void Share.share({ message: `${outwardName(item.authorName, item.nameUnreadable, 'AirChat')}: ${shareText}` });
+    const message = `${outwardName(item.authorName, item.nameUnreadable, 'AirChat')}: ${shareText}\n${buildPostLink(item.id).web}`;
+    void Share.share({ message });
   }, [t]);
 
   // v4.32.92: стабилизация handlers через ref — renderItem теперь не пересоздаётся
@@ -4201,6 +4250,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer }: Props):
                 <ScrollView style={{ maxHeight: 440 }}>
                   {row('happy-outline', t('feed.menuReaction'), () => setReactionTarget(p.id))}
                   {hasText ? row('copy-outline', t('feed.menuCopyText'), () => { void Clipboard.setStringAsync(p.text ?? '').then(() => showSuccess(t('feed.menuCopied'))); }) : null}
+                  {/* v4.32.606: ссылка на публикацию. Раньше её нельзя было
+                      получить нигде: «поделиться» отдавало отрывок текста, и
+                      вернуться к самой записи было не по чему. */}
+                  {row('link-outline', t('feed.menuCopyLink'), () => {
+                    void Clipboard.setStringAsync(buildPostLink(p.id).web).then(() => showSuccess(COPIED_LINK));
+                  })}
                   {hasText ? (
                     isTranslatedP
                       ? row('language-outline', t('feed.menuHideTranslation'), () => setTranslatedPosts((prev) => { const next = { ...prev }; delete next[p.id]; return next; }))

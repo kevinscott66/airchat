@@ -119,14 +119,18 @@ describe('экран разговора пересоздаётся под каж
 
 describe('ключ нужен именно потому, что разговор меняется напрямую', () => {
   it('переход из «Контактов» ставит нового собеседника поверх старого', () => {
-    expect(SCREEN!.source).toContain('setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent });');
+    // v4.32.606: у перехода появилось необязательное «к какому сообщению» —
+    // ссылка ведёт не только к собеседнику, но и к строке в переписке.
+    // Подстановка поверх открытого разговора при этом та же самая.
+    expect(SCREEN!.source).toContain('setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent, jumpMsgId: peerJump.msgId });');
   });
 
   it('плашка уведомления ставит другую группу поверх открытой', () => {
     const groups = FILES.find((f) => f.key === 'screens/GroupsScreen.tsx');
     // v4.32.548: группа для перехода теперь берётся из базы, а не только из
     // списка в памяти, — но подстановка поверх открытого разговора та же.
-    expect(groups!.source).toContain("setNav({ screen: 'chat', group: target });");
+    // v4.32.606: к тому же переходу добавилось необязательное сообщение из ссылки.
+    expect(groups!.source).toContain("setNav({ screen: 'chat', group: target, initialJumpMsgId: groupJump.msgId });");
   });
 
   it('черновик группы дописывается при уходе, а не теряется при ремоунте', () => {

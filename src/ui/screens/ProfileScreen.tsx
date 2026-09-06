@@ -63,7 +63,8 @@ import { shortIdentity } from '../identity/shortId';
 import { findEntities } from '../../core/text/entities';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { userErrorText } from '../components/userErrorText';
-import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
+import { COPY_ID_ACTION, COPIED_LINK } from '../clipboardText';
+import { buildContactLink } from '../../core/net/appLink';
 
 /**
  * Разбивает биографию на куски так, чтобы кандидаты в ссылки шли отдельными
@@ -367,9 +368,19 @@ function ProfileScreenImpl({
    * ссылок отсюда ушло целиком — в ProfileEditModal. Держать те же шесть
    * функций и здесь значило бы держать два набора правил на одни и те же поля.
    */
+  /**
+   * v4.32.606: наружу уходит ссылка на профиль, а не голый DID.
+   *
+   * Голый `did:key:z…` понимало ровно одно поле во всём мире — «Новый контакт»
+   * в этом же приложении. Человек, которому его прислали, видел строку, не
+   * похожую ни на что, и должен был догадаться, куда её вставить. Ссылка тем и
+   * лучше, что она открывается: с приложением — этим профилем, без него —
+   * страницей, где приложение предлагают поставить. Ключ внутри ссылки тот же
+   * самый, так что «Новый контакт» принимает обе записи (см. parseContactId).
+   */
   const copyDid = async (): Promise<void> => {
-    await Clipboard.setStringAsync(did);
-    showSuccess(COPIED_ID);
+    await Clipboard.setStringAsync(buildContactLink(did).web);
+    showSuccess(COPIED_LINK);
   };
 
   const pickAvatar = async (): Promise<void> => {
@@ -758,14 +769,14 @@ function ProfileScreenImpl({
             <View style={styles.modalBox}>
               <Text style={styles.modalTitle}>Ваш QR-код</Text>
               <View style={styles.qrWrap}>
-                <QRCode value={did} size={200} color={QR_CODE.ink} backgroundColor={QR_CODE.fill} />
+                <QRCode value={buildContactLink(did).web} size={200} color={QR_CODE.ink} backgroundColor={QR_CODE.fill} />
               </View>
-              <Text style={styles.modalHint}>Друг может отсканировать код — или вставить ваш ID у себя: «Профиль» → «Контакты» → «Новый контакт»</Text>
+              <Text style={styles.modalHint}>Друг может отсканировать код — или открыть вашу ссылку. Её же можно вставить у себя: «Профиль» → «Контакты» → «Новый контакт»</Text>
               {/* v4.32.31: прямая кнопка «копировать DID» — чтобы пользователь мог скинуть его в мессенджер/чат, а получатель вставил в Контакты → + */}
               <AppPressable
                 style={styles.btn}
                 onPress={() => {
-                  void Clipboard.setStringAsync(did).then(() => showSuccess(COPIED_ID));
+                  void Clipboard.setStringAsync(buildContactLink(did).web).then(() => showSuccess(COPIED_LINK));
                 }}
               >
                 <Text style={styles.btnText}>{COPY_ID_ACTION}</Text>
@@ -773,7 +784,7 @@ function ProfileScreenImpl({
               <AppPressable
                 style={styles.linkBtn}
                 onPress={() => {
-                  void Share.share({ message: `Добавь меня в AirChat:\n${did}` });
+                  void Share.share({ message: `Добавь меня в AirChat:\n${buildContactLink(did).web}` });
                 }}
               >
                 <Text style={styles.linkText}>Поделиться…</Text>

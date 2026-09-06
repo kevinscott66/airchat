@@ -1,6 +1,7 @@
 import { Linking, Platform } from 'react-native';
 
 import { log } from '../../core/logger';
+import { routeAppLink } from '../../core/net/appLinkRouter';
 import { safeExternalUrl, safeTypedUrl } from '../../core/net/externalLink';
 import { appleMapsUrl, geoUri, mapLinkUrl } from '../../core/net/mapLink';
 import { rawErrorText } from '../components/userErrorText';
@@ -54,6 +55,13 @@ function openChecked(href: string | null, where: string, failText: string): void
  * личным.
  */
 export function openExternal(raw: unknown, where: string, failText: string = OPEN_FAILED): void {
+  // v4.32.606: своя ссылка открывается своим экраном, а не браузером. Уводить
+  // человека на страницу «поставьте приложение» из самого приложения — тот же
+  // тупик, что и молчаливое нажатие, только длиннее.
+  if (routeAppLink(raw)) {
+    log.info('ui_open_app_link', { where });
+    return;
+  }
   openChecked(safeExternalUrl(raw), where, failText);
 }
 

@@ -145,7 +145,7 @@ import { useBackHandler } from '../../core/hooks/useBackHandler';
 
 type Props = {
   pair: KeyPairBytes;
-  peerJump?: { peer: string; token: number; intent?: 'chat' | 'search' | 'starred' } | null;
+  peerJump?: { peer: string; token: number; intent?: 'chat' | 'search' | 'starred'; msgId?: string } | null;
   // v4.32.228 (BUG-07): монотонный счётчик. App.tsx инкрементит его при повторном
   // тапе по уже активному табу «Чаты» — это сигнал «вернись из открытого диалога к
   // списку чатов» (поведение «tap active tab → pop to root»). 0 = нет сигнала.
@@ -771,6 +771,7 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { COPY_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { buildDmLink } from '../../core/net/appLink';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
 import { SecureContent, isSecureContentSupported, setWindowSecure } from '../../../modules/airchat-screen-guard/src';
 
@@ -2634,8 +2635,16 @@ function ChatThreadView({
     setSelectedIds(new Set([id]));
   }, []);
 
+  /**
+   * v4.32.606: в буфер уезжает https-форма, а не `airchat://`.
+   *
+   * Прежняя ссылка была мертва дважды: её не разбирал никто (обработчик знал
+   * только `join-group` и `tab`), и у человека без приложения она не открывала
+   * ничего вообще — незнакомая схема. Теперь это обычный адрес: с приложением
+   * он ведёт к самому сообщению, без — на страницу с установкой.
+   */
   const copyRowLink = useCallback((id: string) => {
-    Clipboard.setString(`airchat://dm/${encodeURIComponent(peerB64)}/msg/${encodeURIComponent(id)}`);
+    Clipboard.setString(buildDmLink(peerB64, id).web);
     showSuccess(COPIED_LINK);
   }, [peerB64]);
 
@@ -4280,14 +4289,17 @@ function ChatScreenImpl({ pair, peerJump, popToListToken, onConversationClosed }
   useEffect(() => {
     if (!peerJump?.peer) return;
     const pub = peerJump.peer;
-    setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent });
+    // v4.32.606: msgId — из ссылки на сообщение (`.../msg/<id>`). Механика
+    // перехода к сообщению здесь уже была, её использовал глобальный поиск
+    // (initialJumpMsgId); ссылке недоставало только дороги до неё.
+    setOpenPeer({ pubB64: pub, displayName: shortIdentity(pub), intent: peerJump.intent, jumpMsgId: peerJump.msgId });
     void listContacts().then((ctacts) => {
       const c = ctacts.find((x) => x.peerPublicKey === pub);
       if (c?.displayName) {
         setOpenPeer((prev) => (prev?.pubB64 === pub ? { ...prev, displayName: c.displayName } : prev));
       }
     });
-  }, [peerJump?.token, peerJump?.peer, peerJump?.intent]);
+  }, [peerJump?.token, peerJump?.peer, peerJump?.intent, peerJump?.msgId]);
 
   // When any chat message is written, refresh the list
   useEffect(() => {

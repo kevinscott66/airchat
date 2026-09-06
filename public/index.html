@@ -38,6 +38,30 @@
   </head>
 
   <body>
+    <!--
+      v4.32.606: восстановление адреса ссылки. GitHub Pages отдаёт на /l/…
+      страницу 404.html, и та приводит человека сюда с адресом в запросе.
+      Здесь он возвращается в строку браузера настоящим путём — приложение
+      читает его через Linking.getInitialURL() и открывает нужный экран.
+
+      Проверка строгая нарочно: replaceState меняет только адрес, но чужая
+      строка в адресной строке — это чужая строка в адресной строке.
+      Принимается ровно один вид пути и ничего больше.
+    -->
+    <script>
+      (function () {
+        try {
+          var m = /[?&]l=([^&]*)/.exec(window.location.search || '');
+          if (!m) return;
+          var rest = decodeURIComponent(m[1]);
+          if (!/^[A-Za-z0-9._~:@+%-]+(\/[A-Za-z0-9._~:@+%-]+)*$/.test(rest)) return;
+          if (rest.length > 4096) return;
+          window.history.replaceState(null, '', '/l/' + rest);
+        } catch (e) {
+          /* адрес останется прежним — приложение просто откроется на своём экране */
+        }
+      })();
+    </script>
     <noscript>Для работы AirChat нужен JavaScript.</noscript>
     <div id="root"></div>
   </body>

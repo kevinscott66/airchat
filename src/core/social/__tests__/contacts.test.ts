@@ -45,7 +45,9 @@ import {
   getSymmetricKeyForPeer,
   findContactPubKeyByHash,
   invalidateContactsList,
+  parseContactId,
 } from '../contacts';
+import { buildContactLink, buildDmLink } from '../../net/appLink';
 import { publicKeyHash4 } from '../../crypto/keyManager';
 
 // We need real ECDH — mock only at the storage layer, leave crypto real.
@@ -277,5 +279,49 @@ describe('contacts — негодный открытый ключ отверга
       BAD_PUBLIC_KEY_MESSAGE
     );
     expect(await listContacts()).toEqual([]);
+  });
+});
+
+/**
+ * v4.32.606: «Новый контакт» принимает ссылку.
+ *
+ * Наружу из профиля теперь уходит ссылка, а не голый DID, — и если бы поле её
+ * не читало, человек копировал бы у себя одно, а вставлял бы у другого то, что
+ * тот не может принять.
+ */
+describe('parseContactId читает ссылку на профиль', () => {
+  const PUB = Buffer.from(Array.from({ length: 32 }, (_, i) => (i * 5 + 1) & 0xff)).toString('base64');
+
+  test('https-форма ссылки на профиль', () => {
+    const parsed = parseContactId(buildContactLink(PUB).web);
+    expect(parsed && Buffer.from(parsed).toString('base64')).toBe(PUB);
+  });
+
+  test('схема приложения', () => {
+    const parsed = parseContactId(buildContactLink(PUB).app);
+    expect(parsed && Buffer.from(parsed).toString('base64')).toBe(PUB);
+  });
+
+  test('ссылка на переписку несёт тот же ключ', () => {
+    const parsed = parseContactId(buildDmLink(PUB).web);
+    expect(parsed && Buffer.from(parsed).toString('base64')).toBe(PUB);
+  });
+
+  test('ссылка под ПРЕЖНИМ адресом читается после смены адреса', () => {
+    const saved = process.env.EXPO_PUBLIC_LINK_BASE;
+    process.env.EXPO_PUBLIC_LINK_BASE = 'https://new.example.org';
+    try {
+      const old = `https://air.dobropalm.tech/l/u/${PUB.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+      const parsed = parseContactId(old);
+      expect(parsed && Buffer.from(parsed).toString('base64')).toBe(PUB);
+    } finally {
+      if (saved === undefined) delete process.env.EXPO_PUBLIC_LINK_BASE;
+      else process.env.EXPO_PUBLIC_LINK_BASE = saved;
+    }
+  });
+
+  test('чужая ссылка контактом не становится', () => {
+    expect(parseContactId('https://example.com/l/whatever/x')).toBeNull();
+    expect(parseContactId('https://example.com/blog')).toBeNull();
   });
 });
