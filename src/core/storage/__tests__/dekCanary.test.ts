@@ -208,7 +208,9 @@ describe('канарейка отличает ключ от чужого', () =>
 });
 
 describe('источник: разбор случаев вместо «null — значит первый запуск»', () => {
-  const BODY = bodyOf(ENC, 'export async function getOrCreateDataEncryptionKey()');
+  // v4.32.615: тело переехало в `resolveDataEncryptionKey` — экспортируемая
+  // функция теперь только склеивает параллельные вызовы (см. dekInflight.test).
+  const BODY = bodyOf(ENC, 'async function resolveDataEncryptionKey(');
 
   it('решение принимает политика, а не сама функция', () => {
     expect(BODY).toContain('decideDek({');

@@ -48,13 +48,26 @@ export class DekUnavailableError extends Error {
 
 let dekMemory: Uint8Array | null = null;
 
+/**
+ * v4.32.615: счётчик намеренных смен ключа в памяти.
+ *
+ * Пока идёт `getOrCreateDataEncryptionKey`, ключ рядом могли поменять — сменой
+ * профиля, dispose сервиса или миграцией из `local.ts`. Без счётчика такой
+ * вызов дописывал бы в `dekMemory` уже чужой ключ, отменяя эту смену.
+ */
+let dekGeneration = 0;
+
 export function setDekMemory(dek: Uint8Array): void {
   dekMemory = dek;
+  dekGeneration += 1;
+  dekInflight = null;
 }
 
 /** Сброс кэша DEK в памяти при смене профиля / dispose сервиса (секрет перечитывается из SecureStore). */
 export function clearDekMemory(): void {
   dekMemory = null;
+  dekGeneration += 1;
+  dekInflight = null;
 }
 
 /** Сырой DEK из SecureStore (без генерации). */
@@ -166,12 +179,39 @@ export async function canaryOpensWith(dek: Uint8Array): Promise<boolean | null> 
 export async function persistDek(dek: Uint8Array): Promise<void> {
   await SecureStore.setItemAsync(DEK_KEY, Buffer.from(dek).toString('base64'));
   await writeCanary(dek);
-  dekMemory = dek;
+  setDekMemory(dek);
 }
 
-export async function getOrCreateDataEncryptionKey(): Promise<Uint8Array> {
-  if (dekMemory && dekMemory.length === SYMMETRIC_KEY_BYTES) return dekMemory;
+/**
+ * v4.32.615: параллельные вызовы складываются в один.
+ *
+ * Дефект. Между чтением хранилища и записью выбранного ключа стоят несколько
+ * await — чтение SecureStore, чтение канарейки, распаковка мнемоники. Звали эту
+ * функцию из сотни мест, и на первом запуске (`create-random`) два вызова
+ * успевали оба решить «ключа нет» и сгенерировать РАЗНЫЕ случайные ключи.
+ * Дальше — как лягут записи: часть строк уезжает под первый ключ, часть под
+ * второй, а канарейка может остаться запечатанной третьим сочетанием. Тогда
+ * следующий запуск честно откажется открывать базу
+ * (`stored_does_not_match_data`), и переписка не откроется уже никогда.
+ *
+ * Склейка — та же, что у `getStoredMnemonic` в `seedPhrase.ts`: первый вызов
+ * делает работу, остальные ждут его обещание. Отказ обещание не кэширует —
+ * следующий вызов попробует заново.
+ */
+let dekInflight: Promise<Uint8Array> | null = null;
 
+export function getOrCreateDataEncryptionKey(): Promise<Uint8Array> {
+  if (dekMemory && dekMemory.length === SYMMETRIC_KEY_BYTES) return Promise.resolve(dekMemory);
+  if (dekInflight) return dekInflight;
+  const p = resolveDataEncryptionKey().finally(() => {
+    if (dekInflight === p) dekInflight = null;
+  });
+  dekInflight = p;
+  return p;
+}
+
+async function resolveDataEncryptionKey(): Promise<Uint8Array> {
+  const gen = dekGeneration;
   const stored = await observeStoredDek();
   const canary = await readCanary();
   const storedOpensCanary = canaryOpens(canary.stored, stored.dek);
@@ -208,7 +248,8 @@ export async function getOrCreateDataEncryptionKey(): Promise<Uint8Array> {
     await SecureStore.setItemAsync(DEK_KEY, Buffer.from(chosen).toString('base64'));
   }
   if (decision.writeCanary) await writeCanary(chosen);
-  dekMemory = chosen;
+  // Ключ рядом могли поменять, пока шло чтение, — тогда наш уже чужой.
+  if (dekGeneration === gen) dekMemory = chosen;
   return chosen;
 }
 
