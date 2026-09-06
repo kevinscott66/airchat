@@ -18,6 +18,7 @@ import { validateMnemonic } from 'bip39';
 import { decryptSymmetric, encryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
 import { passwordPolicyError } from '../security/passwordPolicy';
 import { log } from '../logger';
+import { fetchWithDeadline } from '../net/timedFetch';
 import { cloudBaseUrl } from './cloudVault';
 
 export const SEED_BINDING_VERSION = 1;
@@ -92,24 +93,31 @@ export function decryptSeedBinding(
   return validateMnemonic(mnemonic) ? mnemonic : null;
 }
 
-async function fetchBinding(path: string, body: unknown): Promise<Response> {
+/**
+ * Запрос привязки со сроком на весь обмен (v4.32.614). Тело читает переданная
+ * функция: раньше срок снимался на заголовках, и разбор ответа оставался без
+ * предела — на этом пути человек ждёт вход в аккаунт.
+ */
+function fetchBinding<T>(
+  path: string,
+  body: unknown,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
   const base = cloudBaseUrl();
   if (!base) throw new Error('Облачное хранилище не настроено.');
-  const controller = typeof AbortController === 'undefined' ? null : new AbortController();
-  const timeout = setTimeout(() => controller?.abort(), SEED_BINDING_TIMEOUT_MS);
-  try {
-    return await fetch(`${base}/v1/seed-binding/${path}`, {
+  return fetchWithDeadline(
+    `${base}/v1/seed-binding/${path}`,
+    {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-  } catch (e) {
-    if (controller?.signal.aborted) throw new Error('Облачный сервер не отвечает.');
-    throw e;
-  } finally {
-    clearTimeout(timeout);
-  }
+    },
+    {
+      timeoutMs: SEED_BINDING_TIMEOUT_MS,
+      onTimeout: () => new Error('Облачный сервер не отвечает.'),
+    },
+    read,
+  );
 }
 
 function bindingError(status: number): Error {
@@ -143,8 +151,9 @@ export async function putSeedBinding(
   password: string,
 ): Promise<void> {
   const envelope = encryptSeedBinding(mnemonic, password);
-  const response = await fetchBinding('put', { provider, idToken, envelope });
-  if (!response.ok) throw bindingError(response.status);
+  await fetchBinding('put', { provider, idToken, envelope }, async (response) => {
+    if (!response.ok) throw bindingError(response.status);
+  });
   log.info('seed_binding_saved', { provider });
 }
 
@@ -153,20 +162,23 @@ export async function fetchSeedBinding(
   provider: SeedBindingProvider,
   idToken: string,
 ): Promise<SeedBindingEnvelope | null> {
-  const response = await fetchBinding('get', { provider, idToken });
-  if (response.status === 404) return null;
-  if (!response.ok) throw bindingError(response.status);
-  const body = (await response.json()) as { envelope?: SeedBindingEnvelope };
-  return body?.envelope ?? null;
+  return fetchBinding('get', { provider, idToken }, async (response) => {
+    if (response.status === 404) return null;
+    if (!response.ok) throw bindingError(response.status);
+    const body = (await response.json()) as { envelope?: SeedBindingEnvelope };
+    return body?.envelope ?? null;
+  });
 }
 
 export async function deleteSeedBinding(
   provider: SeedBindingProvider,
   idToken: string,
 ): Promise<boolean> {
-  const response = await fetchBinding('delete', { provider, idToken });
-  if (!response.ok) throw bindingError(response.status);
-  const body = (await response.json()) as { ok?: boolean };
+  const ok = await fetchBinding('delete', { provider, idToken }, async (response) => {
+    if (!response.ok) throw bindingError(response.status);
+    const body = (await response.json()) as { ok?: boolean };
+    return body?.ok === true;
+  });
   log.info('seed_binding_deleted', { provider });
-  return body?.ok === true;
+  return ok;
 }

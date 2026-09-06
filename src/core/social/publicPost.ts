@@ -25,6 +25,7 @@ import { publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { bytesToBase64Url } from '../utils/base64url';
 import { FEED_ENVELOPE_MAGIC, FEED_ENVELOPE_MAX_BYTES } from './feedTransport';
 import { log } from '../logger';
+import { fetchWithDeadline } from '../net/timedFetch';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import type { FeedEnvelopePayload } from './feedTransport';
 
@@ -41,26 +42,30 @@ export function publicPostStoreAvailable(): boolean {
   return cloudBaseUrl() !== null;
 }
 
-/**
- * Запрос с общим сроком на весь обмен, включая чтение тела (v4.32.614).
- *
- * Раньше таймер снимался, как только вернулись заголовки, а `response.json()`
- * оставался без всякого предела: сервер, отдающий первый килобайт и потом
- * молчащий, держал вызывающего до самого разрыва соединения. Поэтому работа с
- * ответом делается внутри, а не после.
- */
-async function fetchPublicPost<T>(
+/** Запрос со сроком на весь обмен, включая чтение тела (см. timedFetch). */
+function fetchPublicPost<T>(
   url: string,
   init: RequestInit,
   read: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const controller = typeof AbortController === 'undefined' ? null : new AbortController();
-  const timeout = setTimeout(() => controller?.abort(), PUBLIC_POST_TIMEOUT_MS);
+  return fetchWithDeadline(url, init, { timeoutMs: PUBLIC_POST_TIMEOUT_MS }, read);
+}
+
+/**
+ * Слово сервера об отказе рядом с кодом ответа (v4.32.614).
+ *
+ * Раньше любой неуспех сворачивался здесь в `false`, а снятие копии и проверка
+ * её наличия не оставляли в журнале и того. Отличить «сервер отверг подпись»
+ * от «нет связи» и от «копии там и не было» было нечем — а от этого зависит,
+ * имеет ли смысл повторять запрос. Тело ответа сервер пишет одним словом в
+ * поле `error`; оно и кладётся рядом с кодом.
+ */
+async function refusalCode(response: Response): Promise<string | undefined> {
   try {
-    const response = await fetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
-    return await read(response);
-  } finally {
-    clearTimeout(timeout);
+    const body = await response.json() as { error?: unknown };
+    return typeof body?.error === 'string' ? body.error.slice(0, 64) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -131,7 +136,11 @@ export async function putPublicPostCopy(
       },
       async (response) => {
         if (!response.ok) {
-          log.warn('public_post_put_failed', { postId: payload.postId.slice(0, 24), status: response.status });
+          log.warn('public_post_put_failed', {
+            postId: payload.postId.slice(0, 24),
+            status: response.status,
+            code: await refusalCode(response),
+          });
           return false;
         }
         return true;
@@ -164,7 +173,13 @@ export async function getPublicPostFrame(postId: string): Promise<Uint8Array | n
       { method: 'GET' },
       async (response) => {
         if (!response.ok) {
-          if (response.status !== 404) log.warn('public_post_get_failed', { postId: postId.slice(0, 24), status: response.status });
+          if (response.status !== 404) {
+            log.warn('public_post_get_failed', {
+              postId: postId.slice(0, 24),
+              status: response.status,
+              code: await refusalCode(response),
+            });
+          }
           return null;
         }
         return await response.json() as { payload?: unknown; signature?: unknown; authorPublicKeyB64?: unknown };
@@ -226,7 +241,14 @@ export async function publicPostCopyExists(postId: string): Promise<boolean> {
     return await fetchPublicPost(
       `${base}/v1/post/${encodeURIComponent(postId)}`,
       { method: 'HEAD' },
-      async (response) => response.ok,
+      async (response) => {
+        // 404 — это не отказ, а ответ: копии на сервере нет. Всё остальное
+        // означает, что мы про копию так ничего и не узнали.
+        if (!response.ok && response.status !== 404) {
+          log.warn('public_post_head_failed', { postId: postId.slice(0, 24), status: response.status });
+        }
+        return response.ok;
+      },
     );
   } catch (e) {
     log.warn('public_post_head_error', { err: e instanceof Error ? e.message : String(e) });
@@ -260,7 +282,16 @@ export async function deletePublicPostCopy(
           intent,
         }),
       },
-      async (response) => response.ok,
+      async (response) => {
+        if (!response.ok) {
+          log.warn('public_post_delete_failed', {
+            postId: payload.postId.slice(0, 24),
+            status: response.status,
+            code: await refusalCode(response),
+          });
+        }
+        return response.ok;
+      },
     );
   } catch (e) {
     log.warn('public_post_delete_error', { err: e instanceof Error ? e.message : String(e) });

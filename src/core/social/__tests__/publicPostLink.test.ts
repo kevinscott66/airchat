@@ -15,6 +15,17 @@ jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn() },
 }));
 jest.mock('../contacts', () => ({ listContacts: jest.fn(async () => []) }));
+const mockWarns: Array<{ event: string; data: Record<string, unknown> }> = [];
+jest.mock('../../logger', () => ({
+  log: {
+    info: jest.fn(),
+    debug: jest.fn(),
+    error: jest.fn(),
+    warn: jest.fn((event: string, data: Record<string, unknown>) => {
+      mockWarns.push({ event, data: data ?? {} });
+    }),
+  },
+}));
 
 import { ed25519 } from '@noble/curves/ed25519.js';
 
@@ -25,7 +36,13 @@ import {
   FEED_ENVELOPE_MAX_AGE_MS,
   type FeedEnvelopePayload,
 } from '../feedTransport';
-import { deletePublicPostCopy, getPublicPostFrame, putPublicPostCopy, isPublicPostId } from '../publicPost';
+import {
+  deletePublicPostCopy,
+  getPublicPostFrame,
+  publicPostCopyExists,
+  putPublicPostCopy,
+  isPublicPostId,
+} from '../publicPost';
 
 function identity(): { pair: { secretKey: Uint8Array; publicKey: Uint8Array }; did: string } {
   const { secretKey, publicKey } = ed25519.keygen();
@@ -178,5 +195,58 @@ describe('публикация по ссылке', () => {
     const bad = { ...expiredPost(did), postId: '../../etc/passwd' };
     expect(await putPublicPostCopy(pair, bad)).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * v4.32.614: отказ сервера перестал быть безымянным.
+ *
+ * Все четыре запроса возвращают наружу «да» или «нет», и на два из них — снятие
+ * копии и проверку её наличия — журнал не отзывался вовсе. Между тем от причины
+ * зависит поведение: отвергнутую подпись повторять бессмысленно, а разрыв связи
+ * ложится в очередь повторов. Ниже проверяется, что причина доходит до журнала
+ * и что «копии нет» отказом не считается.
+ */
+describe('причина отказа сервера', () => {
+  beforeEach(() => { mockWarns.length = 0; });
+
+  function refuse(status: number, error?: string): void {
+    globalThis.fetch = jest.fn(async () => new Response(
+      error === undefined ? null : JSON.stringify({ error }),
+      { status, headers: error === undefined ? undefined : { 'content-type': 'application/json' } },
+    )) as unknown as typeof fetch;
+  }
+
+  it('снятие копии пишет код ответа и слово сервера', async () => {
+    const { pair, did } = identity();
+    refuse(400, 'invalid_post_intent');
+    const payload: FeedEnvelopePayload = { ...expiredPost(did), type: 'feed_delete', data: { kind: 'delete' } };
+    expect(await deletePublicPostCopy(pair, payload)).toBe(false);
+    const note = mockWarns.find((w) => w.event === 'public_post_delete_failed');
+    expect(note).toBeDefined();
+    expect(note?.data.status).toBe(400);
+    expect(note?.data.code).toBe('invalid_post_intent');
+  });
+
+  it('выкладка копии тоже называет причину', async () => {
+    const { pair, did } = identity();
+    refuse(429, 'rate_limited');
+    expect(await putPublicPostCopy(pair, expiredPost(did))).toBe(false);
+    const note = mockWarns.find((w) => w.event === 'public_post_put_failed');
+    expect(note?.data.status).toBe(429);
+    expect(note?.data.code).toBe('rate_limited');
+  });
+
+  it('«копии нет» — это ответ, а не отказ: журнал молчит', async () => {
+    refuse(404);
+    expect(await publicPostCopyExists('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBe(false);
+    expect(mockWarns.map((w) => w.event)).not.toContain('public_post_head_failed');
+  });
+
+  it('а вот молчание сервера про копию — отказ, и он записан', async () => {
+    refuse(503);
+    expect(await publicPostCopyExists('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBe(false);
+    const note = mockWarns.find((w) => w.event === 'public_post_head_failed');
+    expect(note?.data.status).toBe(503);
   });
 });

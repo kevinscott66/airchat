@@ -25,6 +25,7 @@ import {
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import * as SecureStore from '../storage/secureStoreQueued';
 import { log } from '../logger';
+import { fetchWithDeadline } from '../net/timedFetch';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../security/passwordPolicy';
 import { deriveLocalDekFromMnemonic } from '../storage/dekDerivation';
 import { bytesToBase64Url } from '../utils/base64url';
@@ -180,20 +181,28 @@ function randomNonce(): string {
   return bytesToBase64Url(randomBytes(16));
 }
 
-async function fetchCloud(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const controller = typeof AbortController === 'undefined' ? null : new AbortController();
-  const timeout = setTimeout(() => controller?.abort(), CLOUD_REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(input, {
-      ...init,
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-  } catch (e) {
-    if (controller?.signal.aborted) throw new Error('Облачный сервер не отвечает.');
-    throw e;
-  } finally {
-    clearTimeout(timeout);
-  }
+/**
+ * Запрос к облаку со сроком на весь обмен (v4.32.614).
+ *
+ * Ответ разбирает переданная функция, а не вызывающий: раньше срок снимался
+ * на заголовках, и `response.json()` — а это архив аккаунта размером в
+ * мегабайты — читался уже без предела. Восстановление из облака зависало
+ * навсегда, если сервер замолкал на середине тела.
+ */
+function fetchCloud<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  return fetchWithDeadline(
+    input,
+    init,
+    {
+      timeoutMs: CLOUD_REQUEST_TIMEOUT_MS,
+      onTimeout: () => new Error('Облачный сервер не отвечает.'),
+    },
+    read,
+  );
 }
 
 function validateArchiveFileList(
@@ -281,12 +290,17 @@ export async function uploadCloudVault(mnemonic: string, password: string): Prom
   if (!archive) throw new Error('Не удалось прочитать локальную копию аккаунта.');
   const envelope = encryptCloudVaultArchive(mnemonic, password, archive);
   const signed = await signedRequest(mnemonic, 'put', envelope);
-  const response = await fetchCloud(`${base}/v1/cloud-vault/${envelope.accountId}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(signed),
-  });
-  if (!response.ok) throw requestError(response.status);
+  await fetchCloud(
+    `${base}/v1/cloud-vault/${envelope.accountId}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(signed),
+    },
+    async (response) => {
+      if (!response.ok) throw requestError(response.status);
+    },
+  );
   log.info('cloud_vault_uploaded', { accountId: envelope.accountId, savedAt: envelope.savedAt });
 }
 
@@ -298,17 +312,20 @@ export async function restoreCloudVault(
   const base = cloudBaseUrl();
   if (!base) throw new Error('Облачное хранилище не настроено.');
   const signed = await signedRequest(mnemonic, 'get');
-  const response = await fetchCloud(
+  const envelope = await fetchCloud(
     `${base}/v1/cloud-vault/${accountIdFromPublicKey(deriveKeyPairFromMnemonic(mnemonic).publicKey)}/get`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(signed),
     },
+    async (response) => {
+      if (response.status === 404) return null;
+      if (!response.ok) throw requestError(response.status);
+      return (await response.json()) as CloudVaultEnvelope;
+    },
   );
-  if (response.status === 404) return 'not_found';
-  if (!response.ok) throw requestError(response.status);
-  const envelope = (await response.json()) as CloudVaultEnvelope;
+  if (!envelope) return 'not_found';
   const archive = decryptCloudVaultArchive(mnemonic, password, envelope);
   if (!archive) throw new Error('Неверный облачный пароль или повреждённая копия.');
   const { closeFeedStorage } = await import('../social/feedService');
