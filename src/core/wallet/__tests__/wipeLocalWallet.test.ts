@@ -178,17 +178,19 @@ const ALL_SECRETS = [
   FCM_TOKEN_KEY,
 ];
 
-/**
- * Пять шагов сброса грузят свой модуль через `await import(...)` — так
- * разорваны циклические зависимости. В production это работает, а jest без
- * --experimental-vm-modules бросает на любом динамическом импорте, поэтому
- * здесь они падают всегда и в том же порядке.
+/*
+ * v4.32.614: пять шагов сброса грузят свой модуль через `await import(...)` —
+ * так разорваны циклические зависимости, — и под jest падали ВСЕ, потому что
+ * `import()` оставался нетронутым и бросал ERR_VM_DYNAMIC_IMPORT_CALLBACK_-
+ * MISSING_FLAG. Здесь стоял список этих пяти имён, и каждая проверка итога
+ * несла его в ожидании.
  *
- * Отменять их ради теста нечестно, и не нужно: среда сама воспроизводит ровно
- * ту ситуацию, ради которой раунд и делался — четыре упавших шага подряд, — а
- * тесты ниже показывают, что seed, ключи и база при этом всё равно стираются.
+ * Цена была не в кривом списке. Пять шагов — среди них account_vault, который
+ * убирает копию аккаунта с сервера, — не выполнялись в тестах ни разу, и
+ * сломать их было нечем: любая поломка внутри давала то же самое имя в
+ * failedSteps. Плагин в babel.config.js (env.test) чинит `import()`, шаги
+ * пошли по-настоящему, и теперь пустой failedSteps — настоящий пустой.
  */
-const JEST_DYNAMIC_FAILS = ['live_account_sync', 'story_inbox_listener', 'live_location', 'scheduler', 'account_vault'];
 
 /**
  * Где шаг оказался в журнале: либо своим именем, либо записью о падении —
@@ -228,7 +230,7 @@ describe('performLocalWalletWipe', () => {
   it('стирает все секреты, несмотря на упавшие по дороге шаги', async () => {
     const res = await performLocalWalletWipe();
 
-    expect(res).toEqual({ ok: true, failedSteps: JEST_DYNAMIC_FAILS, survivors: [] });
+    expect(res).toEqual({ ok: true, failedSteps: [], survivors: [] });
     expect([...mockStore.keys()]).toEqual([]);
   });
 
@@ -256,7 +258,7 @@ describe('performLocalWalletWipe', () => {
     const res = await performLocalWalletWipe();
 
     expect(mockCalls).toEqual(expect.arrayContaining(['mnemonic', 'keypair', 'local_db']));
-    expect(res.failedSteps).toEqual(['auth_data', ...JEST_DYNAMIC_FAILS]);
+    expect(res.failedSteps).toEqual(['auth_data']);
     // Ключи пароля остались (шаг упал), но сброс их добил проверкой.
     expect(res).toMatchObject({ ok: true, survivors: [] });
   });
@@ -266,7 +268,7 @@ describe('performLocalWalletWipe', () => {
 
     const res = await performLocalWalletWipe();
 
-    expect(res.failedSteps).toEqual([...JEST_DYNAMIC_FAILS, 'profiles']);
+    expect(res.failedSteps).toEqual(['profiles']);
     expect(mockCalls).toEqual(expect.arrayContaining(['mnemonic', 'keypair', 'local_db', 'clipboard']));
     expect(res.ok).toBe(true);
   });
@@ -347,7 +349,7 @@ describe('performLocalWalletWipe', () => {
 
     const res = await performLocalWalletWipe();
 
-    expect(res).toEqual({ ok: true, failedSteps: JEST_DYNAMIC_FAILS, survivors: [] });
+    expect(res).toEqual({ ok: true, failedSteps: [], survivors: [] });
     expect(mockStore.has(SEED_KEY)).toBe(false);
   });
 
@@ -380,7 +382,7 @@ describe('performLocalWalletWipe', () => {
     const res = await performLocalWalletWipe();
 
     expect(res.ok).toBe(true);
-    expect(res.failedSteps).toEqual([...JEST_DYNAMIC_FAILS, 'media_cache', 'avatars', 'clipboard']);
+    expect(res.failedSteps).toEqual(['media_cache', 'avatars', 'clipboard']);
   });
 
   it('итог попадает в журнал целиком', async () => {
