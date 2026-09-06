@@ -16,18 +16,34 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-// v4.32.222 (Paranoid): pin every SecureStore write to
-// WHEN_UNLOCKED_THIS_DEVICE_ONLY unless the caller already provided a
-// keychainAccessible value. On iOS this prevents the entry from being
-// restored onto another device via iCloud Keychain backup (default for
-// expo-secure-store is AFTER_FIRST_UNLOCK, which IS backed up). On Android
-// the flag is a no-op but centralising the default makes the intent
-// explicit and blocks future regressions.
+// v4.32.222 (Paranoid): каждая запись закрепляется за этим устройством,
+// если вызывающий не указал доступность сам. На iOS это не даёт записи
+// уехать на чужой телефон через восстановление связки ключей из iCloud
+// (умолчание expo-secure-store — AFTER_FIRST_UNLOCK, а оно в копию входит).
+// На Android флаг ничего не делает, но общее умолчание в одном месте
+// закрывает путь к откату.
+//
+// v4.32.613: ...THIS_DEVICE_ONLY остаётся — именно он и был причиной правки
+// v4.32.222, — а вот WHEN_UNLOCKED заменён на AFTER_FIRST_UNLOCK.
+// WHEN_UNLOCKED значит «читать можно только на разблокированном телефоне», и
+// iOS поднимает приложение раньше разблокировки чаще, чем кажется: переход по
+// ссылке из другого приложения, запуск по уведомлению, прогрев. Первое же
+// чтение падало с errSecInteractionNotAllowed, и запуск упирался в красный
+// экран на ровном месте. AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY закрыт до первой
+// разблокировки после включения телефона и так же не попадает в копию iCloud.
+//
+// Важно: у уже созданных записей доступность этим не меняется. Нативный
+// модуль на существующем ключе идёт в SecItemUpdate и обновляет только
+// значение (SecureStoreModule.swift, ветка errSecDuplicateItem), а
+// пересоздавать записи с ключами ради атрибута нельзя: между удалением и
+// вставкой помещается смерть процесса, и секрет пропадёт навсегда. Поэтому
+// новое умолчание работает для новых установок, а тем, у кого записи уже
+// лежат, помогает повтор запуска (см. `keychainLocked` и `App.tsx`).
 function withSafeDefaults(options?: SecureStoreOptions): SecureStoreOptions {
   if (options && options.keychainAccessible !== undefined) return options;
   return {
     ...(options ?? {}),
-    keychainAccessible: ExpoSecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    keychainAccessible: ExpoSecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
   };
 }
 

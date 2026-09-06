@@ -41,6 +41,7 @@ import { ownerPidForPublicKey } from './core/identity/ownerPidLookup';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, ownFieldGet, stripOwnDisplayName } from './core/identity/ownProfile';
 import { ensureLocalStorageReadyForBoot, kvGet, subscribeChatWrites, purgeDisappearedMessages, createGroup, upsertGroupMember, groupIdState, liveAttachmentBlobIds } from './core/storage/local';
 import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webStorageDiagnosis';
+import { KEYCHAIN_LOCKED_TEXT, isKeychainLockedMessage } from './core/storage/keychainLocked';
 import { dekFailureAdvice } from './core/storage/dekFailureAdvice';
 import { scheduleDialogBackupPersist } from './core/storage/dialogBackup';
 import { parseAppLink } from './core/net/appLink';
@@ -1730,9 +1731,11 @@ function MainScreen({
 function BootErrorView({
   message,
   onReset,
+  onRetry,
 }: {
   message: string;
   onReset?: () => void;
+  onRetry?: () => void;
 }): React.ReactElement {
   // v4.32.603: у отказа «данные не открываются» до сих пор не было ни
   // человеческого объяснения, ни выхода — экран показывал строку исключения и
@@ -1740,10 +1743,15 @@ function BootErrorView({
   // решает, помогает ли здесь сброс: при «хранилище не отвечает» удалять
   // нечего и нельзя, данные целы.
   const advice = useMemo(() => dekFailureAdvice(message), [message]);
+  // v4.32.613: «телефон был заблокирован» — не поломка, а состояние. Данных
+  // это не касается, поэтому сброс здесь не предлагается ни при каких
+  // условиях, зато есть повтор — и тот же повтор запуск делает сам, как
+  // только приложение вернётся в активное состояние.
+  const locked = useMemo(() => isKeychainLockedMessage(message), [message]);
   /** Первое нажатие — только предупреждение. Удаление необратимо, и одного касания для него мало. */
   const [resetArmed, setResetArmed] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
-  const canReset = advice?.resettable === true && !!onReset;
+  const canReset = !locked && advice?.resettable === true && !!onReset;
   const styles = useThemedStyles((c) => ({
     center: { flex: 1, justifyContent: 'center' as const, alignItems: 'center' as const, backgroundColor: c.background },
     title: { color: c.error, fontSize: font.lg, fontWeight: '700' as const, marginBottom: spacing.xs },
@@ -1767,12 +1775,34 @@ function BootErrorView({
       opacity: resetBusy ? 0.6 : 1,
     },
     resetText: { color: c.error, fontWeight: '600' as const, fontSize: font.md },
+    retryBtn: {
+      marginTop: spacing.lg,
+      minHeight: TOUCH_TARGET_MIN,
+      justifyContent: 'center' as const,
+      paddingHorizontal: spacing.lg,
+      backgroundColor: c.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    retryText: { color: c.text, fontWeight: '600' as const, fontSize: font.md },
   }));
   return (
     <SafeScreen edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.center} testID="boot_error">
         <Text style={styles.title}>Ошибка запуска</Text>
-        <Text style={styles.body}>{advice ? advice.text : message}</Text>
+        <Text style={styles.body}>{locked ? KEYCHAIN_LOCKED_TEXT : advice ? advice.text : message}</Text>
+        {locked && onRetry ? (
+          <AppPressable
+            style={styles.retryBtn}
+            onPress={onRetry}
+            testID="boot_error_retry"
+            accessibilityRole="button"
+            accessibilityLabel="Повторить запуск"
+          >
+            <Text style={styles.retryText}>Повторить</Text>
+          </AppPressable>
+        ) : null}
         {canReset ? (
           <>
             {resetArmed ? (
@@ -2018,6 +2048,16 @@ export default function App(): React.ReactElement {
     setGate('ready');
   }, []);
 
+  /**
+   * Повторить запуск с начала. Единственный законный повод — отказ, который
+   * проходит сам: хранилище ключей было закрыто, пока телефон заблокирован.
+   * Данные при этом не трогаются: нонс просто перезапускает эффект запуска.
+   */
+  const retryBoot = useCallback(() => {
+    setBootError(null);
+    setWalletBootNonce((n) => n + 1);
+  }, []);
+
   const onWalletLogout = useCallback(async () => {
     // Unmount the account UI before closing SQLite. Feed/chat effects can still
     // issue reads while the confirmation handler awaits the wipe; keeping the
@@ -2253,7 +2293,15 @@ export default function App(): React.ReactElement {
           // Отказ браузерного хранилища выглядит как строка из недр
           // expo-sqlite: верная и нечитаемая. Заменяем на диагноз, из
           // которого понятно, чинится это сертификатом или браузером.
-          setBootError(diagnoseStorageFailure(msg, currentStorageEnv()) ?? msg);
+          // v4.32.613: отказ «нет доступа, пока устройство заблокировано»
+          // раньше доезжал до экрана строкой исключения — без объяснения и
+          // без выхода. Ломать тут нечего: телефон разблокируют, и запуск
+          // повторится сам (см. эффект ниже).
+          setBootError(
+            isKeychainLockedMessage(msg)
+              ? KEYCHAIN_LOCKED_TEXT
+              : (diagnoseStorageFailure(msg, currentStorageEnv()) ?? msg)
+          );
         }
       }
     })();
@@ -2517,13 +2565,33 @@ export default function App(): React.ReactElement {
     return () => clearTimeout(t);
   }, [gate]);
 
+  // v4.32.613: запуск при заблокированном телефоне повторяется сам, как
+  // только приложение стало активным — то есть ровно тогда, когда человек
+  // разблокировал устройство. Без этого экран оставался красным до тех пор,
+  // пока приложение не убьют и не откроют заново.
+  useEffect(() => {
+    if (bootError !== KEYCHAIN_LOCKED_TEXT) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') retryBoot();
+    });
+    return () => sub.remove();
+  }, [bootError, retryBoot]);
+
   useEffect(() => {
     log.debug('boot_gate_pair_snapshot', { gate, hasPair: !!pair });
   }, [gate, pair]);
 
   let body: React.ReactElement;
   if (bootError) {
-    body = <BootErrorView message={bootError} onReset={() => { void onWalletLogout(); }} />;
+    body = (
+      <BootErrorView
+        message={bootError}
+        onReset={() => {
+          void onWalletLogout();
+        }}
+        onRetry={retryBoot}
+      />
+    );
   } else if (gate === 'onboarding') {
     body = <OnboardingScreen onComplete={onOnboardingComplete} />;
   } else if (gate === 'backup_warn' && pair) {
