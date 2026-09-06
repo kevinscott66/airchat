@@ -35,6 +35,7 @@ import {
 } from '../../core/security/biometricUnlock';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/passwordPolicy';
 import { PasswordField } from '../components/PasswordField';
+import { ModalScrimBlur } from '../components/ModalScrimBlur';
 import { copySecretToClipboard } from '../../core/security/clipboardSecret';
 import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../core/internalDiagnostics';
 import { Ionicons } from '@expo/vector-icons';
@@ -2233,6 +2234,7 @@ function SettingsScreenImpl({
       {/* Active Sessions */}
       <Modal visible={activeSessionsVisible} transparent animationType="fade" onRequestClose={() => setActiveSessionsVisible(false)}>
         <AppPressable style={styles.pwdModalBg} onPress={() => setActiveSessionsVisible(false)}>
+          <ModalScrimBlur />
           <AppPressable style={[styles.pwdModalBox, { maxHeight: '78%' }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>Активные сессии</Text>
             <Text style={[styles.desc, { marginBottom: 8 }]}>Устройства, где открыт доступ к аккаунту</Text>
@@ -2317,6 +2319,7 @@ function SettingsScreenImpl({
         {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <AppPressable style={styles.pwdModalBg} onPress={() => setStatusModal(false)}>
+            <ModalScrimBlur />
             <AppPressable style={[styles.pwdModalBox, { gap: 12 }]} onPress={() => {}}>
               <Text style={styles.modalTitle}>Мой статус</Text>
               {/* v4.32.375: статус — одна строка под именем, а не абзац. Здесь
@@ -2346,6 +2349,7 @@ function SettingsScreenImpl({
       {editingQR ? (
         <Modal visible transparent animationType="fade" onRequestClose={() => setEditingQR(null)}>
           <AppPressable style={styles.pwdModalBg} onPress={() => setEditingQR(null)}>
+            <ModalScrimBlur />
             <AppPressable style={[styles.pwdModalBox, { gap: 12 }]} onPress={() => {}}>
               <Text style={styles.modalTitle}>Изменить шаблон</Text>
               <TextInput style={[styles.pwdInput, { height: 80, textAlignVertical: 'top' }]} value={editingQRText} onChangeText={setEditingQRText} multiline maxLength={200} autoFocus />
@@ -2369,6 +2373,7 @@ function SettingsScreenImpl({
         {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>
                 {pwdStep === 'repeat' ? 'Повторите пароль' : 'Новый пароль'}
@@ -2418,6 +2423,7 @@ function SettingsScreenImpl({
       <Modal visible={backupUnlockModal} transparent animationType="fade" testID="backup_unlock_modal" onRequestClose={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }}>
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Резервная копия</Text>
               <Text style={[styles.desc, { marginBottom: 12 }]}>Раздел защищён паролем приложения: в нём секретные слова и облачная копия.</Text>
@@ -2444,6 +2450,7 @@ function SettingsScreenImpl({
       <Modal visible={bioModal} transparent animationType="fade" onRequestClose={() => { setBioModal(false); setBioPwdInput(''); }}>
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>{Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}</Text>
               <Text style={styles.desc}>Введите пароль приложения — он ляжет в защищённое хранилище устройства и будет доступен только по биометрии.</Text>
@@ -2470,6 +2477,7 @@ function SettingsScreenImpl({
       <Modal visible={appleBindModal} transparent animationType="fade" onRequestClose={() => { setAppleBindModal(false); setAppleBindPwd(''); }}>
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Привязать к Apple ID</Text>
               <Text style={styles.desc}>
@@ -2499,6 +2507,7 @@ function SettingsScreenImpl({
         {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>
                 {pwdStep === 'old' ? 'Текущий пароль'
@@ -2559,6 +2568,7 @@ function SettingsScreenImpl({
       {/* Night schedule */}
       <Modal visible={nightTimeModal} transparent animationType="fade" onRequestClose={() => setNightTimeModal(false)}>
         <AppPressable style={styles.pwdModalBg} onPress={() => setNightTimeModal(false)}>
+          <ModalScrimBlur />
           <AppPressable style={[styles.pwdModalBox, { gap: 12 }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>Расписание ночного режима</Text>
             <Text style={[styles.desc, { textAlign: 'center', marginBottom: 4 }]}>Тёмная тема будет активна в выбранный период</Text>
@@ -2592,6 +2602,7 @@ function SettingsScreenImpl({
       {/* DND time picker */}
       <Modal visible={dndTimeModal !== null} transparent animationType="fade" onRequestClose={() => setDndTimeModal(null)}>
         <AppPressable style={styles.pwdModalBg} onPress={() => setDndTimeModal(null)}>
+          <ModalScrimBlur />
           <AppPressable style={[styles.pwdModalBox, { gap: 12 }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>{dndTimeModal === 'start' ? 'Начало тихих часов' : 'Конец тихих часов'}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
@@ -2616,6 +2627,7 @@ function SettingsScreenImpl({
         {/* v4.32.102 K.8: внутри Modal на Android нужно behavior="padding" (height не работает с flex:1 sheet) */}
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Секретные слова</Text>
               {seedPhrase ? (
@@ -2657,6 +2669,7 @@ function SettingsScreenImpl({
       <Modal visible={cloudPasswordModal} transparent animationType="fade" onRequestClose={() => setCloudPasswordModal(false)}>
         <KeyboardAvoidingView style={styles.pwdModalKav} behavior="padding" keyboardVerticalOffset={0}>
           <View style={styles.pwdModalBg}>
+            <ModalScrimBlur />
             <View style={styles.pwdModalBox}>
               <Text style={styles.modalTitle}>Копия в облако</Text>
               <Text style={styles.desc}>Введите пароль приложения. Копия шифруется им вместе с секретными словами прямо здесь — на сервер уходит уже закрытый файл. Без слов и пароля её не откроет никто, включая нас.</Text>

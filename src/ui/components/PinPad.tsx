@@ -34,6 +34,31 @@ const PIN_ROWS = [
   ['', '0', PIN_BACKSPACE],
 ];
 
+type KeysProps = { style: StyleProp<ViewStyle>; children: React.ReactNode };
+
+/** Клавиатура на фоне приложения: под ней действительно есть что размывать. */
+function GlassKeys({ style, children }: KeysProps): React.ReactElement {
+  return (
+    <GlassSurface variant="regular" rim style={style}>
+      {children}
+    </GlassSurface>
+  );
+}
+
+/**
+ * Клавиатура внутри окна поверх экрана: без панели.
+ *
+ * v4.32.604. Компактный вид лежит на глухой карточке диалога. Стекло там
+ * размывает ровно одну плоскую заливку, то есть не размывает ничего, — зато
+ * приносит вторую рамку поверх рамки карточки, на том же месте и того же
+ * радиуса. Это и есть «лишние рамки» с экрана: карточка, панель, кружки клавиш.
+ * Карточку убрать нельзя — в тёмной теме её от подложки отделяет как раз рамка
+ * (см. `scrim` в theme.ts), — поэтому уходит панель.
+ */
+function BareKeys({ style, children }: KeysProps): React.ReactElement {
+  return <View style={style}>{children}</View>;
+}
+
 type Props = {
   pin: string;
   length: number;
@@ -59,6 +84,7 @@ export function PinPad({
   const size = compact ? 58 : 70;
   const gap = compact ? spacing.md : spacing.lg;
   const glyph = compact ? 22 : 24;
+  const Keys = compact ? BareKeys : GlassKeys;
 
   const styles = useThemedStyles((c) => ({
     wrap: { alignItems: 'center' as const },
@@ -72,6 +98,8 @@ export function PinPad({
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.md,
     },
+    /** Клавиатура внутри окна: без панели — значит и без её отступов. */
+    panelBare: { alignItems: 'center' as const },
     row: { flexDirection: 'row' as const },
     key: {
       borderRadius: radius.full,
@@ -99,7 +127,7 @@ export function PinPad({
         ))}
       </View>
 
-      <GlassSurface variant="regular" rim style={styles.panel}>
+      <Keys style={compact ? styles.panelBare : styles.panel}>
         {PIN_ROWS.map((row, ri) => (
           <View key={ri} style={[styles.row, { gap }, ri > 0 && { marginTop: gap }]}>
             {row.map((key, ki) => {
@@ -143,7 +171,7 @@ export function PinPad({
             })}
           </View>
         ))}
-      </GlassSurface>
+      </Keys>
     </View>
   );
 }
