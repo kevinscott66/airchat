@@ -54,6 +54,28 @@ describe('UI interaction contracts', () => {
     expect(loading).toContain('themeColors.background');
   });
 
+  /**
+   * Своё имя не открывает профиль — и не должно отвечать на палец (v4.32.614).
+   *
+   * Было `onPress={() => { if (!isOwn) … }}`: нажатие проходило, AppPressable
+   * сжимал элемент, обработчик молча выходил. Для человека это неотличимо от
+   * сломанной кнопки, и починить это правкой обработчика нельзя — отклик живёт
+   * в AppPressable и снимается только `disabled`.
+   *
+   * Проверка именно на исходный текст: поведение здесь — «ничего не
+   * происходит», и отличить в тесте «ничего, потому что disabled» от «ничего,
+   * потому что обработчик вышел» нечем.
+   */
+  it('does not give press feedback where the handler cannot act', () => {
+    const feed = read('src/ui/screens/FeedScreen.tsx');
+    const stories = read('src/ui/components/StoriesRow.tsx');
+    for (const src of [feed, stories]) {
+      expect(src).not.toContain('if (!isOwn)');
+    }
+    expect(feed.match(/disabled=\{isOwn\}/g) ?? []).toHaveLength(2);
+    expect(stories).toContain('disabled={isOwn}');
+  });
+
   it('keeps the crash fallback consistent with the Russian UI', () => {
     const boundary = read('src/ui/AppErrorBoundary.tsx');
     expect(boundary).toContain('Произошла ошибка');

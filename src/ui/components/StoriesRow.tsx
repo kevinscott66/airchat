@@ -284,12 +284,13 @@ function StoryViewer({
         ) : null}
         {/* Header */}
         <View style={sv.header}>
+          {/* v4.32.614: «Моя сторис» никуда не ведёт, но нажатие сжимало
+              строку — отклик на палец без действия. См. FeedScreen. */}
           <AppPressable
             style={sv.authorInfo}
             hitSlop={4}
-            onPress={() => {
-              if (!isOwn) setPeekPubB64(story.authorPubB64);
-            }}
+            disabled={isOwn}
+            onPress={() => setPeekPubB64(story.authorPubB64)}
           >
             <View style={[sv.authorDot, { backgroundColor: c.primary }]} />
             <Text style={sv.authorName}>

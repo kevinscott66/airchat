@@ -3941,8 +3941,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                           реестр снимков, поэтому «есть фото» и «видно фото»
                           не могут разойтись. Нажатие открывает профиль — то
                           же, что и нажатие на имя рядом. */}
+                      {/* v4.32.614: своё имя не открывает ничего — своего
+                          профиля в этом окне нет. Но нажатие всё равно
+                          сжимало кружок и имя: элемент отвечал на палец и
+                          ничего не делал, что читается как поломка, а не как
+                          «здесь нечего открывать». disabled убирает и отклик,
+                          и роль кнопки разом. */}
                       <AppPressable
-                        onPress={() => { if (!isOwn) openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName); }}
+                        onPress={() => openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName)}
+                        disabled={isOwn}
                         hitSlop={4}
                         accessibilityRole={isOwn ? undefined : 'button'}
                       >
@@ -3957,7 +3964,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           {/* v4.32.50: тап по имени автора комментария → профиль */}
                           <AppPressable
-                            onPress={() => { if (!isOwn) openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName); }}
+                            onPress={() => openPeekAuthor(c.authorDid, c.nameUnreadable ? null : c.authorName)}
+                            disabled={isOwn}
                             hitSlop={4}
                           >
                             <Text style={cmStyles.commentAuthor}>{isOwn ? t('common.you') : shownName(c.authorName, c.nameUnreadable, t('common.anonymous'))}</Text>
