@@ -389,6 +389,13 @@ function resolveEffectiveAccountId(requestedAccountId, payload) {
   return requestedAccountId;
 }
 
+/**
+ * Есть ли уже такая учётная запись — в базе синхронизации или старым файлом.
+ */
+function accountExists(accountId) {
+  return syncDb.hasAccount(accountId) || !!existingFileOwner(accountId);
+}
+
 function accountCreationAllowed(requestedAccountId, effectiveAccountId, payload) {
   if (isVerifiableAccountId(requestedAccountId, payload.accountPublicKeyB64 || payload.publicKeyB64)) return true;
   // Legacy ids may still be used to access an already-created account during
@@ -659,6 +666,7 @@ function authenticateLegacyVaultRequest(req, accountId, op) {
   if (!accountCreationAllowed(accountId, effectiveAccountId, payload)) {
     return accountAccessDenied('legacy_account_id_requires_migration', accountId);
   }
+  if (!accountExists(effectiveAccountId)) return accountAccessDenied('account_not_enrolled', accountId);
   const account = syncDb.ensureAccount(effectiveAccountId, payload.accountPublicKeyB64);
   if (!account.ok) return { error: account.reason, status: 403 };
   const device = syncDb.ensureDevice(
@@ -685,6 +693,13 @@ function authenticateSyncRequest(req, accountId, op) {
   if (!accountCreationAllowed(accountId, effectiveAccountId, checked)) {
     return accountAccessDenied('legacy_account_id_requires_migration', accountId);
   }
+  // v4.32.614: ключ аккаунта и ключ подписи — разные поля, и первый может
+  // назвать кто угодно: он лежит внутри did:key, которым человек делится с
+  // каждым собеседником. Прежде такой запрос заводил учётную запись на чужой
+  // ключ — заочно, ещё до того, как владелец вообще открыл приложение. Здесь
+  // учётная запись только находится; появляется она при привязке устройства,
+  // где подпись ставит её собственный ключ.
+  if (!accountExists(effectiveAccountId)) return accountAccessDenied('account_not_enrolled', accountId);
   const account = syncDb.ensureAccount(effectiveAccountId, checked.accountPublicKeyB64);
   if (!account.ok) return { error: account.reason, status: 403 };
   const device = syncDb.ensureDevice(
