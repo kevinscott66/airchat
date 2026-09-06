@@ -136,7 +136,7 @@ import {
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
 import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
-import { insertSortedDesc } from '../../core/utils/insertSortedDesc';
+import { mergeChatWindow } from '../../core/utils/mergeChatWindow';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
 import { MAX_MESSAGE_TEXT } from '../../core/social/messageTextLimit';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
@@ -1325,7 +1325,9 @@ function ChatThreadView({
   useEffect(() => { void reloadThread(); }, [reloadThread]);
 
   /**
-   * Запрашивает последние POLL_BATCH сообщений, мёржит по id с O(N+M) через insertSortedDesc.
+   * Запрашивает последние POLL_BATCH сообщений и сводит окно с экраном
+   * (см. mergeChatWindow): новые строки добавляются, изменившиеся заменяются,
+   * исчезнувшие из окна убираются.
    * Инвариант: lines всегда отсортирован DESC (новейшие первыми).
    */
   // v4.32.545: своя склейка вызовов уехала в coalescedTask. Здесь она
@@ -1348,29 +1350,13 @@ function ChatThreadView({
       const _dt = Date.now() - _t0;
     if (_dt > 150) log.info('ui_chat_poll_getmsgs', { ms: _dt, n: latest.length });
     const filtered = latest.filter((m) => m.text !== '\u200b');
-    if (filtered.length === 0) return;
 
-      setLines((prev) => {
-      const existingIds = new Set(prev.map((m) => m.id));
-      const newOnes = filtered.filter((m) => !existingIds.has(m.id));
-
-      // Обновляем статусы существующих сообщений (например, 'sending' → 'sent')
-      const updatedStatuses = new Map(filtered.map((m) => [m.id, m.status]));
-      const hasStatusChanges = prev.some(
-        (m) => updatedStatuses.has(m.id) && updatedStatuses.get(m.id) !== m.status
-      );
-      const updated = hasStatusChanges
-        ? prev.map((m) =>
-            updatedStatuses.has(m.id) ? { ...m, status: updatedStatuses.get(m.id)! } : m
-          )
-        : prev;
-
-      if (newOnes.length === 0) {
-        return hasStatusChanges ? updated : prev;
-      }
-      // O(N + M) слияние: сохраняет DESC-инвариант, обрабатывает out-of-order доставку
-      return insertSortedDesc(updated, newOnes);
-      });
+      // O(N + M) сведение: сохраняет DESC-инвариант и обрабатывает
+      // out-of-order доставку; ссылка на массив сохраняется, если ничего не
+      // изменилось, — иначе список перерисовывался бы на каждом опросе.
+      // Границу окна задаёт `latest`, а не `filtered`: надгробия из выборки
+      // не рисуются, но место в ней занимают.
+      setLines((prev) => mergeChatWindow(prev, filtered, latest));
 
       setOptimisticOutgoing((opt) => {
       if (!opt) return null;

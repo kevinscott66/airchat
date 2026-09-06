@@ -33,8 +33,17 @@ export type PeerDelivery =
   /** Не доставим: нет канала, нет сети или ни одна ступень фолбэка не сработала. */
   | 'unreachable';
 
-/** Что в итоге произошло с обеими половинами. */
-export type TwoSidedOutcome = 'both-sides' | 'your-side-only' | 'nothing-happened';
+/**
+ * Что в итоге произошло с обеими половинами.
+ *
+ * v4.32.607: исходов стало четыре. В «Заметках для себя» собеседника нет —
+ * переписка ведётся с собственным ключом, — и вторая половина не просто не
+ * доставлена, её не существует. Прежде этот случай попадал в
+ * `your-side-only`, и человек, поправивший свою же заметку, читал «собеседнику
+ * отправить не удалось»: сообщение про несуществующего адресата, из которого
+ * следует, что правка где-то не применилась.
+ */
+export type TwoSidedOutcome = 'both-sides' | 'your-side-only' | 'no-peer-half' | 'nothing-happened';
 
 /**
  * Собрать исход из двух половин. Если локальная не удалась, судьба сетевой уже
@@ -45,6 +54,14 @@ export function combineHalves(localDone: boolean, peer: PeerDelivery): TwoSidedO
   return peer === 'sent' ? 'both-sides' : 'your-side-only';
 }
 
+/**
+ * Исход операции, у которой второй половины нет: переписка с самим собой.
+ * Локальная половина здесь — вся операция целиком.
+ */
+export function selfChatOutcome(localDone: boolean): TwoSidedOutcome {
+  return localDone ? 'no-peer-half' : 'nothing-happened';
+}
+
 /** Выполнена ли половина у себя — единственное, что человек видит сразу. */
 export function localHalfDone(outcome: TwoSidedOutcome): boolean {
   return outcome !== 'nothing-happened';
@@ -53,6 +70,11 @@ export function localHalfDone(outcome: TwoSidedOutcome): boolean {
 /** Дошла ли половина до собеседника. */
 export function peerHalfDone(outcome: TwoSidedOutcome): boolean {
   return outcome === 'both-sides';
+}
+
+/** Была ли вторая половина вообще. `false` — переписка с самим собой. */
+export function hasPeerHalf(outcome: TwoSidedOutcome): boolean {
+  return outcome !== 'no-peer-half';
 }
 
 /**

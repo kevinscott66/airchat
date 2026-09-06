@@ -1,6 +1,6 @@
 import { Alert, Platform, ToastAndroid } from 'react-native';
 import { authGuard } from '../../core/security/authGuard';
-import { localHalfDone, peerHalfDone, type TwoSidedOutcome } from '../../core/social/twoSidedEdit';
+import { hasPeerHalf, localHalfDone, peerHalfDone, type TwoSidedOutcome } from '../../core/social/twoSidedEdit';
 import { pushConfirm, pushToast, type ConfirmActionSpec } from './appNotify';
 
 /**
@@ -89,12 +89,21 @@ export function showConfirm(spec: { title: string; message?: string; actions: Co
  * тоже ничего не произошло: сообщение оставалось на экране, а текст уверял,
  * что оно удалено. Третий исход теперь называется своим именем, а сам тип
  * `TwoSidedOutcome` не позволяет его пропустить.
+ *
+ * v4.32.607. Четвёртый исход — «второй половины нет». В «Заметках для себя»
+ * собеседника не существует, и «собеседнику отправить не удалось» читалось как
+ * сообщение о сбое: человек правил собственную заметку и получал красное
+ * предупреждение о недоставке несуществующему адресату.
  */
 export function reportTwoSided(outcome: TwoSidedOutcome, op: 'delete' | 'edit'): void {
   const done = op === 'delete' ? 'удалено' : 'изменено';
   const verb = op === 'delete' ? 'удалить' : 'изменить';
   if (!localHalfDone(outcome)) {
     showError(`Не удалось ${verb} сообщение`);
+    return;
+  }
+  if (!hasPeerHalf(outcome)) {
+    showSuccess(`Сообщение ${done}`);
     return;
   }
   if (peerHalfDone(outcome)) {

@@ -25,7 +25,7 @@ import {
 } from '../storage/local';
 import { oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
 import { checkOnlineWrite, requireOnlineWrite } from '../sync/cachePolicy';
-import { combineHalves, shouldTryPeerHalf, type TwoSidedOutcome } from './twoSidedEdit';
+import { combineHalves, selfChatOutcome, shouldTryPeerHalf, type TwoSidedOutcome } from './twoSidedEdit';
 import { handleIncomingGroupEnvelope, handleIncomingGroupReadReceipt, handleIncomingGroupJoinRequest, handleIncomingGroupControl, GROUP_READ_RECEIPT_PREFIX, GROUP_JOIN_REQUEST_PREFIX, GROUP_CTL_PREFIX } from './groupMessaging';
 import { receiptOverflowCount, sanitizeReceiptIds } from './receiptBatch';
 import { withinMessageTextLimit } from './messageTextLimit';
@@ -1786,6 +1786,7 @@ export class MessagingService {
     const ownerPid = await this.ownerProfileId();
     // Половина у себя — первой и без оглядки на сеть: своя строка в своей базе.
     const localDone = await deleteChatMessage(targetMessageId, ownerPid);
+    if (this.isSelfChat(contactPubB64)) return selfChatOutcome(localDone);
     const online = await checkOnlineWrite(await localPathTo(contactPubB64));
     if (!shouldTryPeerHalf(localDone, online.ok)) {
       log.info('ctl_delete_peer_half_skipped', {
@@ -1806,6 +1807,17 @@ export class MessagingService {
       return combineHalves(localDone, 'sent');
     }
     return combineHalves(localDone, 'unreachable');
+  }
+
+  /**
+   * Переписка с самим собой — «Заметки для себя» (v4.32.607).
+   *
+   * Собеседника у неё нет: адресат — собственный ключ. Служебный конверт
+   * такой переписке некуда девать (self-echo из неё уже исключён с v4.32.119),
+   * а разговор про доставку — не про эту переписку вовсе.
+   */
+  private isSelfChat(contactPubB64: string): boolean {
+    return contactPubB64 === publicKeyToB64(this.pair.publicKey);
   }
 
   async deleteMessageLocalOnly(messageId: string): Promise<void> {
@@ -1834,6 +1846,7 @@ export class MessagingService {
     const ownerPid = await this.ownerProfileId();
     // Тот же порядок, что и в удалении: своя строка правится всегда.
     const localDone = await updateChatMessageText(messageId, newText, ownerPid);
+    if (this.isSelfChat(contactPubB64)) return selfChatOutcome(localDone);
     const online = await checkOnlineWrite(await localPathTo(contactPubB64));
     if (!shouldTryPeerHalf(localDone, online.ok)) {
       log.info('ctl_edit_peer_half_skipped', {
