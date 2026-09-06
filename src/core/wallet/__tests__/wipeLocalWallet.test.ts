@@ -197,6 +197,23 @@ const JEST_DYNAMIC_FAILS = ['live_account_sync', 'story_inbox_listener', 'live_l
 const posOf = (name: string): number =>
   mockCalls.findIndex((c) => c === name || c.startsWith(`log:wallet_wipe_step_failed:{"step":"${name}"`));
 
+/**
+ * То же самое, но для проверок порядка — и с обязательным условием, что шаг
+ * вообще случился (v4.32.614).
+ *
+ * Тут была вакуумная проверка: «копия переписки пишется ДО удаления базы»
+ * сравнивала `posOf('dialog_backup_export')` с `posOf('local_db')`. Шага с
+ * таким именем в сбросе нет и никогда не было, `posOf` отдавал -1, а -1
+ * меньше любого места в журнале — проверка была зелёной при любом порядке и
+ * даже при полностью выключённом сбросе. Опечатка в имени шага стоила бы
+ * ровно столько же и осталась бы незамеченной.
+ */
+const orderOf = (name: string): number => {
+  const i = posOf(name);
+  if (i < 0) throw new Error(`шага «${name}» в журнале сброса нет — проверка порядка бессмысленна`);
+  return i;
+};
+
 beforeEach(() => {
   mockStore.clear();
   mockDeleteFailures.clear();
@@ -254,10 +271,23 @@ describe('performLocalWalletWipe', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('копия переписки пишется ДО удаления базы', async () => {
+  it('базы закрываются ДО удаления их файлов', async () => {
+    // Удалять файл открытой SQLite — значит оставить рядом -wal и -shm с
+    // теми же расшифрованными строками, которые и просили стереть.
     await performLocalWalletWipe();
 
-    expect(posOf('dialog_backup_export')).toBeLessThan(posOf('local_db'));
+    expect(orderOf('local_db_close')).toBeLessThan(orderOf('local_db'));
+    expect(orderOf('feed_storage_close')).toBeLessThan(orderOf('feed_dbs'));
+  });
+
+  it('облачная копия аккаунта удаляется ДО стирания сид-фразы', async () => {
+    // Шаг account_vault читает сид-фразу (getStoredMnemonic) и только ею
+    // может назвать серверу, какую копию убрать. После wipeMnemonicAndSession-
+    // Flags называть нечем: локально всё чисто, а копия аккаунта остаётся
+    // лежать на сервере — то есть «удалить данные» их не удаляет.
+    await performLocalWalletWipe();
+
+    expect(orderOf('account_vault')).toBeLessThan(orderOf('mnemonic'));
   });
 
   it('номера профилей собираются до их очистки и уходят в удаление лент', async () => {
@@ -265,7 +295,7 @@ describe('performLocalWalletWipe', () => {
     // собрать их позже — значит не удалить ни одной.
     await performLocalWalletWipe();
 
-    expect(posOf('collect_profile_ids')).toBeLessThan(posOf('profiles'));
+    expect(orderOf('collect_profile_ids')).toBeLessThan(orderOf('profiles'));
     expect(mockCalls).toContain('feed_dbs:1+4');
   });
 
