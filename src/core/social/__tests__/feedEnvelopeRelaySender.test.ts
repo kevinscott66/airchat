@@ -28,6 +28,7 @@ import {
   serializeFeedEnvelope,
   parseAndVerifyFeedEnvelope,
   parseAndVerifyRelayedFeedEnvelope,
+  FEED_ENVELOPE_MAX_AGE_MS,
   type FeedEnvelopePayload,
 } from '../feedTransport';
 
@@ -101,14 +102,17 @@ describe('пустой отправитель у интернет-ретранс
   it('транспорт по-прежнему не называет отправителя — иначе чинить было бы нечего', () => {
     const src = read('core/transport/internet/internetTransport.ts');
     expect(src).toContain('do NOT send X-Sender');
-    expect(src).toContain("this.onFrame?.(senderDid, payload);");
+    // v4.32.614: третьим аргументом поехало время кадра — отметку «докуда
+    // прочитано» двигает теперь тот, кто кадр разобрал. Отправитель
+    // по-прежнему приходит как есть, первым аргументом.
+    expect(src).toContain('this.onFrame?.(senderDid, payload, frameAt);');
     // Пустой отправитель — нормальный случай, а не повод бросить кадр.
     expect(src).toContain('if (senderDid) {');
   });
 
   it('приёмник интернет-кадров отдаёт отправителя ленте как есть', () => {
     const src = read('core/transport/internet/internetCoordinator.ts');
-    expect(src).toContain('void receiveFeedEnvelope(payload, senderDid);');
+    expect(src).toContain('await receiveFeedEnvelope(payload, senderDid);');
   });
 });
 
@@ -151,10 +155,25 @@ describe('подделку ветка «автор из тела» не проп
   it('старый конверт отбраковывается обеими ветками', async () => {
     const me = newIdentity();
     const old = post(me.did);
-    (old as { ts: number }).ts = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    // v4.32.614: порог сравнялся со сроком хранения на relay (30 суток).
+    // Отсчёт от FEED_ENVELOPE_MAX_AGE_MS, а не от своей копии числа — иначе
+    // тест начнёт врать при следующем изменении срока.
+    (old as { ts: number }).ts = Date.now() - FEED_ENVELOPE_MAX_AGE_MS - 60_000;
     const frame = await frameFrom(me.pair, old);
     expect(await parseAndVerifyRelayedFeedEnvelope(frame)).toBeNull();
     expect(await parseAndVerifyFeedEnvelope(frame, me.did)).toBeNull();
+  });
+
+  it('конверт двухнедельной давности принимается: relay столько хранит', async () => {
+    // Измеренный дефект v4.32.614. Окно приёма было семь суток, а relay
+    // отдаёт накопленное за тридцать: вернувшийся из отпуска скачивал свою
+    // ленту и не видел из неё ничего.
+    const me = newIdentity();
+    const old = post(me.did);
+    (old as { ts: number }).ts = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const frame = await frameFrom(me.pair, old);
+    expect(await parseAndVerifyRelayedFeedEnvelope(frame)).not.toBeNull();
+    expect(await parseAndVerifyFeedEnvelope(frame, me.did)).not.toBeNull();
   });
 });
 

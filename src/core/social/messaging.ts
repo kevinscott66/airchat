@@ -44,6 +44,7 @@ import { PRESENCE_PREF_PREFIX } from './presenceEnvelope';
 import { PROFILE_PREFIX } from './profileEnvelope';
 import { stripSpoofedSysPrefix } from './sysLineGuard';
 import { isPlainCid } from '../cid';
+import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { isNbCid } from '../media/mediaBlob';
 import { isIpfsEnabled } from '../transport/ipfs/heliaNode';
 import { multiTransportRouter } from '../transport/multiTransport';
@@ -93,10 +94,18 @@ type InnerPayload =
  * v4.32.124 (AUDIT P0 #1): replay window for envelope timestamps.
  * Dedupe by messageId uses a 4096-entry FIFO + SQLite existence check; once
  * the FIFO evicts an id and the local row is GC'd, a captured ciphertext
- * could be replayed as a fresh inbound. Reject envelopes older than 7 days
- * or more than 5 minutes in the future.
+ * could be replayed as a fresh inbound. Reject envelopes older than the relay
+ * retention window or more than 5 minutes in the future.
+ *
+ * v4.32.614: было семь суток — при том, что relay держит накопленное тридцать
+ * и отдаёт его целиком при подписке. Получалось, что человек, не заходивший
+ * две недели, скачивал всё, что его ждало, и не видел из этого ничего: окно
+ * приёма молча выбрасывало кадры старше недели. Теперь срок один и общий
+ * (`transport/retentionWindow`) — ровно столько, сколько сообщение может
+ * пролежать на relay. Дольше этого кадра в сети уже нет, и «вброс через год»
+ * по-прежнему отсекается.
  */
-const ENVELOPE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const ENVELOPE_MAX_AGE_MS = RELAY_RETENTION_MS;
 const ENVELOPE_MAX_SKEW_MS = 5 * 60 * 1000;
 
 // PUBLISH_RETRIES=1 означал 1 итерацию (i=0), проверка `i < 0` никогда не true → delay не срабатывал.

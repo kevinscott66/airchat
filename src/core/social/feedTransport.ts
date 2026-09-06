@@ -38,6 +38,7 @@ import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyToDidKey, parseDidKey } from '../identity/did';
 import { log } from '../logger';
 import { listContacts } from './contacts';
+import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { multiTransportRouter } from '../transport/multiTransport';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
 import { pubsubSubscribe, pubsubPublish } from '../transport/ipfs/pubsub';
@@ -69,8 +70,14 @@ export const FEED_ENVELOPE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 /**
  * Срок годности конверта: старше — не принимаем (v4.32.213, Audit-42 C2).
  * Пойманный в сети подписанный кадр иначе можно вбросить заново через год.
+ *
+ * v4.32.614: было семь суток, а relay держит и отдаёт тридцать. Публикации
+ * едут тем же topic'ом, что и личные сообщения, поэтому у вернувшегося после
+ * отпуска лента доезжала до устройства и тут же отбрасывалась. Срок теперь
+ * общий с сообщениями (`transport/retentionWindow`) — столько же, сколько
+ * кадр вообще может пролежать на relay.
  */
-export const FEED_ENVELOPE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const FEED_ENVELOPE_MAX_AGE_MS = RELAY_RETENTION_MS;
 
 /**
  * Чем разбор конверта, запрошенного по ссылке, отличается от разбора того, что
@@ -418,7 +425,8 @@ export async function parseAndVerifyFeedEnvelope(
     return null;
   }
   if (typeof payload.ts !== 'number' || !Number.isFinite(payload.ts)) return null;
-  // v4.32.213 (Audit-42 C2): reject envelopes older than 7 days. Without this
+  // v4.32.213 (Audit-42 C2): reject envelopes older than the retention window
+  // (v4.32.614: было «7 days», теперь столько же, сколько держит relay). Without this
   // a relay/peer can capture a signed envelope and re-inject it years later;
   // combined with FIFO-evicting feedSeenKeys (8192 entries) it re-processes.
   // Floor is applied BEFORE the forward clamp so rejected envelopes never

@@ -10,6 +10,7 @@ import { Platform } from 'react-native';
 import * as Network from 'expo-network';
 
 import { log } from '../../logger';
+import { RELAY_RETENTION_PARAM } from '../retentionWindow';
 
 /**
  * InternetTransport — доставка AirChat-фреймов поверх публичного WebSocket/HTTP
@@ -37,7 +38,16 @@ import { log } from '../../logger';
  * (`messaging.ts:encryptSymmetric` — для DM), relay видит только ciphertext.
  */
 
-type OnFrameCallback = (senderDid: string, payload: Uint8Array) => void;
+/**
+ * Третий аргумент — время кадра по часам relay (мс).
+ *
+ * v4.32.614: раньше это время уходило отдельным колбэком `onFrameSeen`, и
+ * уходило РАНЬШЕ разбора кадра. Отметка «докуда прочитано» продвигалась даже
+ * тогда, когда разбор падал, — и упавший кадр не запрашивался уже никогда.
+ * Теперь время едет вместе с кадром, а двигать отметку решает тот, кто кадр
+ * разобрал.
+ */
+type OnFrameCallback = (senderDid: string, payload: Uint8Array, frameAtMs: number) => void;
 
 /**
  * Опции подписки, отвечающие за «сколько накопленного забрать».
@@ -49,8 +59,6 @@ type OnFrameCallback = (senderDid: string, payload: Uint8Array) => void;
 type BacklogHooks = {
   /** Значение параметра `?since=` на момент открытия сокета. */
   since?: () => string;
-  /** Время принятого кадра (мс). Вызывается на каждом кадре. */
-  onFrameSeen?: (atMs: number) => void;
 };
 
 const DEFAULT_RELAY_BASE = 'https://ntfy.sh';
@@ -125,7 +133,6 @@ export class InternetTransport {
   private lastSendOkAt = 0;
   private wsOpen = false;
   private since?: () => string;
-  private onFrameSeen?: (atMs: number) => void;
 
   isActive(): boolean {
     return this.active;
@@ -233,7 +240,6 @@ export class InternetTransport {
     this.relayBase = opts.relayBase ?? DEFAULT_RELAY_BASE;
     this.wsBase = opts.wsBase ?? DEFAULT_WS_BASE;
     this.since = opts.since;
-    this.onFrameSeen = opts.onFrameSeen;
     this.active = true;
     this.reconnectAttempt = 0;
     this.openWs();
@@ -282,7 +288,7 @@ export class InternetTransport {
     // v4.32.611: запасное значение — 720 часов (30 суток), столько держит свой
     // сервер. Просить у relay больше, чем он хранит, безопасно: ntfy отдаёт
     // то, что есть. Формат — только go-duration: `30d` сервер отвечает 400.
-    const since = this.since?.() ?? '720h';
+    const since = this.since?.() ?? RELAY_RETENTION_PARAM;
     const url = `${this.wsBase}/${topic}/ws?since=${encodeURIComponent(since)}`;
     let ws: WebSocket;
     try {
@@ -360,8 +366,7 @@ export class InternetTransport {
         // его надо в его же системе отсчёта. Своих часов хватает только как
         // запасного варианта, если поле не пришло.
         const frameAt = typeof msg.time === 'number' && msg.time > 0 ? msg.time * 1000 : Date.now();
-        this.onFrameSeen?.(frameAt);
-        this.onFrame?.(senderDid, payload);
+        this.onFrame?.(senderDid, payload, frameAt);
       } catch (e) {
         log.warn('internet_ws_msg_err', { err: e instanceof Error ? e.message : String(e) });
       }

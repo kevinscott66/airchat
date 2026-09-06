@@ -32,12 +32,19 @@ function identity(): { pair: { secretKey: Uint8Array; publicKey: Uint8Array }; d
   return { pair: { secretKey, publicKey }, did: publicKeyToDidKey(publicKey) };
 }
 
-function monthOldPost(did: string): FeedEnvelopePayload {
+/**
+ * Публикация заведомо старше окна приёма.
+ *
+ * v4.32.614: было ровно тридцать суток — ровно столько же, сколько стало окно,
+ * и разница держалась на паре миллисекунд между вызовами `Date.now()`. Теперь
+ * возраст берётся с запасом от самого окна, а не от переписанного числа.
+ */
+function expiredPost(did: string): FeedEnvelopePayload {
   return {
     type: 'feed_post',
     postId: 'f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246',
     authorDid: did,
-    ts: Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ts: Date.now() - FEED_ENVELOPE_MAX_AGE_MS - 24 * 60 * 60 * 1000,
     data: { kind: 'post', text: 'месяц назад', authorName: 'Автор' },
   };
 }
@@ -48,7 +55,7 @@ afterEach(() => { globalThis.fetch = realFetch; });
 describe('публикация по ссылке', () => {
   it('приходит с сервера кадром, который проходит обычную проверку подписи', async () => {
     const { pair, did } = identity();
-    const payload = monthOldPost(did);
+    const payload = expiredPost(did);
     const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
     globalThis.fetch = jest.fn(async () => new Response(JSON.stringify({
       postId: payload.postId,
@@ -61,10 +68,10 @@ describe('публикация по ссылке', () => {
     const frame = await getPublicPostFrame(payload.postId);
     expect(frame).not.toBeNull();
 
-    // Тот самый месячный возраст: по умолчанию конверт отвергается — эта
-    // защита от повторного вброса из сети остаётся на месте.
+    // Возраст заведомо за окном приёма: по умолчанию конверт отвергается —
+    // эта защита от повторного вброса из сети остаётся на месте.
     expect(await parseAndVerifyRelayedFeedEnvelope(frame!)).toBeNull();
-    expect(FEED_ENVELOPE_MAX_AGE_MS).toBeLessThan(30 * 24 * 60 * 60 * 1000);
+    expect(Number.isFinite(FEED_ENVELOPE_MAX_AGE_MS)).toBe(true);
 
     // А по названному вслух адресу — открывается.
     const got = await parseAndVerifyRelayedFeedEnvelope(frame!, { maxAgeMs: Infinity });
@@ -74,7 +81,7 @@ describe('публикация по ссылке', () => {
 
   it('подменённое сервером тело до приёмного пути не доходит', async () => {
     const { pair, did } = identity();
-    const payload = monthOldPost(did);
+    const payload = expiredPost(did);
     const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
     globalThis.fetch = jest.fn(async () => new Response(JSON.stringify({
       postId: payload.postId,
@@ -89,7 +96,7 @@ describe('публикация по ссылке', () => {
   it('чужой ключ вместо авторского тоже не проходит', async () => {
     const { pair, did } = identity();
     const stranger = identity();
-    const payload = monthOldPost(did);
+    const payload = expiredPost(did);
     const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
     globalThis.fetch = jest.fn(async () => new Response(JSON.stringify({
       postId: payload.postId,
@@ -107,7 +114,7 @@ describe('публикация по ссылке', () => {
     expect(isPublicPostId('../../etc/passwd')).toBe(false);
     const fetchSpy = jest.fn();
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
-    const bad = { ...monthOldPost(did), postId: '../../etc/passwd' };
+    const bad = { ...expiredPost(did), postId: '../../etc/passwd' };
     expect(await putPublicPostCopy(pair, bad)).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
   });

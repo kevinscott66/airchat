@@ -7,6 +7,7 @@ import {
   RELAY_RETENTION_MS,
   sinceParam,
 } from '../relayBacklog';
+import { RELAY_RETENTION_PARAM } from '../../retentionWindow';
 
 const NOW = 1_700_000_000_000;
 
@@ -77,6 +78,11 @@ describe('relay обязан сохранять отправленное', () =>
   });
 
   it('запасное окно подписки совпадает со сроком хранения', () => {
-    expect(source).toContain(`this.since?.() ?? '${BACKLOG_FALLBACK}'`);
+    // v4.32.614: значение больше не переписано в транспорте буквой — оба
+    // места берут его из общего модуля. Проверяем и связь, и то, что своей
+    // копии срока в транспорте не осталось.
+    expect(source).toContain('this.since?.() ?? RELAY_RETENTION_PARAM');
+    expect(source).not.toMatch(/'\d+h'/);
+    expect(BACKLOG_FALLBACK).toBe(RELAY_RETENTION_PARAM);
   });
 });

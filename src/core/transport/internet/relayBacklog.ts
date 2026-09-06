@@ -20,6 +20,7 @@
  */
 import { kvGet, kvSet } from '../../storage/local';
 import { log } from '../../logger';
+import { RELAY_RETENTION_MS, RELAY_RETENTION_PARAM } from '../retentionWindow';
 
 /**
  * Сколько relay держит сообщения — то есть насколько глубоко имеет смысл
@@ -30,8 +31,12 @@ import { log } from '../../logger';
  * Значение одно на оба случая нарочно: просить у relay больше, чем он хранит,
  * безопасно — ntfy отдаёт то, что есть, — а вот просить меньше значит молча
  * выбросить то, что сервер сохранил и ждёт.
+ *
+ * v4.32.614: само число переехало в `transport/retentionWindow`, потому что
+ * тот же срок обязан знать приём сообщений и ленты. Здесь оставлен реэкспорт,
+ * чтобы не переписывать вызовы.
  */
-export const RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export { RELAY_RETENTION_MS } from '../retentionWindow';
 
 /**
  * Нахлёст назад от отметки.
@@ -50,7 +55,7 @@ export const BACKLOG_OVERLAP_MS = 60_000;
  * Формат — только go-duration: часы, минуты, секунды. `30d` ntfy отвечает 400,
  * поэтому тридцать суток пишутся как 720 часов.
  */
-export const BACKLOG_FALLBACK = '720h';
+export const BACKLOG_FALLBACK = RELAY_RETENTION_PARAM;
 
 /**
  * Значение параметра `?since=` для подписки.

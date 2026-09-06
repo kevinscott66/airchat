@@ -68,34 +68,68 @@ export async function startInternetTransportIfEnabled(
   // ночь оставалось лежать на relay до истечения срока хранения.
   let watermark = await loadBacklogWatermark(myDid);
   let flushedAt = 0;
+  // Кадры, разбор которых упал. Ключ — время кадра; хранится до перезапуска
+  // транспорта. Первый провал держит отметку (кадр перезапросим), второй
+  // провал того же кадра отпускает её: кадр, падающий стабильно, иначе
+  // заставлял бы перекачивать весь накопленный месяц при каждом подключении.
+  const failedOnce = new Set<number>();
+
+  /** Продвинуть отметку «докуда прочитано» — только вперёд и только по разобранному. */
+  const advance = (atMs: number): void => {
+    // Кадры внутри пачки приходят не строго по возрастанию времени, и откат
+    // отметки назад означал бы повторный разбор уже разобранного.
+    if (atMs <= (watermark ?? 0)) return;
+    watermark = atMs;
+    pendingWatermark = { myDid, atMs };
+    const now = Date.now();
+    if (now - flushedAt < WATERMARK_FLUSH_MS) return;
+    flushedAt = now;
+    pendingWatermark = null;
+    void saveBacklogWatermark(myDid, atMs);
+  };
+
   transport.start({
     myDid,
     relayBase: c.internet?.relayBase,
     wsBase: c.internet?.wsBase,
     since: () => sinceParam(watermark, Date.now()),
-    onFrameSeen: (atMs) => {
-      // Только вперёд: кадры внутри пачки приходят не строго по возрастанию
-      // времени, и откат отметки назад означал бы повторный разбор уже
-      // разобранного при следующем подключении.
-      if (atMs <= (watermark ?? 0)) return;
-      watermark = atMs;
-      pendingWatermark = { myDid, atMs };
-      const now = Date.now();
-      if (now - flushedAt < WATERMARK_FLUSH_MS) return;
-      flushedAt = now;
-      pendingWatermark = null;
-      void saveBacklogWatermark(myDid, atMs);
-    },
-    onFrame: (senderDid, payload) => {
+    onFrame: (senderDid, payload, frameAtMs) => {
       // Симметрично lanCoordinator.onFrame: feed → group → DM.
       // v4.32.208: accept 0xF0 + 0xF1 (relay wrapper) — unwrap inside receiveFeedEnvelope.
-      if (isFeedFrame(payload)) {
-        void receiveFeedEnvelope(payload, senderDid);
-      } else if (isGroupEnvelope(payload)) {
-        void getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid);
-      } else {
-        void getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid);
-      }
+      //
+      // v4.32.614: отметка двигается ПОСЛЕ разбора, а не до него. Раньше время
+      // кадра записывалось сразу по приёме, и кадр, на котором разбор упал
+      // (база ещё не открыта, профиль не загружен, ключ занят), больше не
+      // запрашивался никогда — relay его хранит, а мы его уже «прочитали».
+      void (async () => {
+        try {
+          if (isFeedFrame(payload)) {
+            await receiveFeedEnvelope(payload, senderDid);
+          } else if (isGroupEnvelope(payload)) {
+            await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid);
+          } else {
+            await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid);
+          }
+          advance(frameAtMs);
+        } catch (e) {
+          if (failedOnce.has(frameAtMs)) {
+            // Второй провал того же кадра: он не транзиентный. Отпускаем, иначе
+            // отметка встанет навсегда и накопленное будет качаться по кругу.
+            log.warn('internet_frame_handle_failed_again', {
+              err: e instanceof Error ? e.message : String(e),
+            });
+            advance(frameAtMs);
+            return;
+          }
+          // Множество растёт только на провалах; потолок — чтобы длинная
+          // сессия с плохой сетью не копила его без предела.
+          if (failedOnce.size > 512) failedOnce.clear();
+          failedOnce.add(frameAtMs);
+          log.warn('internet_frame_handle_failed', {
+            err: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
     },
   });
   started = true;
