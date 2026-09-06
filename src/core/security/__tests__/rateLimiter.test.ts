@@ -7,10 +7,11 @@
  * только тогда, когда новая действительно легла (v4.32.293) — иначе
  * разблокируются все разом и безвозвратно.
  *
- * Номер профиля здесь всегда 1: RateLimiter берёт его динамическим import, а
- * тот в jest не работает (нужен --experimental-vm-modules), и currentPid
- * уходит в свой запасной путь. Разделение блок-листов по профилям проверяется
- * на именах ключей — storage/__tests__/kvKeys.test.ts.
+ * Номер профиля здесь всегда 1: currentPid грузит profileManager и берёт
+ * активный профиль, а в этой обвязке активного профиля нет — остаётся тот же
+ * запасной 1 (до v4.32.614 сюда же приводил сломанный под jest `import()`).
+ * Разделение блок-листов по профилям проверяется на именах ключей —
+ * storage/__tests__/kvKeys.test.ts.
  */
 jest.mock('../../storage/local', () => {
   const kv: Record<string, string> = {};
@@ -137,7 +138,8 @@ describe('перенос со старых имён ключа', () => {
     await jest.isolateModulesAsync(async () => {
       const local = jest.requireMock('../../storage/local') as MockLocal;
       prepare(local);
-      // Именно require: динамический import в jest не работает (см. шапку).
+      // Именно require: модуль нужен внутри isolateModulesAsync синхронно,
+      // с тем самым моком хранилища, который только что подготовили.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('../rateLimiter') as typeof import('../rateLimiter');
       const rl = new mod.RateLimiter();
