@@ -1,4 +1,5 @@
 import { Alert } from 'react-native';
+import { scrubTelemetryContext, scrubTelemetryText } from './errorScrub';
 import { log } from './logger';
 
 export enum ErrorSeverity {
@@ -87,10 +88,16 @@ export class ErrorHandler {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const Sentry = require('@sentry/react-native') as typeof import('@sentry/react-native');
         if (sentryInit) {
-          Sentry.captureException(new Error(`${error.code}: ${error.message}`), {
-            tags: { code: error.code, severity: error.severity },
-            extra: error.context as Record<string, unknown> | undefined,
-          });
+          // v4.32.614: отчёт уходит на чужой сервер, и правило «ключи и DID
+          // сюда не кладём» до сих пор держалось на комментариях у трёх
+          // вызовов. Теперь оно выполняется само, см. errorScrub.
+          Sentry.captureException(
+            new Error(`${error.code}: ${scrubTelemetryText(error.message)}`),
+            {
+              tags: { code: error.code, severity: error.severity },
+              extra: scrubTelemetryContext(error.context),
+            }
+          );
         }
       } catch {
         /* optional */
