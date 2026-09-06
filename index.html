@@ -39,8 +39,32 @@
 <link rel="icon" href="/favicon.ico" /></head>
 
   <body>
+    <!--
+      v4.32.606: восстановление адреса ссылки. GitHub Pages отдаёт на /l/…
+      страницу 404.html, и та приводит человека сюда с адресом в запросе.
+      Здесь он возвращается в строку браузера настоящим путём — приложение
+      читает его через Linking.getInitialURL() и открывает нужный экран.
+
+      Проверка строгая нарочно: replaceState меняет только адрес, но чужая
+      строка в адресной строке — это чужая строка в адресной строке.
+      Принимается ровно один вид пути и ничего больше.
+    -->
+    <script>
+      (function () {
+        try {
+          var m = /[?&]l=([^&]*)/.exec(window.location.search || '');
+          if (!m) return;
+          var rest = decodeURIComponent(m[1]);
+          if (!/^[A-Za-z0-9._~:@+%-]+(\/[A-Za-z0-9._~:@+%-]+)*$/.test(rest)) return;
+          if (rest.length > 4096) return;
+          window.history.replaceState(null, '', '/l/' + rest);
+        } catch (e) {
+          /* адрес останется прежним — приложение просто откроется на своём экране */
+        }
+      })();
+    </script>
     <noscript>Для работы AirChat нужен JavaScript.</noscript>
     <div id="root"></div>
-  <script src="/_expo/static/js/web/__expo-metro-runtime-1f8f5d3ca6b7f58204d51e14506d73fb.js" defer></script><script src="/_expo/static/js/web/__common-4d6a03da8e343b7a3af960cbc7e92585.js" defer></script><script src="/_expo/static/js/web/index-96ac97d16515545185e37e621e810a6d.js" defer></script>
+  <script src="/_expo/static/js/web/__expo-metro-runtime-1f8f5d3ca6b7f58204d51e14506d73fb.js" defer></script><script src="/_expo/static/js/web/__common-2fec0c04bf5f5c19e79c978c33988c4c.js" defer></script><script src="/_expo/static/js/web/index-aed74efbdf655d44631a06a8039940a4.js" defer></script>
 </body>
 </html>
