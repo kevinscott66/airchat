@@ -7,7 +7,8 @@ import { accountIdFromPublicKey, accountVaultIdFromMnemonic } from '../storage/a
 import { ED25519_SECRET_KEY_BYTES } from '../crypto/keyManager';
 import { deriveKeyPairFromMnemonic } from '../backup/seedPhrase';
 import { getConfigSync } from '../config';
-import { signJson } from '../crypto/signature';
+import { signBytes, signJson } from '../crypto/signature';
+import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { bytesToBase64Url } from '../utils/base64url';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import * as SecureStore from '../storage/secureStoreQueued';
@@ -458,8 +459,15 @@ export async function claimSyncUsername(
   username: string,
   ownerProfileId: number,
   badge?: string | null,
+  /**
+   * Ключ переписки этого профиля — тот, к которому имя должно вести
+   * (v4.32.607). Необязателен: без него имя просто занимается, и справочник
+   * отвечает по нему «занято, владелец не назван».
+   */
+  profilePair?: KeyPairBytes | null,
 ): Promise<UsernameClaimResult> {
   try {
+    const directory = profilePair ? await usernameDirectoryProof(mnemonic, username, ownerProfileId, profilePair) : null;
     const response = await request<{ ok: boolean; username: string }>(
       mnemonic,
       pair,
@@ -469,7 +477,7 @@ export async function claimSyncUsername(
       // отвергается там же, где и у постороннего. Проверяет её сервер сам:
       // подпись накрывает весь payload, значит подменить бумагу по дороге
       // нельзя, а поверить клиенту на слово было бы то же, что снять список.
-      badge ? { username, ownerProfileId, badge } : { username, ownerProfileId },
+      { username, ownerProfileId, ...(badge ? { badge } : {}), ...(directory || {}) },
       'username/claim',
     );
     return response.ok ? { ok: true, username: response.username } : { ok: false, reason: 'rejected' };
@@ -495,19 +503,56 @@ export function releaseSyncUsername(
 }
 
 /**
- * Свободно ли имя. Запрос без подписи: спросить нужно и до того, как аккаунт
- * заведён. Сервер отвечает только «занято/свободно» — владельца он не
- * называет. `null` означает «спросить не удалось», а не «свободно».
+ * Бумага о том, что этот ключ переписки согласен стоять за этим именем.
+ *
+ * Подписывает её сам ключ профиля, а не ключ аккаунта, которым подписан
+ * запрос: у дополнительных профилей ключ переписки другой, и без собственной
+ * подписи владелец имени мог бы направить своё `@name` на чужой ключ. Строка
+ * привязки повторена на сервере дословно (usernameDirectoryBinding).
  */
-export async function lookupSyncUsername(username: string): Promise<boolean | null> {
+async function usernameDirectoryProof(
+  mnemonic: string,
+  username: string,
+  ownerProfileId: number,
+  profilePair: KeyPairBytes,
+): Promise<{ profilePublicKeyB64: string; profileProof: string }> {
+  const accountId = accountIdFromPublicKey(deriveKeyPairFromMnemonic(mnemonic).publicKey);
+  const bound = `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+  const signature = await signBytes(profilePair.secretKey, new TextEncoder().encode(bound));
+  return {
+    profilePublicKeyB64: publicKeyToB64(profilePair.publicKey),
+    profileProof: Buffer.from(signature).toString('base64'),
+  };
+}
+
+/**
+ * Кто стоит за именем.
+ *
+ * Три разных ответа, и путать их нельзя (v4.32.607): раньше здесь было
+ * `boolean | null`, где `null` значил «спросить не удалось», и любой
+ * вызывающий, написавший `if (!taken)`, читал недоступность сервера как
+ * «имени не существует».
+ *
+ * `taken` без ключа — имя занято, но владелец не назван: запись сделана до
+ * появления справочника либо клиентом, который ключ не прикладывает.
+ */
+export type UsernameDirectoryAnswer =
+  | { status: 'free' }
+  | { status: 'taken'; peerPubB64: string | null }
+  | { status: 'unknown' };
+
+export async function lookupSyncUsername(username: string): Promise<UsernameDirectoryAnswer> {
   const base = syncBaseUrl();
-  if (!base) return null;
+  if (!base) return { status: 'unknown' };
   try {
     const response = await fetch(`${base}/v1/username/${encodeURIComponent(username)}`);
-    if (!response.ok) return null;
-    const body = await response.json() as { taken?: unknown };
-    return typeof body.taken === 'boolean' ? body.taken : null;
+    if (!response.ok) return { status: 'unknown' };
+    const body = await response.json() as { taken?: unknown; pub?: unknown };
+    if (typeof body.taken !== 'boolean') return { status: 'unknown' };
+    if (!body.taken) return { status: 'free' };
+    // Ключ проверяется на форму здесь: дальше он уходит адресом собеседника.
+    return { status: 'taken', peerPubB64: isPubKeyB64(body.pub) ? body.pub : null };
   } catch {
-    return null;
+    return { status: 'unknown' };
   }
 }

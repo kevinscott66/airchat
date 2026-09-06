@@ -272,6 +272,18 @@ function accountCreationAllowed(requestedAccountId, effectiveAccountId, payload)
   return syncDb.hasAccount(effectiveAccountId) || !!existingFileOwner(effectiveAccountId);
 }
 
+/**
+ * Что именно подписывает ключ профиля, чтобы имя указало на него (v4.32.607).
+ *
+ * Строка привязывает ключ к конкретному имени, конкретному аккаунту и
+ * конкретному профилю. Без имени подпись переносилась бы на любое другое имя
+ * того же аккаунта; без аккаунта — чужую подпись можно было бы предъявить как
+ * свою; без номера профиля два профиля одного аккаунта менялись бы именами.
+ */
+function usernameDirectoryBinding(username, accountId, ownerProfileId) {
+  return `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+}
+
 function verifySignedPayload(rawPayload, signature) {
   if (typeof rawPayload !== 'string' || rawPayload.length > MAX_BODY_BYTES) return null;
   if (typeof signature !== 'string' || !SIGNATURE_RE.test(signature)) return null;
@@ -416,9 +428,32 @@ function validateSyncRequest(payload, accountId, op) {
       // сервер, а не только экран: клиент можно пересобрать без проверки.
       const username = normalizeClaimableUsername(payload.username, unlocked);
       if (!username) return null;
+      // v4.32.607: ключ профиля для справочника. Необязателен — старый клиент
+      // его не шлёт, и имя тогда просто остаётся без владельца, — но если он
+      // есть, к нему обязана прилагаться подпись ЭТИМ ключом. Запрос подписан
+      // ключом аккаунта, а ключ переписки у дополнительных профилей другой:
+      // без своей подписи владелец имени направил бы `@name` на чужой ключ.
+      let profilePublicKeyB64 = null;
+      if (payload.profilePublicKeyB64 != null || payload.profileProof != null) {
+        const profileKey = typeof payload.profilePublicKeyB64 === 'string'
+          ? decodeBase64(payload.profilePublicKeyB64, 32)
+          : null;
+        const proof = typeof payload.profileProof === 'string' && SIGNATURE_RE.test(payload.profileProof)
+          ? decodeBase64(payload.profileProof, 64)
+          : null;
+        if (!profileKey || profileKey.length !== 32 || !proof || proof.length !== 64) return null;
+        const bound = usernameDirectoryBinding(username, accountId, payload.ownerProfileId);
+        let ok = false;
+        try {
+          ok = ed25519.verify(proof, Buffer.from(bound, 'utf8'), profileKey);
+        } catch { ok = false; }
+        if (!ok) return null;
+        profilePublicKeyB64 = payload.profilePublicKeyB64;
+      }
       return {
         ...payload,
         username,
+        profilePublicKeyB64,
         accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64,
         deviceInfo,
       };
@@ -906,7 +941,12 @@ app.post('/v1/sync/:accountId/username/claim', (req, res) => {
   const auth = authenticateSyncRequest(req, accountId, 'claim_username');
   if (auth.error) return res.status(auth.status || 401).json({ error: auth.error });
   try {
-    const result = syncDb.claimUsername(auth.accountId, auth.payload.ownerProfileId, auth.payload.username);
+    const result = syncDb.claimUsername(
+      auth.accountId,
+      auth.payload.ownerProfileId,
+      auth.payload.username,
+      auth.payload.profilePublicKeyB64 || null,
+    );
     if (!result.ok) return res.status(409).json({ error: result.reason });
     return res.json({ ok: true, username: result.username });
   } catch {
@@ -927,17 +967,28 @@ app.post('/v1/sync/:accountId/username/release', (req, res) => {
 });
 
 /**
- * Справка о занятости — единственный запрос реестра без подписи: спросить
- * «свободно ли имя» нужно до того, как аккаунт вообще заведён. Наружу уходит
- * только `taken`. Владельца не называем намеренно: `accountId` — это адрес
- * его хранилища, и отдавать его по чужому имени нельзя.
+ * Справка по имени — единственный запрос реестра без подписи: спросить
+ * «свободно ли имя» нужно до того, как аккаунт вообще заведён.
+ *
+ * `accountId` наружу не уходит по-прежнему. А вот `pub` — ключ профиля —
+ * уходит: имя затем и существует, чтобы по нему можно было прийти к человеку,
+ * которого нет в адресной книге. Что это значит и чем оплачено — в
+ * комментарии у таблицы sync_usernames.
+ *
+ * Три разных ответа, и вызывающий обязан их различать:
+ *   taken:false            — имени нет ни за кем;
+ *   taken:true,  pub:null  — имя занято, владелец не назван (запись сделана
+ *                            до v4.32.607 либо старым клиентом);
+ *   taken:true,  pub:'…'   — вот его ключ.
+ * Перебор ограничен общим потолком запросов с адреса (см. rateBuckets).
  */
 app.get('/v1/username/:username', (req, res) => {
   noStore(res);
   const username = normalizeLookupUsername(req.params.username);
   if (!username) return res.status(400).json({ error: 'invalid_username' });
   try {
-    return res.json({ username, taken: syncDb.lookupUsername(username) !== null });
+    const row = syncDb.lookupUsername(username);
+    return res.json({ username, taken: row !== null, pub: row?.profilePublicKeyB64 || null });
   } catch {
     return res.status(500).json({ error: 'username_lookup_failed' });
   }

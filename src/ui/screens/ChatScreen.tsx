@@ -49,7 +49,7 @@ import { ChatQuickReactModal } from '../components/modals/chat/ChatQuickReactMod
 import { DmPollCreatorModal } from '../components/modals/chat/ChatPollCreatorModal';
 import { SharedMediaModal } from '../components/modals/chat/ChatSharedMediaModal';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { lookupMention } from '../../core/social/mentionLookup';
+import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -1019,22 +1019,28 @@ function ChatThreadView({
    * в адресной книге — сначала по неизменяемому username, потом по именам — и
    * открывает карточку. Упоминание собеседника открывает ЕГО карточку, ту же,
    * что и шапка: двух карточек одного человека в одном чате быть не должно.
+   *
+   * v4.32.607: и не только контакта. Промах по адресной книге больше не
+   * означает «такого человека нет» — имя спрашивается в общем реестре, и по
+   * незнакомцу открывается та же карточка, где есть «Добавить в контакты».
    */
   const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
   const handleMentionPress = useCallback((mention: string) => {
     void (async () => {
       const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
       if (!bare) return;
-      let hit: Awaited<ReturnType<typeof lookupMention>>;
+      let hit: MentionTarget;
       try {
-        hit = await lookupMention(bare, profileManager.getActiveProfile()?.id ?? 1);
+        hit = await resolveMentionTarget(bare, profileManager.getActiveProfile()?.id ?? 1);
       } catch (e) {
         log.warn('chat_mention_lookup_failed', { err: rawErrorText(e) });
         showError('Не удалось найти этого человека');
         return;
       }
-      if (hit.status === 'none') { showError(`@${bare} нет в ваших контактах`); return; }
-      if (hit.status === 'ambiguous') { showError(`Имя «${bare}» носят несколько контактов — откройте нужного в списке`); return; }
+      if (hit.status !== 'contact' && hit.status !== 'stranger') {
+        showError(mentionMissText(hit.status, bare));
+        return;
+      }
       if (hit.peerPubB64 === myPubB64) return;
       if (hit.peerPubB64 === peerB64) { setContactInfoVisible(true); return; }
       setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });

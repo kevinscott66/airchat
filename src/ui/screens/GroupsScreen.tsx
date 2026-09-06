@@ -269,6 +269,7 @@ import { ruPlural, membersLabel, subscribersLabel } from '../utils/plural';
 import { ambiguityMessage, memberLabel, resolveMember } from '../utils/memberLookup';
 import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
+import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { listContactsFor } from '../../core/social/contacts';
 import { normalizeUsername } from '../../core/identity/username';
 import { collectHashtags } from '../../core/text/entities';
@@ -1542,12 +1543,27 @@ function GroupChatScreen({
       const hits = byUsername
         ? allMembers.filter((m) => m.peerPubB64 === byUsername)
         : resolveMention(bare, allMembers);
-      if (hits.length === 0) {
-        showError(`Участника @${bare} в этом чате нет`);
-        return;
-      }
       if (hits.length > 1) {
         showError(`Имя «${bare}» носят несколько участников — откройте нужного в списке`);
+        return;
+      }
+      // v4.32.607: не участник — ещё не «никто». Имя могло достаться группе из
+      // пересланного текста, и по нему всё равно есть куда перейти.
+      if (hits.length === 0) {
+        let hit: MentionTarget;
+        try {
+          hit = await resolveMentionTarget(bare, pid);
+        } catch (e) {
+          log.warn('group_mention_directory_failed', { err: rawErrorText(e) });
+          showError(`Не удалось найти @${bare}`);
+          return;
+        }
+        if (hit.status !== 'contact' && hit.status !== 'stranger') {
+          showError(mentionMissText(hit.status, bare));
+          return;
+        }
+        if (hit.peerPubB64 === myPubB64) return;
+        setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
         return;
       }
       // Своё упоминание карточку не открывает: собственный профиль и так свой.

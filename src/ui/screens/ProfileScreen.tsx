@@ -33,6 +33,7 @@ import { listStarredMessages, setMessageStarred, setGroupMessageStarred, type St
 import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage/unreadableText';
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
 import { profileManager } from '../../core/identity/profileManager';
+import { republishOwnUsernameToDirectory } from '../../core/identity/usernameRegistry';
 import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { readLinkProofRecord } from '../../core/identity/linkProof';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
@@ -248,6 +249,10 @@ function ProfileScreenImpl({
       const id = await ipfsId();
       if (alive) setPeer(id);
       await runSyncIfOnline();
+      // v4.32.607: имена, занятые до появления справочника, лежат в реестре без
+      // ключа профиля — по ним никуда не перейти. Один тихий повторный захват
+      // за запуск это чинит; ошибка здесь ничего не значит для экрана.
+      void republishOwnUsernameToDirectory();
       setHasSeed(await hasStoredMnemonic());
       await loadDisplayName();
       const savedAvatar = await ownAvatarUri();

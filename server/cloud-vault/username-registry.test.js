@@ -85,14 +85,15 @@ test('username registry claims globally and refuses a name held by another accou
 
   const free = await fetch(`${base}/v1/username/kevin_s`);
   assert.equal(free.status, 200);
-  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false });
+  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false, pub: null });
 
   const claim = await post(alice, signed(alice, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
   assert.equal(claim.status, 200);
   assert.deepEqual(await claim.json(), { ok: true, username: 'kevin_s' });
 
   const taken = await fetch(`${base}/v1/username/KEVIN_S`);
-  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true });
+  // Имя занято, но ключа при захвате не предъявляли — владелец не назван.
+  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true, pub: null });
 
   // Чужой аккаунт то же имя не получает.
   const conflict = await post(bob, signed(bob, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
@@ -148,6 +149,55 @@ test('username registry claims globally and refuses a name held by another accou
   assert.equal(release.status, 200);
   assert.equal((await (await fetch(`${base}/v1/username/kevin_s3`)).json()).taken, false);
 
+  // v4.32.607: справочник имён. Ключ профиля кладётся не на слово — подпись
+  // под привязкой делается ЭТИМ ключом, а не ключом аккаунта, которым
+  // подписан сам запрос. Иначе владелец имени направил бы своё @name на
+  // чужой ключ: у дополнительных профилей ключ переписки другой.
+  const profileSecret = new Uint8Array(32).fill(42);
+  const profilePublicKeyB64 = Buffer.from(ed25519.getPublicKey(profileSecret)).toString('base64');
+  const binding = (username, pid) =>
+    Buffer.from(`airchat-username-directory:v1:${username}:${alice.accountId}:${pid}`, 'utf8');
+  const proofBy = (secret, msg) => Buffer.from(ed25519.sign(msg, secret)).toString('base64');
+
+  // Свой адрес для этой части: общий потолок запросов — 30 в минуту на адрес,
+  // и проверка справочника не должна упираться в него вместе с остальными.
+  const dirHeaders = { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' };
+  const postDir = (body) => fetch(`${base}/v1/sync/${alice.accountId}/username/claim`, {
+    method: 'POST', headers: dirHeaders, body: JSON.stringify(body),
+  });
+  const lookupDir = (name) => fetch(`${base}/v1/username/${name}`, { headers: dirHeaders });
+
+  const badProofs = [
+    // Подпись ключом аккаунта под чужим (профильным) ключом.
+    proofBy(alice.privateKey, binding('alice_dir', 0)),
+    // Своя подпись, но под ДРУГИМ именем того же аккаунта: привязка именная.
+    proofBy(profileSecret, binding('alice_other', 0)),
+    // Своя подпись под другим номером профиля.
+    proofBy(profileSecret, binding('alice_dir', 1)),
+  ];
+  for (const profileProof of badProofs) {
+    const rejected = await postDir(signed(alice, 'claim_username', {
+      username: 'alice_dir', ownerProfileId: 0, profilePublicKeyB64, profileProof,
+    }));
+    assert.equal(rejected.status, 401, 'expected refusal for a proof that does not bind');
+  }
+  // Ключ без подписи вовсе — отказ, а не «положим на слово».
+  const noProof = await postDir(signed(alice, 'claim_username', {
+    username: 'alice_dir', ownerProfileId: 0, profilePublicKeyB64,
+  }));
+  assert.equal(noProof.status, 401);
+  assert.equal((await (await lookupDir('alice_dir')).json()).taken, false);
+
+  // Своя подпись под своим именем — имя занято, ключ опубликован.
+  const published = await postDir(signed(alice, 'claim_username', {
+    username: 'alice_dir', ownerProfileId: 0,
+    profilePublicKeyB64, profileProof: proofBy(profileSecret, binding('alice_dir', 0)),
+  }));
+  assert.equal(published.status, 200);
+  assert.deepEqual(await (await lookupDir('ALICE_DIR')).json(), {
+    username: 'alice_dir', taken: true, pub: profilePublicKeyB64,
+  });
+
   const malformed = await fetch(`${base}/v1/username/${encodeURIComponent('нет')}`);
   assert.equal(malformed.status, 400);
 });
@@ -166,4 +216,35 @@ test('server reserved list matches the client one', () => {
   assert.deepEqual([...clientNames].sort(), [...RESERVED_USERNAMES].sort());
   assert.equal(normalizeClaimableUsername(' @Kevin_S '), 'kevin_s');
   assert.equal(normalizeClaimableUsername('support'), null);
+});
+
+
+/**
+ * Справочник имён (v4.32.607): по @name отдаётся открытый ключ профиля — тот,
+ * которым этот профиль переписывается, — и только он.
+ *
+ * Проверяется главное: ключ кладётся не на слово. Подпись под привязкой
+ * делается ЭТИМ ключом, а не ключом аккаунта, которым подписан сам запрос, —
+ * иначе владелец имени направил бы своё @name на чужой ключ.
+ */
+test('username directory publishes the profile key only with its own proof', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-username-dir-'));
+  const dbFile = path.join(dir, 'sync.sqlite');
+  const { SyncDatabase } = require('./sync-db');
+  const db = new SyncDatabase(dbFile);
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const owner = accountFor(21);
+  db.ensureAccount(owner.accountId, owner.publicKeyB64);
+
+  const profileKey = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(31))).toString('base64');
+  assert.equal(db.claimUsername(owner.accountId, 0, 'directory_one', profileKey).ok, true);
+  assert.equal(db.lookupUsername('directory_one').profilePublicKeyB64, profileKey);
+
+  // Повторный захват без ключа не стирает уже опубликованный.
+  assert.equal(db.claimUsername(owner.accountId, 0, 'directory_one', null).ok, true);
+  assert.equal(db.lookupUsername('directory_one').profilePublicKeyB64, profileKey);
+
+  // Свободного имени в справочнике нет вовсе.
+  assert.equal(db.lookupUsername('directory_two'), null);
 });

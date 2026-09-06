@@ -17,8 +17,12 @@ jest.mock('../ownProfile', () => ({
   isUsernameTakenByAnotherProfile: jest.fn(),
   setOwnUsername: jest.fn(),
 }));
+const mockProfilePair = { publicKey: new Uint8Array(32).fill(7), secretKey: new Uint8Array(64).fill(7) };
 jest.mock('../profileManager', () => ({
-  profileManager: { getActiveProfile: jest.fn(() => ({ id: 0 })) },
+  profileManager: {
+    getActiveProfile: jest.fn(() => ({ id: 0 })),
+    getActiveKeyPair: jest.fn(() => mockProfilePair),
+  },
 }));
 jest.mock('../ownBadge', () => ({
   ownBadgeGrantFor: jest.fn(),
@@ -28,6 +32,7 @@ import { getStoredMnemonic } from '../../backup/seedPhrase';
 import { claimSyncUsername } from '../../sync/syncApi';
 import { ownBadgeGrantFor } from '../ownBadge';
 import { isUsernameTakenByAnotherProfile, setOwnUsername } from '../ownProfile';
+import { profileManager } from '../profileManager';
 import { saveOwnUsernameGlobally } from '../usernameRegistry';
 
 const mnemonic = getStoredMnemonic as jest.MockedFunction<typeof getStoredMnemonic>;
@@ -47,7 +52,7 @@ beforeEach(() => {
 
 test('занимает имя в реестре и только потом пишет его локально', async () => {
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
-  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null);
+  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, mockProfilePair);
   expect(saveLocal).toHaveBeenCalledWith('kevin_s');
 });
 
@@ -59,8 +64,18 @@ test('бумага на галочку уезжает вместе с заявк
   claim.mockResolvedValue({ ok: true, username: 'founder' });
   await expect(saveOwnUsernameGlobally('founder')).resolves.toEqual({ ok: true, scope: 'global' });
   expect(claim).toHaveBeenCalledWith(
-    expect.any(String), expect.anything(), 'founder', 0, '{"payload":"…","signature":"…"}',
+    expect.any(String), expect.anything(), 'founder', 0, '{"payload":"…","signature":"…"}', mockProfilePair,
   );
+});
+
+// v4.32.607: имя ведёт к ключу ПЕРЕПИСКИ профиля, а не к ключу аккаунта — у
+// дополнительных профилей они разные. Если менеджер профилей ещё не готов,
+// имя всё равно занимается, просто без записи в справочник.
+test('ключ профиля уезжает в справочник вместе с именем', async () => {
+  const getPair = profileManager.getActiveKeyPair as jest.MockedFunction<typeof profileManager.getActiveKeyPair>;
+  getPair.mockImplementationOnce(() => { throw new Error('профили не подняты'); });
+  await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
+  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, null);
 });
 
 test('занятое чужим аккаунтом имя не пишется даже локально', async () => {

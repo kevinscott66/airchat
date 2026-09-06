@@ -39,7 +39,7 @@ import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT } f
 import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { lookupMention } from '../../core/social/mentionLookup';
+import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { collectHashtags } from '../../core/text/entities';
 import { normalizeUsername } from '../../core/identity/username';
 import { showPermissionDeniedAlert } from '../permissionAlert';
@@ -2624,21 +2624,27 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, postJump 
    * v4.32.605: имя в тексте было просто цветным словом — нажатие не делало
    * ничего. Теперь оно ищется в адресной книге (сначала по неизменяемому
    * username, потом по именам) и открывает ту же карточку, что и имя автора.
+   *
+   * v4.32.607: если в книге промах — имя спрашивается в общем реестре. Для
+   * перехода по имени контакт не нужен: в ленте чаще всего упоминают как раз
+   * незнакомых.
    */
   const handleMentionPress = useCallback((mention: string) => {
     void (async () => {
       const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
       if (!bare) return;
-      let hit: Awaited<ReturnType<typeof lookupMention>>;
+      let hit: MentionTarget;
       try {
-        hit = await lookupMention(bare, profileManager.getActiveProfile()?.id ?? 1);
+        hit = await resolveMentionTarget(bare, profileManager.getActiveProfile()?.id ?? 1);
       } catch (e) {
         log.warn('feed_mention_lookup_failed', { err: rawErrorText(e) });
         showError(t('feed.mentionLookupFailed'));
         return;
       }
-      if (hit.status === 'none') { showError(t('feed.mentionNotFound', { name: bare })); return; }
-      if (hit.status === 'ambiguous') { showError(t('feed.mentionAmbiguous', { name: bare })); return; }
+      if (hit.status !== 'contact' && hit.status !== 'stranger') {
+        showError(mentionMissText(hit.status, bare));
+        return;
+      }
       setPeekAuthorDid(null);
       setPeekAuthorName(hit.displayName || bare);
       setPeekAuthorPub(hit.peerPubB64);

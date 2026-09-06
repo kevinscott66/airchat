@@ -520,7 +520,10 @@ test('имя в реестре не хранится открытым текст
 
   // Сверка занятости работает как раньше — она и есть единственное, что серверу
   // от имени нужно.
-  assert.deepEqual({ ...db.lookupUsername('founder') }, { accountId: account, profileId: 1 });
+  assert.deepEqual(
+    { ...db.lookupUsername('founder') },
+    { accountId: account, profileId: 1, profilePublicKeyB64: null },
+  );
   assert.equal(db.lookupUsername('somebody-else'), null);
 
   // А самого имени в базе нет ни в одной строке: тот, кому досталась копия
@@ -560,7 +563,12 @@ test('старый реестр с открытыми именами перее�
   t.after(() => db.close());
 
   // Имя по-прежнему занято тем же профилем — переезд ничего не потерял.
-  assert.deepEqual({ ...db.lookupUsername('founder') }, { accountId: 'r'.repeat(32), profileId: 1 });
+  // v4.32.607: переехавшая запись ключа не несёт — по такому имени перехода нет,
+  // пока владелец не подтвердит имя заново уже с подписью своего ключа.
+  assert.deepEqual(
+    { ...db.lookupUsername('founder') },
+    { accountId: 'r'.repeat(32), profileId: 1, profilePublicKeyB64: null },
+  );
   assert.deepEqual(db.claimUsername('s'.repeat(32), 1, 'founder'), { ok: false, reason: 'username_taken' });
   assert.equal(
     db.db.prepare('SELECT claimed_at AS at FROM sync_usernames').get().at,

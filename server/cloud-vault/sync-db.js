@@ -207,11 +207,35 @@ class SyncDatabase {
       -- Честно о границах: секрет знает сервер, и захват работающего сервера
       -- позволяет перебрать имена по словарю — пространство имён маленькое.
       -- Защита здесь ровно от утёкшей базы, не от захваченного сервера.
+      --
+      -- v4.32.607: рядом с записью лежит открытый ключ профиля — тот, которым
+      -- этот профиль переписывается. Без него @name работал только внутри
+      -- адресной книги: нажатие на чужое имя упиралось в «нет в ваших
+      -- контактах», хотя имя — единственный человекочитаемый адрес в
+      -- приложении и смысл его ровно в том, чтобы по нему можно было прийти к
+      -- незнакомому.
+      --
+      -- Честно о цене. Прежний комментарий выше предупреждал: назвав
+      -- владельца, сервер выдаёт адрес его хранилища (accountId — хеш ключа
+      -- аккаунта, и у основного профиля ключ переписки тот же). Это остаётся
+      -- правдой, и цена уплачена сознательно: адрес хранилища сам по себе не
+      -- открывает ничего — каждое обращение к нему подписано ключом владельца,
+      -- — а имя без возможности по нему прийти бессмысленно. Не названным
+      -- остаётся всё остальное: имя в базе по-прежнему лежит слепым индексом,
+      -- перечислить реестр нельзя, ключ отдаётся только на точный запрос
+      -- точного имени.
+      --
+      -- Ключ кладётся не на слово: клиент прикладывает подпись ЭТИМ ключом
+      -- под именем, аккаунтом и номером профиля (profile_proof). Иначе
+      -- владелец имени мог бы направить своё @name на чужой ключ — запрос
+      -- подписан ключом аккаунта, а ключ переписки у дополнительных профилей
+      -- другой.
       CREATE TABLE IF NOT EXISTS sync_usernames (
         username_key TEXT PRIMARY KEY NOT NULL,
         account_id TEXT NOT NULL,
         profile_id INTEGER NOT NULL,
         claimed_at INTEGER NOT NULL,
+        profile_public_key TEXT,
         FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
@@ -259,6 +283,7 @@ class SyncDatabase {
     `);
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
+    this.ensureUsernameDirectoryColumn();
     this.ensureDeviceMetadataColumns();
     this.ensureAccountMutationSequenceColumn();
     this.ensureProfileScopedCursors();
@@ -362,6 +387,19 @@ class SyncDatabase {
       throw error;
     }
     this.db.exec('VACUUM;');
+  }
+
+  /**
+   * Колонка с ключом профиля (v4.32.607). Добавляется пустой: у записей,
+   * сделанных до этой версии, ключа нет, и справка по ним честно отвечает
+   * «имя занято, владелец не назван». Ключ появится, когда владелец в
+   * следующий раз подтвердит имя из приложения.
+   */
+  ensureUsernameDirectoryColumn() {
+    const columns = new Set(this.db.prepare('PRAGMA table_info(sync_usernames)').all().map((column) => column.name));
+    if (!columns.has('profile_public_key')) {
+      this.db.exec('ALTER TABLE sync_usernames ADD COLUMN profile_public_key TEXT');
+    }
   }
 
   ensureDeviceMetadataColumns() {
@@ -513,7 +551,7 @@ class SyncDatabase {
    * Прежнее имя того же профиля освобождается здесь же — иначе брошенные
    * имена копились бы за каждым, кто хоть раз переименовался.
    */
-  claimUsername(accountId, profileId, username) {
+  claimUsername(accountId, profileId, username, profilePublicKeyB64 = null) {
     const now = Date.now();
     const key = this.usernameKey(username);
     this.db.exec('BEGIN IMMEDIATE');
@@ -529,10 +567,14 @@ class SyncDatabase {
         'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username_key <> ?',
       ).run(accountId, profileId, key);
       this.db.prepare(`
-        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT (username_key) DO UPDATE SET claimed_at = excluded.claimed_at
-      `).run(key, accountId, profileId, now);
+        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at, profile_public_key)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (username_key) DO UPDATE SET
+          claimed_at = excluded.claimed_at,
+          -- Ключ переписывается только когда он предъявлен: повтор захвата без
+          -- подписи не должен стирать уже опубликованный.
+          profile_public_key = COALESCE(excluded.profile_public_key, sync_usernames.profile_public_key)
+      `).run(key, accountId, profileId, now, profilePublicKeyB64);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -550,13 +592,17 @@ class SyncDatabase {
   }
 
   /**
-   * Справка о занятости. Наружу уходит только `taken`: сам `account_id`
-   * остаётся здесь, иначе по чужому имени можно было бы вычислить адрес
-   * хранилища владельца.
+   * Справка по имени. `account_id` наружу не уходит никогда — а вот ключ
+   * профиля уходит: он и есть адрес человека, к которому ведёт `@name`
+   * (см. комментарий у таблицы). У записей старше v4.32.607 ключа нет, и
+   * вызывающий обязан различать «владелец есть, но не назван» и «имя
+   * свободно» — это разные ответы.
    */
   lookupUsername(username) {
     const row = this.db.prepare(
-      'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username_key = ?',
+      `SELECT account_id AS accountId, profile_id AS profileId,
+              profile_public_key AS profilePublicKeyB64
+       FROM sync_usernames WHERE username_key = ?`,
     ).get(this.usernameKey(username));
     return row || null;
   }

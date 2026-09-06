@@ -9,9 +9,21 @@
  * ровно на этом.
  *
  * Реестр живёт на сервере синхронизации, рядом с хранилищем, и записывается
- * той же подписью, что pull/push. Сервер отдаёт по имени только «занято /
- * свободно» — владельца он не называет, иначе по чужому `@name` вычислялся бы
- * адрес его хранилища.
+ * той же подписью, что pull/push.
+ *
+ * v4.32.607: рядом с именем публикуется открытый ключ профиля — тот, которым
+ * этот профиль переписывается. Прежде сервер намеренно не называл владельца:
+ * `accountId` — хеш ключа аккаунта, то есть адрес хранилища. Цена уплачена
+ * сознательно, потому что без владельца имя не работало как адрес: нажатие на
+ * чужое `@name` упиралось в «нет в ваших контактах», хотя смысл имени ровно в
+ * том, чтобы прийти к незнакомому. Адрес хранилища сам по себе не открывает
+ * ничего — каждое обращение к нему подписано ключом владельца, — а перебор
+ * реестра по-прежнему невозможен: имя лежит слепым индексом, ключ отдаётся
+ * только на точный запрос точного имени.
+ *
+ * Ключ подписывается САМ СОБОЙ (см. `claimSyncUsername`): запрос подписан
+ * ключом аккаунта, а у дополнительных профилей ключ переписки другой, и без
+ * собственной подписи владелец имени направил бы своё имя на чужой ключ.
  *
  * Сервер может быть не настроен или недоступен. Тогда имя сохраняется
  * локально, а экран честно говорит, что глобально оно пока не закреплено:
@@ -19,10 +31,12 @@
  * чем отдать имя без глобальной брони.
  */
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../backup/seedPhrase';
+import type { KeyPairBytes } from '../crypto/keyManager';
+import { log } from '../logger';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
 import { ownBadgeGrantFor } from './ownBadge';
+import { getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
 import { profileManager } from './profileManager';
-import { isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
 
 /**
  * Чем кончилось сохранение имени.
@@ -65,12 +79,70 @@ export async function saveOwnUsernameGlobally(username: string): Promise<Usernam
       username,
       ownerProfileId(),
       await ownBadgeGrantFor(ownerProfileId()),
+      activeProfilePair(),
     );
     if (!claim.ok && claim.reason !== 'offline') return { ok: false, reason: claim.reason };
     if (claim.ok) scope = 'global';
   }
   if (!(await setOwnUsername(username))) return { ok: false, reason: 'local' };
   return { ok: true, scope };
+}
+
+/**
+ * Ключ переписки активного профиля — если он вообще доступен.
+ *
+ * У профиля свой ключ, отличный от ключа аккаунта, и брать здесь второй
+ * нельзя: имя должно вести туда, откуда этот профиль пишет. Менеджер профилей
+ * может быть ещё не готов (ранний старт, выход из учётной записи) — тогда имя
+ * занимается без ключа, и справочник по нему честно молчит о владельце.
+ */
+function activeProfilePair(): KeyPairBytes | null {
+  try {
+    return profileManager.getActiveKeyPair();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Подтвердить уже занятое имя, чтобы в справочник попал ключ профиля.
+ *
+ * Нужно ровно один раз для каждого, кто занял имя до v4.32.607: их записи
+ * лежат без ключа, и по такому имени никуда не перейти. Захват своего же
+ * имени идемпотентен, поэтому повтор безвреден; сбой глотается — это фоновая
+ * работа, из-за которой нельзя ни падать, ни задерживать экран.
+ *
+ * Раз за запуск на профиль: вызывается с экрана профиля, а тот перечитывается
+ * после каждого сохранения — сетевой запрос на каждое открытие вкладки тут ни
+ * к чему.
+ */
+const republished = new Set<number>();
+
+export async function republishOwnUsernameToDirectory(): Promise<void> {
+  const pid = ownerProfileId();
+  if (republished.has(pid)) return;
+  republished.add(pid);
+  try {
+    const username = await getOwnUsernameFor(pid);
+    if (!username) return;
+    const pair = activeProfilePair();
+    if (!pair) return;
+    const mnemonic = await getStoredMnemonic();
+    if (!mnemonic) return;
+    await claimSyncUsername(
+      mnemonic,
+      deriveKeyPairFromMnemonic(mnemonic),
+      username,
+      pid,
+      await ownBadgeGrantFor(pid),
+      pair,
+    );
+  } catch (error) {
+    republished.delete(pid); // не вышло — пусть следующий запуск попробует снова
+    log.info('username_directory_republish_skipped', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
