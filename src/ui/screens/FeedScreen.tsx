@@ -4427,9 +4427,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                               runFeedOp(async () => {
                                 const reach = await deleteFeedPost(pair, p.id);
                                 const missed = reach.total - reach.success;
-                                showSuccess(missed > 0
+                                const spread = missed > 0
                                   ? t('feed.deletedPartly', { n: missed })
-                                  : t('feed.deletedEverywhere'));
+                                  : t('feed.deletedEverywhere');
+                                // v4.32.614: копию по ссылке открывает кто угодно,
+                                // а не только контакты, поэтому пока она на сервере
+                                // «удалена у всех» — неправда.
+                                showSuccess(reach.linkCopyLeft
+                                  ? t('feed.deletedLinkCopyLeft')
+                                  : spread);
                               }, t('feed.deletePostFailed'));
                             } else {
                               runFeedOp(async () => {

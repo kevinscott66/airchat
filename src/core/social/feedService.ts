@@ -89,6 +89,7 @@ import {
   deletePublicPostCopy,
   publicPostCopyExists,
   publicPostStoreAvailable,
+  isPublicPostId,
 } from './publicPost';
 
 import {
@@ -817,7 +818,10 @@ function scheduleFeedPublishRetry(pair: KeyPairBytes, delayMs: number): void {
       if (!p) return;
       await flushFeedPublishQueue(p);
       const q = await myQueueItems(p);
-      if (q.length > 0) {
+      // Пустая очередь постов ещё не значит, что повторять нечего: неудавшееся
+      // удаление копии по ссылке живёт своей записью и тоже держит таймер.
+      const pendingLinkDeletes = (await loadLinkDeleteOutbox()).length;
+      if (q.length > 0 || pendingLinkDeletes > 0) {
         const r = q[0]?.retries ?? 0;
         const nextDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.min(r, 6)), 180_000);
         scheduleFeedPublishRetry(p, nextDelay);
@@ -1134,6 +1138,9 @@ export async function flushFeedPublishQueue(pair: KeyPairBytes): Promise<void> {
 }
 
 async function _flushFeedPublishQueueImpl(pair: KeyPairBytes): Promise<void> {
+  // Раньше выхода по пустой очереди: копия по ссылке ждёт своего удаления
+  // отдельно от постов, и пустая очередь публикации её не отменяет.
+  await flushLinkDeleteOutbox(pair);
   const list = await loadPublishQueue();
   if (list.length === 0) return;
 
@@ -3540,8 +3547,114 @@ export async function getFeedCommentCounts(postIds: string[]): Promise<Record<st
   return counts;
 }
 
+/**
+ * Копию по ссылке удаляем с повтором (v4.32.614).
+ *
+ * Она лежит на сервере отдельно от контактов, и рассылка feed_delete её не
+ * касается. Пока запрос на удаление не дошёл, ссылка открывает запись, которую
+ * человек уже стёр у себя и у всех, — поэтому неудача не теряется молча, а
+ * ложится сюда и повторяется на каждом прогоне очереди публикации.
+ */
+const LINK_DELETE_OUTBOX_KEY = 'feed_link_delete_outbox_v1';
+/** Копия на сервере сама не протухает; месяц — предел, после которого перестаём. */
+const LINK_DELETE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const LINK_DELETE_MAX_ITEMS = 200;
+
+type LinkDeleteItem = {
+  postId: string;
+  /** Чей ключ подписывает удаление: очередь общая, профилей несколько. */
+  authorDid: string;
+  createdAt: number;
+};
+
+async function loadLinkDeleteOutbox(): Promise<LinkDeleteItem[]> {
+  const raw = await kvGet(LINK_DELETE_OUTBOX_KEY);
+  if (!raw) return [];
+  try {
+    const p = JSON.parse(raw) as unknown;
+    if (!Array.isArray(p)) return [];
+    const clean: LinkDeleteItem[] = [];
+    for (const e of p as unknown[]) {
+      if (clean.length >= LINK_DELETE_MAX_ITEMS) break;
+      if (!e || typeof e !== 'object') continue;
+      const r = e as Record<string, unknown>;
+      if (typeof r.postId !== 'string' || r.postId.length === 0 || r.postId.length > 128) continue;
+      if (typeof r.authorDid !== 'string' || !r.authorDid.startsWith('did:')) continue;
+      if (typeof r.createdAt !== 'number' || !Number.isFinite(r.createdAt)) continue;
+      clean.push({ postId: r.postId, authorDid: r.authorDid, createdAt: r.createdAt });
+    }
+    return clean;
+  } catch { return []; }
+}
+
+async function saveLinkDeleteOutbox(q: LinkDeleteItem[]): Promise<void> {
+  try { await kvSet(LINK_DELETE_OUTBOX_KEY, JSON.stringify(q.slice(0, LINK_DELETE_MAX_ITEMS))); }
+  catch (e) {
+    log.warn('feed_link_delete_outbox_save_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** Конверт удаления — тот же, что уходит контактам, но нужен отдельно при повторе. */
+function linkDeletePayload(authorDid: string, postId: string): FeedEnvelopePayload {
+  return { type: 'feed_delete', postId, authorDid, ts: Date.now(), data: { kind: 'delete' } };
+}
+
+/**
+ * Убрать копию с сервера. `true` — копии там больше нет (в том числе если её и
+ * не было).
+ */
+async function dropPublicPostCopy(pair: KeyPairBytes, payload: FeedEnvelopePayload): Promise<boolean> {
+  if (!publicPostStoreAvailable() || !isPublicPostId(payload.postId)) return true;
+  try {
+    if (await deletePublicPostCopy(pair, payload)) return true;
+    // Отказ сервера ещё не значит, что копия осталась: запись могли не выкладывать
+    // по ссылке вовсе или уже удалить с другого устройства. HEAD отвечает точно.
+    return !(await publicPostCopyExists(payload.postId));
+  } catch { return false; }
+}
+
+async function queueLinkCopyDelete(pair: KeyPairBytes, postId: string): Promise<void> {
+  const authorDid = publicKeyToDidKey(pair.publicKey);
+  const q = await loadLinkDeleteOutbox();
+  if (q.some((it) => it.postId === postId && it.authorDid === authorDid)) return;
+  q.push({ postId, authorDid, createdAt: Date.now() });
+  await saveLinkDeleteOutbox(q);
+  log.warn('feed_link_delete_queued', { postId: postId.slice(0, 24), size: q.length });
+  scheduleFeedPublishRetry(pair, RETRY_DELAY_MS);
+}
+
+/** Повтор отложенных удалений копий. Берёт только записи своего ключа. */
+async function flushLinkDeleteOutbox(pair: KeyPairBytes): Promise<void> {
+  const q = await loadLinkDeleteOutbox();
+  if (q.length === 0) return;
+  const myDid = publicKeyToDidKey(pair.publicKey);
+  const now = Date.now();
+  const left: LinkDeleteItem[] = [];
+  for (const it of q) {
+    if (now - it.createdAt > LINK_DELETE_TTL_MS) {
+      log.warn('feed_link_delete_ttl_dropped', { postId: it.postId.slice(0, 24) });
+      continue;
+    }
+    if (it.authorDid !== myDid) { left.push(it); continue; }
+    if (await dropPublicPostCopy(pair, linkDeletePayload(myDid, it.postId))) {
+      log.info('feed_link_delete_done', { postId: it.postId.slice(0, 24) });
+      continue;
+    }
+    left.push(it);
+  }
+  if (left.length !== q.length) await saveLinkDeleteOutbox(left);
+}
+
 /** Сколько контактов приняли `feed_delete`: `total` — кому слали, `success` — кто принял. */
-export type FeedDeleteReach = { total: number; success: number };
+export type FeedDeleteReach = {
+  total: number;
+  success: number;
+  /**
+   * Осталась ли копия по ссылке на сервере. Она открывается кому угодно, а не
+   * только контактам, поэтому «удалена у всех» при `true` — неправда.
+   */
+  linkCopyLeft: boolean;
+};
 
 /**
  * Удалить свой пост локально + разослать feed_delete.
@@ -3556,10 +3669,10 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
   const myDid = publicKeyToDidKey(pair.publicKey);
   const s = await ensureStorage();
   const existing = await s.getPost(postId);
-  if (!existing) return { total: 0, success: 0 };
+  if (!existing) return { total: 0, success: 0, linkCopyLeft: false };
   if (existing.authorDid !== myDid) {
     log.warn('feed_delete_not_owner', { postId: postId.slice(0, 24) });
-    return { total: 0, success: 0 };
+    return { total: 0, success: 0, linkCopyLeft: false };
   }
   await cleanupInlinePayloads(postId);
   await s.deletePost(postId);
@@ -3576,11 +3689,21 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
   // v4.32.612: копия для ссылки живёт на сервере отдельно от контактов, и
   // рассылка feed_delete её не касается. Без этого вызова ссылка продолжала бы
   // открывать публикацию, которую человек уже стёр у себя и у всех.
-  if (publicPostStoreAvailable()) {
-    void deletePublicPostCopy(pair, payload).catch(() => { /* ссылка переживёт неудачу, пост уже удалён */ });
-  }
-  const res = await signAndBroadcastFeedEnvelope(pair, payload);
-  return { total: res?.delivered.total ?? 0, success: res?.delivered.success ?? 0 };
+  //
+  // v4.32.614: исход больше не теряется. Запрос уходил без ожидания, и человеку
+  // показывали «удалена у всех», пока ссылка ещё открывала запись — причём
+  // кому угодно, не только контактам. Теперь неудача попадает в очередь
+  // повторов, а вызывающий узнаёт о ней и говорит правду.
+  const [copyGone, res] = await Promise.all([
+    dropPublicPostCopy(pair, payload),
+    signAndBroadcastFeedEnvelope(pair, payload),
+  ]);
+  if (!copyGone) await queueLinkCopyDelete(pair, postId);
+  return {
+    total: res?.delivered.total ?? 0,
+    success: res?.delivered.success ?? 0,
+    linkCopyLeft: !copyGone,
+  };
 }
 
 /**
