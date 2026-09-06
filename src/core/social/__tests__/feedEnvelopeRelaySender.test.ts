@@ -92,8 +92,10 @@ describe('пустой отправитель у интернет-ретранс
   it('приём по интернету выбирает ветку по пустому отправителю', () => {
     const src = read('core/social/feedService.ts');
     expect(src).toContain("const authorFromBody = relayed || senderDid === '';");
-    expect(src).toContain('? await parseAndVerifyRelayedFeedEnvelope(innerFrame)');
-    expect(src).toContain(': await parseAndVerifyFeedEnvelope(innerFrame, senderDid);');
+    // v4.32.612: обеим веткам добавлен второй довод — послабления разбора для
+    // конверта, запрошенного по ссылке. Ветка выбирается по-прежнему отправителем.
+    expect(src).toContain('? await parseAndVerifyRelayedFeedEnvelope(innerFrame, verifyOpts)');
+    expect(src).toContain(': await parseAndVerifyFeedEnvelope(innerFrame, senderDid, verifyOpts);');
   });
 
   it('транспорт по-прежнему не называет отправителя — иначе чинить было бы нечего', () => {

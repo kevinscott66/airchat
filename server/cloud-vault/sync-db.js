@@ -280,6 +280,30 @@ class SyncDatabase {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      -- Публикация, на которую разослана ссылка (v4.32.612).
+      --
+      -- Всё остальное в этой базе — шифртекст, который сервер не умеет
+      -- прочесть. Здесь не так, и это осознанная цена: конверт ленты
+      -- подписан, но не зашифрован, потому что у ссылки нет получателя, чьим
+      -- ключом её можно было бы закрыть. Открывший ссылку — и сервер вместе с
+      -- ним — видит текст и вложения. Поэтому сюда кладётся не всякий пост, а
+      -- только тот, ссылку на который автор скопировал сам.
+      --
+      -- Таблица намеренно вне sync_accounts: ссылку открывает тот, у кого
+      -- аккаунта здесь нет вовсе, — в этом весь смысл ссылки.
+      CREATE TABLE IF NOT EXISTS public_posts (
+        post_id TEXT PRIMARY KEY,
+        author_did TEXT NOT NULL,
+        author_public_key TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_public_posts_author
+        ON public_posts (author_did, updated_at DESC);
     `);
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
@@ -649,6 +673,84 @@ class SyncDatabase {
     const result = this.db.prepare('DELETE FROM seed_bindings WHERE subject_key = ?')
       .run(this.seedBindingKey(provider, subject));
     return (result.changes || 0) > 0;
+  }
+
+  /** Сколько уже занимает автор: байты и штуки — обе половины квоты. */
+  publicPostUsage(authorDid) {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS posts, COALESCE(SUM(bytes), 0) AS bytes FROM public_posts WHERE author_did = ?',
+    ).get(authorDid);
+    return { posts: Number(row?.posts || 0), bytes: Number(row?.bytes || 0) };
+  }
+
+  /**
+   * Положить (или переписать) публичную копию публикации.
+   *
+   * Переписывание своего же поста квоту не раздувает: место прежней записи
+   * вычитается до сравнения — иначе правка текста у автора на пределе
+   * отказывала бы, хотя суммарно ничего не прибавилось.
+   */
+  putPublicPost(postId, authorDid, authorPublicKeyB64, payload, signature, options = {}) {
+    const now = Number.isSafeInteger(options.now) ? options.now : Date.now();
+    const maxBytes = Number.isSafeInteger(options.maxBytes) ? options.maxBytes : 64 * 1024 * 1024;
+    const maxPosts = Number.isSafeInteger(options.maxPosts) ? options.maxPosts : 1000;
+    const bytes = Buffer.byteLength(payload, 'utf8') + Buffer.byteLength(signature, 'utf8');
+    const existing = this.db.prepare(
+      'SELECT author_did, bytes, created_at FROM public_posts WHERE post_id = ?',
+    ).get(postId);
+    // Идентификатор поста занят навсегда и только своим автором: иначе чужую
+    // разосланную ссылку можно было бы подменить своим содержимым.
+    if (existing && existing.author_did !== authorDid) return { ok: false, reason: 'public_post_owned' };
+    const usage = this.publicPostUsage(authorDid);
+    const previousBytes = existing ? Number(existing.bytes) : 0;
+    if (!existing && usage.posts >= maxPosts) return { ok: false, reason: 'public_post_count_quota' };
+    if (usage.bytes - previousBytes + bytes > maxBytes) return { ok: false, reason: 'public_post_quota' };
+    this.db.prepare(
+      `INSERT INTO public_posts
+         (post_id, author_did, author_public_key, payload, signature, bytes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (post_id) DO UPDATE SET
+         author_public_key = excluded.author_public_key,
+         payload = excluded.payload,
+         signature = excluded.signature,
+         bytes = excluded.bytes,
+         updated_at = excluded.updated_at`,
+    ).run(
+      postId,
+      authorDid,
+      authorPublicKeyB64,
+      payload,
+      signature,
+      bytes,
+      existing ? Number(existing.created_at) : now,
+      now,
+    );
+    return { ok: true, bytes };
+  }
+
+  getPublicPost(postId) {
+    const row = this.db.prepare(
+      `SELECT post_id, author_did, author_public_key, payload, signature, created_at, updated_at
+         FROM public_posts WHERE post_id = ?`,
+    ).get(postId);
+    if (!row) return null;
+    return {
+      postId: row.post_id,
+      authorDid: row.author_did,
+      authorPublicKeyB64: row.author_public_key,
+      payload: row.payload,
+      signature: row.signature,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  /** Снять копию. Возвращает false, если её нет либо просит не автор. */
+  deletePublicPost(postId, authorDid) {
+    const row = this.db.prepare('SELECT author_did FROM public_posts WHERE post_id = ?').get(postId);
+    if (!row || row.author_did !== authorDid) return false;
+    this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(postId);
+    return true;
   }
 
   hasAccount(accountId) {

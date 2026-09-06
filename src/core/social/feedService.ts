@@ -74,7 +74,15 @@ import {
   type FeedEditData,
   type FeedPollVoteData,
   type FeedViewData,
+  type FeedEnvelopeVerifyOptions,
+  type FeedDocumentAttachment,
 } from './feedTransport';
+import {
+  putPublicPostCopy,
+  getPublicPostFrame,
+  deletePublicPostCopy,
+  publicPostStoreAvailable,
+} from './publicPost';
 
 import {
   mergeQueue,
@@ -1973,6 +1981,138 @@ export async function getFeedPost(postId: string): Promise<FeedPostRow | null> {
   }
 }
 
+
+/**
+ * Копия публикации для ссылки (v4.32.612).
+ *
+ * Ссылка вида `.../l/post/<id>` до этой версии открывалась только у того, у
+ * кого публикация УЖЕ была, — то есть почти ни у кого: лента ходит по
+ * контактам, а получателю ссылки автор контактом быть не обязан. Здесь и
+ * лежит вторая половина починки: перед тем как отдать ссылку наружу, автор
+ * кладёт на сервер ровно тот конверт, который ушёл бы контактам.
+ *
+ * Цена названа вслух в `publicPost.ts`: конверт ленты подписан, но не
+ * зашифрован, и копию читает сервер вместе с любым держателем ссылки. Поэтому
+ * копия уходит не при публикации, а только здесь — в момент, когда человек
+ * сам решил отдать запись наружу.
+ */
+async function buildOwnPostEnvelope(
+  pair: KeyPairBytes,
+  postId: string,
+): Promise<FeedEnvelopePayload | null> {
+  const myDid = publicKeyToDidKey(pair.publicKey);
+  const s = await ensureStorage();
+  const existing = await s.getPost(postId);
+  if (!existing) return null;
+  if (existing.authorDid !== myDid) return null;
+  // Запись, которую не открывает ключ, отдавать нельзя: наружу уйдёт не текст,
+  // а его заглушка, и подпись будет стоять под ней.
+  if (existing.textUnreadable || existing.mediaUnreadable || existing.documentsUnreadable || existing.nameUnreadable) {
+    log.warn('public_post_unreadable_skip', { postId: postId.slice(0, 24) });
+    return null;
+  }
+
+  const media: string[] = [];
+  const mediaMime: string[] = [];
+  if (existing.mediaCids && existing.mediaCids.length > 0) {
+    for (let i = 0; i < existing.mediaCids.length; i++) {
+      const m = /^inline:([^;]+);\d+:/.exec(existing.mediaCids[i]);
+      const mime = m ? m[1] : 'image/jpeg';
+      const b64 = await kvGetInlineAttachment(`feed_inline_media:${postId}:${i}`);
+      if (b64 && b64.length > 0) {
+        media.push(b64);
+        mediaMime.push(mime);
+      }
+    }
+  }
+
+  const authorName = existing.authorName ?? '';
+  const repostOf = typeof existing.repostOf === 'string' && existing.repostOf.length > 0 ? existing.repostOf : null;
+  const repostAuthorDid = typeof existing.repostAuthorDid === 'string' && existing.repostAuthorDid.length > 0
+    ? existing.repostAuthorDid
+    : null;
+  if (repostOf && repostAuthorDid) {
+    const repostData: FeedRepostData = {
+      kind: 'repost',
+      text: existing.text,
+      authorName,
+      originalPostId: repostOf,
+      originalAuthorDid: repostAuthorDid,
+      originalAuthorName: existing.repostAuthorName ?? null,
+      originalText: existing.text,
+      originalMedia: existing.mediaCids && existing.mediaCids.length > 0 ? existing.mediaCids : null,
+      originalMediaBase64: media.length > 0 ? media : undefined,
+      originalMediaBase64Mime: media.length > 0 ? mediaMime : undefined,
+    };
+    return { type: 'feed_repost', postId, authorDid: myDid, ts: existing.timestamp, data: repostData };
+  }
+
+  const documents: FeedDocumentAttachment[] = [];
+  if (existing.documents && existing.documents.length > 0) {
+    for (let i = 0; i < existing.documents.length; i++) {
+      const b64 = await readFeedDocumentBase64(postId, i);
+      if (!b64) continue;
+      documents.push({
+        name: existing.documents[i].name,
+        mime: existing.documents[i].mime,
+        size: existing.documents[i].size,
+        data: b64,
+      });
+    }
+  }
+  const postData: FeedPostData = {
+    kind: 'post',
+    text: existing.text,
+    authorName,
+    media: media.length > 0 ? media : undefined,
+    mediaMime: media.length > 0 ? mediaMime : undefined,
+    documents: documents.length > 0 ? documents : undefined,
+  };
+  return { type: 'feed_post', postId, authorDid: myDid, ts: existing.timestamp, data: postData };
+}
+
+/**
+ * Выложить копию своей публикации, чтобы ссылка на неё открывалась у того, у
+ * кого записи нет. Зовётся при «скопировать ссылку» и «поделиться».
+ *
+ * Молча ничего не делает, если облако не настроено или публикация чужая:
+ * ссылка в этом случае остаётся такой же, какой была до v4.32.612, —
+ * работающей внутри устройства.
+ */
+export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  if (!publicPostStoreAvailable()) return false;
+  try {
+    const payload = await buildOwnPostEnvelope(pair, postId);
+    if (!payload) return false;
+    return await putPublicPostCopy(pair, payload);
+  } catch (e) {
+    log.warn('public_post_share_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
+/**
+ * Открыть публикацию по ссылке, когда её нет на устройстве.
+ *
+ * Кадр уходит на тот же приёмный путь, что и у сети: подпись проверяется
+ * заново, автор сверяется с телом конверта, медиа и документы раскладываются
+ * теми же ветками. Отличий ровно два, и оба названы явно: возраст не
+ * проверяется (адрес назвал сам человек) и запись не пересылается дальше
+ * своим контактам.
+ */
+export async function fetchPostByLink(postId: string): Promise<FeedPostRow | null> {
+  if (!publicPostStoreAvailable()) return null;
+  try {
+    const frame = await getPublicPostFrame(postId);
+    if (!frame) return null;
+    await receiveFeedEnvelope(frame, '', { maxAgeMs: Infinity, gossip: false });
+    return await getFeedPost(postId);
+  } catch (e) {
+    log.warn('public_post_fetch_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
 // v4.32.377: поштучный getFeedPostViewCount убран. Лента считает просмотры
 // сразу для всего списка (getFeedPostViewCountsMap — одна SQL вместо N), и
 // поштучного счётчика не спрашивал никто.
@@ -2079,7 +2219,19 @@ export async function deleteFeedPostLocal(postId: string): Promise<void> {
  * payload.authorDid === senderDid. delete/edit дополнительно проверяют что
  * пост принадлежит автору события (нельзя удалить чужой пост).
  */
-export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string): Promise<void> {
+export async function receiveFeedEnvelope(
+  frame: Uint8Array,
+  senderDid: string,
+  opts?: FeedEnvelopeVerifyOptions & {
+    /**
+     * Пересылать ли конверт дальше по сети. У всего, что пришло из сети, —
+     * да, в этом смысл gossip'а. У публикации, вытащенной по ссылке, — нет:
+     * её не «принесли», её попросили, и рассылать чужую запись своим
+     * контактам от их имени никто не просил (v4.32.612).
+     */
+    gossip?: boolean;
+  },
+): Promise<void> {
   // v4.32.132 (AUDIT P1): drop envelopes arriving during stop→rebind→start.
   if (feedRebinding) {
     log.debug('feed_envelope_dropped_during_rebind');
@@ -2122,9 +2274,11 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
   // Строгая сверка «автор == сосед по транспорту» остаётся там, где сосед
   // назван, — в локальной сети.
   const authorFromBody = relayed || senderDid === '';
+  const verifyOpts: FeedEnvelopeVerifyOptions | undefined =
+    opts?.maxAgeMs === undefined ? undefined : { maxAgeMs: opts.maxAgeMs };
   const payload = authorFromBody
-    ? await parseAndVerifyRelayedFeedEnvelope(innerFrame)
-    : await parseAndVerifyFeedEnvelope(innerFrame, senderDid);
+    ? await parseAndVerifyRelayedFeedEnvelope(innerFrame, verifyOpts)
+    : await parseAndVerifyFeedEnvelope(innerFrame, senderDid, verifyOpts);
   if (!payload) return;
 
   // v4.32.208: dedup by (type, postId, authorDid, ts). Feed envelopes are
@@ -2162,7 +2316,7 @@ export async function receiveFeedEnvelope(frame: Uint8Array, senderDid: string):
   // high-volume / low-value (a popular post gets thousands) and multi-hop
   // relay would flood the mesh. Views still reach the author via direct
   // broadcast; mesh bridging is reserved for posts/comments/reactions/edits.
-  if (incomingHops < FEED_RELAY_MAX_HOPS && payload.type !== 'feed_view') {
+  if (opts?.gossip !== false && incomingHops < FEED_RELAY_MAX_HOPS && payload.type !== 'feed_view') {
     void feedGossipRelay(innerFrame, incomingHops + 1, senderDid, payload.authorDid);
   }
   // v4.32.133: recheck — a rebind can have run to completion during the
@@ -3406,6 +3560,12 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
     ts: Date.now(),
     data,
   };
+  // v4.32.612: копия для ссылки живёт на сервере отдельно от контактов, и
+  // рассылка feed_delete её не касается. Без этого вызова ссылка продолжала бы
+  // открывать публикацию, которую человек уже стёр у себя и у всех.
+  if (publicPostStoreAvailable()) {
+    void deletePublicPostCopy(pair, payload).catch(() => { /* ссылка переживёт неудачу, пост уже удалён */ });
+  }
   const res = await signAndBroadcastFeedEnvelope(pair, payload);
   return { total: res?.delivered.total ?? 0, success: res?.delivered.success ?? 0 };
 }

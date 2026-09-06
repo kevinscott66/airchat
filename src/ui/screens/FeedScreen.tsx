@@ -75,6 +75,8 @@ import {
   deleteFeedPostLocal,
   editFeedPost,
   getFeedPost,
+  fetchPostByLink,
+  publishPostLinkCopy,
   toggleCommentReaction,
   notifyFeedPostViewed,
   getFeedPostViewCountsMap,
@@ -872,6 +874,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [refreshing, setRefreshing] = useState(false);
   /** Публикация в фоне после закрытия модалки — не блокирует UI. */
   const [publishing, setPublishing] = useState(false);
+  // v4.32.612: публикацию по ссылке может понадобиться сначала забрать с
+  // сервера. Это сеть, и молчать всё это время нельзя.
+  const [linkLoading, setLinkLoading] = useState(false);
   const [queueLen, setQueueLen] = useState(0);
   const [optimisticPosts, setOptimisticPosts] = useState<FeedPostRow[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
@@ -2476,8 +2481,26 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           void openComments(post);
           return;
         }
+        // v4.32.606 отвечала «не найдена» и на этом заканчивала — то есть
+        // ссылка не открывалась ни у кого, кроме тех, у кого запись и так
+        // была. С v4.32.612 автор кладёт копию на сервер в момент, когда
+        // копирует ссылку; здесь мы её и спрашиваем. Подпись проверяется
+        // заново, как у всего, что приходит из сети.
+        setLinkLoading(true);
+        let fetched: FeedPostRow | null = null;
+        try {
+          fetched = await fetchPostByLink(postId);
+        } finally {
+          if (alive) setLinkLoading(false);
+        }
+        if (!alive) return;
+        if (fetched) {
+          void loadFeed();
+          void openComments(fetched);
+          return;
+        }
         log.info('feed_post_link_missing', { post: postId.slice(0, 24) });
-        showError('Публикация не найдена — возможно, она удалена или ещё не дошла до этого устройства');
+        showError('Публикация не найдена — возможно, она удалена или автор не открывал к ней доступ по ссылке');
       } catch (e) {
         if (!alive) return;
         log.warn('feed_post_link_failed', { err: rawErrorText(e) });
@@ -2487,7 +2510,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     return () => {
       alive = false;
     };
-  }, [postJump?.token, postJump?.postId, openComments]);
+  }, [postJump?.token, postJump?.postId, openComments, loadFeed]);
 
   const closeComments = useCallback(() => {
     setCommentPostId(null);
@@ -2894,6 +2917,25 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       .finally(() => { bookmarkLocksRef.current.delete(item.id); });
   }, [bookmarkFilter, loadFeed, t]);
 
+  /**
+   * Открыть публикацию по ссылке для тех, у кого её нет (v4.32.612).
+   *
+   * Зовётся ровно в двух местах — «скопировать ссылку» и «поделиться», — и
+   * только для своих записей: подписать чужую нечем, да и права такого нет.
+   * Копия на сервере не зашифрована (у ссылки нет получателя, чьим ключом её
+   * можно было бы закрыть), поэтому она и уходит именно здесь: человек в этот
+   * момент и так отдаёт запись наружу.
+   */
+  const shareLinkCopy = useCallback((item: FeedPostRow) => {
+    if (item.authorDid !== did) return;
+    void publishPostLinkCopy(pair, item.id).then((ok) => {
+      if (ok) return;
+      // Молчать нельзя: со стороны автора ссылка выглядит скопированной, а у
+      // получателя не откроется — ровно та жалоба, с которой всё началось.
+      showError(`${COPIED_LINK}, но выложить публикацию не удалось: у того, у кого её ещё нет, она не откроется`);
+    }).catch(() => { /* ошибка уже показана выше */ });
+  }, [pair, did]);
+
   const handleNativeShare = useCallback((item: FeedPostRow) => {
     if (!mayRepublishFeedPost(item)) {
       showError(UNREADABLE_POST_ACTION_TEXT);
@@ -2904,8 +2946,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     // было, вернуться к оригиналу — нет.
     const shareText = item.text ? item.text.slice(0, 200) : t('feed.mediaFallback');
     const message = `${outwardName(item.authorName, item.nameUnreadable, 'AirChat')}: ${shareText}\n${buildPostLink(item.id).web}`;
+    shareLinkCopy(item);
     void Share.share({ message });
-  }, [t]);
+  }, [t, shareLinkCopy]);
 
   // v4.32.92: стабилизация handlers через ref — renderItem теперь не пересоздаётся
   // при каждом изменении любого колбэка. FeedPostItem.memo реально держит строки:
@@ -3006,7 +3049,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       <KeyboardHost>
       <View style={[styles.container, { backgroundColor: colors.background }]} testID="feed_screen">
         {/* Полноэкранный оверлей только вне модалки — иначе дублируется с кнопкой «Публикация…». */}
-        <LoadingOverlay visible={publishing} message={t('feed.sending')} />
+        <LoadingOverlay
+          visible={publishing || linkLoading}
+          message={publishing ? t('feed.sending') : 'Загружаем публикацию…'}
+        />
         {/* v4.32.36: компактный header — убраны subtitle (лишние 2 строки) и idRow
             (DID дублируется в Профиле). Это поднимает первый пост ближе к верху
             экрана — раньше вертикальный оверхед ~250px прижимал посты к середине. */}
@@ -4269,6 +4315,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       получить нигде: «поделиться» отдавало отрывок текста, и
                       вернуться к самой записи было не по чему. */}
                   {row('link-outline', t('feed.menuCopyLink'), () => {
+                    shareLinkCopy(p);
                     void Clipboard.setStringAsync(buildPostLink(p.id).web).then(() => showSuccess(COPIED_LINK));
                   })}
                   {hasText ? (

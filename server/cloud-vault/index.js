@@ -86,6 +86,22 @@ const configuredMediaGcBatch = Number(process.env.MEDIA_GC_BATCH);
 const MEDIA_GC_BATCH = Number.isSafeInteger(configuredMediaGcBatch) && configuredMediaGcBatch > 0
   ? Math.min(configuredMediaGcBatch, 1_000)
   : 100;
+/**
+ * Публичная копия публикации (v4.32.612). Потолок нагрузки — тот же, что у
+ * кадра ленты на клиенте (FEED_ENVELOPE_MAX_BYTES), иначе сервер принял бы то,
+ * что получатель всё равно отвергнет.
+ */
+const PUBLIC_POST_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const PUBLIC_POST_BODY_BYTES = 4 * 1024 * 1024;
+const POST_ID_RE = /^[A-Za-z0-9_\-.:]{1,128}$/;
+const configuredPublicPostQuota = Number(process.env.PUBLIC_POST_MAX_AUTHOR_BYTES);
+const PUBLIC_POST_MAX_AUTHOR_BYTES = Number.isSafeInteger(configuredPublicPostQuota) && configuredPublicPostQuota > 0
+  ? configuredPublicPostQuota
+  : 64 * 1024 * 1024;
+const configuredPublicPostCount = Number(process.env.PUBLIC_POST_MAX_AUTHOR_POSTS);
+const PUBLIC_POST_MAX_AUTHOR_POSTS = Number.isSafeInteger(configuredPublicPostCount) && configuredPublicPostCount > 0
+  ? Math.min(configuredPublicPostCount, 100_000)
+  : 1000;
 const ACCOUNT_LOCK_TIMEOUT_MS = 15_000;
 const ACCOUNT_LOCK_STALE_MS = 60_000;
 
@@ -196,6 +212,7 @@ app.use((req, res, next) => {
   if (req.method === 'PUT' && req.path.startsWith('/v1/cloud-vault/')) limit = MAX_BODY_BYTES;
   else if (req.path.endsWith('/push')) limit = SYNC_PUSH_BODY_BYTES;
   else if (req.path.endsWith('/media/put')) limit = MEDIA_BODY_BYTES;
+  else if (req.path.startsWith('/v1/post/')) limit = PUBLIC_POST_BODY_BYTES;
   return express.json({ limit: `${limit}b` })(req, res, next);
 });
 setInterval(() => {
@@ -982,6 +999,121 @@ app.post('/v1/sync/:accountId/username/release', (req, res) => {
  *   taken:true,  pub:'…'   — вот его ключ.
  * Перебор ограничен общим потолком запросов с адреса (см. rateBuckets).
  */
+/**
+ * Публикация, на которую разослана ссылка (v4.32.612).
+ *
+ * До этой версии ссылка `/l/post/<id>` искала публикацию ТОЛЬКО в базе того
+ * телефона, на котором её открыли. У автора она открывалась, у всех прочих —
+ * «этого поста нет». Лента ходит от человека к человеку, и у того, кто перешёл
+ * по ссылке, поста может не быть никогда: он не в контактах, или был не в сети,
+ * когда пост расходился.
+ *
+ * Что здесь лежит и чего здесь нет. Конверт ленты подписан ключом автора, но
+ * не зашифрован — зашифровать его не для кого — поэтому сервер, в отличие от
+ * всего остального в этой базе, видит текст и вложения. Ровно поэтому копия
+ * появляется не при публикации, а при копировании ссылки: сколько ссылок
+ * человек разослал, столько постов сюда и попало.
+ *
+ * Что проверяется. Подпись — обязательно, и не как формальность: без неё
+ * подменить содержимое чужой разосланной ссылки мог бы кто угодно с доступом
+ * к этому адресу. Открытая половина ключа приезжает в запросе, и did внутри
+ * подписанной нагрузки обязан из неё выводиться, иначе подпись подтверждала бы
+ * только саму себя. Идентификатор поста закрепляется за автором навсегда.
+ */
+function verifyPostEnvelope(body, expectedPostId, expectedTypes) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const { payload, signature, authorPublicKeyB64 } = body;
+  if (typeof payload !== 'string' || payload.length === 0) return null;
+  if (Buffer.byteLength(payload, 'utf8') > PUBLIC_POST_MAX_PAYLOAD_BYTES) return null;
+  if (typeof signature !== 'string' || !SIGNATURE_RE.test(signature)) return null;
+  const publicKey = decodeBase64(authorPublicKeyB64, 32);
+  const sig = decodeBase64(signature, 64);
+  if (!publicKey || publicKey.length !== 32 || !sig || sig.length !== 64) return null;
+  if (!ed25519.verify(sig, Buffer.from(payload, 'utf8'), publicKey)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  // Тот же канонический вид, который подписывает клиент (signature.ts#signJson).
+  // Без этой сверки одна и та же подпись подошла бы к нескольким записям JSON.
+  if (stableStringify(parsed) !== payload) return null;
+  if (!expectedTypes.includes(parsed.type)) return null;
+  if (typeof parsed.postId !== 'string' || parsed.postId !== expectedPostId) return null;
+  if (typeof parsed.authorDid !== 'string' || parsed.authorDid !== didKeyFromPublicKeyB64(authorPublicKeyB64)) return null;
+  if (typeof parsed.ts !== 'number' || !Number.isSafeInteger(parsed.ts)) return null;
+  return { parsed, payload, signature, authorPublicKeyB64 };
+}
+
+app.post('/v1/post/:postId', (req, res) => {
+  noStore(res);
+  const postId = req.params.postId;
+  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  // Репост — такая же запись ленты со своим id, и ссылку на него копируют так же.
+  const envelope = verifyPostEnvelope(req.body, postId, ['feed_post', 'feed_repost']);
+  if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
+  try {
+    const result = syncDb.putPublicPost(
+      postId,
+      envelope.parsed.authorDid,
+      envelope.authorPublicKeyB64,
+      envelope.payload,
+      envelope.signature,
+      {
+        maxBytes: PUBLIC_POST_MAX_AUTHOR_BYTES,
+        maxPosts: PUBLIC_POST_MAX_AUTHOR_POSTS,
+      },
+    );
+    if (!result.ok) {
+      return res.status(result.reason === 'public_post_owned' ? 403 : 413).json({ error: result.reason });
+    }
+    return res.json({ ok: true, postId, bytes: result.bytes });
+  } catch {
+    return res.status(500).json({ error: 'public_post_write_failed' });
+  }
+});
+
+app.get('/v1/post/:postId', (req, res) => {
+  noStore(res);
+  const postId = req.params.postId;
+  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  try {
+    const row = syncDb.getPublicPost(postId);
+    if (!row) return res.status(404).json({ error: 'public_post_not_found' });
+    return res.json({
+      postId: row.postId,
+      payload: row.payload,
+      signature: row.signature,
+      authorPublicKeyB64: row.authorPublicKeyB64,
+      updatedAt: row.updatedAt,
+    });
+  } catch {
+    return res.status(500).json({ error: 'public_post_read_failed' });
+  }
+});
+
+/**
+ * Снять копию. Удаление поста у автора обязано убирать и его — иначе ссылка
+ * продолжала бы открывать то, что человек уже стёр.
+ */
+app.post('/v1/post/:postId/delete', (req, res) => {
+  noStore(res);
+  const postId = req.params.postId;
+  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  const envelope = verifyPostEnvelope(req.body, postId, ['feed_delete']);
+  if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
+  try {
+    const removed = syncDb.deletePublicPost(postId, envelope.parsed.authorDid);
+    // Нечего удалять и удаляет не автор — снаружи одно и то же: иначе по коду
+    // ответа можно было бы перебором узнавать, чей это пост.
+    return res.json({ ok: true, removed });
+  } catch {
+    return res.status(500).json({ error: 'public_post_delete_failed' });
+  }
+});
+
 app.get('/v1/username/:username', (req, res) => {
   noStore(res);
   const username = normalizeLookupUsername(req.params.username);

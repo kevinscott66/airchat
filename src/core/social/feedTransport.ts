@@ -1,4 +1,8 @@
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.
+// v4.32.612 — правка по прямому запросу «публикация не доходит»: проверка
+// подписи получала общий потолок нагрузки в 64 КиБ и отбрасывала КАЖДЫЙ пост
+// с фотографией. Формат кадра не тронут, MAGIC прежний.
+
 // Причина: формат envelope FEED_ENVELOPE_MAGIC = 0xF0 согласован с
 // lanCoordinator.onFrame (v4.32.24). Если поменять MAGIC-байт или порядок
 // полей — lanCoordinator перестанет распознавать feed-трафик и будет
@@ -60,7 +64,23 @@ export const FEED_RELAY_MAX_HOPS = 3;
 const FEED_BROADCAST_CONCURRENCY = 8;
 
 /** Лимит размера одного кадра (защита от base64-бомб в медиа). */
-const FEED_ENVELOPE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+export const FEED_ENVELOPE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+
+/**
+ * Срок годности конверта: старше — не принимаем (v4.32.213, Audit-42 C2).
+ * Пойманный в сети подписанный кадр иначе можно вбросить заново через год.
+ */
+export const FEED_ENVELOPE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Чем разбор конверта, запрошенного по ссылке, отличается от разбора того, что
+ * прилетело из сети (v4.32.612). Отличие ровно одно — срок годности; всё
+ * остальное, включая проверку подписи и сверку автора, общее.
+ */
+export type FeedEnvelopeVerifyOptions = {
+  /** Потолок возраста в мс. `Infinity` — не проверять возраст вовсе. */
+  maxAgeMs?: number;
+};
 
 export type FeedEnvelopeType =
   | 'feed_post'
@@ -265,6 +285,7 @@ export function wrapFeedRelay(innerFrame: Uint8Array, hops: number): Uint8Array 
  */
 export async function parseAndVerifyRelayedFeedEnvelope(
   frame: Uint8Array,
+  opts?: FeedEnvelopeVerifyOptions,
 ): Promise<FeedEnvelopePayload | null> {
   if (!isFeedEnvelope(frame)) return null;
   if (frame.length > FEED_ENVELOPE_MAX_BYTES) return null;
@@ -281,7 +302,7 @@ export async function parseAndVerifyRelayedFeedEnvelope(
   } catch {
     return null;
   }
-  return parseAndVerifyFeedEnvelope(frame, peekedAuthor);
+  return parseAndVerifyFeedEnvelope(frame, peekedAuthor, opts);
 }
 
 /** v4.32.208: unwrap a 0xF1-prefixed relay frame. Returns {hops, inner} or null. */
@@ -343,6 +364,7 @@ export async function serializeFeedEnvelope(
 export async function parseAndVerifyFeedEnvelope(
   frame: Uint8Array,
   senderDid: string,
+  opts?: FeedEnvelopeVerifyOptions,
 ): Promise<FeedEnvelopePayload | null> {
   if (!isFeedEnvelope(frame)) return null;
   if (frame.length > FEED_ENVELOPE_MAX_BYTES) {
@@ -363,7 +385,12 @@ export async function parseAndVerifyFeedEnvelope(
     log.warn('feed_envelope_sender_did_invalid', { senderDid: senderDid.slice(0, 32) });
     return null;
   }
-  const verified = await verifySignedJson(pk, outer);
+  // Потолок нагрузки называется вслух: у конверта ленты он свой и он больше
+  // общего (v4.32.612). Внутри лежит base64 фотографии — 64 КиБ по умолчанию
+  // хватает только на текст, и посты с медиа отбрасывались молча. Кадр целиком
+  // уже проверен выше на FEED_ENVELOPE_MAX_BYTES, так что второй предел здесь
+  // ничего не расширяет — он лишь перестаёт быть уже первого.
+  const verified = await verifySignedJson(pk, outer, FEED_ENVELOPE_MAX_BYTES);
   if (!verified) {
     log.warn('feed_envelope_verify_failed', { senderDid: senderDid.slice(0, 32) });
     return null;
@@ -396,8 +423,13 @@ export async function parseAndVerifyFeedEnvelope(
   // combined with FIFO-evicting feedSeenKeys (8192 entries) it re-processes.
   // Floor is applied BEFORE the forward clamp so rejected envelopes never
   // reach savePost or gossip relay.
-  const FEED_ENVELOPE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-  if (payload.ts < Date.now() - FEED_ENVELOPE_MAX_AGE_MS) {
+  // v4.32.612: срок годности стал называемым. Он защищает от повторного
+  // вброса пойманного в сети конверта — но у публикации, которую сознательно
+  // запросили по ссылке, никакого «вброса» нет: адрес назвал сам человек, и
+  // ответ пришёл ровно на этот postId. Оставить недельный порог и там значило
+  // бы, что ссылка на публикацию месячной давности не открывается никогда.
+  const maxAgeMs = opts?.maxAgeMs ?? FEED_ENVELOPE_MAX_AGE_MS;
+  if (Number.isFinite(maxAgeMs) && payload.ts < Date.now() - maxAgeMs) {
     return null;
   }
   // v4.32.202 (Round-32 #1): clamp ts to [0, now+5min]. Without this a signed

@@ -33,16 +33,34 @@ export async function signJson(
   };
 }
 
+/**
+ * Потолок нагрузки по умолчанию — 64 КиБ.
+ *
+ * v4.32.612. Он был здесь единственным и безусловным, и это молча ломало
+ * доставку каждой публикации с фотографией. Отправитель подписывал конверт
+ * (`signJson` никакого потолка не знает), кадр укладывался в свои 2 МБ и
+ * уходил — а получатель на этой строке возвращал null, и пост исчезал без
+ * следа: ни ошибки у автора, ни записи у получателя. Пост с текстом доходил,
+ * пост с фотографией — нет; со стороны это выглядело как «интернет плохой».
+ *
+ * Значение осталось прежним для всех, кто передаёт конверты покороче
+ * (карточка профиля, подтверждения, управляющие кадры): потолок здесь —
+ * дешёвая защита от разбора чужого гиганта до обращения к кривой. Тому, у
+ * кого свой предел заведомо больше, теперь нужно назвать его вслух.
+ */
+export const SIGNED_JSON_DEFAULT_MAX_LEN = 64 * 1024;
+
 export async function verifySignedJson(
   publicKey: Uint8Array,
-  envelope: { payload: string; signature: string }
+  envelope: { payload: string; signature: string },
+  maxPayloadLen: number = SIGNED_JSON_DEFAULT_MAX_LEN
 ): Promise<Record<string, unknown> | null> {
   // v4.32.203 (Round-33 #4): defensive caps at the shared primitive.
   // Ed25519 signatures are 64 bytes (~88 base64 chars). Payloads used across
   // feed/profile envelopes are already capped upstream; mirror here so new
   // callers can't accidentally skip the check.
   if (typeof envelope.signature !== 'string' || envelope.signature.length === 0 || envelope.signature.length > 128) return null;
-  if (typeof envelope.payload !== 'string' || envelope.payload.length === 0 || envelope.payload.length > 64 * 1024) return null;
+  if (typeof envelope.payload !== 'string' || envelope.payload.length === 0 || envelope.payload.length > maxPayloadLen) return null;
   // v4.32.349: длина в БАЙТАХ, а не в символах base64. Buffer.from(s,'base64')
   // молча выбрасывает недопустимые символы и не жалуется на обрезанный хвост,
   // поэтому ограничение на длину строки не гарантирует ничего о результате.
