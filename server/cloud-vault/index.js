@@ -164,6 +164,19 @@ const seedBindingBuckets = new Map();
 // safe and necessary.
 const CLIENT_IP_HEADER = String(process.env.CLIENT_IP_HEADER || '').trim().toLowerCase();
 
+// Whether `cf-ipcountry` / `cf-ipcity` may be believed. Off by default, and
+// that default is the safe one.
+//
+// v4.32.614: the previous guard read `req.socket.remoteAddress` and trusted
+// the headers when the peer was loopback. Behind Nginx the peer is ALWAYS
+// loopback, so the guard was true for every request on this deployment and
+// any client could name its own country — including a stolen key syncing
+// from abroad while «Активные сессии» kept showing the owner's own city.
+// Nginx does not strip inbound `cf-*`, so only an explicit opt-in (set on a
+// deployment that really sits behind Cloudflare, where the edge overwrites
+// them) can make them meaningful.
+const TRUST_GEO_HEADERS = String(process.env.TRUST_GEO_HEADERS || '').trim() === '1';
+
 /**
  * Адрес клиента так, как его видит это развёртывание: названный заголовок
  * прокси, иначе `req.ip` (за Nginx Express уже развернул X-Forwarded-For).
@@ -367,6 +380,23 @@ function accountCreationAllowed(requestedAccountId, effectiveAccountId, payload)
   // Legacy ids may still be used to access an already-created account during
   // migration, but a new account must use the public-key-bound id.
   return syncDb.hasAccount(effectiveAccountId) || !!existingFileOwner(effectiveAccountId);
+}
+
+/**
+ * Один и тот же отказ и на «ключ не тот», и на «такого аккаунта ещё нет».
+ *
+ * v4.32.614: первый случай отвечал 403, второй — 426, и эту разницу видел кто
+ * угодно. Запрос подписан ключом самого спрашивающего, а идентификатор
+ * аккаунта — это sha256 открытого ключа, то есть он выводится из did:key,
+ * которым человек делится с каждым собеседником. Два разных кода превращали
+ * сервер в справочную «есть ли у владельца этого did учётная запись здесь».
+ * Причина остаётся в журнале сервера, наружу уходит один ответ.
+ */
+function accountAccessDenied(reason, requestedAccountId) {
+  if (reason !== 'account_key_mismatch') {
+    console.warn('cloud-vault account access denied', reason, requestedAccountId);
+  }
+  return { error: 'account_key_mismatch', status: 403 };
 }
 
 /**
@@ -578,12 +608,11 @@ function validateSyncRequest(payload, accountId, op) {
 }
 
 function sessionGeo(req) {
-  const remote = req.socket?.remoteAddress;
-  const trustedProxy = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-  // Заголовки cf-* читаем только из-за доверенного прокси: снаружи их ставит
-  // кто угодно, и «страна сессии» стала бы полем, которое клиент заполняет сам.
-  const country = trustedProxy ? String(req.get('cf-ipcountry') || '').trim().toUpperCase() : '';
-  const rawCity = trustedProxy ? String(req.get('cf-ipcity') || '').trim() : '';
+  // Заголовки cf-* читаем, только если развёртывание прямо об этом сказало:
+  // иначе «страна сессии» — поле, которое клиент заполняет сам, а список
+  // активных сессий перестаёт замечать вход из другой страны.
+  const country = TRUST_GEO_HEADERS ? String(req.get('cf-ipcountry') || '').trim().toUpperCase() : '';
+  const rawCity = TRUST_GEO_HEADERS ? String(req.get('cf-ipcity') || '').trim() : '';
   const city = rawCity
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
@@ -612,9 +641,9 @@ function authenticateLegacyVaultRequest(req, accountId, op) {
     return { error: 'invalid_sync_request' };
   }
   const effectiveAccountId = resolveEffectiveAccountId(accountId, payload);
-  if (!effectiveAccountId) return { error: 'account_key_mismatch', status: 403 };
+  if (!effectiveAccountId) return accountAccessDenied('account_key_mismatch', accountId);
   if (!accountCreationAllowed(accountId, effectiveAccountId, payload)) {
-    return { error: 'legacy_account_id_requires_migration', status: 426 };
+    return accountAccessDenied('legacy_account_id_requires_migration', accountId);
   }
   const account = syncDb.ensureAccount(effectiveAccountId, payload.accountPublicKeyB64);
   if (!account.ok) return { error: account.reason, status: 403 };
@@ -638,9 +667,9 @@ function authenticateSyncRequest(req, accountId, op) {
   const checked = validateSyncRequest(payload, accountId, op);
   if (!checked) return { error: 'invalid_sync_request' };
   const effectiveAccountId = resolveEffectiveAccountId(accountId, checked);
-  if (!effectiveAccountId) return { error: 'account_key_mismatch', status: 403 };
+  if (!effectiveAccountId) return accountAccessDenied('account_key_mismatch', accountId);
   if (!accountCreationAllowed(accountId, effectiveAccountId, checked)) {
-    return { error: 'legacy_account_id_requires_migration', status: 426 };
+    return accountAccessDenied('legacy_account_id_requires_migration', accountId);
   }
   const account = syncDb.ensureAccount(effectiveAccountId, checked.accountPublicKeyB64);
   if (!account.ok) return { error: account.reason, status: 403 };
@@ -676,9 +705,9 @@ function authenticateDeviceEnrollment(req, accountId) {
   );
   if (!checked) return { error: 'invalid_enrollment' };
   const effectiveAccountId = resolveEffectiveAccountId(accountId, payload);
-  if (!effectiveAccountId) return { error: 'account_key_mismatch', status: 403 };
+  if (!effectiveAccountId) return accountAccessDenied('account_key_mismatch', accountId);
   if (!accountCreationAllowed(accountId, effectiveAccountId, payload)) {
-    return { error: 'legacy_account_id_requires_migration', status: 426 };
+    return accountAccessDenied('legacy_account_id_requires_migration', accountId);
   }
   const account = syncDb.ensureAccount(effectiveAccountId, payload.accountPublicKeyB64);
   if (!account.ok) return { error: account.reason, status: 403 };

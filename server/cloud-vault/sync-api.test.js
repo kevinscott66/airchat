@@ -9,6 +9,9 @@ const { ed25519 } = require('@noble/curves/ed25519.js');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-sync-api-'));
 process.env.CLOUD_VAULT_DIR = dataDir;
 process.env.SYNC_DB_FILE = path.join(dataDir, 'sync.sqlite');
+// Здесь проверяется путь развёртывания за Cloudflare: заголовкам о стране
+// верят только с этим разрешением. Поведение по умолчанию — в geo-headers.test.js.
+process.env.TRUST_GEO_HEADERS = '1';
 const { app, runMediaGc, syncDb } = require('./index');
 
 function canonicalize(value) {
@@ -82,7 +85,10 @@ test('signed sync API pushes, pulls and revokes devices', async (t) => {
       legacyAccountId: undefined,
     })),
   });
-  assert.equal(legacyClaim.status, 426);
+  // v4.32.614: чужой идентификатор без миграции отвечает тем же отказом, что и
+  // неверный ключ, — по коду ответа нельзя узнать, есть ли такой аккаунт.
+  assert.equal(legacyClaim.status, 403);
+  assert.deepEqual(await legacyClaim.json(), { error: 'account_key_mismatch' });
   const legacyEnrollment = await fetch(`${base}/v1/sync/${accountId}/devices/enroll`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
