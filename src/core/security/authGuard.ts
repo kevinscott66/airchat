@@ -185,8 +185,7 @@ export class AuthGuard {
     // v4.32.176: если payload отсутствует — возвращаем false, а не true.
     // Раньше transient SecureStore miss (Keystore race после boot) давал
     // эффект password-bypass в changePassword и других местах, которые
-    // вызывают verifyPasswordInternal. Bypass-when-unset должен жить только
-    // в checkPasswordOrBypassIfUnset (явно проверяющем hasPassword).
+    // вызывают verifyPasswordInternal.
     if (!raw?.trim()) return false;
     let payload: AuthPayloadV1;
     try {
@@ -199,15 +198,6 @@ export class AuthGuard {
     const expected = new Uint8Array(Buffer.from(payload.hashB64, 'base64'));
     const computed = hashPassword(password, salt);
     return bytesEqualConstTime(computed, expected);
-  }
-
-  /** Пароль не задан — вход без запроса. */
-  async checkPasswordOrBypassIfUnset(password: string): Promise<boolean> {
-    if (!(await this.hasPassword())) {
-      this.sessionUnlocked = true;
-      return true;
-    }
-    return this.checkPassword(password);
   }
 
   async verifyMnemonicMatchesWallet(mnemonic: string): Promise<boolean> {

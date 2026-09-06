@@ -25,6 +25,11 @@ import { AppModal as Modal } from '../components/AppModal';
 import * as FileSystem from 'expo-file-system/legacy';
 import { authGuard } from '../../core/security/authGuard';
 import {
+  APPLE_BINDING_STORED,
+  hintAfterPasswordChange,
+  parseAppleBindingHint,
+} from '../../core/security/appleBindingHint';
+import {
   SENSITIVE_NO_PASSWORD_TEXT,
   sensitiveAccessGate,
   unlockSensitiveAccess,
@@ -266,6 +271,16 @@ function SettingsScreenImpl({
    */
   const [appleBindReady, setAppleBindReady] = useState(false);
   const [appleBound, setAppleBound] = useState(false);
+  /**
+   * v4.32.615: привязка пережила смену пароля и больше не откроется.
+   *
+   * Конверт на сервере зашифрован тем паролем, который был на момент привязки.
+   * Сменив пароль, человек продолжал видеть «Слова привязаны к Apple ID» — а
+   * узнал бы правду только в тот день, когда слов на руках уже нет. Молча
+   * перешифровать нечем: для записи нужен вход через Apple, то есть системное
+   * окно. Поэтому — честная пометка и предложение привязать заново.
+   */
+  const [appleBindStale, setAppleBindStale] = useState(false);
   const [appleBindModal, setAppleBindModal] = useState(false);
   const [appleBindPwd, setAppleBindPwd] = useState('');
   const [appleBindBusy, setAppleBindBusy] = useState(false);
@@ -624,7 +639,29 @@ function SettingsScreenImpl({
       setNewPwd('');
       setNewPwd2('');
       refreshPasswordFlag();
+      await markAppleBindingStaleAfterPasswordChange();
     } finally { setPwdBusy(false); }
+  };
+
+  /**
+   * Пароль сменился — конверт на сервере остался под старым.
+   *
+   * Перешифровать его молча нечем: `putSeedBinding` требует свежий вход через
+   * Apple. Поэтому помечаем привязку устаревшей и говорим об этом сразу, пока
+   * слова ещё на устройстве, — а не в день, когда их уже нет.
+   */
+  const markAppleBindingStaleAfterPasswordChange = async (): Promise<void> => {
+    try {
+      const now = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
+      const next = hintAfterPasswordChange(now);
+      if (!next) return;
+      await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED[next]);
+      setAppleBound(false);
+      setAppleBindStale(true);
+      showError('Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.');
+    } catch {
+      /* подсказка местная: не удалось — привязка и так помечена в интерфейсе */
+    }
   };
 
   /**
@@ -711,8 +748,10 @@ function SettingsScreenImpl({
       }
       if (!alive || !providers.includes('apple')) return;
       setAppleBindReady(true);
-      const hint = await scopedKvGet(APPLE_BINDING_HINT_KEY);
-      if (alive) setAppleBound(hint === '1');
+      const hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
+      if (!alive) return;
+      setAppleBound(hint === 'bound');
+      setAppleBindStale(hint === 'stale');
     })();
     return () => { alive = false; };
   }, []);
@@ -736,8 +775,9 @@ function SettingsScreenImpl({
       const identity = await signInWithApple();
       if (!identity) return;
       await putSeedBinding('apple', identity.idToken, mnemonic, appleBindPwd);
-      await scopedKvSet(APPLE_BINDING_HINT_KEY, '1');
+      await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED.bound);
       setAppleBound(true);
+      setAppleBindStale(false);
       setAppleBindModal(false);
       showSuccess('Секретные слова привязаны к Apple ID');
     } catch (e) {
@@ -767,8 +807,9 @@ function SettingsScreenImpl({
                 const identity = await signInWithApple();
                 if (!identity) return;
                 const removed = await deleteSeedBinding('apple', identity.idToken);
-                await scopedKvSet(APPLE_BINDING_HINT_KEY, '0');
+                await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED.none);
                 setAppleBound(false);
+                setAppleBindStale(false);
                 showSuccess(removed ? 'Apple ID отвязан' : 'Привязки на сервере не было');
               } catch (e) {
                 showError(userErrorText(e, 'Не удалось отвязать Apple ID'));
@@ -1879,11 +1920,19 @@ function SettingsScreenImpl({
         >
           <Ionicons name="logo-apple" size={22} color={colors.text} />
           <View style={styles.rowBody}>
-            <Text style={styles.label}>{appleBound ? 'Слова привязаны к Apple ID' : 'Привязать слова к Apple ID'}</Text>
+            <Text style={styles.label}>
+              {appleBound
+                ? 'Слова привязаны к Apple ID'
+                : appleBindStale
+                  ? 'Привязка к Apple ID устарела'
+                  : 'Привязать слова к Apple ID'}
+            </Text>
             <Text style={styles.desc}>
               {appleBound
                 ? 'Восстановить аккаунт можно входом через Apple ID и паролем приложения. Нажмите, чтобы отвязать.'
-                : 'Запасной путь, если секретные слова потеряны: копия уйдёт на сервер шифртекстом, и без пароля приложения её не открыть — ни серверу, ни Apple.'}
+                : appleBindStale
+                  ? 'Копия на сервере зашифрована прежним паролем и новым уже не откроется. Нажмите, чтобы привязать заново.'
+                  : 'Запасной путь, если секретные слова потеряны: копия уйдёт на сервер шифртекстом, и без пароля приложения её не открыть — ни серверу, ни Apple.'}
             </Text>
           </View>
           {appleBindBusy

@@ -60,24 +60,25 @@ function freshGuard(): AuthGuard {
 describe('AuthGuard — basic password flow', () => {
   // v4.32.176: checkPassword БОЛЬШЕ не пропускает при незаданном пароле.
   // Раньше transient SecureStore miss (Keystore race после boot) читался как
-  // «пароля нет» и давал password-bypass. Теперь bypass живёт только в явном
-  // checkPasswordOrBypassIfUnset, который проверяет hasPassword().
+  // «пароля нет» и давал password-bypass.
+  //
+  // v4.32.615: заодно убран `checkPasswordOrBypassIfUnset` — единственный
+  // оставшийся вход, который выставлял `sessionUnlocked` вообще без проверки.
+  // В приложении его не звали нигде: он существовал только здесь, в тестах,
+  // и ждал, пока кто-нибудь подключит к нему экран блокировки.
   test('no password → checkPassword returns false (no implicit bypass)', async () => {
     const guard = freshGuard();
     expect(await guard.checkPassword('anything')).toBe(false);
     expect(guard.isSessionUnlocked()).toBe(false);
   });
 
-  test('no password → checkPasswordOrBypassIfUnset returns true (explicit bypass)', async () => {
+  test('пароля нет — разблокировать сессию нечем: обхода больше не существует', async () => {
     const guard = freshGuard();
-    expect(await guard.checkPasswordOrBypassIfUnset('anything')).toBe(true);
-    expect(guard.isSessionUnlocked()).toBe(true);
-  });
-
-  test('password set → checkPasswordOrBypassIfUnset still rejects a wrong password', async () => {
-    const guard = freshGuard();
-    await guard.setPassword('hunter2!');
-    expect(await guard.checkPasswordOrBypassIfUnset('wrong')).toBe(false);
+    const SRC = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'authGuard.ts'), 'utf8'
+    ) as string;
+    expect(SRC).not.toContain('checkPasswordOrBypassIfUnset');
+    expect(await guard.checkPassword('anything')).toBe(false);
     expect(guard.isSessionUnlocked()).toBe(false);
   });
 
