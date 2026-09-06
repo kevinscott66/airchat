@@ -1997,6 +1997,7 @@ async function buildOwnPostEnvelope(
 
   const media: string[] = [];
   const mediaMime: string[] = [];
+  let mediaMissing = 0;
   if (existing.mediaCids && existing.mediaCids.length > 0) {
     for (let i = 0; i < existing.mediaCids.length; i++) {
       const m = /^inline:([^;]+);\d+:/.exec(existing.mediaCids[i]);
@@ -2005,6 +2006,8 @@ async function buildOwnPostEnvelope(
       if (b64 && b64.length > 0) {
         media.push(b64);
         mediaMime.push(mime);
+      } else {
+        mediaMissing++;
       }
     }
   }
@@ -2014,6 +2017,17 @@ async function buildOwnPostEnvelope(
   if (media.length === 0 && legacy?.base64 && legacy.base64.length > 0) {
     media.push(...legacy.base64);
     mediaMime.push(...(legacy.mimes ?? []));
+    mediaMissing = 0;
+  }
+
+  // v4.32.614: недостающая фотография отменяет конверт целиком, а не выпадает
+  // из него молча. Правило то же, что и у нечитаемых столбцов выше: подпись
+  // ставится под тем, что человек считает своей записью, а не под её огрызком.
+  // Особенно это важно правке: она кладёт новую копию ПОВЕРХ прежней, и запись
+  // с потерянной картинкой затирала бы на сервере целую.
+  if (mediaMissing > 0) {
+    log.warn('public_post_media_missing', { postId: postId.slice(0, 24), missing: mediaMissing });
+    return null;
   }
 
   const authorName = existing.authorName ?? legacy?.authorName ?? '';
@@ -2048,6 +2062,14 @@ async function buildOwnPostEnvelope(
         size: existing.documents[i].size,
         data: b64,
       });
+    }
+    // Документ, байты которого не нашлись, — тот же случай, что и фотография.
+    if (documents.length !== existing.documents.length) {
+      log.warn('public_post_docs_missing', {
+        postId: postId.slice(0, 24),
+        missing: existing.documents.length - documents.length,
+      });
+      return null;
     }
   }
   const postData: FeedPostData = {
