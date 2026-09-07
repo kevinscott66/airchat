@@ -49,6 +49,13 @@ function normalizeClaimableUsername(value, unlocked) {
   if (typeof value !== 'string') return null;
   const raw = value.trim().replace(/^@+/, '').toLowerCase();
   if (!/^[a-z0-9_]+$/.test(raw)) return null;
+  // v4.32.615: имя из одних цифр не занимается вообще (зеркало клиентского
+  // `digits_only`). Рядом с юзернеймами ходят числовые идентификаторы — номер
+  // профиля, номер группы, — и `@12345` от них не отличить. Клиентская
+  // проверка есть с v4.32.594, но последнее слово здесь: пересобранное
+  // приложение попросило бы себе `@1` и получило бы его. Стоит ДО разрешения
+  // по бумаге — цифровое имя не выдаётся и ею.
+  if (/^\d+$/.test(raw)) return null;
   if (raw.length > USERNAME_MAX) return null;
   const granted = typeof unlocked === 'string' && unlocked.trim().toLowerCase() === raw;
   if (!granted && raw.length < USERNAME_MIN_SELF_SERVICE) return null;

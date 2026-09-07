@@ -216,6 +216,14 @@ test('server reserved list matches the client one', () => {
   assert.deepEqual([...clientNames].sort(), [...RESERVED_USERNAMES].sort());
   assert.equal(normalizeClaimableUsername(' @Kevin_S '), 'kevin_s');
   assert.equal(normalizeClaimableUsername('support'), null);
+  // Сверка выше видит только СПИСОК имён: правило, записанное регулярным
+  // выражением, для неё невидимо — так и разъехалось `digits_only`. Полную
+  // сверку ответов обеих сторон делает jest-тест клиента
+  // `src/core/identity/__tests__/usernameServerMirror.test.ts`; здесь —
+  // короткая страховка на тот же случай.
+  assert.equal(normalizeClaimableUsername('12345'), null);
+  assert.equal(normalizeClaimableUsername('12345', '12345'), null);
+  assert.equal(normalizeClaimableUsername('a12345'), 'a12345');
 });
 
 
