@@ -3742,8 +3742,26 @@ function clearCommentOutboxTimer(): void {
   }
 }
 
-async function loadCommentOutbox(): Promise<CommentOutboxItem[]> {
-  const raw = await kvGet(COMMENT_OUTBOX_KEY);
+/**
+ * Очередь отложенных комментариев. `null` — строку не удалось прочитать.
+ *
+ * v4.32.647: прежде читали через `kvGet`, отвечающий `null` и когда строки
+ * нет, и когда её не прочитали. Сбой чтения означал «в очереди ничего нет», а
+ * записывают её целиком: `enqueueCommentOutboxItem` клал поверх файла очередь
+ * из одной своей записи, и все остальные недоставленные комментарии, удаления
+ * и реакции пропадали. Потерянное удаление обиднее прочего — у получателя
+ * комментарий так и остаётся висеть, хотя автор его стёр.
+ *
+ * Разобранное не до конца — другое дело: если в строке лежит не массив или не
+ * JSON вовсе, отправлять оттуда нечего и держаться за неё незачем.
+ */
+async function loadCommentOutbox(): Promise<CommentOutboxItem[] | null> {
+  const read = await kvTryGet(COMMENT_OUTBOX_KEY);
+  if (read === null) {
+    log.warn('comment_outbox_read_failed', {});
+    return null;
+  }
+  const raw = read.value;
   if (!raw) return [];
   let dropped = 0;
   try {
@@ -3781,8 +3799,18 @@ async function loadCommentOutbox(): Promise<CommentOutboxItem[]> {
   }
 }
 
-async function saveCommentOutbox(q: CommentOutboxItem[]): Promise<void> {
-  try { await kvSet(COMMENT_OUTBOX_KEY, JSON.stringify(q)); } catch { /* noop */ }
+/** Записать очередь целиком. `false` — не легла, на диске осталась прежняя. */
+async function saveCommentOutbox(q: CommentOutboxItem[]): Promise<boolean> {
+  // v4.32.647: kvSet гасит свой отказ и возвращает void. Комментарий, который
+  // на диск не лёг, выглядел ровно так же, как отложенный на повтор.
+  try {
+    if (await kvSetChecked(COMMENT_OUTBOX_KEY, JSON.stringify(q))) return true;
+    log.warn('comment_outbox_save_failed', { count: q.length });
+    return false;
+  } catch (e) {
+    log.warn('comment_outbox_save_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
 }
 
 /**
@@ -3792,13 +3820,18 @@ async function saveCommentOutbox(q: CommentOutboxItem[]): Promise<void> {
  * операцией, а `apply` синхронна — в неё нельзя случайно вписать поход в сеть,
  * а значит нельзя и снова завести «прочитал старое, записал поверх нового».
  */
+const COMMENT_OUTBOX_UNAVAILABLE = 'feed_comment_outbox_unavailable';
 let commentQueueTx: Promise<unknown> = Promise.resolve();
 async function updateCommentOutbox<T>(
   apply: (q: CommentOutboxItem[]) => { next: CommentOutboxItem[]; value: T }
 ): Promise<T> {
   const run = async (): Promise<T> => {
-    const { next, value } = apply(await loadCommentOutbox());
-    await saveCommentOutbox(next);
+    // v4.32.647: не прочитали или не записали — изменения не происходит вовсе,
+    // очередь на диске остаётся прежней, а вызывающий узнаёт об этом ошибкой.
+    const current = await loadCommentOutbox();
+    if (current === null) throw new Error(COMMENT_OUTBOX_UNAVAILABLE);
+    const { next, value } = apply(current);
+    if (!(await saveCommentOutbox(next))) throw new Error(COMMENT_OUTBOX_UNAVAILABLE);
     return value;
   };
   const started = commentQueueTx.then(run, run);
@@ -3848,7 +3881,9 @@ async function flushCommentOutbox(pair: KeyPairBytes): Promise<void> {
 
 async function _flushCommentOutboxImpl(pair: KeyPairBytes): Promise<void> {
   const q = await loadCommentOutbox();
-  if (q.length === 0) return;
+  // v4.32.647: непрочитанную очередь не за что принимать — ни за пустую, ни за
+  // известную. Этот проход просто не состоялся, таймер её ещё позовёт.
+  if (q === null || q.length === 0) return;
   const myDid = publicKeyToDidKey(pair.publicKey);
   const now = Date.now();
   /**
@@ -3924,7 +3959,17 @@ async function _flushCommentOutboxImpl(pair: KeyPairBytes): Promise<void> {
       keep({ ...item, retries: item.retries + 1 });
     }
   }
-  await updateCommentOutbox((cur) => ({ next: mergeOutbox(cur, decisions), value: undefined }));
+  try {
+    await updateCommentOutbox((cur) => ({ next: mergeOutbox(cur, decisions), value: undefined }));
+  } catch (e) {
+    // v4.32.647: итог прохода не лёг. Записи остаются в очереди: доставленный
+    // второй раз комментарий получатель отбросит по INSERT OR IGNORE, а
+    // потерянная запись — это комментарий, которого он не увидит никогда.
+    log.warn('comment_outbox_commit_skipped', {
+      decisions: decisions.size,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 /** Ключ, которым будет отправлять таймер отложенных комментариев (v4.32.462). */
@@ -3940,6 +3985,13 @@ function scheduleCommentOutboxRetry(pair: KeyPairBytes, delayMs: number): void {
       if (!p) return;
       await flushCommentOutbox(p);
       const q = await loadCommentOutbox();
+      if (q === null) {
+        // v4.32.647: очередь не прочиталась. Погасить таймер по такому ответу
+        // значит бросить её до следующего запуска приложения — а в ней лежат
+        // комментарии и удаления, которых получатель ещё не видел.
+        scheduleCommentOutboxRetry(p, delayMs);
+        return;
+      }
       // v4.32.615: задержка считается по СВОИМ записям, а не по первой в
       // очереди. Чужая запись ждёт своего профиля и попытку не тратит, то
       // есть её `retries` остаётся нулём навсегда; стоя первой в очереди,
@@ -3971,11 +4023,14 @@ export function resumeCommentOutbox(pair: KeyPairBytes): void {
   commentRetryPair = pair;
   void (async () => {
     const q = await loadCommentOutbox();
+    // v4.32.647: непрочитанная очередь — повод завести таймер, а не повод молча
+    // уйти: разбор на старте профиля для неё единственный шанс.
+    if (q === null) { scheduleCommentOutboxRetry(pair, RETRY_DELAY_MS); return; }
     if (q.length === 0) return;
     log.info('comment_outbox_resume', { size: q.length });
     await flushCommentOutbox(pair);
     const tail = await loadCommentOutbox();
-    if (tail.length > 0) scheduleCommentOutboxRetry(pair, RETRY_DELAY_MS);
+    if (tail === null || tail.length > 0) scheduleCommentOutboxRetry(pair, RETRY_DELAY_MS);
   })();
 }
 

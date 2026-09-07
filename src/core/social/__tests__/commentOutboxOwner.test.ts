@@ -128,7 +128,15 @@ describe('задержка повторов считается по своим �
     const guard = CODE.indexOf('if (mine.length > 0) {');
     expect(guard).toBeGreaterThan(-1);
     expect(reschedule).toBeGreaterThan(guard);
-    // Единственная перезапись таймера в этом теле — внутри ветки своих записей.
-    expect((CODE.match(/scheduleCommentOutboxRetry\(p, /g) ?? []).length).toBe(1);
+    // Единственная перезапись по расчётной задержке — внутри ветки своих записей.
+    expect((CODE.match(/scheduleCommentOutboxRetry\(p, nextDelay\);/g) ?? []).length).toBe(1);
+    // v4.32.647: вторая и последняя перезапись — возврат к прежней задержке,
+    // когда очередь не прочиталась. Она стоит ДО разбора своих записей: гасить
+    // таймер по нечитаемой строке значило бы бросить очередь до перезапуска.
+    const unreadable = CODE.indexOf('if (q === null) {');
+    expect(unreadable).toBeGreaterThan(-1);
+    expect(unreadable).toBeLessThan(guard);
+    expect(CODE).toContain('scheduleCommentOutboxRetry(p, delayMs);');
+    expect((CODE.match(/scheduleCommentOutboxRetry\(p, /g) ?? []).length).toBe(2);
   });
 });

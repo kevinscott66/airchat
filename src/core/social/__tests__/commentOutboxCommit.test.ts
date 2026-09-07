@@ -115,7 +115,11 @@ describe('очередь комментариев — одна транзакц�
   it('файл очереди пишут только из транзакции', () => {
     expect(count(FEED, 'await saveCommentOutbox(')).toBe(1);
     const tx = FEED.slice(FEED.indexOf('async function updateCommentOutbox<T>('));
-    expect(tx.slice(0, tx.indexOf('\n}')).trim()).toContain('await saveCommentOutbox(next);');
+    // v4.32.647: запись не просто вызывается — её отказ поднимает ошибку, иначе
+    // очередь, не легшая на диск, выглядела бы записанной.
+    expect(tx.slice(0, tx.indexOf('\n}')).trim()).toContain(
+      'if (!(await saveCommentOutbox(next))) throw new Error(COMMENT_OUTBOX_UNAVAILABLE);'
+    );
   });
 
   it('постановка в очередь тоже идёт через транзакцию', () => {
