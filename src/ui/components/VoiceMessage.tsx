@@ -33,6 +33,7 @@ import { contrastingInk, fadedOn, font, radius } from '../theme';
 import { deleteCachedFileUris, resolveBlobToLocalFile, type BlobRef } from '../../core/media/mediaBlob';
 import { formatClockDuration } from '../time/durationLabel';
 import { failed, IDLE_GATE, pressIn, pressOut, ready, type RecorderGate } from './recorderGate';
+import { showError } from './userFeedback';
 import { shouldAutoStopVoice, voiceCountdownSeconds, VOICE_MIN_MS } from './voiceLimit';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,7 +221,14 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
       }, 100);
       startPulse();
     } catch {
-      // permission or hardware unavailable — silently skip
+      /**
+       * v4.32.632: об отказе говорят. Раньше выход отсюда был молчаливым:
+       * человек зажимал микрофон, говорил в него, отпускал — и не происходило
+       * ничего. Ни записи, ни слова о том, почему. Сюда приходят занятый
+       * звонком аудиотракт и недоступный микрофон — то, что человек может
+       * исправить, если ему сказать.
+       */
+      showError('Не удалось начать запись');
       // v4.32.493: без возврата в исходное кнопка залипала бы навсегда: любое
       // следующее нажатие видело бы «уже записываю».
       gateRef.current = failed(gateRef.current, press.token);
@@ -260,6 +268,17 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
         await deleteCachedFileUris([uri]);
       }
     } catch {
+      /**
+       * v4.32.632: сбой закрытия рекордера гасился пустым catch, а осциллограмма
+       * и счётчик к этому моменту уже сброшены выше. Со стороны человека это
+       * выглядело как исправно записанное и молча не отправленное голосовое:
+       * повторять было нечего, потому что о потере никто не сказал.
+       *
+       * Недописанный файл наружу не отдаём — он может быть оборван на любом
+       * месте, — но и в кэше открытым текстом не оставляем.
+       */
+      if (rec.uri) await deleteCachedFileUris([rec.uri]);
+      showError('Не удалось сохранить запись');
     }
     await setAudioModeAsync({ allowsRecording: false }).catch(() => {});
   }, [stopPulse, onRecorded]);
