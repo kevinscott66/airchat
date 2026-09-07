@@ -68,3 +68,36 @@ describe('поиск упомянутого в адресной книге', () 
     });
   });
 });
+
+describe('чужой username не открывает чужую карточку', () => {
+  const alice = contact({ peerPublicKey: 'PUB_ALICE', displayName: 'Алиса', peerUsername: 'alice' });
+  const mallory = contact({ peerPublicKey: 'PUB_MAL', displayName: 'Мэллори', peerUsername: 'ALICE' });
+
+  it('двое назвались одним именем — отказ, а не первый попавшийся', () => {
+    expect(lookupMentionAmong('@alice', [alice, mallory])).toEqual({ status: 'ambiguous' });
+    expect(lookupMentionAmong('@alice', [mallory, alice])).toEqual({ status: 'ambiguous' });
+  });
+
+  it('один носитель имени находится как прежде', () => {
+    expect(lookupMentionAmong('@alice', [alice])).toEqual({
+      status: 'found',
+      peerPubB64: 'PUB_ALICE',
+      displayName: 'Алиса',
+    });
+  });
+
+  it('две строки одного контакта неоднозначности не создают', () => {
+    const two = contact({
+      peerPublicKey: 'PUB_ONE',
+      displayName: 'Своя подпись',
+      peerName: 'Самоназвание',
+      peerUsername: 'one',
+    });
+    expect(contactCandidates([two])).toHaveLength(2);
+    expect(lookupMentionAmong('@one', [two])).toEqual({
+      status: 'found',
+      peerPubB64: 'PUB_ONE',
+      displayName: 'Своя подпись',
+    });
+  });
+});

@@ -1525,6 +1525,13 @@ function GroupChatScreen({
    * книга, куда его кладёт конверт профиля. Поэтому сперва спрашиваем её, и
    * только потом сравниваем отображаемые имена. Отображаемое имя не уникально:
    * если совпало несколько, выбрать за человека нельзя — об этом и говорим.
+   *
+   * v4.32.615: то же и про username. Он уникален в общем реестре, но в
+   * адресную книгу попадает не оттуда — `peerUsername` списан с конверта
+   * профиля собеседника и с реестром не сверялся ни разу. Значит принятый в
+   * контакты человек может назваться чужим именем, и «первый выигрывает»
+   * здесь означал бы «выигрывает тот, кто назвался». Отказ тоже считаем по
+   * ключам: один контакт даёт одну запись, двое разных — неоднозначность.
    */
   const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
 
@@ -1534,15 +1541,26 @@ function GroupChatScreen({
       if (!bare) return;
       const canonical = normalizeUsername(bare);
       let byUsername: string | null = null;
+      // v4.32.615: `peerUsername` — самоназвание из конверта профиля, с
+      // реестром оно не сверяется. Здесь стоял `find`, то есть «первый
+      // выигрывает»: достаточно было принять в контакты одного человека,
+      // назвавшего себя чужим именем, чтобы нажатие вело к нему. Считаем по
+      // ключам, а не по строкам — один контакт даёт одну и ту же запись.
+      let ambiguousUsername = false;
       if (canonical) {
         try {
-          const contact = (await listContactsFor(pid))
-            .find((c) => normalizeUsername(c.peerUsername) === canonical);
-          byUsername = contact?.peerPublicKey ?? null;
+          const pubs = new Set(
+            (await listContactsFor(pid))
+              .filter((c) => normalizeUsername(c.peerUsername) === canonical)
+              .map((c) => c.peerPublicKey)
+          );
+          ambiguousUsername = pubs.size > 1;
+          byUsername = pubs.size === 1 ? [...pubs][0] : null;
         } catch (e) {
           log.warn('group_mention_lookup_failed', { err: rawErrorText(e) });
         }
       }
+      if (ambiguousUsername) { showError(mentionMissText('ambiguous', bare)); return; }
       const hits = byUsername
         ? allMembers.filter((m) => m.peerPubB64 === byUsername)
         : resolveMention(bare, allMembers);

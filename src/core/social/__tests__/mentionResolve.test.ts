@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import { resolveMention } from '../mentionResolve';
 
 type Row = { id: string; username?: string | null; displayName?: string | null };
@@ -48,5 +51,43 @@ describe('resolveMention', () => {
     expect(ids('@BOB')).toEqual(['bob']);
     // Имя, которое не может быть username (кириллица), в первую попытку не идёт.
     expect(ids('@Боб')).toEqual(['bob']);
+  });
+});
+
+/**
+ * Главное свойство модуля: он НЕ выбирает за человека. `peerUsername` списан
+ * с конверта профиля собеседника и с общим реестром не сверяется — значит
+ * назваться чужим именем может любой принятый контакт (v4.32.615).
+ */
+describe('username не даёт права выбрать за человека', () => {
+  const alice = { id: 'alice', username: 'alice', displayName: 'Алиса' };
+  const mallory = { id: 'mallory', username: 'Alice', displayName: 'Не Алиса' };
+
+  it('двое с одним username возвращаются оба', () => {
+    expect(ids('@alice', [alice, mallory]).sort()).toEqual(['alice', 'mallory']);
+  });
+
+  it('регистр не спасает: канон сводит «Alice» и «alice» в одно имя', () => {
+    expect(ids('@ALICE', [alice, mallory])).toHaveLength(2);
+  });
+
+  it('единственный носитель по-прежнему возвращается один', () => {
+    expect(ids('@alice', [alice])).toEqual(['alice']);
+  });
+
+  it('совпадение по username не смешивается с совпадением по имени', () => {
+    // «Не Алиса» подходит только по username, «Алиса» — и по нему, и по имени.
+    // Возвращаются оба, но именно из первой попытки, а не из второй.
+    const both = ids('@alice', [alice, mallory]);
+    expect(both).toContain('mallory');
+  });
+
+  it('в исходнике не осталось усечения до первого совпадения', () => {
+    const src = readFileSync(join(__dirname, '..', 'mentionResolve.ts'), 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(src).toContain('if (byUsername.length > 0) return byUsername;');
+    expect(src).not.toContain('byUsername.slice(');
   });
 });
