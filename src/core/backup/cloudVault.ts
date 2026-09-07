@@ -66,6 +66,14 @@ function normalizePassword(password: string): string {
 
 function decodeBase64(value: string, maxBytes: number): Uint8Array | null {
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
+  //
+  // v4.32.615: отсекаем по длине строки до раскодирования. Потолок ниже
+  // проверялся уже по готовому массиву, то есть память под заведомо слишком
+  // большой файл сначала выделялась и только потом отбрасывалась. Base64 от
+  // n байт занимает ровно ceil(n/3)*4 символов, поэтому строка длиннее этого
+  // числа для maxBytes байт не может быть кодировкой влезающего файла —
+  // отказ по ней ничего годного не отбрасывает.
+  if (value.length > Math.ceil(maxBytes / 3) * 4) return null;
   try {
     const bytes = new Uint8Array(Buffer.from(value, 'base64'));
     if (bytes.length === 0 || Buffer.from(bytes).toString('base64') !== value || bytes.length > maxBytes) return null;
@@ -221,14 +229,28 @@ function validateArchiveFileList(
   if (new Set(fileNames).size !== fileNames.length) return null;
   if (archive.files.some((file) => !file || typeof file.name !== 'string'
     || !uniqueNames.has(file.name) || !isSafeArchiveFile(file.name)
-    || typeof file.dataB64 !== 'string' || !decodeBase64(file.dataB64, CLOUD_VAULT_MAX_BYTES))) return null;
+    || typeof file.dataB64 !== 'string')) return null;
   const files = archive.files as AccountVaultFile[];
+  //
+  // v4.32.615: раскодируем каждый файл один раз и в остаток бюджета.
+  //
+  // Раньше проход по `some()` раскодировал всё ради одного ответа «да/нет», а
+  // следом тот же набор раскодировался заново ради суммы. Работа и пиковая
+  // память удваивались на ровном месте: decodeBase64 внутри ещё и кодирует
+  // результат обратно ради сверки, так что на файл приходилось по два
+  // временных массива, а на копию — по четыре. Нехватка памяти при
+  // восстановлении всплывала пользователю как «Неверный облачный пароль или
+  // повреждённая копия» — то есть как подозрение на неверный пароль.
+  //
+  // Остаток бюджета вместо полного потолка на каждый файл: прежняя проверка
+  // разрешала раскодировать все 80 МиБ даже когда сумма предыдущих файлов их
+  // почти исчерпала. Итог тот же (сумма больше потолка — отказ), но отказ
+  // наступает до выделения памяти, а не после.
   let totalBytes = 0;
   for (const file of files) {
-    const decoded = decodeBase64(file.dataB64, CLOUD_VAULT_MAX_BYTES);
+    const decoded = decodeBase64(file.dataB64, CLOUD_VAULT_MAX_BYTES - totalBytes);
     if (!decoded) return null;
     totalBytes += decoded.length;
-    if (totalBytes > CLOUD_VAULT_MAX_BYTES) return null;
   }
   return { names: uniqueNames, files };
 }
