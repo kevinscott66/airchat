@@ -208,6 +208,19 @@ function StoryViewer({
     if (index > 0) setIndex(index - 1);
   }, [index]);
 
+  /**
+   * v4.32.620: переход держим в ref, а эффект зависит только от того, что
+   * действительно должно перезапускать полосу — номер сторис и пауза.
+   *
+   * Прежде в зависимостях стоял сам `goNext`, а он пересобирается при каждой
+   * смене `onClose`; родитель же передаёт `onClose` встроенной стрелкой и
+   * перерисовывается на каждой записи в переписку. В активном чате полоса
+   * сбрасывалась в ноль на каждом входящем сообщении: шесть секунд не
+   * дотикивали никогда, сторис не листались сами и не закрывались по концу.
+   */
+  const goNextRef = useRef(goNext);
+  goNextRef.current = goNext;
+
   // Auto-advance and progress bar animation
   useEffect(() => {
     if (replyPaused) return;
@@ -217,9 +230,9 @@ function StoryViewer({
       duration: STORY_DURATION_MS,
       useNativeDriver: false,
     });
-    anim.start(({ finished }: { finished: boolean }) => { if (finished) goNext(); });
+    anim.start(({ finished }: { finished: boolean }) => { if (finished) goNextRef.current(); });
     return () => anim.stop();
-  }, [index, goNext, progressAnim, replyPaused]);
+  }, [index, progressAnim, replyPaused]);
 
   if (!story) return <></>;
 

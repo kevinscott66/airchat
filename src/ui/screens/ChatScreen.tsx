@@ -2293,6 +2293,18 @@ function ChatThreadView({
           reportTwoSided(echo, 'edit');
         } catch (e) {
           log.error('chat_edit_failed', { err: rawErrorText(e) });
+          /**
+           * v4.32.620: поле, баннер правки и черновик очищаются ДО отправки —
+           * иначе экран замирает на время сети. Значит при сбое их надо
+           * вернуть: до этой версии сбой только писался в журнал, и человек
+           * видел пустое поле, исчезнувший баннер и прежний текст в пузыре.
+           * Набранное пропадало без следа и без единого слова о том, что
+           * правка не ушла.
+           */
+          setMsg(newText);
+          msgRef.current = newText;
+          setEditTarget(target);
+          showError(userErrorText(e, 'Правку не удалось отправить'));
         } finally {
           setSending(false);
         }
@@ -4117,7 +4129,17 @@ function ChatThreadView({
             return;
           }
           setSending(true);
-          void svc.sendMessage(peerB64, pollText).then(() => { setSending(false); void appendNewMessages(); }).catch(() => setSending(false));
+          // v4.32.620: sendMessage отвечает null, когда отправки не было
+          // (контакт заблокирован, исчерпан часовой лимит), и это не исключение.
+          // Прежде обе ветки — и null, и брошенная ошибка — просто гасили
+          // крутилку: окно закрывалось, опроса не появлялось, объяснений тоже.
+          void svc.sendMessage(peerB64, pollText)
+            .then((echo) => {
+              setSending(false);
+              if (!echo) { showError('Опрос не отправлен. Проверьте, не заблокирован ли собеседник.'); return; }
+              void appendNewMessages();
+            })
+            .catch((e) => { setSending(false); showError(userErrorText(e, 'Не удалось отправить опрос')); });
         }}
       />
       {peerB64 ? (

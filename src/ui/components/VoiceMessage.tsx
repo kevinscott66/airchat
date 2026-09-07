@@ -396,6 +396,16 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
   const [speed, setSpeed] = useState<Speed>(1);
   const subRef = useRef<{ remove: () => void } | null>(null);
   const progressWidth = useRef(0);
+  /**
+   * v4.32.620: между скачиванием вложения и созданием проигрывателя стоит сеть,
+   * и за это время экран успевает закрыться. Уборка ниже завязана на [sound] и
+   * снимает только тот проигрыватель, что уже лежит в состоянии, — созданный
+   * после размонтирования не попадал туда никогда. Он начинал играть с
+   * закрытого экрана, занимал `activeVoicePlayer` (и следующее голосовое
+   * «останавливало» покойника вместо него) и не освобождался вовсе.
+   */
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   useEffect(() => {
     return () => {
@@ -482,6 +492,7 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         activeVoicePlayer.stop();
         activeVoicePlayer = null;
       }
+      if (!mountedRef.current) return;
       const snd = createAudioPlayer({ uri: playUri }, { updateInterval: 100 });
       createdPlayer = snd;
       attachStatusListener(snd);

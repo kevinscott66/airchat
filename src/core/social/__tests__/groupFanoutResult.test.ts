@@ -66,15 +66,27 @@ describe('итог групповой рассылки различает отк
   });
 
   it('адресаты считаются там же, где ловится отказ', () => {
+    /**
+     * v4.32.620: проверка усилена, а не подправлена под новый вид кода.
+     * Раньше здесь стояло `await svc.sendMessage(...);` отдельной строкой, и
+     * `sent += 1` шло следом безусловно — то есть «не бросило» считалось
+     * «отправлено». sendMessage отвечает null без исключения (адресат
+     * заблокирован, исчерпан часовой лимит \x02-конвертов), и такой отказ
+     * прибавлялся к `sent`. Теперь сторожим ветвление: успех — только по
+     * истинному ответу, у отказа своя ветка со своим счётчиком.
+     */
     const body = bodyOf(messaging, 'export async function fanoutGroupMessage(');
     const code = codeLines(body);
-    const send = code.findIndex((l) => l.includes('await svc.sendMessage(m.peerPubB64, envelope);'));
-    const okCount = code.findIndex((l) => l.trim() === 'sent += 1;');
-    const catchLine = code.findIndex((l) => l.trim().startsWith('} catch (e) {') && code.indexOf(l) > send);
-    const failCount = code.findIndex((l) => l.trim() === 'failed += 1;');
+    const send = code.findIndex((l) => l.includes('if (await svc.sendMessage(m.peerPubB64, envelope)) {'));
     expect(send).toBeGreaterThanOrEqual(0);
-    expect(okCount).toBe(send + 1); // сразу после успешной отправки, до любого await
-    expect(failCount).toBeGreaterThan(catchLine);
+    // Отправка не должна вызываться «в никуда»: ответ читается всегда.
+    expect(code.some((l) => l.trim() === 'await svc.sendMessage(m.peerPubB64, envelope);')).toBe(false);
+    expect(code[send + 1].trim()).toBe('sent += 1;'); // до любого await
+    expect(code[send + 2].trim()).toBe('} else {');
+    expect(code[send + 3].trim()).toBe('failed += 1;'); // отказ без исключения
+    const catchLine = code.findIndex((l, i) => i > send && l.trim().startsWith('} catch (e) {'));
+    expect(catchLine).toBeGreaterThan(send + 3);
+    expect(code[catchLine + 1].trim()).toBe('failed += 1;'); // исключение
     expect(code.some((l) => l.includes('return { ok: true, members: targets.length, sent, failed };'))).toBe(true);
   });
 
@@ -122,6 +134,8 @@ describe('итог групповой рассылки различает отк
       '  if (!svc) {',
       '    return false;',
       '  }',
+      '  await svc.sendMessage(m.peerPubB64, envelope);',
+      '  sent += 1;',
       '  await Promise.allSettled(sends);',
       '  return true;',
       '}',
@@ -129,6 +143,9 @@ describe('итог групповой рассылки различает отк
     const code = codeLines(bodyOf(oldFanout, 'export async function fanoutGroupMessage('));
     expect(code.some((l) => l.trim() === 'return true;')).toBe(true);
     expect(oldFanout).not.toContain('Promise<GroupFanoutResult>');
+    // И тот самый безусловный счёт: отправка без чтения ответа.
+    expect(code.some((l) => l.trim() === 'await svc.sendMessage(m.peerPubB64, envelope);')).toBe(true);
+    expect(code.some((l) => l.includes('if (await svc.sendMessage('))).toBe(false);
 
     const oldScheduler = [
       'async function flushDueOnce(): Promise<void> {',

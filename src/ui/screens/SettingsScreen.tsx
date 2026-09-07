@@ -394,6 +394,21 @@ function SettingsScreenImpl({
   useEffect(() => { void isInternalDiagnosticsEnabled().then(setDiagUnlocked); }, []);
 
   useEffect(() => {
+    /**
+     * v4.32.620: два изъяна у одного чтения.
+     *
+     * Промаха не было видно: у Promise.all не стояло ни одного catch, а отказ
+     * ЛЮБОГО из двадцати пяти чтений (занятая база во время синхронизации)
+     * отменяет все setter'ы разом. Экран рисовал реактовские значения по
+     * умолчанию — «уведомления включены», «не беспокоить выключено» — и выдавал
+     * их за состояние базы. Человек мог переключить тумблер, будучи уверенным,
+     * что меняет одно, а менял другое.
+     *
+     * И гонки: быстрое переключение профилей меняет profileRefreshToken дважды,
+     * а ответить пачки могут в обратном порядке — настройки профиля A ложились
+     * поверх открытого профиля B.
+     */
+    let cancelled = false;
     void Promise.all([
       privacyPrefGet('privacy_last_seen_visibility'),
       privacyPrefGet('privacy_avatar_visibility'),
@@ -423,6 +438,7 @@ function SettingsScreenImpl({
       kvGet('notify_calls'),
       kvGet(KEEPALIVE_KEY),
     ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls, keepAlive]) => {
+      if (cancelled) return;
       if (lsVis === 'everybody' || lsVis === 'contacts' || lsVis === 'nobody') setLastSeenVisibility(lsVis);
       setAvatarVisibilityState(parseAvatarVisibility(avVis));
       setOnlyContactsCanMsg(onlyContacts === 'true');
@@ -460,7 +476,12 @@ function SettingsScreenImpl({
       // Границы (минута…год) проверены в parseAutoDeleteMs — здесь уже число
       // либо null, второй копии проверки быть не должно.
       if (defAutoDelete != null) setDefaultAutoDeleteMs(defAutoDelete);
+    }).catch((e) => {
+      if (cancelled) return;
+      log.error('settings_read_failed', { err: rawErrorText(e) });
+      showError('Настройки не прочитались. То, что на экране, может не совпадать с сохранённым.');
     });
+    return () => { cancelled = true; };
   }, [profileRefreshToken]);
 
   /**

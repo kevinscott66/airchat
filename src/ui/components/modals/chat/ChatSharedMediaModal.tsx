@@ -97,10 +97,20 @@ export function SharedMediaPane({
 
   useEffect(() => {
     if (!active) return;
-    void listConversationMedia(contactPubB64, ownerProfileId).then(setItems);
+    /**
+     * v4.32.620: карточка профиля переиспользуется — `contactPubB64` меняется
+     * на месте, без размонтирования. Без этого флага более медленный запрос
+     * предыдущего собеседника отвечал вторым и подписывал ЕГО файлы именем
+     * следующего. Это не мерцание, а неверная подпись к чужой переписке.
+     */
+    let cancelled = false;
+    void listConversationMedia(contactPubB64, ownerProfileId).then((rows) => {
+      if (!cancelled) setItems(rows);
+    });
     // Load links and docs from messages
     void import('../../../../core/storage/local').then(async (m) => {
       const msgs = await m.listAllChatMessages({ contactPubB64, ownerProfileId });
+      if (cancelled) return;
       // v4.32.604: сбой чтения — не «ссылок и файлов нет». Прежние списки
       // остаются как были, вкладка не рисует пустоту как факт.
       if (!shouldApplyRows(msgs)) return;
@@ -135,11 +145,13 @@ export function SharedMediaPane({
           if (vm) voice.push({ id: msg.id, durationMs: vm.durationMs, createdAt: msg.createdAt, outgoing: msg.direction === 'out' });
         }
       }
+      if (cancelled) return;
       setSharedLinks(links.reverse());
       setSharedDocs(docs.reverse());
       setSharedMusic(music.reverse());
       setSharedVoice(voice.reverse());
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [active, contactPubB64, ownerProfileId]);
 
   /**

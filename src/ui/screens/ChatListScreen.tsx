@@ -1111,6 +1111,11 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   onPress={() => {
                     if (!broadcastMsg.trim() || broadcastSelected.size === 0) return;
                     setBroadcastSending(true);
+                    // v4.32.620: список доставленных объявлен снаружи try — при
+                    // обрыве на середине надо и сказать, скольким уже ушло, и
+                    // снять отметки с этих контактов, чтобы повтор не отправил
+                    // им второй раз.
+                    const delivered: string[] = [];
                     void (async () => {
                       try {
                         // v4.32.335: раньше окно закрывалось и текст стирался по
@@ -1121,10 +1126,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                         // закрывшееся окно и считал рассылку выполненной.
                         const svc = getMessagingService();
                         const text = broadcastMsg.trim();
-                        let sent = 0;
                         for (const pubB64 of broadcastSelected) {
-                          if (svc && (await svc.sendMessage(pubB64, text))) sent += 1;
+                          if (svc && (await svc.sendMessage(pubB64, text))) delivered.push(pubB64);
                         }
+                        const sent = delivered.length;
                         const total = broadcastSelected.size;
                         if (sent === 0) {
                           // Текст и выбор не стираем: иначе набранное придётся
@@ -1138,6 +1143,25 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                         setBroadcastMsg('');
                         setBroadcastSelected(new Set());
                         void loadData();
+                      } catch (e) {
+                        /**
+                         * v4.32.620: у цикла не было catch. Ошибка на середине
+                         * списка обрывала рассылку необработанным отказом:
+                         * крутилка гасла, окно оставалось открытым с прежним
+                         * текстом и прежними отметками, и ни одного слова о
+                         * том, что часть уже ушла. Человек нажимал ещё раз, и
+                         * первые адресаты получали сообщение дважды.
+                         */
+                        if (delivered.length > 0) {
+                          setBroadcastSelected((prev) => {
+                            const next = new Set(prev);
+                            for (const done of delivered) next.delete(done);
+                            return next;
+                          });
+                        }
+                        showError(userErrorText(e, delivered.length > 0
+                          ? `Рассылка прервалась. Отправлено: ${delivered.length}`
+                          : 'Не удалось отправить ни одному контакту'));
                       } finally {
                         setBroadcastSending(false);
                       }

@@ -363,7 +363,13 @@ describe('проверка стоит в обработчике группы д�
   });
 
   it('каждое поле настроек спрашивает свой знак', () => {
-    expect(SRC).toContain("acceptGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts)");
+    // v4.32.620: знак поля СПРАШИВАЕТСЯ до применения (groupControlTsFresh), а
+    // двигается только после того, как записи легли (commitGroupControlTs).
+    // Прежний acceptGroupControlTs делал и то и другое разом, на десятки строк
+    // раньше самой записи: упавшая транзакция оставляла отметку впереди
+    // непринятого состояния, и повтор отвергался как дубль навсегда.
+    expect(SRC).toContain("groupControlTsFresh(`meta:${field}`, env.groupId, pid, env.ts)");
+    expect(SRC).not.toContain('acceptGroupControlTs(`meta:');
     for (const field of [
       'name',
       'description',
@@ -378,5 +384,19 @@ describe('проверка стоит в обработчике группы д�
     ]) {
       expect(SRC).toContain(`(await fresh('${field}'))`);
     }
+    // Порядок: спросили -> записали -> подтвердили. Проверяем по номерам строк,
+    // иначе перестановка commit обратно наверх прошла бы незамеченной.
+    const lines = SRC.split('\n');
+    const freshAt = lines.findIndex((l) => l.includes('groupControlTsFresh(`meta:${field}`'));
+    const commitAt = lines.findIndex((l) => l.includes('commitGroupControlTs(`meta:${field}`'));
+    const writeAt = Math.max(
+      lines.findIndex((l) => l.includes('await updateGroupMeta(env.groupId, pid, patch)')),
+      lines.findIndex((l) => l.includes('await setGroupSlowMode(env.groupId, pid, env.slowModeSeconds)')),
+      lines.findIndex((l) => l.includes('await setGroupDisappearTimer(env.groupId, pid,')),
+    );
+    expect(freshAt).toBeGreaterThanOrEqual(0);
+    expect(writeAt).toBeGreaterThan(freshAt);
+    expect(commitAt).toBeGreaterThan(writeAt);
+    expect(SRC).toContain('for (const field of acceptedMeta) await commitGroupControlTs(');
   });
 });

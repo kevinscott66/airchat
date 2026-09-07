@@ -240,8 +240,21 @@ export async function fanoutGroupMessage(
   let failed = 0;
   const sends = targets.map(async (m) => {
     try {
-      await svc.sendMessage(m.peerPubB64, envelope);
-      sent += 1;
+      // v4.32.620: отсутствие исключения — это ещё не отправка. sendMessage
+      // отвечает null, когда отправки не было: адресат заблокирован либо
+      // исчерпан часовой лимит управляющих конвертов (конверт группы
+      // начинается с \x02 и считается управляющим, CONTROL_LIMIT общий с
+      // квитанциями и реакциями). Прежде такой отказ прибавлял единицу к
+      // `sent`, и групповое сообщение, не ушедшее НИ ОДНОМУ участнику,
+      // возвращало { sent: N, failed: 0 } — то есть полный успех. На этом же
+      // счётчике стоит единственная проверка честности (groupSendProblem
+      // ищет sent === 0), поэтому отправитель не узнавал ничего.
+      if (await svc.sendMessage(m.peerPubB64, envelope)) {
+        sent += 1;
+      } else {
+        failed += 1;
+        log.warn('group_fanout_member_refused', { member: m.peerPubB64.slice(0, 12) });
+      }
     } catch (e) {
       failed += 1;
       log.warn('group_fanout_member_failed', {
@@ -599,8 +612,12 @@ export async function handleIncomingGroupEnvelope(
       }
     }
   } catch (e) {
-    // Likely duplicate — ignore UNIQUE constraint violations
-    log.debug('group_msg_insert_skip', { err: e instanceof Error ? e.message : String(e) });
+    // v4.32.620: повтор разбирается ВЫШЕ, по ответу insertGroupMessage
+    // (`stored === false`), и до этого места не доходит. Значит сюда попадает
+    // настоящий сбой — нечитаемый ключ данных, переполненный диск, занятая
+    // база, — и записывать его уровнем debug под подписью «похоже, дубль»
+    // означало прятать потерю сообщения от самого себя.
+    log.error('group_msg_apply_failed', { gid: env.groupId.slice(0, 8), err: e instanceof Error ? e.message : String(e) });
   }
 
   return true;
@@ -670,9 +687,11 @@ export async function sendGroupJoinRequest(
  * и «включена ли настройка “Добавление в группы — только контакты”».
  *
  * Вынесено отдельно, чтобы оба пути заявки (личный конверт '\x0agjr:' и
- * управляющий 'join') считали их одинаково. При ошибке чтения контактов или kv
- * возвращаются значения «фильтр не применять»: недоступная база не должна
- * молча превращаться в потерю заявок.
+ * управляющий 'join') считали их одинаково. При ошибке чтения — и настройки, и
+ * списка контактов — берётся осторожная сторона: фильтр применяется, а
+ * неизвестный проситель считается НЕ контактом (v4.32.620). Заявку человек
+ * подаёт сам и может подать ещё раз; впустить незнакомца в обход просьбы
+ * «только контакты» назад не отыграть.
  */
 async function joinRequestIntake(requesterPubB64: string, pid: number): Promise<{
   requesterIsContact: boolean;
@@ -695,7 +714,13 @@ async function joinRequestIntake(requesterPubB64: string, pid: number): Promise<
     try {
       const { listContactsFor } = await import('./contacts');
       requesterIsContact = (await listContactsFor(pid)).some((c) => c.peerPublicKey === requesterPubB64);
-    } catch { onlyContactsMayRequest = false; }
+      // v4.32.620: строкой выше отказ чтения настройки трактуется осторожно —
+      // фильтр применяется. Отказ чтения списка контактов трактовался ровно
+      // наоборот: фильтр снимался, и незнакомец попадал в очередь заявок, пока
+      // таблица контактов недоступна (ранний запуск, недоступный ключ данных,
+      // занятая база). Осторожная сторона одна и та же: фильтр остаётся, а
+      // неизвестный проситель считается НЕ контактом.
+    } catch { requesterIsContact = false; }
   }
   return { requesterIsContact, onlyContactsMayRequest };
 }
@@ -1347,6 +1372,29 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.info('group_ctl_join_queued', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return true;
     }
+    /**
+     * v4.32.620: тот же водяной знак `m:<участник>`, что у leave/ban/kick/role
+     * — состав группы для одного человека это один скаляр, и спорить за него
+     * должны все операции, а не часть.
+     *
+     * Без этого «вступил» оставался единственной операцией состава без защиты
+     * от повтора, и повтор был не идемпотентным, а разрушительным: выход из
+     * группы отметки об удалении не пишет (markGroupRemoval зовёт только
+     * kick), поэтому для добровольно ушедшего decideJoin снова отвечает 'add'.
+     * Кадр из темы relay живёт тридцать суток, тема выводится из открытых DID,
+     * и перехваченный «вступил» возвращал ушедшего в группу — а каждый
+     * администратор ещё и пересказывал это остальным СВЕЖИМ конвертом 'add',
+     * который проходил их водяные знаки. Молча: идентификатор системной строки
+     * собирается из ts операции и при повторе совпадает.
+     *
+     * Отметка сверяется здесь, а сдвигается после записи: иначе сбой базы
+     * между двумя действиями оставил бы знак впереди состава, и повторная
+     * доставка того же конверта была бы отвергнута как повтор.
+     */
+    if (!(await groupControlTsFresh(`m:${senderPubB64}`, env.groupId, pid, env.ts))) {
+      log.warn('group_ctl_join_stale', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
+      return true;
+    }
     await upsertGroupMember({
       groupId: env.groupId,
       peerPubB64: senderPubB64,
@@ -1359,6 +1407,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       ownerProfileId: pid,
     });
     await recountGroupMembers(env.groupId, pid);
+    await commitGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts);
     await insertCtlSysMessage(env, pid, `${env.targetName || 'Участник'} вступил(а) в группу`);
     /**
      * v4.32.262: администратор пересказывает вступление остальным.
@@ -1573,8 +1622,23 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      * собирается из ts операции, при повторе он тот же, и INSERT OR IGNORE
      * ничего не писал.
      */
-    const fresh = (field: string): Promise<boolean> =>
-      acceptGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts);
+    /**
+     * v4.32.620: отметка СВЕРЯЕТСЯ здесь, а сдвигается после записи — как у
+     * слота `m:` (см. commitGroupControlTs после switch). Прежде это был
+     * accept, то есть проверка и сдвиг одним действием, а сама запись
+     * (updateGroupMeta / setGroupSlowMode / setGroupDisappearTimer) шла
+     * ДЕСЯТКАМИ строк ниже. Сбой базы или снятие процесса в этом промежутке
+     * оставляли знак на ts конверта при неприменённом изменении: повторная
+     * доставка того же конверта отвергалась как повтор, и название, аватар,
+     * пригласительная ссылка или таймер автоудаления расходились с группой
+     * навсегда — до следующего изменения тем же администратором.
+     */
+    const acceptedMeta: string[] = [];
+    const fresh = async (field: string): Promise<boolean> => {
+      const ok = await groupControlTsFresh(`meta:${field}`, env.groupId, pid, env.ts);
+      if (ok) acceptedMeta.push(field);
+      return ok;
+    };
     // v4.32.577: своё название могло не открыться ключом данных — тогда оно
     // приходит сюда пустой строкой, и ЛЮБОЕ присланное название выглядит как
     // переименование. Строку в истории пишем только там, где было с чем
@@ -1662,6 +1726,8 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
             : 'Исчезающие сообщения выключены',
       });
     }
+    // Изменения применены — только теперь двигаем отметки принятых полей.
+    for (const field of acceptedMeta) await commitGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts);
     for (const ev of events) await insertCtlSysMessage(env, pid, ev.text, ev.field);
     log.info('group_ctl_meta_applied', { gid: env.groupId.slice(0, 8), events: events.length });
     return true;

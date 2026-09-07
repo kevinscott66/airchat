@@ -734,7 +734,20 @@ function ProfileScreenImpl({
         {/* v4.32.602: журнал звонков — редкая справка, а не быстрое действие.
             В сетке он занимал четверть экрана рядом с «поделиться собой»; здесь
             он стоит там, где его и ищут, — в списке разделов. */}
-        <AppPressable style={styles.settingRow} onPress={() => setCallLogVisible(true)} testID="btn_call_log">
+        <AppPressable
+          style={styles.settingRow}
+          onPress={() => {
+            // v4.32.620: подписка выше отбрасывает обновления, пока открыта не
+            // вкладка «Профиль», а subscribeCallLog не переигрывает снимок при
+            // подписке — значит список замирал на том, что было в момент
+            // первого монтирования вкладки. Пропущенный звонок, случившийся в
+            // «Чатах», не появлялся до перезапуска приложения. Читаем журнал
+            // заново ровно там, где его собираются смотреть.
+            setCallLogEntries(getCallLog());
+            setCallLogVisible(true);
+          }}
+          testID="btn_call_log"
+        >
           <Ionicons name="call-outline" size={22} color={colors.text} />
           <Text style={styles.settingText}>Звонки</Text>
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
