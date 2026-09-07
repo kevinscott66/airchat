@@ -104,7 +104,6 @@ import { TabBarInsetProvider } from './ui/TabBarInset';
 import { getTotalUnreadCount, getTotalGroupUnreadCount } from './core/storage/local';
 import { loadPersistedPresence, startPresenceBroadcast, stopPresenceBroadcast } from './core/social/presenceService';
 import { listContacts } from './core/social/contacts';
-import { startStoryInboxListener, stopStoryInboxListener } from './core/social/storyService';
 import { startScheduler, stopScheduler } from './core/social/scheduledMessages';
 import { initCallService } from './core/social/callService';
 import { initBackgroundKeepalive } from './core/social/backgroundKeepalive';
@@ -880,7 +879,6 @@ function MainTabs({
           });
           meshCoordinatorRef.current = createMeshCoordinatorIfEnabled(pair, cfg.mesh);
           resumeCommentOutbox(pair);
-          startStoryInboxListener(pair, () => {});
           startScheduler();
           void pushNotificationService.init({ peerId: did });
           sweepTimer = setTimeout(() => {
@@ -951,7 +949,6 @@ function MainTabs({
       if (purgeTimer) clearInterval(purgeTimer);
       if (sweepTimer) clearTimeout(sweepTimer);
       stopScheduler();
-      stopStoryInboxListener();
       stopFeedInboxListener();
       // v4.32.135: stop presence heartbeat + unsub contact topics before we
       // tear down the transport layer underneath it.

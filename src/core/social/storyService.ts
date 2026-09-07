@@ -12,8 +12,25 @@
  * "/airchat/v1/stories/<contactPubB64>", а pubsub работает поверх IPFS,
  * выключенного на телефоне с v4.32.19. Опубликованная сторис не уходила
  * никуда, а чужие не приходили никогда: pubsubSubscribe сразу возвращал null.
- * Топик оставлен для сборок с включённым IPFS — он теперь дополнение, а не
- * единственный путь.
+ * Топик оставался дополнением к личным сообщениям.
+ *
+ * v4.32.615: топик убран с обеих сторон.
+ *
+ * Отправка. В топик уходил `JSON.stringify(envelope)` — открытым текстом, без
+ * подписи и без шифрования, а имя топика выводится из публичного ключа
+ * получателя, то есть известно кому угодно. На телефоне это был холостой
+ * вызов (IPFS выключен), а в вебе — рассылка своих сторис всем желающим.
+ *
+ * Приём. Проверка «автор в контактах» тут ничего не доказывает: в топик пишет
+ * любой участник pubsub, а `authorPubB64` берётся из самого конверта. Зная мой
+ * публичный ключ и ключ любого моего контакта — оба не секрет, — посторонний
+ * клал в мою ленту сторис от его имени. Мимо блок-листа тоже: проверку
+ * v4.32.491 («не класть сторис заблокированного в мою ленту») этот путь
+ * обходил целиком.
+ *
+ * Личные сообщения делают всё то же самое и делают это честно: конверт
+ * зашифрован получателю, отправитель известен из DM-слоя, авторство сверяется
+ * (handleIncomingStory), блокировка соблюдается. Второго пути не нужно.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -22,17 +39,14 @@ import { publicKeyToDidKey } from '../identity/did';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { listContactsFor } from './contacts';
 import { catFromIpfs } from '../transport/ipfs/node';
-import { pubsubPublish, pubsubSubscribe } from '../transport/ipfs/pubsub';
 import { insertStory, deleteExpiredStories, countActiveStoriesByAuthor, STORY_TTL_MS } from '../storage/local';
-import { decodeStoryEnvelope, encodeStoryEnvelope, STORY_PREFIX, type StoryEnvelope } from './storyEnvelope';
+import { decodeStoryEnvelope, encodeStoryEnvelope, type StoryEnvelope } from './storyEnvelope';
 import { isNbCid, parseNbCid, resolveBlobToLocalFile } from '../media/mediaBlob';
 import { uploadMediaToCid } from '../media/mediaUpload';
 import { IPFS_VIDEO_MAX_BYTES } from '../media/uploadRoute';
 import type { StoryMediaFailure, StoryPublishOutcome } from './storyPublishOutcome';
 import { rateLimiter } from '../security/rateLimiter';
 import { log } from '../logger';
-
-const STORY_TOPIC_PREFIX = '/airchat/v1/stories/';
 
 /**
  * Потолок одновременно живых сторис от одного автора.
@@ -59,14 +73,6 @@ const STORY_MAX_PER_AUTHOR = 30;
 function localStoryId(authorPubB64: string, envelopeId: string): string {
   return `${authorPubB64}:${envelopeId}`;
 }
-
-let inboxUnsub: (() => void) | null = null;
-// v4.32.191 (Round-21 #8): sentinel closes the double-subscription race
-// where two calls to startStoryInboxListener fire before the first
-// pubsubSubscribe resolves — both would succeed and we'd leak one unsub.
-let inboxSubscribing = false;
-/** Колбэк «пришла сторис» — общий для pubsub и для личных сообщений. */
-let storyArrivalCb: (() => void) | null = null;
 
 // ─── Story update event bus ───────────────────────────────────────────────────
 const storyListeners = new Set<() => void>();
@@ -166,7 +172,6 @@ export async function publishStory(
   await rateLimiter.whenReady();
   const contacts = (await listContactsFor(pid)).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
   const text2 = encodeStoryEnvelope(envelope);
-  const payload = new TextEncoder().encode(JSON.stringify(envelope));
   const { getMessagingService } = await import('./messaging');
   const svc = getMessagingService();
   let delivered = 0;
@@ -181,13 +186,6 @@ export async function publishStory(
         }
       } catch (e) {
         log.debug('story_send_failed', { contact: c.peerPublicKey.slice(0, 8) });
-      }
-      // Дополнительно — прежний pubsub-топик: в сборке с включённым IPFS он
-      // по-прежнему работает, а на телефоне это холостой вызов.
-      try {
-        await pubsubPublish(`${STORY_TOPIC_PREFIX}${c.peerPublicKey}`, payload);
-      } catch {
-        /* pubsub недоступен — основной путь уже отработал */
       }
     })
   );
@@ -292,7 +290,6 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
   });
 
   await deleteExpiredStories(pid);
-  storyArrivalCb?.();
   notifyStoryListeners();
   log.info('story_received', { from: envelope.authorPubB64.slice(0, 8) });
 }
@@ -323,50 +320,3 @@ export async function handleIncomingStory(
   return true;
 }
 
-/** Subscribe to incoming stories from contacts. */
-export function startStoryInboxListener(
-  pair: KeyPairBytes,
-  onNewStory: () => void
-): void {
-  storyArrivalCb = onNewStory;
-  if (inboxUnsub || inboxSubscribing) return;
-  inboxSubscribing = true;
-
-  const myPubB64 = Buffer.from(pair.publicKey).toString('base64');
-  const topic = `${STORY_TOPIC_PREFIX}${myPubB64}`;
-  // Топик выведен из пары ключей — и профиль тоже, а не из активного.
-  const ownerPid = ownerPidForPublicKey(pair.publicKey);
-
-  void pubsubSubscribe(topic, async ({ data }) => {
-    try {
-      // Потолок до TextDecoder+JSON.parse: в топик пишет кто угодно, и 100 МБ
-      // мусора не должны валить устройство. Настоящий конверт — пара килобайт.
-      if (data.byteLength > 2 * 1024 * 1024) return;
-      // Тот же кодек, что и у личных сообщений: топик открыт для любого
-      // участника pubsub, поэтому конверт проверяется целиком, а автор обязан
-      // быть в контактах (проверка в applyIncomingStory).
-      const envelope = decodeStoryEnvelope(STORY_PREFIX + new TextDecoder().decode(data), Date.now());
-      if (!envelope) return;
-      await applyIncomingStory(envelope, ownerPid);
-    } catch (e) {
-      log.warn('story_inbox_parse_failed', { err: e instanceof Error ? e.message : String(e) });
-    }
-  }).then((unsub) => {
-    // If stop was called while subscribe was in flight, immediately tear down.
-    if (!inboxSubscribing) {
-      try { unsub?.(); } catch { /* */ }
-      return;
-    }
-    inboxUnsub = unsub ?? null;
-    inboxSubscribing = false;
-  }).catch((e) => {
-    inboxSubscribing = false;
-    log.warn('story_subscribe_failed', { err: e instanceof Error ? e.message : String(e) });
-  });
-}
-
-export function stopStoryInboxListener(): void {
-  inboxSubscribing = false;
-  inboxUnsub?.();
-  inboxUnsub = null;
-}

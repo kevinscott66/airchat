@@ -145,7 +145,6 @@ jest.mock('../../social/feedService', () => ({
   closeFeedStorage: async () => mockStep('feed_storage_close'),
 }));
 jest.mock('../../social/presenceService', () => ({ stopPresenceBroadcast: async () => mockStep('presence_broadcast') }));
-jest.mock('../../social/storyService', () => ({ stopStoryInboxListener: () => mockStep('story_inbox_listener') }));
 jest.mock('../../social/liveLocationService', () => ({ stopAllLiveLocSessions: () => mockStep('live_location') }));
 jest.mock('../../social/scheduledMessages', () => ({ stopScheduler: () => mockStep('scheduler') }));
 jest.mock('../../../notifications/pushNotifications', () => ({ disposePushNotificationService: async () => mockStep('push_service') }));
@@ -239,7 +238,7 @@ describe('performLocalWalletWipe', () => {
 
     for (const name of [
       'cancel_dialog_backup', 'auth_data', 'feed_inbox_listener', 'presence_broadcast',
-      'push_service', 'rate_limiter', 'story_inbox_listener', 'live_location', 'scheduler',
+      'push_service', 'rate_limiter', 'live_location', 'scheduler',
       'ipfs_client', 'messaging_service', 'call_service', 'feed_storage_close', 'local_db_close',
       'dialog_backups', 'account_vault', 'sync_device_credentials', 'dek_memory',
       'collect_profile_ids', 'profiles', 'mnemonic', 'keypair', 'local_db', 'feed_dbs',

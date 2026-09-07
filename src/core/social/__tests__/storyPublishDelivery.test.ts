@@ -148,7 +148,6 @@ describe('публикация сторис: заблокированные', ()
     mockBlocked.add(contact(1));
     const res = await publishStory(PAIR, null, 'привет');
     expect(mockSent).toEqual([contact(2)]);
-    expect(mockTopics.some((t) => t.includes(contact(1)))).toBe(false);
     expect(res.delivered).toBe(1);
   });
 
@@ -186,5 +185,27 @@ describe('храповик: рассылка сторис', () => {
   test('список рассылки отфильтрован по блок-листу', () => {
     expect(CODE).toContain('rateLimiter.isBlocked(c.peerPublicKey)');
     expect(CODE).toContain('await rateLimiter.whenReady()');
+  });
+
+  /**
+   * v4.32.615: сторис больше не ходят через pubsub-топик.
+   *
+   * Отправка была открытым текстом в топик, выводимый из публичного ключа
+   * получателя, — то есть доступный кому угодно. Приём принимал `authorPubB64`
+   * из самого конверта: посторонний, знающий мой ключ и ключ моего контакта,
+   * клал в ленту сторис от его имени и обходил блок-лист. Личные сообщения
+   * делают то же самое честно.
+   */
+  test('публикация не пишет в открытый топик', async () => {
+    mockContacts = [1, 2].map((n) => ({ peerPublicKey: contact(n) }));
+    await publishStory(PAIR, null, 'привет');
+    expect(mockTopics).toEqual([]);
+  });
+
+  test('pubsub из модуля убран целиком', () => {
+    expect(CODE).not.toContain('pubsubPublish');
+    expect(CODE).not.toContain('pubsubSubscribe');
+    expect(CODE).not.toContain('STORY_TOPIC_PREFIX');
+    expect(CODE).not.toContain('startStoryInboxListener');
   });
 });

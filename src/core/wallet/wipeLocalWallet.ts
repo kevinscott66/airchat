@@ -142,13 +142,12 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
     const { cancelLiveAccountSync } = await import('../sync/liveAccountSync');
     cancelLiveAccountSync();
   }, failed);
-  // v4.32.192 (Round-22 #8): dispose story inbox sub, live-location intervals
-  // and scheduler poll — these keep firing with the old identity's KeyPair
-  // between wipe() and app restart. Mirrors stopFeedInboxListener pattern.
-  await step('story_inbox_listener', async () => {
-    const { stopStoryInboxListener } = await import('../social/storyService');
-    stopStoryInboxListener();
-  }, failed);
+  // v4.32.192 (Round-22 #8): live-location intervals и опрос планировщика
+  // продолжают срабатывать со старой парой ключей между wipe() и перезапуском.
+  //
+  // v4.32.615: подписки на сторис в этом списке больше нет — вместе с самим
+  // pubsub-путём (см. storyService). Сторис приходят личными сообщениями, а их
+  // слушатель снимается вместе с messaging.
   await step('live_location', async () => {
     const { stopAllLiveLocSessions } = await import('../social/liveLocationService');
     stopAllLiveLocSessions();

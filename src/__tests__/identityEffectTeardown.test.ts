@@ -50,7 +50,6 @@ const STARTERS = [
   'createMeshCoordinatorIfEnabled(',
   'startFeedInboxListener(',
   'resumeCommentOutbox(',
-  'startStoryInboxListener(',
   'startScheduler(',
   'pushNotificationService.init(',
   'initCallService(',
@@ -68,7 +67,6 @@ const PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['startNetworkReconnectWatcher(', 'stopNetworkReconnectWatcher()'],
   ['createMeshCoordinatorIfEnabled(', 'meshCoordinatorRef.current?.dispose()'],
   ['startFeedInboxListener(', 'stopFeedInboxListener()'],
-  ['startStoryInboxListener(', 'stopStoryInboxListener()'],
   ['startScheduler(', 'stopScheduler()'],
   ['pushNotificationService.init(', 'disposePushNotificationService()'],
   ['startPresenceBroadcast(', 'stopPresenceBroadcast()'],
@@ -135,7 +133,7 @@ describe('разбор личности: запуск после снятия э
   });
 
   it('разбор выключает планировщик и слушатели, а не только транспорт', () => {
-    for (const stopper of ['stopScheduler()', 'stopStoryInboxListener()', 'stopFeedInboxListener()']) {
+    for (const stopper of ['stopScheduler()', 'stopFeedInboxListener()']) {
       expect(teardown).toContain(stopper);
     }
   });
