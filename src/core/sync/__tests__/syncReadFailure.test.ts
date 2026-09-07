@@ -151,3 +151,40 @@ describe('выгрузки не глотают ошибку чтения', () =>
     expect(code).not.toMatch(/\bcatch\b/);
   });
 });
+
+describe('чужой шифротекст меряется до раскодирования', () => {
+  /**
+   * v4.32.617. Предел на размер сущности проверялся по УЖЕ раскодированному
+   * буферу: чтобы отвергнуть заведомо негодный конверт, в память сначала
+   * поднимались лишние ¾ его объёма, и сколько именно — решала чужая сторона.
+   * Длина base64-строки известна сразу, и порядок проверок — единственное, чем
+   * это отличается: наружу поведение то же (конверт отвергнут), поэтому
+   * правило держится ратчетом.
+   */
+  const SRC = fs.readFileSync(path.join(__dirname, '..', 'liveAccountSync.ts'), 'utf8');
+
+  const bodyOfLive = (head: string): string => {
+    const at = SRC.indexOf(head);
+    expect(at).toBeGreaterThan(-1);
+    const end = SRC.indexOf('\n}', at);
+    expect(end).toBeGreaterThan(at);
+    return SRC.slice(at, end)
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+  };
+
+  it('длина строки проверяется раньше, чем Buffer.from', () => {
+    const body = bodyOfLive('function decryptEntity(');
+    const guard = body.indexOf('MAX_SYNC_ENTITY_B64_CHARS');
+    const decode = body.indexOf("Buffer.from(mutation.ciphertextB64");
+    expect(guard).toBeGreaterThan(-1);
+    expect(decode).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(decode);
+  });
+
+  it('проверка не пустая: предел в символах выведен из предела в байтах', () => {
+    // Иначе ратчет выше удовлетворила бы любая константа с подходящим именем.
+    expect(SRC).toMatch(/MAX_SYNC_ENTITY_B64_CHARS\s*=\s*Math\.ceil\(MAX_SYNC_ENTITY_BYTES \/ 3\) \* 4/);
+  });
+});

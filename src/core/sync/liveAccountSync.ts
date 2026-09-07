@@ -62,6 +62,16 @@ const SNAPSHOT_VERSION = 2;
 const LEGACY_SNAPSHOT_VERSION = 1;
 const MAX_PUSH_MUTATIONS = 100;
 const MAX_SYNC_ENTITY_BYTES = 420 * 1024;
+/**
+ * Тот же предел в символах base64 (v4.32.617).
+ *
+ * Шифротекст приходит с сервера строкой, и длина строки известна ДО
+ * раскодирования. Проверка стояла после него — то есть чтобы отвергнуть
+ * заведомо негодный конверт, в память сначала поднимались лишние ¾ его
+ * объёма, и решала это чужая сторона: сколько прислали, столько и подняли.
+ * Четыре символа на каждые три байта, плюс возможное дополнение.
+ */
+const MAX_SYNC_ENTITY_B64_CHARS = Math.ceil(MAX_SYNC_ENTITY_BYTES / 3) * 4;
 const MAX_SYNC_PASSES = 20;
 let syncGeneration = 0;
 
@@ -216,7 +226,10 @@ function decryptEntity(mnemonic: string, mutation: SyncMutation): EncodedEntity 
   try {
     const entityId = decodedEntityId(mutation.entityId);
     if (!entityId) return null;
+    if (mutation.ciphertextB64.length > MAX_SYNC_ENTITY_B64_CHARS) return null;
     const blob = new Uint8Array(Buffer.from(mutation.ciphertextB64, 'base64'));
+    // Проверку по байтам оставляем: строка могла быть короче предела и всё
+    // равно раскодироваться во что-то другое (пробелы, не-base64 символы).
     if (blob.byteLength > MAX_SYNC_ENTITY_BYTES) return null;
     const dek = deriveLocalDekFromMnemonic(mnemonic);
     const base: AadFields = {
