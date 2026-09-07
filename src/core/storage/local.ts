@@ -3163,6 +3163,13 @@ export async function countChatMessages(ownerProfileId?: number): Promise<number
  * таблица, а импорт всё равно оставляет от неё лишь строки активного профиля,
  * так что чужие переписки лежали в файле мёртвым грузом — и занимали место в
  * лимите на размер копии.
+ *
+ * v4.32.616: ошибка чтения выбрасывается, а не превращается в пустой список.
+ * Пустой список — это утверждение «переписки нет», и оба вызывающих ему
+ * верили: синхронизация выписывала надгробие каждому сообщению и удаляла
+ * переписку на других устройствах, а резервное копирование записывало пустой
+ * файл поверх целой копии. Соседние выгрузки (exportSyncProfileSettings,
+ * exportFeedSyncSnapshot, exportStoryAlbumSyncSnapshot) так и делали всегда.
  */
 export async function exportRawChatMessageRows(ownerProfileId: number): Promise<
   Array<{
@@ -3179,27 +3186,22 @@ export async function exportRawChatMessageRows(ownerProfileId: number): Promise<
     reply_to_preview: string | null;
   }>
 > {
-  try {
-    const d = await db();
-    return await d.getAllAsync<{
-      id: string;
-      contact_pub_b64: string;
-      cid: string | null;
-      text: string;
-      direction: string;
-      status: string;
-      media_cids: string | null;
-      created_at: number;
-      owner_profile_id: number;
-      reply_to_id: string | null;
-      reply_to_preview: string | null;
-    }>('SELECT * FROM chat_messages WHERE owner_profile_id = ? ORDER BY created_at ASC', [
-      ownerProfileId,
-    ]);
-  } catch (e) {
-    log.warn('chat_export_raw_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
-  }
+  const d = await db();
+  return await d.getAllAsync<{
+    id: string;
+    contact_pub_b64: string;
+    cid: string | null;
+    text: string;
+    direction: string;
+    status: string;
+    media_cids: string | null;
+    created_at: number;
+    owner_profile_id: number;
+    reply_to_id: string | null;
+    reply_to_preview: string | null;
+  }>('SELECT * FROM chat_messages WHERE owner_profile_id = ? ORDER BY created_at ASC', [
+    ownerProfileId,
+  ]);
 }
 
 /**
@@ -3390,22 +3392,18 @@ export async function rebuildConversationsFromMessages(ownerProfileId: number): 
 export async function exportConversationMetaRows(
   ownerProfileId: number
 ): Promise<ConversationMetaRow[]> {
-  try {
-    const d = await db();
-    return await d.getAllAsync<ConversationMetaRow>(
-      `SELECT contact_pub_b64, unread_count, draft_text, pinned, archived, muted, muted_until,
-              pinned_message_id, disappear_after_ms, disappear_set_at, color_tag
-         FROM conversations
-        WHERE owner_profile_id = ?
-          AND (pinned = 1 OR archived = 1 OR muted = 1 OR unread_count > 0
-               OR draft_text IS NOT NULL OR pinned_message_id IS NOT NULL
-               OR disappear_after_ms IS NOT NULL OR color_tag IS NOT NULL)`,
-      [ownerProfileId]
-    );
-  } catch (e) {
-    log.warn('conversation_meta_export_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
-  }
+  // v4.32.616: без перехвата — см. exportRawChatMessageRows.
+  const d = await db();
+  return await d.getAllAsync<ConversationMetaRow>(
+    `SELECT contact_pub_b64, unread_count, draft_text, pinned, archived, muted, muted_until,
+            pinned_message_id, disappear_after_ms, disappear_set_at, color_tag
+       FROM conversations
+      WHERE owner_profile_id = ?
+        AND (pinned = 1 OR archived = 1 OR muted = 1 OR unread_count > 0
+             OR draft_text IS NOT NULL OR pinned_message_id IS NOT NULL
+             OR disappear_after_ms IS NOT NULL OR color_tag IS NOT NULL)`,
+    [ownerProfileId]
+  );
 }
 
 /**
@@ -3485,39 +3483,35 @@ export async function exportGroupBackupRows(ownerProfileId: number): Promise<{
   messages: GroupMessageBackupRow[];
   members: GroupMemberBackupRow[];
 }> {
+  // v4.32.616: без перехвата — см. exportRawChatMessageRows.
   const empty = { groups: [], messages: [], members: [] };
-  try {
-    const d = await db();
-    const groups = await d.getAllAsync<GroupBackupRow>(
+  const d = await db();
+  const groups = await d.getAllAsync<GroupBackupRow>(
       `SELECT id, name, description, avatar_cid, type, invite_token, is_admin, member_count,
-              unread_count, mention_count, muted, muted_until, pinned, archived,
-              last_message_at, last_message_preview, last_message_sender_name,
-              last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
-              disappear_after_ms, disappear_set_at, slow_mode_seconds, admin_only_posting,
-              admin_only_pinning, anonymous_posting, require_approval, created_at
-         FROM groups WHERE owner_profile_id = ?`,
-      [ownerProfileId]
-    );
-    if (!groups.length) return empty;
-    const messages = await d.getAllAsync<GroupMessageBackupRow>(
-      `SELECT id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id,
-              reply_to_preview, reactions, created_at, edited_at, starred, view_count, seen_by
-         FROM group_messages WHERE owner_profile_id = ? ORDER BY created_at ASC`,
-      [ownerProfileId]
-    );
-    // v4.32.466: состав отбирается по своей же колонке профиля. До неё копию
-    // приходилось собирать через JOIN с groups — и осиротевший состав (группа
-    // удалена, строки участников остались) в копию не попадал вовсе.
-    const members = await d.getAllAsync<GroupMemberBackupRow>(
-      `SELECT group_id, peer_pub_b64, role, display_name, joined_at
-         FROM group_members WHERE owner_profile_id = ?`,
-      [ownerProfileId]
-    );
-    return { groups, messages, members };
-  } catch (e) {
-    log.warn('group_backup_export_failed', { err: e instanceof Error ? e.message : String(e) });
-    return empty;
-  }
+            unread_count, mention_count, muted, muted_until, pinned, archived,
+            last_message_at, last_message_preview, last_message_sender_name,
+            last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
+            disappear_after_ms, disappear_set_at, slow_mode_seconds, admin_only_posting,
+            admin_only_pinning, anonymous_posting, require_approval, created_at
+       FROM groups WHERE owner_profile_id = ?`,
+    [ownerProfileId]
+  );
+  if (!groups.length) return empty;
+  const messages = await d.getAllAsync<GroupMessageBackupRow>(
+    `SELECT id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id,
+            reply_to_preview, reactions, created_at, edited_at, starred, view_count, seen_by
+       FROM group_messages WHERE owner_profile_id = ? ORDER BY created_at ASC`,
+    [ownerProfileId]
+  );
+  // v4.32.466: состав отбирается по своей же колонке профиля. До неё копию
+  // приходилось собирать через JOIN с groups — и осиротевший состав (группа
+  // удалена, строки участников остались) в копию не попадал вовсе.
+  const members = await d.getAllAsync<GroupMemberBackupRow>(
+    `SELECT group_id, peer_pub_b64, role, display_name, joined_at
+       FROM group_members WHERE owner_profile_id = ?`,
+    [ownerProfileId]
+  );
+  return { groups, messages, members };
 }
 
 /**
@@ -3724,35 +3718,31 @@ export async function deleteSyncEntity(
 
 /** KV для списка чатов: контакты и подсказки переписок. */
 export async function exportDialogKvSnapshot(profileId: number): Promise<Array<{ k: string; v: string }>> {
-  try {
-    const d = await db();
-    // Что забирать — решает dialogBackupKeySelectors: правило одно и на экспорт,
-    // и на импорт. Старые глобальные ключи входят только в копию первого
-    // профиля — копия, снятая на установке, где миграция контактов ещё не
-    // отработала, всё равно должна что-то содержать.
-    const { exact, like } = dialogBackupKeySelectors(profileId);
-    const where = [
-      ...exact.map(() => 'k = ?'),
-      ...like.map(() => 'k LIKE ?'),
-    ].join(' OR ');
-    const rows = await d.getAllAsync<{ k: string; v: string }>(
-      `SELECT k, v FROM kv WHERE ${where}`,
-      [...exact, ...like]
-    );
-    // Запись профиля важнее одноимённой глобальной: глобальная — это остаток
-    // до миграции, и она заведомо не новее.
-    const out = new Map<string, string>();
-    for (const r of rows ?? []) {
-      const logical = dialogBackupLogicalKey(r.k);
-      if (!logical) continue;
-      if (hasProfilePrefix(r.k)) out.set(logical, r.v);
-      else if (!out.has(logical)) out.set(logical, r.v);
-    }
-    return [...out].map(([k, v]) => ({ k, v }));
-  } catch (e) {
-    log.warn('dialog_kv_export_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+  // v4.32.616: без перехвата — см. exportRawChatMessageRows.
+  const d = await db();
+  // Что забирать — решает dialogBackupKeySelectors: правило одно и на экспорт,
+  // и на импорт. Старые глобальные ключи входят только в копию первого
+  // профиля — копия, снятая на установке, где миграция контактов ещё не
+  // отработала, всё равно должна что-то содержать.
+  const { exact, like } = dialogBackupKeySelectors(profileId);
+  const where = [
+    ...exact.map(() => 'k = ?'),
+    ...like.map(() => 'k LIKE ?'),
+  ].join(' OR ');
+  const rows = await d.getAllAsync<{ k: string; v: string }>(
+    `SELECT k, v FROM kv WHERE ${where}`,
+    [...exact, ...like]
+  );
+  // Запись профиля важнее одноимённой глобальной: глобальная — это остаток
+  // до миграции, и она заведомо не новее.
+  const out = new Map<string, string>();
+  for (const r of rows ?? []) {
+    const logical = dialogBackupLogicalKey(r.k);
+    if (!logical) continue;
+    if (hasProfilePrefix(r.k)) out.set(logical, r.v);
+    else if (!out.has(logical)) out.set(logical, r.v);
   }
+  return [...out].map(([k, v]) => ({ k, v }));
 }
 
 /**
