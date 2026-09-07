@@ -924,11 +924,6 @@ export class FeedStorage {
     ]);
   }
 
-  async clear(): Promise<void> {
-    const d = await this.ensureDb();
-    await d.runAsync('DELETE FROM feed');
-  }
-
   // ─── Comments ──────────────────────────────────────────────────────────────
 
   /**

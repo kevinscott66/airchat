@@ -121,6 +121,19 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
       return { status: 'offline', pushed: null, pulled: null };
     }
     pushed = await pushSyncMutations(options.mnemonic, options.pair, options.pendingMutations);
+    // v4.32.624: форма ответа на отправку проверяется ДО того, как по нему
+    // что-то решают. Ниже оба списка перебирают и меряют без оглядки на то,
+    // списки ли это: сервер, приславший вместо массива null, ронял проход
+    // английским TypeError из середины saveSyncEntityHeads — то есть уже
+    // после saveSyncState, с наполовину применённым ответом. Тем же правилом
+    // и по той же причине отвергается непонятный курсор в ветке приёма ниже.
+    if (!Array.isArray(pushed.acceptedMutationIds) || !Array.isArray(pushed.rejectedMutationIds)) {
+      log.warn('sync_push_shape_invalid', {
+        accepted: typeof pushed.acceptedMutationIds,
+        rejected: typeof pushed.rejectedMutationIds,
+      });
+      throw new Error('Сервер вернул некорректный ответ синхронизации.');
+    }
     if (options.shouldContinue && !options.shouldContinue()) {
       return { status: 'offline', pushed, pulled: null };
     }
@@ -153,6 +166,14 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
   if (!validSyncCursor(pulled.nextCursor)) {
     log.warn('sync_pull_cursor_invalid', { cursor: String(pulled.nextCursor).slice(0, 64) });
     throw new Error('Сервер вернул некорректный курсор синхронизации.');
+  }
+  // v4.32.624: курсор проверялся, а сам пакет — нет. Каждую строку в нём
+  // разбирает isDeliverable, но до неё дело не доходило: не-массив ронял
+  // перебор ниже английским TypeError, и человек вместо честного «сервер
+  // ответил не по протоколу» видел общий запасной текст.
+  if (!Array.isArray(pulled.mutations)) {
+    log.warn('sync_pull_shape_invalid', { got: typeof pulled.mutations });
+    throw new Error('Сервер вернул некорректный ответ синхронизации.');
   }
 
   // Cursor advances only after every row has been projected locally. A crash

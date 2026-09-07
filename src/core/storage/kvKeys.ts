@@ -214,8 +214,10 @@ export function groupLastSentKey(groupId: string): string {
  * половину просмотров. Заодно общее имя не попадало под уборку `p<id>:%`, то
  * есть переживало удаление аккаунта и доставалось следующему с тем же номером.
  */
+export const FEED_VIEW_SENT_PREFIX = 'feed_view_sent:';
+
 export function feedViewSentKey(postId: string): string {
-  return `feed_view_sent:${postId}`;
+  return `${FEED_VIEW_SENT_PREFIX}${postId}`;
 }
 
 /** Список заблокированных пиров (см. rateLimiter.ts). */

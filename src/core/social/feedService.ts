@@ -23,8 +23,13 @@ import {
 } from '../storage/feedStorage';
 import { isPlainCid } from '../cid';
 import { log } from '../logger';
-import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
-import { feedViewSentKey } from '../storage/kvKeys';
+import {
+  scopedKvDelete,
+  scopedKvListKeysByPrefix,
+  scopedKvSetFor,
+  scopedKvTryGetFor,
+} from '../storage/profileScopedKv';
+import { FEED_VIEW_SENT_PREFIX, feedViewSentKey } from '../storage/kvKeys';
 import {
   addDeferred,
   deferredFromPayload,
@@ -3327,6 +3332,43 @@ export async function reconcileOrphanInlineMedia(profileId: number): Promise<voi
   }
   if (orphanKeysPurged > 0) {
     log.info('feed_orphan_kv_purged', { profileId, count: orphanKeysPurged });
+  }
+
+  // v4.32.624: третья половина — отметки «просмотр уже отправлен». По одной на
+  // каждую ЧУЖУЮ запись, которую человек досмотрел (feedViewSentKey), а
+  // снимались они нигде: ни удаление публикации, ни уборка ленты профиля их не
+  // знали. Лента по возрасту не чистится, так что ряд оставался навсегда —
+  // привязанный к id, которого в базе уже нет. Правило то же, что и у байтов
+  // вложений выше: пропала публикация — пропала и отметка.
+  //
+  // Список публикаций берётся по ВСЕМ профилям, поэтому отметку про запись,
+  // которая лежит в ленте соседнего аккаунта, отсюда не снесёт. Свой список
+  // ключей, наоборот, только у активного профиля — у остальных отметки
+  // подберутся, когда в них войдут.
+  //
+  // Отметка снята с ещё живой публикации не потеряется: просмотр уйдёт автору
+  // повторно, а у него зрители складываются в множество (см. feed_view выше).
+  if (knownPostIdsEverywhere !== null) {
+    try {
+      const known = new Set(knownPostIdsEverywhere);
+      let viewGuardsPurged = 0;
+      for (const key of await scopedKvListKeysByPrefix(FEED_VIEW_SENT_PREFIX)) {
+        const postId = key.slice(FEED_VIEW_SENT_PREFIX.length);
+        if (!postId || known.has(postId)) continue;
+        await scopedKvDelete(key);
+        viewGuardsPurged++;
+      }
+      if (viewGuardsPurged > 0) {
+        log.info('feed_view_guard_purged', { profileId, count: viewGuardsPurged });
+      }
+    } catch (e) {
+      // Список ключей не прочитался — не значит «их нет». Молчаливый пустой
+      // список здесь безвреден (удалять нечего), но знать о нём стоит.
+      log.warn('feed_view_guard_purge_failed', {
+        profileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 }
 

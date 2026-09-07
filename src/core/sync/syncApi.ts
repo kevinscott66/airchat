@@ -27,6 +27,26 @@ const DEVICE_PUBLIC_KEY = 'airchat_sync_device_public_v1';
 const REQUEST_VERSION = 1;
 const SYNC_REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Потолок на ОБЪЯВЛЕННЫЙ размер ответа сервера (v4.32.624).
+ *
+ * Тело успешного ответа разбиралось `response.json()` без всякого предела:
+ * единственной границей был дедлайн в 15 секунд, а за 15 секунд враждебный или
+ * подменённый сервер отдаёт ровно столько, сколько успеет положить в память
+ * телефона. Приём тот же, что и в загрузке вложений (`mediaBlob.ts`) и в
+ * узле IPFS: объявленную длину смотрим ДО чтения тела.
+ *
+ * Величина — с запасом от честного максимума: за проход сервер отдаёт не
+ * больше ста записей, каждая до MAX_SYNC_ENTITY_BYTES (420 КиБ) сырых байт,
+ * то есть около 57 МиБ в base64 на пакет. Вложения идут этим же путём и
+ * ограничены отдельно, уже после разбора (MAX_DOWNLOAD_B64_CHARS).
+ *
+ * Честно про предел этой защиты: заголовка может и не быть (chunked), и тогда
+ * остаётся только дедлайн. Это потолок против «отдал гигабайт одним куском»,
+ * а не потоковый счётчик байт.
+ */
+const MAX_SYNC_RESPONSE_BYTES = 96 * 1024 * 1024;
+
 export const SYNC_DEVICE_SECURE_KEYS = [DEVICE_ID_KEY, DEVICE_SECRET_KEY, DEVICE_PUBLIC_KEY] as const;
 
 export type SyncDeviceInfo = {
@@ -167,6 +187,13 @@ async function fetchSigned<T>(url: string, signed: { payload: string; signature:
     } catch {
       if (controller?.signal.aborted) throw new Error('Сервер синхронизации не отвечает.');
       throw new Error('Нет соединения с сервером синхронизации.');
+    }
+    // Проверка стоит до разбора обоих тел — и успешного, и тела ошибки: их
+    // читают одинаково, и переполнить память одинаково можно любым из них.
+    const declared = parseInt(response.headers?.get?.('content-length') ?? '', 10);
+    if (Number.isFinite(declared) && declared > MAX_SYNC_RESPONSE_BYTES) {
+      log.warn('sync_response_too_large', { status: response.status, declared });
+      throw responseError(response.status, 'too_large');
     }
     if (!response.ok) {
       let code: string | undefined;
