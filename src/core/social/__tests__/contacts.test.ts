@@ -46,6 +46,7 @@ import {
   findContactPubKeyByHash,
   invalidateContactsList,
   parseContactId,
+  rememberContactId,
   setPeerProfile,
 } from '../contacts';
 import { buildContactLink, buildDmLink } from '../../net/appLink';
@@ -381,5 +382,53 @@ describe('contacts — поля профиля из конверта возвр�
     expect(c.peerUsername).toBeUndefined();
     expect(c.pronouns).toBeUndefined();
     expect(c.peerStatus).toHaveLength(60);
+  });
+});
+
+// ── Предел указателя контактов ────────────────────────────────────────────────
+
+describe('contacts — указатель не растёт мимо читателя (v4.32.617)', () => {
+  const IDX = 'p1:contacts_index';
+  const logMock = (jest.requireMock('../../logger') as { log: { warn: jest.Mock } }).log;
+  const NEW = 'N'.repeat(43);
+
+  function fill(n: number): void {
+    const arr = Array.from({ length: n }, (_, i) => `id-${i}`);
+    mockLocal.__kv[IDX] = JSON.stringify(arr);
+  }
+
+  function index(): string[] {
+    return JSON.parse(mockLocal.__kv[IDX]) as string[];
+  }
+
+  beforeEach(() => {
+    clearKv();
+    logMock.warn.mockClear();
+  });
+
+  it('на пределе новый ключ не дописывается и это видно в журнале', async () => {
+    // Читатель (listContactsFor) обрезает указатель тем же числом. Молча
+    // дописать значило бы положить строку на диск, до которой он не дойдёт.
+    fill(5000);
+    await rememberContactId(NEW);
+    expect(index()).toHaveLength(5000);
+    expect(index()).not.toContain(NEW);
+    expect(logMock.warn).toHaveBeenCalledWith('contacts_index_full', expect.anything());
+  });
+
+  it('проверка не пустая: под пределом ключ дописывается как прежде', async () => {
+    fill(4999);
+    await rememberContactId(NEW);
+    expect(index()).toHaveLength(5000);
+    expect(index()).toContain(NEW);
+    expect(logMock.warn).not.toHaveBeenCalledWith('contacts_index_full', expect.anything());
+  });
+
+  it('уже записанный ключ на пределе отказом не считается', async () => {
+    fill(5000);
+    const existing = index()[0];
+    await rememberContactId(existing);
+    expect(index()).toHaveLength(5000);
+    expect(logMock.warn).not.toHaveBeenCalledWith('contacts_index_full', expect.anything());
   });
 });

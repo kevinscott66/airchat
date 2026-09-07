@@ -31,7 +31,7 @@ import {
 } from '../../core/social/contacts';
 import { publicKeyToDidKey, didFromPubB64 } from '../../core/identity/did';
 import { getMessagingService } from '../../core/social/messaging';
-import { rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
@@ -515,12 +515,13 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             onPress: () => {
               void (async () => {
                 try {
+                  // v4.32.617: успех показывали, не спросив, легла ли запись.
                   if (alreadyBlocked) {
-                    await rateLimiter.unblockContact(dup.peerPublicKey);
-                    showSuccess('Разблокировано');
+                    if (await rateLimiter.unblockContact(dup.peerPublicKey)) showSuccess('Разблокировано');
+                    else showError(BLOCK_NOT_SAVED_OFF);
                   } else {
-                    await rateLimiter.blockContact(dup.peerPublicKey);
-                    showSuccess('Заблокировано');
+                    if (await rateLimiter.blockContact(dup.peerPublicKey)) showSuccess('Заблокировано');
+                    else showError(BLOCK_NOT_SAVED_ON);
                   }
                   await load();
                   setAddVisible(false);
@@ -624,11 +625,11 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             void (async () => {
               try {
                 if (isBlocked) {
-                  await rateLimiter.unblockContact(c.peerPublicKey);
-                  showSuccess('Разблокировано');
+                  if (await rateLimiter.unblockContact(c.peerPublicKey)) showSuccess('Разблокировано');
+                  else showError(BLOCK_NOT_SAVED_OFF);
                 } else {
-                  await rateLimiter.blockContact(c.peerPublicKey);
-                  showSuccess('Заблокировано');
+                  if (await rateLimiter.blockContact(c.peerPublicKey)) showSuccess('Заблокировано');
+                  else showError(BLOCK_NOT_SAVED_ON);
                 }
                 await load();
               } catch (e) {

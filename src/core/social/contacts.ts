@@ -30,6 +30,19 @@ import { mergeExplicitContactRow } from './contactRowMerge';
 const PREFIX = 'contact:';
 
 /**
+ * Потолок указателя контактов (v4.32.617).
+ *
+ * Он всегда стоял на чтении — `listContactsFor` отрезает хвост, иначе
+ * подсунутый указатель на 100 000 строк подвешивает список. А запись потолка
+ * не знала вовсе, и указатель рос дальше: строку заводит не только человек, но
+ * и любой незнакомец, написавший в личные (ensureImplicitContact). Разойтись
+ * этим двум числам нельзя — за 5000-й записью настоящий контакт переставал
+ * показываться в списках молча и навсегда. Теперь потолок один на обе стороны,
+ * и переполнение видно в журнале.
+ */
+const CONTACTS_INDEX_MAX = 5000;
+
+/**
  * v4.32.286: строка контакта — секрет, а не настройка.
  *
  * В ней лежит `symKey` — тот самый симметричный ключ, которым шифруется
@@ -442,7 +455,7 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
     const ids = (Array.isArray(parsed) ? (parsed as unknown[]) : [])
       // v4.32.368: форма ключа общая (crypto/pubKeyFormat), не только длина.
       .filter(isPubKeyB64)
-      .slice(0, 5000);
+      .slice(0, CONTACTS_INDEX_MAX);
     const out: Contact[] = [];
     // v4.32.124 (AUDIT P1 Block 7): collect IDs whose row is missing OR
     // unparseable — heal the index persistently instead of re-warning on
@@ -569,6 +582,13 @@ async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string):
     // v4.32.115: guard against corrupted index (e.g. `{}` instead of `[]`).
     const arr = Array.isArray(parsed) ? (parsed as string[]) : [];
     const ids = new Set(arr);
+    if (!ids.has(peerPublicKeyB64) && ids.size >= CONTACTS_INDEX_MAX) {
+      // Молча дописать было бы хуже: запись легла бы на диск, а читатель до
+      // неё всё равно не дошёл. Дальше идёт разговор про то, чем указатель
+      // забит, — вытеснять здесь наугад нечего.
+      log.warn('contacts_index_full', { pid, size: ids.size });
+      return;
+    }
     ids.add(peerPublicKeyB64);
     await profileKvSet(pid, 'contacts_index', JSON.stringify([...ids]));
     notifyChatStorageChanged();

@@ -269,6 +269,23 @@ export function dialogBackupLogicalKey(storedKey: string): string | null {
 }
 
 /**
+ * Есть ли в снимке kv строка блок-листа (v4.32.617).
+ *
+ * Снимок приходит двумя путями — синхронизация между устройствами и
+ * восстановление копии — и оба пишут прямо в kv, мимо {@link rateLimiter}. В
+ * памяти список при этом остаётся прежним, а следующая блокировка
+ * раскладывает его обратно на диск поверх пришедшего. Вызывающая сторона
+ * спрашивает этой функцией, надо ли перечитать список.
+ */
+export function dialogKvSnapshotHasBlockList(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  return input.some((raw) => {
+    const k = (raw as { k?: unknown } | null)?.k;
+    return typeof k === 'string' && dialogBackupLogicalKey(k) === BLOCKED_KEY_BASE;
+  });
+}
+
+/**
  * Какие строки kv забирать в копию профиля `profileId`.
  *
  * v4.32.289. Отбор жил в SQL-запросе экспорта и разошёлся с правилами чтения

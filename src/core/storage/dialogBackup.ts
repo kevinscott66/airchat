@@ -24,6 +24,8 @@ import {
   CONVERSATION_META_MAX_ROWS,
   type ConversationMetaRow,
 } from './conversationMeta';
+import { rateLimiter } from '../security/rateLimiter';
+import { dialogKvSnapshotHasBlockList } from './kvKeys';
 import { RAW_CHAT_MESSAGE_MAX_ROWS } from './chatMessageBackup';
 import {
   GROUP_MAX_ROWS,
@@ -352,6 +354,10 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
       restoredMessages = await importRawChatMessageRows(data.messages);
       if (data.kv?.length) {
         restoredKv = await importDialogKvSnapshot(data.kv, pid);
+        // v4.32.617: блок-лист лежит и в памяти rateLimiter. Восстановление
+        // писало только в базу, поэтому вернувшиеся из копии запреты не
+        // действовали, а следующая блокировка стирала их с диска.
+        if (dialogKvSnapshotHasBlockList(data.kv)) await rateLimiter.reloadBlocked();
       }
       // v4.32.280: список чатов строится по сообщениям, затем возвращаются
       // настройки переписок, которые были сохранены в копии.

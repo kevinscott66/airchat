@@ -50,6 +50,12 @@ jest.mock('../../identity/profileManager', () => ({
 let mockImportedMessages = 0;
 let mockImportedKv = 0;
 let mockExistingMessages = 0;
+// v4.32.617: восстановление копии перечитывает блок-лист (rateLimiter), а он
+// тянет за собой SecureStore — в этом наборе его нет.
+jest.mock('../../security/rateLimiter', () => ({
+  rateLimiter: { reloadBlocked: jest.fn(async () => {}) },
+}));
+
 jest.mock('../local', () => ({
   countChatMessages: jest.fn(async () => mockExistingMessages),
   exportConversationMetaRows: jest.fn(async () => []),
@@ -221,5 +227,49 @@ describe('восстановление из файла (v4.32.370)', () => {
 
   it('без файла — ноль и никакого импорта', async () => {
     expect(await tryRestoreDialogBackupFromFile()).toBe(0);
+  });
+
+  describe('блок-лист из копии (v4.32.617)', () => {
+    const rl = (jest.requireMock('../../security/rateLimiter') as {
+      rateLimiter: { reloadBlocked: jest.Mock };
+    }).rateLimiter;
+
+    beforeEach(() => rl.reloadBlocked.mockClear());
+
+    it('пришёл блок-лист — список перечитывается', async () => {
+      // Строка ложится прямо в базу мимо rateLimiter: без перечитывания в
+      // памяти остаётся прежний список, и следующая блокировка выложит его
+      // поверх восстановленного.
+      put(P1, {
+        ...goodFile([{}]),
+        kv: [{ k: 'p1:airchat_blocked_peer_pub_b64', v: '["' + 'A'.repeat(43) + '"]' }],
+      });
+      mockImportedMessages = 1;
+      mockImportedKv = 1;
+      await tryRestoreDialogBackupFromFile();
+      expect(rl.reloadBlocked).toHaveBeenCalledTimes(1);
+    });
+
+    it('проверка не пустая: другие строки блок-лист не трогают', async () => {
+      put(P1, {
+        ...goodFile([{}]),
+        kv: [{ k: 'p1:contacts_index', v: '[]' }],
+      });
+      mockImportedMessages = 1;
+      mockImportedKv = 1;
+      await tryRestoreDialogBackupFromFile();
+      expect(rl.reloadBlocked).not.toHaveBeenCalled();
+    });
+
+    it('старое имя ключа с суффиксом профиля тоже узнаётся', async () => {
+      put(P1, {
+        ...goodFile([{}]),
+        kv: [{ k: 'airchat_blocked_peer_pub_b64_p1', v: '[]' }],
+      });
+      mockImportedMessages = 1;
+      mockImportedKv = 1;
+      await tryRestoreDialogBackupFromFile();
+      expect(rl.reloadBlocked).toHaveBeenCalledTimes(1);
+    });
   });
 });

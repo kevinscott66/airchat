@@ -21,6 +21,8 @@ import {
   forgetSyncEntityFingerprints,
   type SyncEntityHead,
 } from '../storage/local';
+import { dialogKvSnapshotHasBlockList } from '../storage/kvKeys';
+import { rateLimiter } from '../security/rateLimiter';
 import {
   applyFeedSyncComment,
   applyFeedSyncCommentDelete,
@@ -528,6 +530,11 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       break;
     case 'setting':
       await importDialogKvSnapshot([entity.value], mutation.ownerProfileId);
+      // v4.32.617: блок-лист входит в этот снимок, а живёт он ещё и в памяти
+      // rateLimiter. Без перечитывания пришедший запрет не действовал до
+      // перезапуска, а первая же блокировка на этом устройстве раскладывала
+      // старый список поверх нового — и снимала запрет на обоих сразу.
+      if (dialogKvSnapshotHasBlockList([entity.value])) await rateLimiter.reloadBlocked();
       break;
     case 'profile':
       if (!(await importSyncProfileSetting(entity.value, mutation.ownerProfileId))) {

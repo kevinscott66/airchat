@@ -31,6 +31,16 @@ import { log } from '../logger';
  * Записанное до этой версии дошифровывает kvGetSecretUpgrading при первом же
  * чтении: список читают и на старте, и при каждом открытии настроек.
  */
+/**
+ * Что сказать человеку, когда список изменён в памяти, но не записан
+ * (v4.32.617). Формулировка держится того же правила, что и persistBlocked:
+ * решение применено сейчас и потеряется при перезапуске.
+ */
+export const BLOCK_NOT_SAVED_ON =
+  'Заблокировано, но запись не удалась — после перезапуска запрет пропадёт.';
+export const BLOCK_NOT_SAVED_OFF =
+  'Разблокировано, но запись не удалась — после перезапуска запрет вернётся.';
+
 function blockedKey(pid: number): string {
   return profileScopedKey(pid, BLOCKED_KEY_BASE);
 }
@@ -268,6 +278,23 @@ export class RateLimiter {
     await this.ready;
   }
 
+  /**
+   * Перечитать блок-лист с диска (v4.32.617).
+   *
+   * Нужен там, где список меняют в обход этого класса: снимок kv приходит с
+   * другого устройства (синхронизация) или из копии (восстановление) и ложится
+   * прямо в базу. В памяти оставался прежний список, и он не просто устаревал
+   * — следующая блокировка выкладывала его целиком поверх пришедшего, молча
+   * снимая запрет сразу на обоих устройствах.
+   *
+   * После записи снимка правда лежит на диске, поэтому список именно
+   * перечитывается, а не сливается: слияние вернуло бы снятые запреты.
+   */
+  async reloadBlocked(): Promise<void> {
+    this.ready = this.loadBlocked();
+    await this.ready;
+  }
+
   /** True if this contact pubkey (base64) is blocked. */
   isBlocked(peerPubKeyB64: string): boolean {
     // v4.32.498: этот ответ уже не исправить — список не поднят. Но повтор
@@ -290,7 +317,15 @@ export class RateLimiter {
     return false;
   }
 
-  async blockContact(peerPubKeyB64: string): Promise<void> {
+  /**
+   * Заблокировать контакт. Возвращает, легла ли запись на диск (v4.32.617).
+   *
+   * Прежде тип был `void`, и оба провала — отвергнутая форма ключа и
+   * несостоявшаяся запись — оставались только в журнале. Все три экрана при
+   * этом одинаково показывали «Заблокировано»: человек уходил уверенный, что
+   * запрет поставлен, а после перезапуска запрета не было.
+   */
+  async blockContact(peerPubKeyB64: string): Promise<boolean> {
     // v4.32.187 (Round-17 #8): reject garbage shapes at the entry point so
     // we never persist invalid strings that later leak through
     // getBlockedPubKeys / Settings UI.
@@ -300,21 +335,24 @@ export class RateLimiter {
       peerPubKeyB64.length > 48
     ) {
       log.warn('rate_limiter_block_invalid_shape', { len: peerPubKeyB64?.length ?? -1 });
-      return;
+      return false;
     }
     this.blocked.add(peerPubKeyB64);
     this.inviteCounts.delete(peerPubKeyB64);
     this.messageCounts.delete(peerPubKeyB64);
     const pid = await this.currentPid();
-    await this.persistBlocked(pid);
+    const saved = await this.persistBlocked(pid);
     notifyChatStorageChanged();
+    return saved;
   }
 
-  async unblockContact(peerPubKeyB64: string): Promise<void> {
+  /** Снять блокировку. Как и {@link blockContact}, отвечает про запись. */
+  async unblockContact(peerPubKeyB64: string): Promise<boolean> {
     this.blocked.delete(peerPubKeyB64);
     const pid = await this.currentPid();
-    await this.persistBlocked(pid);
+    const saved = await this.persistBlocked(pid);
     notifyChatStorageChanged();
+    return saved;
   }
 
   /**
@@ -322,10 +360,12 @@ export class RateLimiter {
    * изменён, и блокировка действует до перезапуска — потерять её на диске
    * заметнее, чем не применить вовсе, но применить и промолчать хуже всего.
    */
-  private async persistBlocked(pid: number): Promise<void> {
+  private async persistBlocked(pid: number): Promise<boolean> {
     if (!(await kvSetSecret(blockedKey(pid), JSON.stringify([...this.blocked])))) {
       log.warn('rate_limiter_block_save_failed', { pid, size: this.blocked.size });
+      return false;
     }
+    return true;
   }
 
   /**

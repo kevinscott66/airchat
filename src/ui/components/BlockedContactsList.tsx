@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { AppPressable } from './AppPressable';
 import { listContacts, type Contact } from '../../core/social/contacts';
-import { rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_NOT_SAVED_OFF, rateLimiter } from '../../core/security/rateLimiter';
 import { useTheme } from '../ThemeContext';
 import { font, radius, readableInk } from '../theme';
 import { contactLabel } from '../../core/social/contactLabel';
@@ -68,7 +68,9 @@ export function BlockedContactsList(): React.ReactElement {
             style={styles.unblock}
             onPress={() => {
               void (async () => {
-                await rateLimiter.unblockContact(item);
+                // v4.32.617: строка исчезала из списка независимо от того,
+                // легла ли запись; перезапуск возвращал её без объяснений.
+                if (!(await rateLimiter.unblockContact(item))) Alert.alert('AirChat', BLOCK_NOT_SAVED_OFF);
                 await reload();
               })();
             }}

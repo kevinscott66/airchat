@@ -96,7 +96,7 @@ import { log, measurePerformance } from '../../core/logger';
 import { toggleAndSyncReaction } from '../../core/social/reactionSync';
 import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { profileManager } from '../../core/identity/profileManager';
-import { rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
 import { reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
 import { exportBody } from '../../core/social/exportLine';
@@ -3276,17 +3276,19 @@ function ChatThreadView({
                     onPress: () => {
                       if (isBlocked) {
                         runGuardedOp(async () => {
-                          await rateLimiter.unblockContact(peerB64);
-                          Alert.alert('AirChat', 'Разблокировано');
+                          // v4.32.617: «Разблокировано» показывали и тогда,
+                          // когда запись не легла.
+                          const ok = await rateLimiter.unblockContact(peerB64);
+                          Alert.alert('AirChat', ok ? 'Разблокировано' : BLOCK_NOT_SAVED_OFF);
                           setIsBlocked(false);
                         }, 'Не удалось разблокировать', 'ui_chat_unblock_failed');
                       } else {
                         Alert.alert('Заблокировать?', 'Сообщения будут отклонены.', [
                           { text: 'Отмена', style: 'cancel' },
                           { text: 'Заблокировать', style: 'destructive', onPress: () => runGuardedOp(async () => {
-                            await rateLimiter.blockContact(peerB64);
-                            Alert.alert('AirChat', 'Заблокировано');
-                            setIsBlocked(true);
+                            const ok = await rateLimiter.blockContact(peerB64);
+                            Alert.alert('AirChat', ok ? 'Заблокировано' : BLOCK_NOT_SAVED_ON);
+                            setIsBlocked(ok || rateLimiter.isBlocked(peerB64));
                           }, 'Не удалось заблокировать', 'ui_chat_block_failed') },
                         ]);
                       }
