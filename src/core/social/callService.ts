@@ -465,6 +465,27 @@ function rememberOffer(callId: string): boolean {
   }
   return true;
 }
+/**
+ * Свернуть свой исходящий звонок, уступая встречному (v4.32.615).
+ *
+ * Не `_hangup`: тому положено записать звонок в журнал и предупредить
+ * собеседника. Здесь не нужно ни того, ни другого — звонок не оборвался, а
+ * слился со встречным, и собеседник узнает об этом по своему же предложению,
+ * на которое сейчас и ответим. Запись в журнал появится одна, от общего
+ * разговора, а не две — «не дозвонился» и «поговорили».
+ */
+function yieldOutgoingToGlare(): void {
+  if (outgoingTimeoutTimer) { clearTimeout(outgoingTimeoutTimer); outgoingTimeoutTimer = null; }
+  stopOfferRetry();
+  pendingRemoteIce.length = 0;
+  // Поколение обрывает то, что ещё доделывает `initiateCall`: свой микрофон,
+  // своё соединение и своё предложение ему теперь ставить некуда.
+  callGeneration += 1;
+  activeCallId = null;
+  missedReceiptSentFor = null;
+  cleanupCallResources();
+  currentCall = null;
+}
 /** Как часто повторять предложение звонка тому, кого не было в сети. */
 const OFFER_RETRY_INTERVAL_MS = 3000;
 
@@ -760,6 +781,27 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       && currentCall.peerPubB64 === fromPubB64) {
       return;
     }
+    // v4.32.615: встречный звонок. Двое набрали друг друга разом — и оба
+    // получали «Занято»: у каждого чужое предложение приходило на свой
+    // исходящий. Кому уступить, обе стороны считают одинаково — по ключам,
+    // третий среди которых не появится: чей ключ больше, тот свой звонок и
+    // держит. Уступивший сворачивает исходящий молча и принимает встречное
+    // предложение как входящее; на той стороне телефон продолжает звонить и
+    // дожидается ответа.
+    if (currentCall
+      && currentCall.state === 'outgoing'
+      && currentCall.peerPubB64 === fromPubB64) {
+      if (myPub > fromPubB64) {
+        // Их предложение мы не берём, но баннер, которым их push разбудил наш
+        // телефон, всё равно наш: звонок с той стороны уже свёрнут.
+        dismissCallBanner(offerEnvelope.callId);
+        log.info('call_glare_hold', { peer: fromPubB64.slice(0, 8) });
+        return;
+      }
+      log.info('call_glare_yield', { peer: fromPubB64.slice(0, 8) });
+      yieldOutgoingToGlare();
+    }
+
     if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
       // Busy — decline automatically
       sig.sendAnswer(fromPubB64, await sealCallEnvelope(pair, myPub, {

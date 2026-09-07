@@ -18,6 +18,21 @@ export function makePeer(): TestPeer {
   return { pair: { secretKey, publicKey }, pub: publicKeyToB64(publicKey) };
 }
 
+/**
+ * Пара ключей заведомо «выше» или «ниже» чужой (v4.32.615).
+ *
+ * Встречный звонок обе стороны разрешают сравнением ключей, поэтому тесту
+ * нужна определённая сторона, а не та, что выпадет. Ключ случаен, попадание —
+ * примерно каждый второй раз.
+ */
+export function makePeerRelativeTo(other: string, side: 'above' | 'below'): TestPeer {
+  for (let i = 0; i < 200; i += 1) {
+    const candidate = makePeer();
+    if (candidate.pub !== other && (candidate.pub > other) === (side === 'above')) return candidate;
+  }
+  throw new Error(`makePeerRelativeTo: не нашлось ключа ${side}`);
+}
+
 /** Номер звонка того же вида, что выдаёт сервис: 32 шестнадцатеричных знака. */
 export function testCallId(hexDigit = 'a'): string {
   return hexDigit.repeat(32);

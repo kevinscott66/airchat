@@ -28,7 +28,16 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
-import { envelopeBody, makePeer, sealAnswer, sealHangup, sealOffer, testCallId } from './callTestPeers';
+import {
+  envelopeBody,
+  makePeer,
+  makePeerRelativeTo,
+  sealAnswer,
+  sealHangup,
+  sealOffer,
+  testCallId,
+  type TestPeer,
+} from './callTestPeers';
 
 const mockOfferHandler: { current: ((msg: { fromPeerId: string; sdp: string }) => void) | null } = { current: null };
 const mockHangupHandler: { current: ((msg: { fromPeerId?: string }) => void) | null } = { current: null };
@@ -133,6 +142,10 @@ const me = makePeer();
 const peer = makePeer();
 const ME = me.pub;
 const PEER = peer.pub;
+// v4.32.615: встречный звонок разрешается сравнением ключей, поэтому обе
+// стороны спора нужны обе — и та, что уступает, и та, что держит своё.
+const greater = makePeerRelativeTo(ME, 'above');
+const lesser = makePeerRelativeTo(ME, 'below');
 
 /** Прокрутить очередь микрозадач, не двигая часы. */
 function settle(): Promise<void> {
@@ -144,6 +157,15 @@ async function receiveOffer(callId = testCallId()): Promise<void> {
   mockOfferHandler.current?.({
     fromPeerId: PEER,
     sdp: await sealOffer(peer, ME, { isVideo: false, callId }),
+  });
+  await settle();
+}
+
+/** Предложение от кого угодно, а не только от постоянного собеседника. */
+async function deliverOfferFrom(from: TestPeer, callId: string): Promise<void> {
+  mockOfferHandler.current?.({
+    fromPeerId: from.pub,
+    sdp: await sealOffer(from, ME, { isVideo: false, callId }),
   });
   await settle();
 }
@@ -379,6 +401,49 @@ describe('поведение сервиса звонков', () => {
     await receiveOffer(testCallId('b'));
 
     expect(getCurrentCall()?.state).toBe('incoming');
+  });
+
+  it('встречный звонок: чей ключ меньше, тот уступает и принимает входящий', async () => {
+    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe(true);
+    expect(getCurrentCall()?.state).toBe('outgoing');
+    mockSendAnswer.mockClear();
+    mockSendHangup.mockClear();
+
+    await deliverOfferFrom(greater, testCallId('e'));
+
+    expect(getCurrentCall()).toMatchObject({
+      state: 'incoming',
+      peerPubB64: greater.pub,
+      direction: 'incoming',
+    });
+    // Уступка молчалива: ни «занято», ни трубки. Собеседник и не должен
+    // узнать, что мы набирали его в ту же секунду.
+    expect(mockSendAnswer).not.toHaveBeenCalled();
+    expect(mockSendHangup).not.toHaveBeenCalled();
+  });
+
+  it('встречный звонок: чей ключ больше, тот держит свой исходящий', async () => {
+    await expect(initiateCall(lesser.pub, 'lesser', false)).resolves.toBe(true);
+    mockSendAnswer.mockClear();
+    mockSendHangup.mockClear();
+
+    await deliverOfferFrom(lesser, testCallId('e'));
+
+    expect(getCurrentCall()).toMatchObject({ state: 'outgoing', direction: 'outgoing' });
+    expect(mockSendAnswer).not.toHaveBeenCalled();
+    expect(mockSendHangup).not.toHaveBeenCalled();
+  });
+
+  it('звонок от третьего во время исходящего по-прежнему получает «занято»', async () => {
+    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe(true);
+    mockSendAnswer.mockClear();
+
+    await deliverOfferFrom(peer, testCallId('e'));
+
+    expect(getCurrentCall()).toMatchObject({ state: 'outgoing', peerPubB64: greater.pub });
+    const [to, body] = mockSendAnswer.mock.calls.at(-1) as [string, string];
+    expect(to).toBe(PEER);
+    expect(envelopeBody(body)).toMatchObject({ kind: 'answer', to: PEER, control: 'busy' });
   });
 
   it('то же предложение, присланное заново, второй раз не звонит', async () => {
