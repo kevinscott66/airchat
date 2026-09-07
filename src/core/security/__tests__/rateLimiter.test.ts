@@ -35,12 +35,19 @@ jest.mock('../../storage/local', () => {
     kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
     kvGetSecret,
     kvSetSecret,
-    kvGetSecretUpgrading: jest.fn(async (k: string) => {
+    // v4.32.635: лимитер читает ячейкой. Нечитаемого шифртекста в этом наборе
+    // нет — он проверяет перенос со старых имён ключа и окно на старте.
+    kvGetSecretCell: jest.fn(async (k: string) => {
       const stored = kv[k];
-      if (stored == null) return null;
-      if (stored.startsWith(PREFIX)) return stored.slice(PREFIX.length);
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
+    kvGetSecretCellUpgrading: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      if (stored.startsWith(PREFIX)) return { state: 'plain', text: stored.slice(PREFIX.length) };
       await kvSetSecret(k, stored);
-      return stored;
+      return { state: 'plain', text: stored };
     }),
     notifyChatStorageChanged: jest.fn(),
   };
@@ -62,7 +69,7 @@ type MockLocal = {
   __kv: Record<string, string>;
   __prefix: string;
   __failWrites: (on: boolean) => void;
-  kvGetSecretUpgrading: jest.Mock;
+  kvGetSecretCellUpgrading: jest.Mock;
 };
 
 const mockLocal = jest.requireMock('../../storage/local') as MockLocal;
@@ -187,7 +194,7 @@ describe('блок-лист поднимается с диска не мгнов
   });
 
   it('whenReady не отклоняется, если чтение упало', async () => {
-    mockLocal.kvGetSecretUpgrading.mockRejectedValueOnce(new Error('база занята'));
+    mockLocal.kvGetSecretCellUpgrading.mockRejectedValueOnce(new Error('база занята'));
     const rl = new RateLimiter();
     await expect(rl.whenReady()).resolves.toBeUndefined();
     expect(rl.isBlocked(PEER)).toBe(false);

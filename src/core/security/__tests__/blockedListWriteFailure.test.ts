@@ -24,7 +24,15 @@ jest.mock('../../storage/local', () => {
     if (stored == null) return null;
     return stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored;
   };
+  // v4.32.635: лимитер читает ячейкой — «нет записи» и «не открылась» здесь
+  // различимы. В этом наборе нечитаемых записей нет: он про отказ ЗАПИСИ.
+  const cell = (k: string) => {
+    const text = read(k);
+    return text === null ? { state: 'absent' } : { state: 'plain', text };
+  };
   return {
+    kvGetSecretCell: jest.fn(async (k: string) => cell(k)),
+    kvGetSecretCellUpgrading: jest.fn(async (k: string) => cell(k)),
     __kv: kv,
     __prefix: PREFIX,
     kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),

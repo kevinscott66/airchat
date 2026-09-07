@@ -30,12 +30,18 @@ jest.mock('../../storage/local', () => {
     kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
     kvGetSecret,
     kvSetSecret,
-    kvGetSecretUpgrading: jest.fn(async (k: string) => {
+    // v4.32.635: считаем чтения там, где лимитер их теперь делает, — ячейкой.
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
+    kvGetSecretCellUpgrading: jest.fn(async (k: string) => {
       mockReads += 1;
       if (mockReads <= mockFailUntil) throw new Error('database is locked');
       const stored = kv[k];
-      if (stored == null) return null;
-      return stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored;
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
     }),
     notifyChatStorageChanged: jest.fn(),
   };

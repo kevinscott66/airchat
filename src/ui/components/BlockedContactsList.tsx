@@ -14,6 +14,7 @@ export function BlockedContactsList(): React.ReactElement {
   const [blocked, setBlocked] = useState<string[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [readFailed, setReadFailed] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -21,6 +22,11 @@ export function BlockedContactsList(): React.ReactElement {
       const [keys, all] = await Promise.all([rateLimiter.getBlockedPubKeys(), listContacts()]);
       setBlocked(keys);
       setContacts(all);
+      // v4.32.635: список не поднялся с диска. Показать «нет заблокированных»
+      // здесь нельзя: это не «никого не блокировали», а «запреты прямо сейчас
+      // не действуют» — про такое человеку надо сказать, а не подсунуть
+      // пустую страницу, из которой он сделает обратный вывод.
+      setReadFailed(!rateLimiter.blockedListReadable());
     } finally {
       setLoading(false);
     }
@@ -39,6 +45,24 @@ export function BlockedContactsList(): React.ReactElement {
     return (
       <View style={styles.center} testID="blocked_list_loading">
         <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
+
+  if (readFailed) {
+    return (
+      <View style={styles.failBox} testID="blocked_list_unreadable">
+        <Text style={styles.failText}>
+          Список заблокированных не прочитался. Пока он не прочитан, запреты не действуют.
+        </Text>
+        <AppPressable
+          style={styles.unblock}
+          onPress={() => {
+            void reload();
+          }}
+        >
+          <Text style={styles.unblockText}>Повторить</Text>
+        </AppPressable>
       </View>
     );
   }
@@ -89,6 +113,8 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     center: { padding: 24 },
     empty: { color: colors.textMuted, padding: 12 },
+    failBox: { padding: 12, gap: 12, alignItems: 'flex-start' },
+    failText: { color: colors.text },
     row: {
       flexDirection: 'row',
       alignItems: 'center',

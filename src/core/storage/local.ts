@@ -2433,16 +2433,26 @@ export async function kvSetSecret(key: string, value: string): Promise<boolean> 
  * попробует снова. Открытым текстом при этом остаётся ровно та строка, что и
  * так там лежала: хуже провал не делает.
  */
-export async function kvGetSecretUpgrading(key: string): Promise<string | null> {
-  const stored = await kvGet(key);
-  if (stored == null) return null;
+export async function kvGetSecretCellUpgrading(key: string): Promise<AtRestCell> {
+  // v4.32.635: kvTryGet, а не kvGet. Сбой самого чтения из базы — это не
+  // «записи нет»; kvGet обе беды сводил к null, и различить их не мог даже
+  // тот вызывающий, которому различие жизненно нужно (блок-лист).
+  const read = await kvTryGet(key);
+  if (read === null) return { state: 'unreadable' };
+  const stored = read.value;
+  if (stored == null) return classifyAtRestCell(null, null);
   if (stored !== '' && !stored.startsWith(AT_REST_PREFIX)) {
     await kvSetSecret(key, stored);
-    return stored;
+    return { state: 'plain', text: stored };
   }
   // v4.32.552: через ту же ячейку, что и kvGetSecret — не открывшийся
   // шифртекст приходит сюда как null, а не как пустая строка.
-  return cellTextOrNull(await kvGetSecretCell(key));
+  return kvGetSecretCell(key);
+}
+
+/** То же чтение строкой: отсутствие и нечитаемость снова сливаются в null. */
+export async function kvGetSecretUpgrading(key: string): Promise<string | null> {
+  return cellTextOrNull(await kvGetSecretCellUpgrading(key));
 }
 
 /**

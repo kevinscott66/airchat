@@ -2,11 +2,12 @@ import { publicKeyHash4 } from '../crypto/keyManager';
 import { isPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import {
   kvDelete,
-  kvGetSecret,
-  kvGetSecretUpgrading,
+  kvGetSecretCell,
+  kvGetSecretCellUpgrading,
   kvSetSecret,
   notifyChatStorageChanged,
 } from '../storage/local';
+import { cellTextOrNull, mayOverwrite } from '../storage/atRestCell';
 import { BLOCKED_KEY_BASE, legacySuffixBlockedKey, profileScopedKey } from '../storage/kvKeys';
 import { log } from '../logger';
 
@@ -28,8 +29,18 @@ import { log } from '../logger';
  * имя зашифровано с v4.32.286. Открытая строка блок-листа отвечала на вопрос
  * «с кем человек поссорился» в базе, где само общение спрятано.
  *
- * Записанное до этой версии дошифровывает kvGetSecretUpgrading при первом же
- * чтении: список читают и на старте, и при каждом открытии настроек.
+ * Записанное до этой версии дошифровывает kvGetSecretCellUpgrading при первом
+ * же чтении: список читают и на старте, и при каждом открытии настроек.
+ *
+ * v4.32.635: читается именно ячейкой. Строковое чтение отвечало `null` и на
+ * «списка нет», и на «список не открылся нашим ключом», а loadBlockedOnce
+ * второе принимал за первое: исключения не возникало, `loadFailed` оставался
+ * снятым, повтор чтения не запускался — и пустое множество выдавалось за
+ * действительный ответ. Все запреты молча переставали действовать: навсегда и
+ * ровно в том месте, которое обязано отказывать. Настройки при этом показывали
+ * «Нет заблокированных контактов», а следующая блокировка выкладывала список
+ * из одной записи поверх нечитаемого шифртекста — прежние запреты исчезали
+ * безвозвратно вместе с байтами, которые ещё могли открыться верным ключом.
  */
 /**
  * Что сказать человеку, когда список изменён в памяти, но не записан
@@ -126,6 +137,18 @@ export class RateLimiter {
   }
 
   /**
+   * Поднят ли список с диска на самом деле (v4.32.635).
+   *
+   * Нужен экрану «Заблокированные»: пустой список и несостоявшееся чтение
+   * выглядят там одинаково, а значат противоположное. «Никого не блокировали»
+   * — обычное дело; «список не прочитан» означает, что запреты прямо сейчас
+   * не действуют, и об этом надо сказать, а не показывать пустую страницу.
+   */
+  blockedListReadable(): boolean {
+    return !this.loadFailed;
+  }
+
+  /**
    * Повторить сорвавшееся чтение. Не отклоняется: неудачный повтор просто
    * оставляет отметку на месте, и следующий обратившийся попробует снова.
    */
@@ -214,7 +237,12 @@ export class RateLimiter {
 
   private async loadBlockedOnce(): Promise<void> {
     const pid = await this.currentPid();
-    let raw = await kvGetSecretUpgrading(blockedKey(pid));
+    const cell = await kvGetSecretCellUpgrading(blockedKey(pid));
+    // v4.32.635: шифртекст, который не открылся, — сбой чтения, а не пустой
+    // список. Ниже разницы уже не будет, поэтому она объявляется здесь:
+    // исключение поднимает loadFailed, а с ним и повтор чтения.
+    if (cell.state === 'unreadable') throw new Error('blocked list unreadable');
+    let raw = cellTextOrNull(cell);
     if (!raw) {
       // Миграция со старых имён — один раз, с удалением исходного ключа.
       // Без удаления «разовая» миграция повторялась бы у каждого следующего
@@ -223,8 +251,17 @@ export class RateLimiter {
       // звонков). Глобальный ключ наследует только первый профиль — он
       // писался тогда, когда профиль был один, и это был профиль 1.
       const suffixKey = legacySuffixBlockedKey(pid);
-      const legacy =
-        (await kvGetSecret(suffixKey)) ?? (pid === 1 ? await kvGetSecret(BLOCKED_KEY_BASE) : null);
+      // v4.32.635: непрочитанную старую запись не сносим. Уборка ниже стирала
+      // бы единственный экземпляр списка — тот самый, который ещё мог
+      // открыться верным ключом, — приняв нечитаемость за пустоту.
+      const suffixCell = await kvGetSecretCell(suffixKey);
+      if (suffixCell.state === 'unreadable') throw new Error('legacy blocked list unreadable');
+      let legacy = cellTextOrNull(suffixCell);
+      if (legacy === null && pid === 1) {
+        const baseCell = await kvGetSecretCell(BLOCKED_KEY_BASE);
+        if (baseCell.state === 'unreadable') throw new Error('legacy blocked list unreadable');
+        legacy = cellTextOrNull(baseCell);
+      }
       let copied = true;
       if (legacy) {
         raw = legacy;
@@ -359,9 +396,22 @@ export class RateLimiter {
    * Записать список. Провал шифрования не откатываем: в памяти список уже
    * изменён, и блокировка действует до перезапуска — потерять её на диске
    * заметнее, чем не применить вовсе, но применить и промолчать хуже всего.
+   *
+   * v4.32.635: поверх нечитаемого шифртекста не пишем. К этому моменту список
+   * в памяти поднят НЕ с диска — чтение сорвалось, см. loadBlockedOnce, — то
+   * есть заведомо неполон. Записать его значило бы заменить все прежние
+   * запреты одной новой строкой навсегда: старые байты ещё могли открыться
+   * верным ключом, переписанные не откроются ничем. Правило то же, что у
+   * kvUpdateSecretScoped: не прочитали — не переписываем. Отказ доходит до
+   * человека теми же строками BLOCK_NOT_SAVED_ON и BLOCK_NOT_SAVED_OFF.
    */
   private async persistBlocked(pid: number): Promise<boolean> {
-    if (!(await kvSetSecret(blockedKey(pid), JSON.stringify([...this.blocked])))) {
+    const key = blockedKey(pid);
+    if (!mayOverwrite(await kvGetSecretCell(key))) {
+      log.warn('rate_limiter_block_save_refused_unreadable', { pid, size: this.blocked.size });
+      return false;
+    }
+    if (!(await kvSetSecret(key, JSON.stringify([...this.blocked])))) {
       log.warn('rate_limiter_block_save_failed', { pid, size: this.blocked.size });
       return false;
     }
@@ -379,7 +429,11 @@ export class RateLimiter {
    * чтении и при смене профиля, и оба явные.
    */
   async getBlockedPubKeys(): Promise<string[]> {
-    await this.ready;
+    // v4.32.635: whenReady, а не голое `ready`. Сорвавшееся чтение резолвит
+    // `ready` как ни в чём не бывало, и настройки показывали пустой список
+    // вместо того, чтобы дождаться повтора, — при том что рядом, в isBlocked,
+    // повтор с v4.32.498 запускается именно на этом признаке.
+    await this.whenReady();
     return [...this.blocked];
   }
 

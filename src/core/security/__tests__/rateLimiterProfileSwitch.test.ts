@@ -23,7 +23,17 @@ jest.mock('../../storage/local', () => {
     kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
     kvGetSecret,
     kvSetSecret,
-    kvGetSecretUpgrading: kvGetSecret,
+    // v4.32.635: лимитер читает ячейкой; нечитаемых записей здесь нет.
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
+    kvGetSecretCellUpgrading: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
     notifyChatStorageChanged: jest.fn(),
   };
 });
