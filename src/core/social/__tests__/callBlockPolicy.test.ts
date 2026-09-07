@@ -11,8 +11,10 @@
  * полагается видеть ровно то же, что при выключенном телефоне.
  */
 type OfferHandler = (msg: { fromPeerId?: string; sdp: string }) => void;
+type MissedHandler = (msg: { calls: Array<{ fromPeerId: string; at: number; attempts: number }> }) => void;
 
 let mockOfferHandler: OfferHandler | null = null;
+let mockMissedHandler: MissedHandler | null = null;
 const mockSendAnswer = jest.fn();
 const mockSendOffer = jest.fn();
 
@@ -29,7 +31,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     onAnswer = jest.fn();
     onIceCandidate = jest.fn();
     onPeerUnavailable = jest.fn();
-    onMissedCalls = jest.fn();
+    onMissedCalls = (h: MissedHandler): void => { mockMissedHandler = h; };
   },
 }));
 
@@ -47,6 +49,7 @@ jest.mock('../../security/rateLimiter', () => ({
 
 import {
   disposeCallService,
+  getCallLog,
   getCurrentCall,
   initCallService,
   initiateCall,
@@ -69,6 +72,7 @@ function settle(): Promise<void> {
 beforeEach(async () => {
   mockBlocked = new Set();
   mockOfferHandler = null;
+  mockMissedHandler = null;
   mockSendAnswer.mockClear();
   mockSendOffer.mockClear();
   disposeCallService();
@@ -115,5 +119,35 @@ describe('исходящий звонок заблокированному', () 
     mockBlocked.add(PEER);
     await expect(initiateCall(PEER, 'кто-то', false)).resolves.toBe(false);
     expect(mockSendOffer).not.toHaveBeenCalled();
+  });
+});
+
+describe('пропущенные звонки, придержанные сервером', () => {
+  const AT = 1_700_000_000_000;
+
+  it('заблокированный не попадает в журнал', async () => {
+    mockBlocked.add(PEER);
+    expect(mockMissedHandler).not.toBeNull();
+    mockMissedHandler?.({ calls: [{ fromPeerId: PEER, at: AT, attempts: 3 }] });
+    await settle();
+    expect(getCallLog()).toEqual([]);
+  });
+
+  it('незаблокированный попадает', async () => {
+    mockMissedHandler?.({ calls: [{ fromPeerId: PEER, at: AT, attempts: 1 }] });
+    await settle();
+    expect(getCallLog()).toMatchObject([{ peerPubB64: PEER, outcome: 'missed', direction: 'incoming' }]);
+  });
+
+  it('в одной пачке отсеивается только заблокированный', async () => {
+    mockBlocked.add(PEER);
+    mockMissedHandler?.({
+      calls: [
+        { fromPeerId: PEER, at: AT, attempts: 1 },
+        { fromPeerId: other.pub, at: AT + 1000, attempts: 1 },
+      ],
+    });
+    await settle();
+    expect(getCallLog().map((e) => e.peerPubB64)).toEqual([other.pub]);
   });
 });

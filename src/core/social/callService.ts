@@ -223,6 +223,13 @@ export function recordMissedCalls(calls: Array<{ fromPeerId: string; at: number;
   let added = 0;
   for (const call of calls) {
     if (!isPubKeyB64(call.fromPeerId)) continue;
+    // v4.32.615: блокировка действует и здесь. Сервер про блок-лист не знает
+    // и знать не должен — он придерживает несостоявшийся звонок для всякого,
+    // кто не ответил. Без этой проверки заблокированный человек, позвонив в
+    // закрытое приложение, всё равно оставлял «вам звонили» в журнале и
+    // поднимал уведомление о пропущенных: третий канал мимо решения
+    // v4.32.318, после живого сокета (onOffer) и фонового баннера.
+    if (rateLimiter.isBlocked(call.fromPeerId)) continue;
     const at = Number.isFinite(call.at) ? Math.min(Number(call.at), Date.now()) : Date.now();
     // Разговор с этим человеком идёт прямо сейчас — «вам звонили» о нём было
     // бы неправдой.
@@ -533,6 +540,21 @@ async function getSignaling(): Promise<WebRTCSignaling | null> {
  * пробовал заново и потому иногда оживал; входящий не пробовал никогда, и
  * телефон оставался невидимым для звонящих до перезапуска приложения, ничем
  * этого не показывая.
+ *
+ * v4.32.615: таймер стал постоянным сторожем, а не разовым добором.
+ *
+ * Он заводился только если НЕ УДАЛАСЬ ПЕРВАЯ попытка, и снимался с первым же
+ * успехом. Дальше регистрацию держал сам транспорт: при обрыве socket.io сам
+ * переподключается и зовёт `reregisterAfterReconnect`. Но перерегистрация там
+ * делается ровно один раз, а её неудача — истёкшее ожидание вызова, отказ
+ * сервера — только пишется в журнал. Сокет при этом остаётся живым, поэтому
+ * второго `connect` не будет, и повторить попытку становится нечем: телефон
+ * снова невидим для звонящих до перезапуска, и опять ничем этого не
+ * показывает. Разница с первым случаем только в том, что теперь до этого надо
+ * доехать в метро.
+ *
+ * Сторож дёшев: `ensureRegistered` при живой регистрации спрашивает у
+ * транспорта булев признак и выходит, в сеть не ходит.
  */
 const REGISTER_RETRY_MS = 15_000;
 let registerRetryTimer: ReturnType<typeof setInterval> | null = null;
@@ -798,8 +820,12 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     callSig.socket.on('hangup', handleRemoteHangup);
   }
 
-  sig.onMissedCalls((msg) => {
+  sig.onMissedCalls(async (msg) => {
     const calls = Array.isArray(msg?.calls) ? msg.calls.slice(0, 50) : [];
+    // Список приезжает первым событием после регистрации — как раз тогда,
+    // когда блок-лист ещё поднимается с диска. Тот же приём, что в onOffer:
+    // дождаться, иначе отсев не сработает ровно в момент своей нужды.
+    await rateLimiter.whenReady();
     const added = recordMissedCalls(calls);
     if (added === 0) return;
     log.info('call_missed_delivered', { count: added });
@@ -1054,18 +1080,32 @@ export async function initCallService(pair: KeyPairBytes, profileId = 1): Promis
   await loadCallLog();
   if (serviceEpoch !== epoch || myPubB64Global !== myPub) return;
   stopRegisterRetry();
-  if (await ensureRegistered(myPub, epoch)) return;
-  // Не вышло — пробуем дальше. Пока регистрации нет, входящих звонков нет
-  // тоже, и молча ждать перезапуска приложения нельзя.
+  await ensureRegistered(myPub, epoch);
+  // Сторож заводится в любом случае — и когда первая попытка удалась. Он
+  // снимается только вместе со службой: пока она жива, регистрация должна
+  // быть жива тоже.
   registerRetryTimer = setInterval(() => {
-    if (serviceEpoch !== epoch || myPubB64Global !== myPub || signalingRegistered) {
+    if (serviceEpoch !== epoch || myPubB64Global !== myPub) {
       stopRegisterRetry();
       return;
     }
-    void ensureRegistered(myPub, epoch)
-      .then((sig) => { if (sig) stopRegisterRetry(); })
-      .catch(() => { /* следующая попытка через интервал */ });
+    if (isSignalingLive()) return;
+    void ensureRegistered(myPub, epoch).catch(() => { /* следующая попытка через интервал */ });
   }, REGISTER_RETRY_MS);
+}
+
+/**
+ * Видит ли нас сигнальный сервер прямо сейчас.
+ *
+ * Свой признак `signalingRegistered` — это память о том, что регистрация
+ * когда-то удалась; после обрыва он остаётся поднятым, потому что снимать его
+ * некому. Живое состояние знает только транспорт.
+ */
+function isSignalingLive(): boolean {
+  if (!signalingRegistered) return false;
+  const sig = signaling;
+  if (!sig) return false;
+  return typeof sig.isRegistered === 'function' ? sig.isRegistered() : true;
 }
 
 /**
@@ -1083,7 +1123,10 @@ export function getCallServiceStatus(): {
 } {
   return {
     hasKey: !!myPubB64Global && !!mySigningPair,
-    registered: signalingRegistered,
+    // v4.32.615: экран диагностики отвечал по памяти о прошлом успехе и
+    // показывал «зарегистрирован» телефону, которого сервер уже не видит, —
+    // то есть ровно в том случае, ради которого экран и открывают.
+    registered: isSignalingLive(),
     retrying: registerRetryTimer !== null,
     lastError: lastRegisterError,
   };
