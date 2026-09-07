@@ -932,6 +932,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [peekAuthorDid, setPeekAuthorDid] = useState<string | null>(null);
   /** Имя автора из публикации — подсказка карточке, если его нет в контактах. */
   const [peekAuthorName, setPeekAuthorName] = useState<string | null>(null);
+  /** v4.32.616: юзернейм перехода — адрес, а не имя (см. usernameDirectory). */
+  const [peekAuthorUsername, setPeekAuthorUsername] = useState<string | null>(null);
   /**
    * v4.32.605: упоминание в тексте адресует человека именем, а не DID —
    * находится он по адресной книге и открывается по открытому ключу. Та же
@@ -940,6 +942,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [peekAuthorPub, setPeekAuthorPub] = useState<string | null>(null);
   const openPeekAuthor = useCallback((did: string, name?: string | null) => {
     setPeekAuthorName(name?.trim() || null);
+    setPeekAuthorUsername(null);
     setPeekAuthorPub(null);
     setPeekAuthorDid(did);
   }, []);
@@ -1124,10 +1127,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const authorPeek = (
     <UserProfilePeek
       visible={peekAuthorDid !== null || peekAuthorPub !== null}
-      onClose={() => { setPeekAuthorDid(null); setPeekAuthorPub(null); setPeekAuthorName(null); }}
+      onClose={() => {
+        setPeekAuthorDid(null); setPeekAuthorPub(null);
+        setPeekAuthorName(null); setPeekAuthorUsername(null);
+      }}
       peerDid={peekAuthorDid}
       peerPubB64={peekAuthorPub}
       fallbackName={peekAuthorName}
+      usernameHint={peekAuthorUsername}
       pair={pair}
       onOpenChat={
         onOpenChatWithPeer
@@ -2701,7 +2708,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       // контакты» и «Написать» самому себе. Своё место — профиль.
       if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       setPeekAuthorDid(null);
-      setPeekAuthorName(hit.displayName || bare);
+      setPeekAuthorName(hit.status === 'contact' ? hit.displayName : null);
+      setPeekAuthorUsername(hit.status === 'stranger' ? hit.username : null);
       setPeekAuthorPub(hit.peerPubB64);
     })();
   }, [t, myPubB64, onOpenOwnProfile]);

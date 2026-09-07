@@ -1533,7 +1533,7 @@ function GroupChatScreen({
    * здесь означал бы «выигрывает тот, кто назвался». Отказ тоже считаем по
    * ключам: один контакт даёт одну запись, двое разных — неоднозначность.
    */
-  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
+  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string; username: string | null } | null>(null);
 
   const handleMentionPress = useCallback((name: string) => {
     void (async () => {
@@ -1584,13 +1584,16 @@ function GroupChatScreen({
           return;
         }
         if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
-        setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
+        // v4.32.616: см. ChatScreen — юзернейм не имя.
+        setMentionPeek(hit.status === 'contact'
+          ? { pub: hit.peerPubB64, name: hit.displayName, username: null }
+          : { pub: hit.peerPubB64, name: '', username: hit.username });
         return;
       }
       // v4.32.609: своё упоминание ведёт в собственный профиль. Раньше здесь
       // стоял молчаливый выход, и нажатие на своё имя выглядело поломкой.
       if (hits[0].peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
-      setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare });
+      setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare, username: null });
     })();
   }, [allMembers, pid, myPubB64, onOpenOwnProfile]);
 
@@ -4809,7 +4812,8 @@ function GroupChatScreen({
         visible={mentionPeek !== null}
         onClose={() => setMentionPeek(null)}
         peerPubB64={mentionPeek?.pub ?? null}
-        fallbackName={mentionPeek?.name ?? null}
+        fallbackName={mentionPeek?.name || null}
+        usernameHint={mentionPeek?.username ?? null}
         pair={pair}
         onOpenChat={(peerPubB64, displayName) => {
           setMentionPeek(null);

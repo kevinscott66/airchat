@@ -32,9 +32,13 @@ describe('resolveMentionTarget', () => {
   it('незнакомец из реестра открывается без добавления в контакты', async () => {
     local.mockResolvedValue({ status: 'none' });
     remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB });
-    await expect(resolveMentionTarget('@Founder', 1)).resolves.toEqual({
-      status: 'stranger', peerPubB64: PUB, displayName: 'founder',
-    });
+    // v4.32.616: юзернейм едет юзернеймом. Раньше он же уезжал в displayName,
+    // и карточка выдавала адрес за имя: человек, назвавшийся у себя «Ритой»,
+    // открывался как «margarita». toEqual сверяет объект целиком, значит
+    // вернувшийся displayName провалит проверку — что и требуется.
+    const hit = await resolveMentionTarget('@Founder', 1);
+    expect(hit).toEqual({ status: 'stranger', peerPubB64: PUB, username: 'founder' });
+    expect(hit).not.toHaveProperty('displayName');
     expect(remote).toHaveBeenCalledWith('founder');
   });
 

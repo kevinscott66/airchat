@@ -1030,7 +1030,7 @@ function ChatThreadView({
    * означает «такого человека нет» — имя спрашивается в общем реестре, и по
    * незнакомцу открывается та же карточка, где есть «Добавить в контакты».
    */
-  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string } | null>(null);
+  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string; username: string | null } | null>(null);
   const handleMentionPress = useCallback((mention: string) => {
     void (async () => {
       const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
@@ -1049,7 +1049,12 @@ function ChatThreadView({
       }
       if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       if (hit.peerPubB64 === peerB64) { setContactInfoVisible(true); return; }
-      setMentionPeek({ pub: hit.peerPubB64, name: hit.displayName || bare });
+      // v4.32.616: у незнакомца из реестра имени нет — есть юзернейм. Он
+      // едет отдельным полем и остаётся адресом: подставлять его в имя значит
+      // называть человека не так, как он назвал себя сам.
+      setMentionPeek(hit.status === 'contact'
+        ? { pub: hit.peerPubB64, name: hit.displayName, username: null }
+        : { pub: hit.peerPubB64, name: '', username: hit.username });
     })();
   }, [myPubB64, peerB64, onOpenOwnProfile]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);
@@ -4150,7 +4155,8 @@ function ChatThreadView({
       <UserProfilePeek
         visible={mentionPeek !== null}
         peerPubB64={mentionPeek?.pub ?? null}
-        fallbackName={mentionPeek?.name ?? null}
+        fallbackName={mentionPeek?.name || null}
+        usernameHint={mentionPeek?.username ?? null}
         pair={pair}
         onClose={() => setMentionPeek(null)}
         onOpenChat={(pub, name) => { setMentionPeek(null); onOpenPeer?.(pub, name); }}

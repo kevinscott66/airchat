@@ -211,3 +211,57 @@ describe('peekIdentity', () => {
     expect(id.contactName).toBe(shortDid(DID, 6));
   });
 });
+
+/**
+ * v4.32.616: карточка показывает те же поля, что и редактор своего профиля.
+ *
+ * И отдельно — юзернейм перехода. Раньше `@margarita` открывался как человек
+ * по имени «margarita»: реестр имени не знает, и в карточку уезжал сам адрес.
+ */
+describe('peekIdentity: местоимения, статус и юзернейм перехода', () => {
+  const DID = 'did:key:z6MkfooBarBaz';
+
+  it('берёт местоимения и статус у контакта', () => {
+    const id = peekIdentity({
+      contact: { displayName: 'Рита', pronouns: 'она/её', peerStatus: 'Работаю в IT' },
+      did: DID,
+      isSelf: false,
+    });
+    expect(id.pronouns).toBe('она/её');
+    expect(id.status).toBe('Работаю в IT');
+  });
+
+  it('у себя берёт свои, а не чужие', () => {
+    const id = peekIdentity({
+      contact: { displayName: 'я в книге', pronouns: 'он/его', peerStatus: 'старое' },
+      did: DID,
+      isSelf: true,
+      own: { name: 'Александр', pronouns: 'они/их', status: 'Новый статус' },
+    });
+    expect(id.pronouns).toBe('они/их');
+    expect(id.status).toBe('Новый статус');
+  });
+
+  it('пусто — значит null, а не пустая строка', () => {
+    const id = peekIdentity({ contact: null, did: DID, isSelf: false });
+    expect(id.pronouns).toBeNull();
+    expect(id.status).toBeNull();
+  });
+
+  it('юзернейм перехода показывается адресом и НЕ становится именем', () => {
+    const id = peekIdentity({ contact: null, did: DID, isSelf: false, usernameHint: 'margarita' });
+    expect(id.username).toBe('margarita');
+    expect(id.title).toBe('Без имени');
+    expect(id.named).toBe(false);
+  });
+
+  it('присланный владельцем юзернейм важнее набранного нами', () => {
+    const id = peekIdentity({
+      contact: { displayName: 'Рита', username: 'rita' },
+      did: DID,
+      isSelf: false,
+      usernameHint: 'margarita',
+    });
+    expect(id.username).toBe('rita');
+  });
+});

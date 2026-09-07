@@ -26,8 +26,16 @@ import { lookupMention } from './mentionLookup';
 export type MentionTarget =
   /** Свой контакт: адрес и подпись берутся с устройства. */
   | { status: 'contact'; peerPubB64: string; displayName: string }
-  /** Незнакомый владелец имени из общего реестра. */
-  | { status: 'stranger'; peerPubB64: string; displayName: string }
+  /**
+   * Незнакомый владелец имени из общего реестра.
+   *
+   * v4.32.616: имени здесь нет намеренно — реестр его не хранит. Раньше в
+   * `displayName` уезжал сам юзернейм, и карточка выдавала его за имя: человек,
+   * назвавшийся у себя «Ритой», открывался как «margarita». Юзернейм — адрес,
+   * а не имя, и показывать его надо там, где показывают адрес. Настоящее имя
+   * приезжает конвертом профиля при первой же переписке.
+   */
+  | { status: 'stranger'; peerPubB64: string; username: string }
   /** Имя носят несколько контактов — открывать наугад нельзя. */
   | { status: 'ambiguous' }
   /** Такого имени нет ни у кого. */
@@ -51,7 +59,7 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
   if (answer.status === 'unknown') return { status: 'unknown' };
   if (answer.status === 'free') return { status: 'unclaimed' };
   if (!answer.peerPubB64) return { status: 'unlisted' };
-  return { status: 'stranger', peerPubB64: answer.peerPubB64, displayName: username };
+  return { status: 'stranger', peerPubB64: answer.peerPubB64, username };
 }
 
 /** Что показать человеку, когда переходить некуда. */

@@ -123,6 +123,8 @@ import { getOwnDisplayName, getOwnUsername, ownFieldGet } from '../../core/ident
 import { ownLinks } from '../../core/identity/ownLinks';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import { normalizeOwnBio } from '../../core/social/profileEnvelope';
+import { normalizeOwnPronouns } from '../../core/social/peerPronouns';
+import { normalizeOwnStatus } from '../../core/social/peerStatus';
 // v4.32.568: всё, чем карточка теперь управляет, уже есть в ядре — она их
 // вызывает, а не заводит второй набор правил рядом с экраном диалога.
 import { profileManager } from '../../core/identity/profileManager';
@@ -250,6 +252,14 @@ export interface UserProfilePeekProps {
   peerDid?: string | null;
   /** Подсказка для имени, если контакта ещё нет в адресной книге (например `authorName` из поста). */
   fallbackName?: string | null;
+  /**
+   * v4.32.616: юзернейм, по которому открыли карточку (переход по `@имя`).
+   *
+   * Отдельно от fallbackName намеренно: то — подсказка «как звать», а это
+   * адрес. Раньше юзернейм подставлялся в fallbackName и становился именем:
+   * @margarita открывался как человек по имени «margarita».
+   */
+  usernameHint?: string | null;
   /** Мой pair — нужен для addContact (шлёт invite-пакет). */
   pair: KeyPairBytes | null;
   /**
@@ -284,6 +294,7 @@ export function UserProfilePeek({
   peerPubB64,
   peerDid,
   fallbackName,
+  usernameHint,
   pair,
   onOpenChat,
   inChat,
@@ -398,10 +409,15 @@ export function UserProfilePeek({
         if (mine) {
           // Своё читается по одному полю, как и на экране профиля: общей
           // «карточки одним куском» в хранилище нет.
-          const [name, username, bio, claim, links] = await Promise.all([
+          const [name, username, bio, pronouns, status, claim, links] = await Promise.all([
             getOwnDisplayName(),
             getOwnUsername(),
             ownFieldGet('user_bio'),
+            // v4.32.616: те же два поля, что уехали в конверт профиля. Своя
+            // карточка обязана показывать ровно то же, что видит собеседник,
+            // — иначе проверить, как выглядит профиль, негде.
+            ownFieldGet('user_pronouns'),
+            ownFieldGet('user_custom_status'),
             ownBadgeClaim(),
             ownLinks(),
           ]);
@@ -412,6 +428,8 @@ export function UserProfilePeek({
             name,
             username,
             bio: normalizeOwnBio(bio) || null,
+            pronouns: normalizeOwnPronouns(pronouns) || null,
+            status: normalizeOwnStatus(status) || null,
             verified: !!claim && !!username && claim.username === username,
             links,
           });
@@ -478,6 +496,8 @@ export function UserProfilePeek({
             peerName: contact.peerName,
             username: contact.peerUsername,
             bio: contact.bio,
+            pronouns: contact.pronouns,
+            peerStatus: contact.peerStatus,
             verified: contact.verified === 'official',
           }
         : null,
@@ -485,8 +505,9 @@ export function UserProfilePeek({
       did: resolved?.did ?? '',
       isSelf,
       own,
+      usernameHint,
     }),
-    [contact, fallbackName, resolved, isSelf, own]
+    [contact, fallbackName, resolved, isSelf, own, usernameHint]
   );
   // Имя для действий: у безымянного это заглушка из DID, а не слово «Контакт»
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
@@ -1010,6 +1031,22 @@ export function UserProfilePeek({
                         ) : null}
                       </View>
                     ) : null}
+                    {/* v4.32.616: местоимения и статус — из того же
+                        редактора профиля, что имя и «О себе». До этой версии
+                        их не было в карточке ни у себя, ни у собеседника:
+                        поля заполнялись и не показывались никому. Строкой
+                        выше «В ваших контактах», потому что это про человека,
+                        а подсказка ниже — про наши с ним отношения. */}
+                    {identity.pronouns ? (
+                      <Text style={[styles.pronouns, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {identity.pronouns}
+                      </Text>
+                    ) : null}
+                    {identity.status ? (
+                      <Text style={[styles.status, { color: colors.text }]} numberOfLines={2}>
+                        {identity.status}
+                      </Text>
+                    ) : null}
                     <Text style={[styles.hint, { color: colors.textSecondary }]}>
                       {identity.hint}
                     </Text>
@@ -1340,6 +1377,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   bio: {
+    fontSize: font.sm,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+  },
+  pronouns: {
+    fontSize: font.xs,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  status: {
     fontSize: font.sm,
     textAlign: 'center',
     marginTop: spacing.xs,

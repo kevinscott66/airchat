@@ -56,6 +56,9 @@ export type PeekContact = {
   username?: string;
   /** «О себе» из того же конверта. */
   bio?: string;
+  /** v4.32.616: местоимения и статус из того же конверта. */
+  pronouns?: string;
+  peerStatus?: string;
   /** Официальная галочка. Проверена при приёме конверта, здесь — только ответ. */
   verified?: boolean;
   /** v4.32.575: привязанные учётные записи — как приехали в конверте. */
@@ -74,6 +77,9 @@ export type PeekOwn = {
   name?: string | null;
   username?: string | null;
   bio?: string | null;
+  /** v4.32.616: свои местоимения и статус — из своих же полей профиля. */
+  pronouns?: string | null;
+  status?: string | null;
   verified?: boolean;
   /** v4.32.575: свои привязки — из своих же полей профиля. */
   links?: ProfileLink[] | null;
@@ -96,6 +102,15 @@ export type PeekIdentity = {
   username: string | null;
   /** «О себе». `null` — пусто. */
   bio: string | null;
+  /**
+   * v4.32.616: местоимения и статус. `null` — не заданы.
+   *
+   * Ровно те же поля, что в редакторе своего профиля: до этой версии карточка
+   * показывала три поля из шести, и человек, заполнивший профиль целиком,
+   * видел у себя одно, а у собеседника — другое.
+   */
+  pronouns: string | null;
+  status: string | null;
   /** Показывать ли официальную галочку. */
   verified: boolean;
   /**
@@ -133,6 +148,18 @@ export function peekIdentity(input: {
   isSelf: boolean;
   /** Своя карточка. Учитывается только при isSelf — чужую она не заменяет. */
   own?: PeekOwn | null;
+  /**
+   * v4.32.616: юзернейм, по которому сюда пришли, — из реестра имён.
+   *
+   * Нужен ровно для незнакомца: у него нет строки в адресной книге, значит
+   * и юзернейма взять неоткуда, а пришли к нему именно по нему. Показывается
+   * последним: свой и присланный владельцем — точнее того, что мы набрали.
+   *
+   * Именем он НЕ становится ни при каких условиях. Так и было до этой версии:
+   * `@margarita` открывался как человек по имени «margarita», хотя имя себе
+   * он задавал другое.
+   */
+  usernameHint?: string | null;
 }): PeekIdentity {
   const { contact, fallbackName, did, isSelf } = input;
   const own = isSelf ? input.own ?? null : null;
@@ -163,8 +190,11 @@ export function peekIdentity(input: {
     initials: named ? nameInitials(name) : '?',
     inContacts,
     hint,
-    username: (own?.username || contact?.username || '').trim().replace(/^@/, '') || null,
+    username: (own?.username || contact?.username || input.usernameHint || '')
+      .trim().replace(/^@/, '') || null,
     bio: (own?.bio || contact?.bio || '').trim() || null,
+    pronouns: (own?.pronouns || contact?.pronouns || '').trim() || null,
+    status: (own?.status || contact?.peerStatus || '').trim() || null,
     verified: isSelf ? !!own?.verified : contact?.verified === true,
     links: (isSelf ? own?.links : contact?.links) ?? [],
   };
