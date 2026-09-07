@@ -170,9 +170,18 @@ export function parseAppLink(raw: unknown): AppLink | null {
     path = s.slice(`${APP_SCHEME}://`.length);
   } else if (/^https?:\/\//i.test(s)) {
     const afterHost = s.slice(s.indexOf('://') + 3);
-    const slash = afterHost.indexOf('/');
+    // v4.32.615: сначала отрезаем query и фрагмент, и только потом ищем
+    // разделитель пути. Раньше первый '/' искался во всей строке, и `/l/…`,
+    // стоящее ПОСЛЕ '?' или '#' у постороннего адреса, сходило за наш путь:
+    // `https://youtube.com#/l/tab/settings` разбиралось как переход на
+    // вкладку, а `https://ya.ru?next=/l/tab/settings` вместо открытия ya.ru
+    // прыгало в настройки. Решение 2 в шапке допускает чужой хост с путём
+    // нашей формы — это осознанная цена. Но здесь пути нашей формы нет вовсе,
+    // и вид ссылки у получателя расходится с тем, что делает нажатие.
+    const authorityAndPath = afterHost.split(/[?#]/)[0];
+    const slash = authorityAndPath.indexOf('/');
     if (slash < 0) return null;
-    const rest = afterHost.slice(slash + 1);
+    const rest = authorityAndPath.slice(slash + 1);
     const prefix = `${LINK_PATH_PREFIX}/`;
     if (!rest.toLowerCase().startsWith(prefix)) return null;
     path = rest.slice(prefix.length);

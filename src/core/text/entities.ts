@@ -47,7 +47,7 @@ export type TextEntity = {
  * Тот же набор, что был у ленты (`А-Яа-яЁёÀ-ÿ`) и у групп (`Ѐ-ӿ`),
  * сведённый воедино. Точки здесь нет намеренно — см. пункт 2 в заголовке.
  */
-const NAME_BODY = '0-9A-Za-z_\\u00C0-\\u024F\\u0370-\\u04FF';
+export const NAME_BODY = '0-9A-Za-z_\\u00C0-\\u024F\\u0370-\\u04FF';
 
 const ENTITY_RE = new RegExp(
   `(https?://[^\\s<>"'\`]+)|(#[${NAME_BODY}-]+)|(@[${NAME_BODY}]+)`,
@@ -63,23 +63,47 @@ const WORD_CHAR = new RegExp(`[${NAME_BODY}]`);
  */
 const TRAILING = new Set([...'.,;:!?…«»„“”‘’\'"*_~<>']);
 
-/** Сколько лишних закрывающих скобок в конце — столько и отрезать. */
+/**
+ * Сколько лишних закрывающих скобок в конце — столько и отрезать.
+ *
+ * v4.32.615: баланс скобок считается ОДИН раз, а дальше поправляется на
+ * снятый символ. Раньше на каждую хвостовую закрывающую скобку выделялась
+ * копия всего адреса и пробегалась целиком — квадрат от длины, которую задаёт
+ * отправитель: `[^\s<>"'`]+` вбирает скобки внутрь адреса, поэтому сообщение
+ * `https://a.io/` плюс 63 987 знаков ')' укладывалось в MAX_MESSAGE_TEXT и
+ * занимало поток на 11,6 с (замер на V8; на Hermes хуже). Отрисовка одного
+ * входящего вешала приложение, и не только в чате: этот же разбор зовут
+ * вкладка «Ссылки» общих медиа и предпросмотр ссылок.
+ */
 function trimUrlEnd(url: string): string {
+  // Баланс «открывающих минус закрывающих» на префиксе [0, end).
+  let round = 0;
+  let square = 0;
+  let curly = 0;
+  for (const c of url) {
+    if (c === '(') round += 1;
+    else if (c === ')') round -= 1;
+    else if (c === '[') square += 1;
+    else if (c === ']') square -= 1;
+    else if (c === '{') curly += 1;
+    else if (c === '}') curly -= 1;
+  }
   let end = url.length;
   for (;;) {
     const ch = url[end - 1];
     if (ch === undefined) break;
+    // В TRAILING скобок нет, поэтому баланс от такого среза не меняется.
     if (TRAILING.has(ch)) { end -= 1; continue; }
     if (ch === ')' || ch === ']' || ch === '}') {
-      const open = ch === ')' ? '(' : ch === ']' ? '[' : '{';
-      const body = url.slice(0, end);
-      let depth = 0;
-      for (const c of body) {
-        if (c === open) depth += 1;
-        else if (c === ch) depth -= 1;
-      }
+      const depth = ch === ')' ? round : ch === ']' ? square : curly;
       // depth < 0 — закрывающих больше, значит последняя не наша.
-      if (depth < 0) { end -= 1; continue; }
+      if (depth < 0) {
+        if (ch === ')') round += 1;
+        else if (ch === ']') square += 1;
+        else curly += 1;
+        end -= 1;
+        continue;
+      }
     }
     break;
   }

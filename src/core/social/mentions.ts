@@ -13,12 +13,20 @@
  * а посимвольный поиск с проверкой границ.
  */
 
+import { findEntities, NAME_BODY, type TextEntity } from '../text/entities';
+
 /**
  * Символы, из которых «слово» состоит. Нужны, чтобы @аня не срабатывало
  * внутри @анна, а bob@anna.example не считалось упоминанием anna.
  * Без флага 'u' и без \p{...} — Hermes на старых Android их не гарантирует.
+ *
+ * v4.32.615: набор берётся у разборщика сущностей, а не пишется здесь заново.
+ * Свой был короче — только латиница ASCII и а-я — и обещание «bob@anna.example
+ * не упоминание» держалось лишь для них: `José@anna` считалось обращением к
+ * anna, потому что `é` в набор не входила. Так же проходили украинские і/ї/є
+ * и греческий.
  */
-const NAME_CHAR = /[0-9a-zа-яё_]/;
+const NAME_CHAR = new RegExp(`[${NAME_BODY}]`, 'i');
 
 function isNameChar(ch: string | undefined): boolean {
   return ch !== undefined && NAME_CHAR.test(ch);
@@ -35,11 +43,24 @@ export function isMentionOf(text: string, username: string | null | undefined): 
   if (name.length < 2) return false;
   const hay = text.toLowerCase();
   const needle = `@${name}`;
+  // Ссылки считаются один раз и только если кандидат вообще нашёлся: у
+  // подавляющего большинства сообщений имени в тексте нет.
+  let urls: readonly TextEntity[] | null = null;
   for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) {
     // Слева от '@' не должно быть буквы — иначе это хвост адреса почты.
     if (isNameChar(hay[i - 1])) continue;
     // Справа не должно продолжаться слово — иначе @аня матчит @анну.
     if (isNameChar(hay[i + needle.length])) continue;
+    // v4.32.615: '@' внутри адреса — не обращение. У YouTube, Mastodon и
+    // Medium ручка стоит прямо в пути (`/@name`), а слева от '@' там '/' —
+    // не буква, то есть прежняя проверка границы такую ссылку пропускала.
+    // Цена ошибки несимметрична: isMention — единственное, что пробивает
+    // заглушённую группу (v4.32.168), поэтому ссылкой на YouTube отправитель
+    // поднимал уведомление там, где его выключили, и зажигал счётчик
+    // упоминаний, хотя на экране никакого обращения не подсвечено — разбор
+    // сущностей ту же строку отдаёт целиком как один адрес.
+    if (urls === null) urls = findEntities(hay).filter((e) => e.kind === 'url');
+    if (urls.some((u) => i >= u.start && i < u.end)) continue;
     return true;
   }
   return false;

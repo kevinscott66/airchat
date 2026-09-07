@@ -145,6 +145,38 @@ describe('appLink', () => {
     });
   });
 
+  describe('запрос и якорь не подделывают путь', () => {
+    it.each([
+      ['якорь чужой страницы', 'https://youtube.com#/l/tab/settings'],
+      ['параметр чужой страницы', 'https://ya.ru?next=/l/tab/settings'],
+      ['параметр после реального пути', 'https://news.example.com/article?ref=/l/tab/settings'],
+      ['якорь без пути вовсе', 'https://evil.example.com#/l/join-group/AAAA'],
+      ['параметр без пути вовсе', 'https://evil.example.com?x=/l/post/f_1'],
+    ])('%s не читается как наша ссылка', (_name, input) => {
+      expect(parseAppLink(input)).toBeNull();
+      expect(isAppLink(input)).toBe(false);
+    });
+
+    it('свой путь остаётся своим и с хвостом, и с якорем', () => {
+      expect(parseAppLink('https://good.example.com/l/tab/settings')).toEqual({
+        kind: 'tab',
+        tab: 'settings',
+      });
+      expect(parseAppLink('https://good.example.com/l/tab/settings?utm=x')).toEqual({
+        kind: 'tab',
+        tab: 'settings',
+      });
+      expect(parseAppLink('https://good.example.com/l/tab/settings#top')).toEqual({
+        kind: 'tab',
+        tab: 'settings',
+      });
+      expect(parseAppLink('https://good.example.com/l/post/f_1?utm=x')).toEqual({
+        kind: 'post',
+        postId: 'f_1',
+      });
+    });
+  });
+
   describe('готовая ссылка переводится в https-форму', () => {
     const saved = process.env.EXPO_PUBLIC_LINK_BASE;
     afterEach(() => {

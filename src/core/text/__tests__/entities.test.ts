@@ -111,3 +111,73 @@ describe('сборщики списков', () => {
     expect(collectUrls('просто текст')).toEqual([]);
   });
 });
+
+/**
+ * Прежний, наивный отрез хвоста: на каждый снятый знак баланс скобок считался
+ * заново по всему остатку. Держим его в тесте как образец смысла — новый
+ * линейный отрез обязан давать ровно тот же ответ.
+ */
+function trimUrlEndNaive(url: string): string {
+  const TRAILING = new Set([...'.,;:!?…«»„“”‘’\'"*_~<>']);
+  let end = url.length;
+  for (;;) {
+    const ch = url[end - 1];
+    if (ch === undefined) break;
+    if (TRAILING.has(ch)) { end -= 1; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      const open = ch === ')' ? '(' : ch === ']' ? '[' : '{';
+      const head = url.slice(0, end);
+      let depth = 0;
+      for (const c of head) {
+        if (c === open) depth += 1;
+        else if (c === ch) depth -= 1;
+      }
+      if (depth < 0) { end -= 1; continue; }
+    }
+    break;
+  }
+  return url.slice(0, end);
+}
+
+describe('хвост адреса отрезается за один проход', () => {
+  /** Простой детерминированный генератор — тест не должен зависеть от Math.random. */
+  const rnd = (seed: number) => () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  it('ответ совпадает с наивным отрезом на всех формах хвоста', () => {
+    const next = rnd(20250907);
+    const alphabet = [...'()[]{}.,;:!?abc/'];
+    const cases: string[] = [
+      'https://a.io/x',
+      'https://a.io/x)',
+      'https://a.io/x(y)',
+      'https://a.io/x(y))',
+      'https://a.io/(a[b]c)',
+      'https://a.io/x].',
+      'https://a.io/}}}',
+      'https://a.io/[x](y).,!',
+    ];
+    for (let i = 0; i < 400; i += 1) {
+      let tail = '';
+      const len = 1 + Math.floor(next() * 12);
+      for (let j = 0; j < len; j += 1) tail += alphabet[Math.floor(next() * alphabet.length)];
+      cases.push(`https://a.io/${tail}`);
+    }
+    for (const url of cases) {
+      const [e] = findEntities(url);
+      const expected = trimUrlEndNaive(url);
+      // Слишком короткий остаток сущностью не считается — образец тоже это учитывает.
+      if (expected.length < 2) expect(e).toBeUndefined();
+      else expect(e?.text).toBe(expected);
+    }
+  });
+
+  it('разбор длинного хвоста скобок не квадратичен', () => {
+    // Отправитель волен прислать что угодно в пределах MAX_MESSAGE_TEXT = 64 000.
+    // Наивный отрез съедал на этом 11,6 с на V8; линейный укладывается в
+    // единицы миллисекунд, и запас до предела ниже — на три порядка.
+    const text = `https://a.io/${')'.repeat(60_000)}`;
+    const started = Date.now();
+    expect(collectUrls(text)).toEqual(['https://a.io/']);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

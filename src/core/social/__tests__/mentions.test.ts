@@ -65,4 +65,25 @@ describe('isMentionOf', () => {
   it('пустой текст', () => {
     expect(isMentionOf('', 'bob')).toBe(false);
   });
+
+  it('ручка внутри адреса — не обращение', () => {
+    // Слева от '@' стоит '/', то есть проверка границы слова такое пропускала,
+    // а isMention — единственное, что пробивает заглушённую группу.
+    expect(isMentionOf('смотри https://youtube.com/@bob', 'bob')).toBe(false);
+    expect(isMentionOf('https://mastodon.social/@bob', 'bob')).toBe(false);
+    expect(isMentionOf('https://medium.com/@bob/post-1', 'bob')).toBe(false);
+  });
+
+  it('обращение рядом с адресом всё равно находится', () => {
+    expect(isMentionOf('https://youtube.com/@bob — а ты, @bob, видел?', 'bob')).toBe(true);
+    expect(isMentionOf('(https://a.io/x) @bob', 'bob')).toBe(true);
+  });
+
+  it('буква перед собакой считается буквой и вне латиницы', () => {
+    // Набор символов имени берётся у разборщика сущностей: свой, короткий,
+    // обещание «почта не упоминание» держал только для ASCII и а-я.
+    expect(isMentionOf('José@anna', 'anna')).toBe(false);
+    expect(isMentionOf('Марії@anna', 'anna')).toBe(false);
+    expect(isMentionOf('Ωμέγα@anna', 'anna')).toBe(false);
+  });
 });
