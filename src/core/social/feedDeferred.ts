@@ -22,9 +22,16 @@
  *
  * Просмотры (`feed_view`) сюда не кладутся намеренно: их много (у заметной
  * публикации — тысячи), а ценность каждого — единица в счётчике. По той же
- * причине их не пересылают по цепочке. Комментарии тоже: у них своя очередь
- * повторов, которая шлёт конверт заново до получаса, и отложить их — значит
- * держать одно и то же в двух местах.
+ * причине их не пересылают по цепочке.
+ *
+ * Комментарии кладутся (v4.32.615). Прежняя оговорка ссылалась на очередь
+ * повторов комментария, но та наполняется только при неудаче доставки
+ * (`!res || res.delivered.success < res.delivered.total`): конверт, дошедший
+ * до всех, но отвергнутый получателем как сирота, повторён не будет никогда.
+ * А отвергается он ровно в том случае, ради которого полка и заведена, —
+ * публикация ещё в пути. Комментарий крупнее реакции, поэтому у полки
+ * появился ещё и потолок в байтах: чужой подписанный конверт задаёт и число
+ * событий, и их размер.
  */
 import type { FeedEnvelopePayload } from './feedTransport';
 
@@ -34,10 +41,25 @@ export const DEFERRED_TTL_MS = 24 * 60 * 60 * 1000;
 export const DEFERRED_MAX_POSTS = 32;
 /** Сколько событий на одну публикацию. */
 export const DEFERRED_MAX_PER_POST = 24;
+/**
+ * Потолок полки в знаках JSON.
+ *
+ * Число событий само по себе размер не ограничивает: текст комментария —
+ * до двух тысяч знаков, и полное заполнение по одному лишь счётчику дало бы
+ * запись под полтора мегабайта, которую пришлось бы читать и переписывать на
+ * каждое следующее отложенное событие. Реакциям и голосам этот потолок не
+ * мешает: они на два порядка меньше.
+ */
+export const DEFERRED_MAX_BYTES = 192 * 1024;
 
-export type DeferredType = 'feed_reaction' | 'feed_edit' | 'feed_poll_vote';
+export type DeferredType = 'feed_reaction' | 'feed_edit' | 'feed_poll_vote' | 'feed_comment';
 
-export const DEFERRABLE: readonly DeferredType[] = ['feed_reaction', 'feed_edit', 'feed_poll_vote'];
+export const DEFERRABLE: readonly DeferredType[] = [
+  'feed_reaction',
+  'feed_edit',
+  'feed_poll_vote',
+  'feed_comment',
+];
 
 export type DeferredEvent = {
   type: DeferredType;
@@ -65,9 +87,18 @@ export function isDeferrable(type: string): type is DeferredType {
  * времени, поэтому её ячейка не зависит ни от чего, кроме рода события.
  */
 export function deferredSlot(e: DeferredEvent): string {
-  const d = (e.data ?? {}) as { emoji?: unknown; optionIndex?: unknown; remove?: unknown };
+  const d = (e.data ?? {}) as {
+    emoji?: unknown;
+    optionIndex?: unknown;
+    remove?: unknown;
+    commentId?: unknown;
+  };
   if (e.type === 'feed_edit') return 'edit';
   if (e.type === 'feed_reaction') return `r|${e.authorDid}|${String(d.emoji ?? '')}`;
+  // Ячейка комментария — его собственный номер: повтор того же конверта не
+  // должен занимать на полке второе место, а два разных комментария одного
+  // человека — это два разных события.
+  if (e.type === 'feed_comment') return `c|${String(d.commentId ?? '')}`;
   return `v|${e.authorDid}|${String(d.optionIndex ?? '')}`;
 }
 
@@ -162,6 +193,34 @@ export function addDeferred(
       .sort((a, b) => next[a].at - next[b].at)
       .slice(0, ids.length - DEFERRED_MAX_POSTS)
       .forEach((id) => { delete next[id]; });
+  }
+  return trimToBudget(next, postId);
+}
+
+/**
+ * Ужать полку до потолка в байтах.
+ *
+ * Выбывают самые давно не пополнявшиеся публикации, кроме той, ради которой
+ * пришли сейчас, — как и при переполнении по счётчику. Если и она одна уже
+ * не помещается, у неё отбрасываются самые старые события, но последнее
+ * остаётся всегда: новое событие проходит на полку при любом раскладе.
+ */
+function trimToBudget(store: DeferredStore, keepPostId: string): DeferredStore {
+  if (JSON.stringify(store).length <= DEFERRED_MAX_BYTES) return store;
+  const next = { ...store };
+  const order = Object.keys(next)
+    .filter((id) => id !== keepPostId)
+    .sort((a, b) => next[a].at - next[b].at);
+  for (const id of order) {
+    delete next[id];
+    if (JSON.stringify(next).length <= DEFERRED_MAX_BYTES) return next;
+  }
+  const bucket = next[keepPostId];
+  if (!bucket) return next;
+  const events = [...bucket.events];
+  next[keepPostId] = { at: bucket.at, events };
+  while (events.length > 1 && JSON.stringify(next).length > DEFERRED_MAX_BYTES) {
+    events.shift();
   }
   return next;
 }

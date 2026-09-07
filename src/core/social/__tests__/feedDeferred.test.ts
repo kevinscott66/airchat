@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import {
+  DEFERRED_MAX_BYTES,
   DEFERRED_MAX_PER_POST,
   DEFERRED_MAX_POSTS,
   DEFERRED_TTL_MS,
@@ -154,14 +155,15 @@ describe('feedDeferred: разбор записи с диска', () => {
 });
 
 describe('feedDeferred: отбор родов', () => {
-  it('откладываются ровно три рода событий', () => {
+  it('откладываются ровно четыре рода событий', () => {
     expect(isDeferrable('feed_reaction')).toBe(true);
     expect(isDeferrable('feed_edit')).toBe(true);
     expect(isDeferrable('feed_poll_vote')).toBe(true);
+    // v4.32.615: очередь повторов комментария наполняется только при неудаче
+    // доставки — дошедший и отвергнутый как сирота конверт не повторится.
+    expect(isDeferrable('feed_comment')).toBe(true);
     // Просмотров тысячи и цена каждого — единица в счётчике.
     expect(isDeferrable('feed_view')).toBe(false);
-    // У комментария своя очередь повторов, второе место хранения не нужно.
-    expect(isDeferrable('feed_comment')).toBe(false);
     expect(isDeferrable('feed_post')).toBe(false);
     expect(isDeferrable('feed_delete')).toBe(false);
   });
@@ -179,10 +181,11 @@ describe('feedDeferred: проводка в feedService', () => {
   // смотреть на код, а не на его описание.
   const CODE = SRC.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-  it('все три места, где событие пропадало, кладут его на полку', () => {
+  it('все четыре места, где событие пропадало, кладут его на полку', () => {
     expect(CODE).toMatch(/if \(!stored\) await deferFeedEvent\(payload, envelopePid\);/);
     expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_edit_unknown_post'/);
     expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_poll_vote_unknown_post'/);
+    expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_comment_rejected_orphan'/);
   });
 
   it('обе точки прихода публикации разгребают полку', () => {
@@ -207,5 +210,86 @@ describe('feedDeferred: проводка в feedService', () => {
   it('применение конверта выделено и вызывается с двух путей', () => {
     expect(CODE).toMatch(/async function applyFeedEnvelope\(/);
     expect((CODE.match(/await applyFeedEnvelope\(/g) ?? []).length).toBe(2);
+  });
+});
+
+/**
+ * v4.32.615: комментарий-сирота больше не пропадает.
+ *
+ * Он крупнее реакции на два порядка, поэтому вместе с ним у полки появился
+ * потолок в байтах — иначе один контакт занял бы полтора мегабайта, которые
+ * пришлось бы читать и переписывать на каждое следующее отложенное событие.
+ */
+describe('feedDeferred: комментарий на полке', () => {
+  const comment = (id: string, text = 'привет', over: Partial<DeferredEvent> = {}): DeferredEvent => ({
+    type: 'feed_comment',
+    authorDid: 'did:key:zA',
+    ts: T0,
+    data: { kind: 'comment', commentId: id, text, authorName: 'Аноним' },
+    ...over,
+  });
+
+  it('конверт комментария превращается в запись целиком', () => {
+    const e = deferredFromPayload({
+      type: 'feed_comment',
+      postId: 'p1',
+      authorDid: 'did:key:zA',
+      ts: T0,
+      data: { kind: 'comment', commentId: 'c1', text: 'привет', authorName: 'Аноним' },
+    } as never);
+    expect(e?.type).toBe('feed_comment');
+    expect(e?.data).toEqual({ kind: 'comment', commentId: 'c1', text: 'привет', authorName: 'Аноним' });
+  });
+
+  it('повтор того же комментария не занимает второе место, разные — занимают', () => {
+    expect(deferredSlot(comment('c1'))).toBe(deferredSlot(comment('c1', 'другой текст')));
+    expect(deferredSlot(comment('c1'))).not.toBe(deferredSlot(comment('c2')));
+    let store: DeferredStore = {};
+    store = addDeferred(store, 'p1', comment('c1'), T0);
+    store = addDeferred(store, 'p1', comment('c1', 'повтор'), T0 + 1);
+    store = addDeferred(store, 'p1', comment('c2'), T0 + 2);
+    expect(store.p1.events).toHaveLength(2);
+  });
+
+  it('запись комментария переживает диск', () => {
+    const raw = JSON.stringify(addDeferred({}, 'p1', comment('c1'), T0));
+    expect(parseDeferredStore(raw).p1.events[0].type).toBe('feed_comment');
+  });
+
+  it('полка не перерастает потолок в байтах', () => {
+    const long = 'я'.repeat(2000);
+    let store: DeferredStore = {};
+    for (let i = 0; i < DEFERRED_MAX_POSTS; i++) {
+      for (let j = 0; j < DEFERRED_MAX_PER_POST; j++) {
+        store = addDeferred(store, `p${i}`, comment(`c${i}_${j}`, long, { ts: T0 + j }), T0 + i * 100 + j);
+      }
+    }
+    expect(JSON.stringify(store).length).toBeLessThanOrEqual(DEFERRED_MAX_BYTES);
+    // Последняя публикация на полке осталась: новое событие проходит всегда.
+    expect(store[`p${DEFERRED_MAX_POSTS - 1}`].events.length).toBeGreaterThan(0);
+  });
+
+  it('одна публикация с огромными комментариями не отбрасывает последнее событие', () => {
+    const long = 'я'.repeat(2000);
+    let store: DeferredStore = {};
+    for (let j = 0; j < DEFERRED_MAX_PER_POST; j++) {
+      store = addDeferred(store, 'p1', comment(`c${j}`, long, { ts: T0 + j }), T0 + j);
+    }
+    expect(JSON.stringify(store).length).toBeLessThanOrEqual(DEFERRED_MAX_BYTES);
+    expect(store.p1.events.length).toBeGreaterThanOrEqual(1);
+    // Уцелевшее — самое свежее: старое уже неактуально, новое только что пришло.
+    const last = store.p1.events[store.p1.events.length - 1];
+    expect((last.data as { commentId: string }).commentId).toBe(`c${DEFERRED_MAX_PER_POST - 1}`);
+  });
+
+  it('потолок в байтах не мешает реакциям — их на два порядка меньше', () => {
+    let store: DeferredStore = {};
+    for (let i = 0; i < DEFERRED_MAX_POSTS; i++) {
+      for (let j = 0; j < DEFERRED_MAX_PER_POST; j++) {
+        store = addDeferred(store, `p${i}`, ev({ authorDid: `did:key:z${j}`, ts: T0 + j }), T0 + i * 100 + j);
+      }
+    }
+    expect(Object.keys(store)).toHaveLength(DEFERRED_MAX_POSTS);
+    expect(store.p0.events).toHaveLength(DEFERRED_MAX_PER_POST);
   });
 });

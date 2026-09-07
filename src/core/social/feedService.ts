@@ -2587,6 +2587,12 @@ async function applyFeedEnvelope(
       try {
         const exists = await s.getPost(payload.postId);
         if (!exists) {
+          // v4.32.615: комментарий без публикации не отбрасывается, а ждёт её.
+          // Очередь повторов комментария наполняется только при неудаче
+          // доставки, а здесь конверт дошёл — и был отвергнут. Полка
+          // ограничена и числом записей, и объёмом, поэтому засыпать её
+          // ссылками на несуществующие публикации по-прежнему бесполезно.
+          await deferFeedEvent(payload, envelopePid);
           log.info('feed_comment_rejected_orphan', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
           break;
         }
