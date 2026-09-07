@@ -163,9 +163,16 @@ describe('форма исходников', () => {
       'ui/screens/groups-components/PollBubble.tsx',
     ]) {
       const s = src(f);
-      expect(s).toContain('scopedKvGetFor(pid, pollClosedKey(messageId))');
+      // v4.32.652: чтение переехало в общий core/social/pollRead — пузырь
+      // больше не трогает kv сам. Требование то же: флаг берётся у своего
+      // профиля, и через ту форму, которая отличает сбой от отсутствия.
+      expect(s).toContain('readPollSnapshot(messageId, pid)');
       expect(s).not.toContain('kvGet(pollClosedKey(messageId))');
+      expect(s).not.toContain('scopedKvGetFor(');
     }
+    const reader = src('core/social/pollRead.ts');
+    expect(reader).toContain('scopedKvTryGetFor(pid, pollClosedKey(messageId))');
+    expect(reader).not.toContain('scopedKvGetFor(');
   });
 
   it('уборка следов опроса снимает и запись профиля', () => {

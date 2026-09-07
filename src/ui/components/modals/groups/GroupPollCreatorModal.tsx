@@ -7,6 +7,7 @@ import { KeyboardHost } from '../../KeyboardHost';
 import { useTheme } from '../../../ThemeContext';
 import { font, primaryInk, radius, scrim } from '../../../theme';
 import { showError } from '../../userFeedback';
+import { correctAnswerAfterRemove, NO_CORRECT_ANSWER } from '../../../../core/social/pollCorrectAnswer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PollCreatorModal
@@ -31,7 +32,15 @@ export function PollCreatorModal({
   const [allowMultiple, setAllowMultiple] = useState(false);
 
   const addOption = () => { if (options.length < 10) setOptions((prev) => [...prev, '']); };
-  const removeOption = (i: number) => { if (options.length > 2) setOptions((prev) => prev.filter((_, j) => j !== i)); };
+  // v4.32.652: correctAnswer — индекс строки в options, и удаление варианта
+  // его перенумеровывает. Отметив «Б» в «А, Б, В» и удалив «А», человек
+  // получал верным «В»: галочка молча переезжала, и в группу уходила
+  // викторина с чужим ответом. Отметку двигаем вместе со списком.
+  const removeOption = (i: number) => {
+    if (options.length <= 2) return;
+    setOptions((prev) => prev.filter((_, j) => j !== i));
+    setCorrectAnswer((prev) => correctAnswerAfterRemove(prev, i));
+  };
   const updateOption = (i: number, v: string) => setOptions((prev) => prev.map((o, j) => j === i ? v : o));
 
   const submit = () => {
@@ -51,6 +60,9 @@ export function PollCreatorModal({
     // выглядела сломанной.
     if (!q) { showError('Введите вопрос'); return; }
     if (opts.length < 2) { showError('Нужно хотя бы два непустых варианта ответа'); return; }
+    // v4.32.652: отметку могли снять удалением самого отмеченного варианта —
+    // это отдельный случай, и «он не может быть пустым» его не описывает.
+    if (isQuiz && correctAnswer === NO_CORRECT_ANSWER) { showError('Отметьте верный вариант ответа'); return; }
     const answer = kept.indexOf(correctAnswer);
     if (isQuiz && answer < 0) { showError('Отметьте верный вариант: он не может быть пустым'); return; }
     // v4.32.622: форму чистим только после того, как её приняли. Раньше её

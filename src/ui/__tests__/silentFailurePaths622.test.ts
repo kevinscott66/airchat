@@ -42,6 +42,8 @@ const announce = read('groupSendAnnounce.ts');
 const pollModal = read('components/modals/groups/GroupPollCreatorModal.tsx');
 const pollBubble = read('screens/groups-components/PollBubble.tsx');
 const dmPollBubble = read('screens/chat-components/DmPollBubble.tsx');
+// v4.32.652: общий читатель опроса — часть той же защиты, что и пузыри.
+const pollRead = read('../core/social/pollRead.ts');
 
 describe('лента: отказ profileManager.init() не запирает публикацию', () => {
   it('проверка не пустая: ветвей публикации через init ровно две', () => {
@@ -184,12 +186,20 @@ describe.each([
       'setShownId(messageId);',
       'setVotes([]);',
       'setIsClosed(false);',
+      // v4.32.652: фаза чтения сбрасывается вместе с остальным — иначе
+      // переработанная ячейка унесла бы чужое 'ok' на новый опрос и пустила
+      // голос, не прочитав, отвечал ли человек.
+      "setReadPhase('pending');",
       '}',
     ])).toBe(true);
   });
 
   it('признак завершения присваивается, а не «включается» навсегда', () => {
-    expect(src).toContain("setIsClosed(closed === '1');");
+    // v4.32.652: само сравнение с '1' переехало в общий core/social/pollRead;
+    // в пузыре осталось присваивание прочитанного. Проверяем оба конца, иначе
+    // ратчет пропустил бы возврат одностороннего setIsClosed(true).
+    expect(src).toContain('setIsClosed(snap.closed);');
+    expect(pollRead).toContain("closed: closedCell.value === '1'");
     // Упоминание в пояснении не считается — сравниваем только строки кода.
     expect(codeLines(src).filter((l) => l.includes('setIsClosed(true)'))).toEqual([]);
   });

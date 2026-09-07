@@ -4,16 +4,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { AppModal as Modal } from '../../components/AppModal';
 import { showError, showSuccess } from '../../components/userFeedback';
+import { userErrorText } from '../../components/userErrorText';
 import { useTheme } from '../../ThemeContext';
 import { bubbleSurface, font, pollInk, radius, scrim } from '../../theme';
 import {
   parsePollText,
-  getPollVotes,
   subscribeChatWrites,
   type GroupMemberRow,
 } from '../../../core/storage/local';
-import { castAndSyncPollVote, pollClosedKey } from '../../../core/social/pollVoteSync';
-import { scopedKvGetFor } from '../../../core/storage/profileScopedKv';
+import { castAndSyncPollVote } from '../../../core/social/pollVoteSync';
+import {
+  mayCastPollVote,
+  readPollSnapshot,
+  POLL_UNREADABLE_TEXT,
+  type PollReadPhase,
+} from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
 import { shortIdentity } from '../../identity/shortId';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
@@ -43,6 +48,9 @@ export function PollBubble({
   const [votes, setVotes] = useState<Array<{ voterPubB64: string; optionIndex: number }>>([]);
   const [isClosed, setIsClosed] = useState(false);
   const [voterListOpt, setVoterListOpt] = useState<number | null>(null);
+  // v4.32.652: сбой чтения — отдельное состояние, а не «голосов нет». Пока
+  // оно не 'ok', голосовать нельзя: неизвестно, отвечал ли человек уже.
+  const [readPhase, setReadPhase] = useState<PollReadPhase>('pending');
   // v4.32.622: FlashList переиспользует ячейку — тот же экземпляр компонента
   // получает следующее сообщение просто новыми props. Состояние при этом
   // остаётся от прежнего опроса, и до конца асинхронного reload открытый
@@ -55,22 +63,27 @@ export function PollBubble({
     setShownId(messageId);
     setVotes([]);
     setIsClosed(false);
+    setReadPhase('pending');
   }
 
+  // v4.32.251: флаг завершения перечитывается вместе с голосами — раньше он
+  // читался один раз при монтировании, и присланное автором «Опрос завершён»
+  // доходило до экрана только после перезахода в группу.
+  // v4.32.484: отметка о завершении принадлежит профилю — читается из его
+  // namespace, а не общая на всю установку.
+  // v4.32.652: само чтение переехало в core/social/pollRead — там оно ловит
+  // отказ и не выдаёт его за пустой опрос.
   const reload = useCallback(async () => {
-    const [v, closed] = await Promise.all([
-      getPollVotes(messageId, pid),
-      // v4.32.251: флаг завершения перечитывается вместе с голосами — раньше он
-      // читался один раз при монтировании, и присланное автором «Опрос
-      // завершён» доходило до экрана только после перезахода в группу.
-      // v4.32.484: отметка о завершении принадлежит профилю — читается из
-      // его namespace, а не общая на всю установку.
-      scopedKvGetFor(pid, pollClosedKey(messageId)),
-    ]);
-    setVotes(v);
+    const snap = await readPollSnapshot(messageId, pid);
+    if (!snap) {
+      setReadPhase('failed');
+      return;
+    }
+    setVotes(snap.votes);
     // v4.32.622: присваиваем, а не «включаем». Одностороннее setIsClosed(true)
     // невозможно было отменить — ни снятием завершения, ни переработкой ячейки.
-    setIsClosed(closed === '1');
+    setIsClosed(snap.closed);
+    setReadPhase('ok');
   }, [messageId, pid]);
 
   useEffect(() => { void reload(); }, [reload]);
@@ -96,9 +109,12 @@ export function PollBubble({
   );
   const totalVotes = allowMultiple ? uniqueVoterCount : votes.length;
 
+  // v4.32.652: одно правило и для кнопки, и для обработчика. Раньше их было
+  // два одинаковых, и оба считали непрочитанное состояние разрешением.
+  const canVote = mayCastPollVote(readPhase, isClosed, isQuiz, hasVoted);
+
   const castVote = async (idx: number) => {
-    if (isClosed) return; // poll is closed
-    if (isQuiz && hasVoted) return; // quiz: can't revote
+    if (!canVote) return;
     // Повторное нажатие по своему варианту снимает голос. При одиночном выборе
     // нажатие по другому варианту его переносит — прошлый option удаляет сам
     // setPollVote (v4.32.48), отдельный DELETE не нужен.
@@ -129,6 +145,11 @@ export function PollBubble({
       <Text style={{ color: ink.text, fontWeight: '600', marginBottom: 8 }}>
         {isQuiz ? '🧠 ' : allowMultiple ? '☑️ ' : '📊 '}{poll.question}
       </Text>
+      {readPhase === 'failed' ? (
+        <Text style={{ color: ink.muted, fontSize: font.xs, marginBottom: 6 }} testID="poll_read_failed">
+          {POLL_UNREADABLE_TEXT}
+        </Text>
+      ) : null}
       {isQuiz && hasVoted ? (
         myVotedIndices.has(poll.correctAnswer ?? -1)
           ? <Text style={{ color: ink.correct, fontWeight: '700', fontSize: 13, marginBottom: 6 }}>✅ Правильно!</Text>
@@ -148,7 +169,12 @@ export function PollBubble({
           barColor = isCorrect ? ink.correctBar : (isMyChoice ? ink.wrongBar : ink.bar);
         }
         return (
-          <AppPressable key={idx} onPress={() => void castVote(idx)} style={{ marginBottom: 6 }} disabled={(isQuiz && hasVoted) || isClosed}>
+          <AppPressable
+            key={idx}
+            onPress={() => { void castVote(idx).catch((e) => showError(userErrorText(e, 'Не удалось отправить голос'))); }}
+            style={{ marginBottom: 6 }}
+            disabled={!canVote}
+          >
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
               {allowMultiple ? (
                 <View style={{ width: 18, height: 18, borderRadius: radius.sm, borderWidth: 1.5, borderColor: isMyChoice ? ink.accentFill : ink.muted, backgroundColor: isMyChoice ? ink.accentFill : 'transparent', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>

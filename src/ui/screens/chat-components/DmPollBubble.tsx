@@ -3,15 +3,20 @@ import { Clipboard, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { showError, showSuccess } from '../../components/userFeedback';
+import { userErrorText } from '../../components/userErrorText';
 import { useTheme } from '../../ThemeContext';
 import { font, pollInk, radius } from '../../theme';
 import {
-  getPollVotes,
   parsePollText,
   subscribeChatWrites,
 } from '../../../core/storage/local';
-import { castAndSyncPollVote, pollClosedKey } from '../../../core/social/pollVoteSync';
-import { scopedKvGetFor } from '../../../core/storage/profileScopedKv';
+import { castAndSyncPollVote } from '../../../core/social/pollVoteSync';
+import {
+  mayCastPollVote,
+  readPollSnapshot,
+  POLL_UNREADABLE_TEXT,
+  type PollReadPhase,
+} from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
 
@@ -38,6 +43,9 @@ export function DmPollBubble({
   const poll = useMemo(() => parsePollText(pollText), [pollText]);
   const [votes, setVotes] = useState<Array<{ voterPubB64: string; optionIndex: number }>>([]);
   const [isClosed, setIsClosed] = useState(false);
+  // v4.32.652: сбой чтения — отдельное состояние, а не «голосов нет». Пока
+  // оно не 'ok', голосовать нельзя: неизвестно, отвечал ли человек уже.
+  const [readPhase, setReadPhase] = useState<PollReadPhase>('pending');
   // v4.32.622: FlashList переиспользует ячейку — тот же экземпляр компонента
   // получает следующее сообщение просто новыми props. Состояние при этом
   // остаётся от прежнего опроса, и до конца асинхронного reload открытый
@@ -50,20 +58,24 @@ export function DmPollBubble({
     setShownId(messageId);
     setVotes([]);
     setIsClosed(false);
+    setReadPhase('pending');
   }
+  // v4.32.251: флаг завершения перечитывается вместе с голосами — раньше он
+  // читался один раз при монтировании, и присланное автором «Опрос завершён»
+  // доходило до экрана только после перезахода в чат.
+  // v4.32.484: отметка о завершении принадлежит профилю — читается из его
+  // namespace, а не общая на всю установку.
+  // v4.32.652: чтение переехало в core/social/pollRead — см. PollBubble.
   const reload = useCallback(async () => {
-    const [v, closed] = await Promise.all([
-      getPollVotes(messageId, pid),
-      // v4.32.251: флаг завершения перечитывается вместе с голосами — раньше он
-      // читался один раз при монтировании, и присланное автором «Опрос
-      // завершён» доходило до экрана только после перезахода в чат.
-      // v4.32.484: отметка о завершении принадлежит профилю — читается из
-      // его namespace, а не общая на всю установку.
-      scopedKvGetFor(pid, pollClosedKey(messageId)),
-    ]);
-    setVotes(v);
+    const snap = await readPollSnapshot(messageId, pid);
+    if (!snap) {
+      setReadPhase('failed');
+      return;
+    }
+    setVotes(snap.votes);
     // v4.32.622: присваиваем, а не «включаем» — см. PollBubble.
-    setIsClosed(closed === '1');
+    setIsClosed(snap.closed);
+    setReadPhase('ok');
   }, [messageId, pid]);
   useEffect(() => { void reload(); }, [reload]);
   // v4.32.250: голос собеседника приходит отдельным конвертом и пишется в
@@ -89,10 +101,13 @@ export function DmPollBubble({
     new Set(votes.filter((v) => v.optionIndex === idx).map((v) => v.voterPubB64)).size
   );
 
+  // v4.32.652: одно правило и для кнопки, и для обработчика. Раньше их было
+  // два одинаковых, и оба считали непрочитанное состояние разрешением.
+  const canVote = mayCastPollVote(readPhase, isClosed, isQuiz, hasVoted);
+
   /** Ставит или снимает голос и рассылает его собеседнику. */
   const castVote = (idx: number): void => {
-    if (isClosed) return;
-    if (isQuiz && hasVoted) return; // викторина: переголосовать нельзя
+    if (!canVote) return;
     // Повторное нажатие по своему варианту снимает голос; при одиночном
     // выборе нажатие по другому варианту его переносит (это делает setPollVote).
     const on = !myVotedIndices.has(idx);
@@ -109,12 +124,17 @@ export function DmPollBubble({
       // тогда просто не давало ничего, без единого слова почему.
       if (!res.ok) showError(res.reason);
       void reload();
-    });
+    }).catch((e) => showError(userErrorText(e, 'Не удалось отправить голос')));
   };
 
   return (
     <View style={{ minWidth: 200 }}>
       <Text style={{ color: ink.text, fontWeight: '600', marginBottom: 8 }}>{isQuiz ? '🧠 ' : allowMultiple ? '☑️ ' : '📊 '}{poll.question}</Text>
+      {readPhase === 'failed' ? (
+        <Text style={{ color: ink.muted, fontSize: font.xs, marginBottom: 6 }} testID="dm_poll_read_failed">
+          {POLL_UNREADABLE_TEXT}
+        </Text>
+      ) : null}
       {isQuiz && hasVoted ? (
         myVotedIndices.has(poll.correctAnswer ?? -1)
           ? <Text style={{ color: ink.correct, fontWeight: '700', fontSize: 13, marginBottom: 6 }}>✅ Правильно!</Text>
@@ -131,7 +151,7 @@ export function DmPollBubble({
         let barColor = isMine ? ink.barMine : ink.bar;
         if (isQuiz && hasVoted) barColor = isCorrect ? ink.correctBar : (isMine ? ink.wrongBar : ink.bar);
         return (
-          <AppPressable key={idx} onPress={() => castVote(idx)} disabled={(hasVoted && isQuiz) || isClosed}>
+          <AppPressable key={idx} onPress={() => castVote(idx)} disabled={!canVote}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
               <Text style={{ color: isMine ? ink.accent : (isQuiz && hasVoted && isCorrect ? ink.correct : ink.text), fontWeight: isMine || (isQuiz && isCorrect) ? '700' : '400', flex: 1 }}>
                 {isMine ? '✓ ' : (isQuiz && hasVoted && isCorrect ? '✓ ' : '')}{opt}
