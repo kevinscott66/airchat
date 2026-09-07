@@ -3,6 +3,7 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
+import { runGuardedOp } from '../../runGuardedOp';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { font, scrim } from '../../../theme';
@@ -83,10 +84,17 @@ interface RowProps {
 function StarredRowImpl({ entry, textColor, mutedColor, primaryColor, starColor, borderColor, setStarredEntries, onReload }: RowProps) {
   const grpMsg = entry.message as GroupMessageRow;
   const handleUnstar = useCallback(() => {
-    void setGroupMessageStarred(grpMsg.id, false).then(() => {
+    // v4.32.639: отказ записи доходит до человека. Без `.catch` он уходил в
+    // неперехваченное отклонение обещания: строка оставалась в списке, ни
+    // одного слова не появлялось, и «Убрать из избранного» выглядело кнопкой,
+    // которая иногда просто не срабатывает. В переписке этот же случай уже
+    // закрыт тем же runGuardedOp (ChatScreen, unstarFromModal) — здесь он
+    // оставался открытым.
+    runGuardedOp(async () => {
+      await setGroupMessageStarred(grpMsg.id, false);
       setStarredEntries((prev) => prev.filter((e) => (e.message as GroupMessageRow).id !== grpMsg.id));
       onReload();
-    });
+    }, 'Не удалось убрать из избранного', 'ui_group_unstar_failed');
   }, [grpMsg.id, setStarredEntries, onReload]);
   const unreadable = isUnreadableMessage(grpMsg);
 

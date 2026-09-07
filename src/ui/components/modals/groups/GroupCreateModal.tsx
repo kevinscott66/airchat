@@ -23,12 +23,13 @@ import type { KeyPairBytes } from '../../../../core/crypto/keyManager';
 import { listContacts, type Contact } from '../../../../core/social/contacts';
 import {
   createGroup,
-  getGroup,
+  getGroupRead,
   upsertGroupMember,
   recountGroupMembers,
   type GroupRow,
   type GroupType,
 } from '../../../../core/storage/local';
+import { isTrulyMissing } from '../../../../core/utils/lookupResult';
 import { profileManager } from '../../../../core/identity/profileManager';
 import { getOwnDisplayName } from '../../../../core/identity/ownProfile';
 import { showError, showSuccess } from '../../userFeedback';
@@ -65,9 +66,15 @@ export function CreateGroupModal({
   useEffect(() => {
     if (visible && pair) {
       const myPubB64 = Buffer.from(pair.publicKey).toString('base64');
-      void listContacts().then((all) =>
-        setContacts(all.filter((c) => c.peerPublicKey !== myPubB64))
-      );
+      void listContacts()
+        .then((all) => setContacts(all.filter((c) => c.peerPublicKey !== myPubB64)))
+        .catch((e) => {
+          // v4.32.639: раздел «Добавить участников» рисуется только при
+          // непустом списке контактов. Отказ чтения молча убирал его целиком —
+          // выглядело так, будто контактов нет вовсе, и группа заводилась
+          // пустой, хотя выбирать было из кого.
+          showError(userErrorText(e, 'Не удалось загрузить контакты'));
+        });
     }
   }, [visible, pair]);
 
@@ -132,8 +139,22 @@ export function CreateGroupModal({
         // контакты группы у себя не увидят и их сообщения к нему не придут.
         announceCtl(sendGroupInvite(id, cleanName, type, invited, [...selectedPeers], myDisplayNameCreate));
       }
-      const group = await getGroup(id, pid);
-      if (group) { showSuccess('Группа создана'); onCreated(group); }
+      // v4.32.639: `getGroup` схлопывал сбой чтения в `null` (см. lookupValue),
+      // и ветка `if (group)` на нём молчала: окно закрывалось без «Группа
+      // создана» и без ошибки, onCreated не звался — только что созданная
+      // группа не появлялась в списке до перезагрузки, и понять, создалась ли
+      // она вообще, было нельзя.
+      const read = await getGroupRead(id, pid);
+      if (read.state === 'found') {
+        showSuccess('Группа создана');
+        onCreated(read.value);
+      } else {
+        showError(
+          isTrulyMissing(read)
+            ? 'Группа создана, но в списке её нет. Обновите список групп.'
+            : 'Группа создана, но прочитать её не удалось. Обновите список групп.'
+        );
+      }
       reset();
       onClose();
     } catch (e) {
