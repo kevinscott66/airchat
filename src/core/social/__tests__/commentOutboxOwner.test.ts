@@ -97,3 +97,38 @@ describe('разбор очереди не трогает чужие запис�
     expect(code.findIndex((l) => l.includes('signAndBroadcastFeedEnvelope('))).toBeGreaterThan(0);
   });
 });
+
+/**
+ * v4.32.615: задержка повторов считалась по первой записи очереди.
+ *
+ * Чужая запись ждёт своего профиля и попытку не тратит — её `retries`
+ * остаётся нулём. Стоя первой, она держала показатель степени на нуле, то
+ * есть задержку на начальных тридцати секундах, все семь суток жизни
+ * очереди: приложение будило рассылку две тысячи раз в сутки, ничего при
+ * этом не отправляя.
+ */
+describe('задержка повторов считается по своим записям', () => {
+  const TIMER = bodyOf(SOURCE, 'function scheduleCommentOutboxRetry(');
+  const CODE = codeLines(TIMER).join('\n');
+
+  it('первая запись очереди больше не задаёт задержку', () => {
+    expect(TIMER).not.toContain('q[0]?.retries');
+    expect(CODE).toContain('const myDid = publicKeyToDidKey(p.publicKey);');
+    expect(CODE).toContain('const mine = q.filter((i) => i.authorDid === myDid);');
+  });
+
+  it('берётся наименьшее число попыток среди своих', () => {
+    expect(CODE).toContain('mine.reduce((acc, i) => Math.min(acc, i.retries), Number.MAX_SAFE_INTEGER)');
+    // Показатель степени и потолок остались прежними.
+    expect(CODE).toContain('Math.min(RETRY_DELAY_MS * Math.pow(2, Math.min(r, 6)), 30 * 60_000)');
+  });
+
+  it('проход, которому нечего отправлять, себя не перезаводит', () => {
+    const reschedule = CODE.indexOf('scheduleCommentOutboxRetry(p, nextDelay);');
+    const guard = CODE.indexOf('if (mine.length > 0) {');
+    expect(guard).toBeGreaterThan(-1);
+    expect(reschedule).toBeGreaterThan(guard);
+    // Единственная перезапись таймера в этом теле — внутри ветки своих записей.
+    expect((CODE.match(/scheduleCommentOutboxRetry\(p, /g) ?? []).length).toBe(1);
+  });
+});

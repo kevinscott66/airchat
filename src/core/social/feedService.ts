@@ -1297,16 +1297,38 @@ async function _flushFeedQueueForPeerImpl(pair: KeyPairBytes, peerDid: string): 
       if (item.deliveredTo && item.deliveredTo.includes(peerDid)) {
         return item;
       }
+      // v4.32.615: та же защита, что и у общего прохода. Мьютекс держит
+      // следующий проход лишь до ВОЗВРАТА предыдущего, а тот возвращается по
+      // таймауту, пока рассылка ещё идёт. Без этой проверки обнаружение
+      // контакта в сети запускало вторую рассылку той же записи поверх
+      // первой: контакт получал пост дважды, а `deliveredTo` писали две
+      // ветки вперемешку.
+      if (inFlightQueueItems.has(item.id)) {
+        log.debug('feed_queue_item_in_flight_skip', { id: item.id });
+        return item;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
       try {
+        inFlightQueueItems.add(item.id);
+        const attempt = republishQueuedItem(pair, item, { onlyDids });
+        void attempt.then(
+          () => {
+            inFlightQueueItems.delete(item.id);
+            return timedOut ? mergeLateDelivery(item) : undefined;
+          },
+          () => { inFlightQueueItems.delete(item.id); },
+        );
         const result = await Promise.race([
-          republishQueuedItem(pair, item, { onlyDids }),
-          new Promise<{ fullyDelivered: boolean; foreign?: boolean }>((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`peer_flush_timeout_${FLUSH_ITEM_TIMEOUT_MS}ms`)),
-              FLUSH_ITEM_TIMEOUT_MS,
-            ),
-          ),
+          attempt,
+          new Promise<{ fullyDelivered: boolean; foreign?: boolean }>((_, reject) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              reject(new Error(`peer_flush_timeout_${FLUSH_ITEM_TIMEOUT_MS}ms`));
+            }, FLUSH_ITEM_TIMEOUT_MS);
+          }),
         ]);
+        if (timer) clearTimeout(timer);
         // fullyDelivered here проверяет ВСЕХ контактов — для targeted retry это оверкилл,
         // но корректно: если этот peer был последним недоставленным, дропаем item.
         if (result.fullyDelivered) {
@@ -1318,6 +1340,7 @@ async function _flushFeedQueueForPeerImpl(pair: KeyPairBytes, peerDid: string): 
         // item.deliveredTo уже обновлён мутацией внутри republishQueuedItem — spread сохранит.
         return { ...item };
       } catch (e) {
+        if (timer) clearTimeout(timer);
         log.warn('feed_queue_peer_flush_error', {
           id: item.id, peerDid: peerDid.slice(0, 24),
           err: e instanceof Error ? e.message : String(e),
@@ -3716,11 +3739,24 @@ function scheduleCommentOutboxRetry(pair: KeyPairBytes, delayMs: number): void {
       if (!p) return;
       await flushCommentOutbox(p);
       const q = await loadCommentOutbox();
-      if (q.length > 0) {
-        const r = q[0]?.retries ?? 0;
+      // v4.32.615: задержка считается по СВОИМ записям, а не по первой в
+      // очереди. Чужая запись ждёт своего профиля и попытку не тратит, то
+      // есть её `retries` остаётся нулём навсегда; стоя первой в очереди,
+      // она удерживала задержку на начальных тридцати секундах все семь
+      // суток жизни очереди. По той же причине проход, которому нечего
+      // отправлять, себя больше не перезаводит: очередь оживит переключение
+      // профиля (resumeCommentOutbox) или новый комментарий.
+      const myDid = publicKeyToDidKey(p.publicKey);
+      const mine = q.filter((i) => i.authorDid === myDid);
+      if (mine.length > 0) {
+        // Наименьшее число попыток среди своих: только что добавленный
+        // комментарий не должен ждать столько же, сколько давно лежащий.
+        const r = mine.reduce((acc, i) => Math.min(acc, i.retries), Number.MAX_SAFE_INTEGER);
         // Экспоненциальная задержка, потолок 30 мин.
         const nextDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.min(r, 6)), 30 * 60_000);
         scheduleCommentOutboxRetry(p, nextDelay);
+      } else if (q.length > 0) {
+        log.debug('comment_outbox_idle_foreign_only', { size: q.length });
       }
     })();
   }, delayMs);
