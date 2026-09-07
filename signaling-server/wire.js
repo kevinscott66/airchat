@@ -18,6 +18,43 @@ const MAX_PEER_ID_LENGTH = 256;
 
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
+/** Адрес — короткая строка без пробелов и запятых: IPv4, IPv6 или IPv6%zone. */
+const CLIENT_ADDRESS_RE = /^[0-9A-Fa-f.:%_-]{3,64}$/;
+
+/**
+ * Доверяем ли заголовкам обратного прокси (v4.32.617).
+ *
+ * По умолчанию — нет, и это правильный по умолчанию ответ: если сервер стоит
+ * голым портом наружу, `X-Forwarded-For` присылает сам клиент, и предел
+ * подключений с одного адреса обходится одной строкой заголовка. Включать
+ * разрешено только там, где прокси заведомо переписывает заголовок сам.
+ */
+function trustProxyEnabled(env = process.env) {
+  return /^(1|true|yes)$/i.test(String(env?.TRUST_PROXY ?? ''));
+}
+
+/**
+ * Адрес клиента с учётом прокси.
+ *
+ * Без доверия — адрес сокета, как и было. С доверием берётся `Fly-Client-IP`
+ * (его прокси ставит сам и целиком), а если его нет — ПОСЛЕДНИЙ элемент
+ * `X-Forwarded-For`. Именно последний: всё, что клиент прислал сам, прокси
+ * оставляет слева и дописывает настоящий адрес справа. Взять первый —
+ * значит снова поверить клиенту.
+ */
+function clientAddressFrom(headers, fallback, trustProxy) {
+  const plain = typeof fallback === 'string' && fallback.length > 0 ? fallback : 'unknown';
+  if (!trustProxy || !headers) return plain;
+  const direct = headers['fly-client-ip'];
+  if (typeof direct === 'string' && CLIENT_ADDRESS_RE.test(direct.trim())) return direct.trim();
+  const forwarded = headers['x-forwarded-for'];
+  const chain = Array.isArray(forwarded) ? forwarded[forwarded.length - 1] : forwarded;
+  if (typeof chain !== 'string') return plain;
+  const hops = chain.split(',');
+  const last = hops[hops.length - 1].trim();
+  return CLIENT_ADDRESS_RE.test(last) ? last : plain;
+}
+
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -83,4 +120,6 @@ module.exports = {
   isPeerId,
   isSignature,
   verifyEd25519,
+  trustProxyEnabled,
+  clientAddressFrom,
 };

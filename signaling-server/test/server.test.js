@@ -20,6 +20,25 @@ function waitForEvent(socket, event, timeoutMs = 1000) {
   });
 }
 
+/**
+ * Журнал непринятых сервер убирает только по расписке о получении
+ * (v4.32.617) — настоящий клиент её шлёт, значит и здесь ждём с распиской.
+ */
+function waitForMissedCalls(socket, timeoutMs = 1000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off('missed_calls', onEvent);
+      reject(new Error('Timed out waiting for missed_calls'));
+    }, timeoutMs);
+    const onEvent = (value, ack) => {
+      clearTimeout(timer);
+      if (typeof ack === 'function') ack();
+      resolve(value);
+    };
+    socket.once('missed_calls', onEvent);
+  });
+}
+
 async function connectedClient(port) {
   const socket = connect(`http://127.0.0.1:${port}`, { transports: ['websocket'] });
   const challenge = waitForEvent(socket, 'registration_challenge');
@@ -266,7 +285,7 @@ test('звонок в пустоту ждёт получателя и уезжа
 
   const bob = await connectedClient(port);
   t.after(() => bob.close());
-  const missed = waitForEvent(bob, 'missed_calls');
+  const missed = waitForMissedCalls(bob);
   await registerClient(bob, bobId, 'room-a');
   const payload = await missed;
   assert.equal(payload.calls.length, 1);
@@ -294,7 +313,7 @@ test('журнал непринятых отдаётся один раз и не
 
   const bob = await connectedClient(port);
   t.after(() => bob.close());
-  const missed = waitForEvent(bob, 'missed_calls');
+  const missed = waitForMissedCalls(bob);
   await registerClient(bob, bobId, 'room-a');
   assert.equal((await missed).calls.length, 1);
 
@@ -328,7 +347,7 @@ test('дозвонившийся звонок из журнала неприня
   // Боб появился и повтор предложения доехал — звонок состоялся.
   const bob = await connectedClient(port);
   t.after(() => bob.close());
-  const missed = waitForEvent(bob, 'missed_calls');
+  const missed = waitForMissedCalls(bob);
   await registerClient(bob, bobId, 'room-a');
   await missed;
   const delivered = waitForEvent(bob, 'offer');
@@ -456,7 +475,7 @@ test('расписка звонившего доезжает вместе с з�
 
   const bob = await connectedClient(port);
   t.after(() => bob.close());
-  const missed = waitForEvent(bob, 'missed_calls');
+  const missed = waitForMissedCalls(bob);
   await registerClient(bob, bobId, 'room-a');
   const payload = await missed;
   assert.equal(payload.calls.length, 1);
@@ -544,7 +563,7 @@ test('переполнение журнала вытесняет того, к к
 
   const thirdSocket = await connectedClient(port);
   t.after(() => thirdSocket.close());
-  const thirdMissed = waitForEvent(thirdSocket, 'missed_calls');
+  const thirdMissed = waitForMissedCalls(thirdSocket);
   await registerClient(thirdSocket, third, 'room-a');
   assert.equal((await thirdMissed).calls.length, 1);
 });
@@ -582,9 +601,228 @@ test('повторный звонок обновляет давность: вы�
   // А первый на месте, и оба его звонка сосчитаны как один.
   const firstSocket = await connectedClient(port);
   t.after(() => firstSocket.close());
-  const firstMissed = waitForEvent(firstSocket, 'missed_calls');
+  const firstMissed = waitForMissedCalls(firstSocket);
   await registerClient(firstSocket, first, 'room-a');
   const payload = await firstMissed;
   assert.equal(payload.calls.length, 1);
   assert.equal(payload.calls[0].attempts, 2);
 });
+
+test('задача на подпись меняется после регистрации (v4.32.617)', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  // Новую задачу ловим заранее: она приходит вместе с ответом о регистрации.
+  const rotated = waitForEvent(alice, 'registration_challenge');
+  await registerClient(alice, aliceId, 'room-a');
+  const next = (await rotated).challenge;
+  assert.notEqual(next, alice.registrationChallenge);
+
+  // Раньше задачу обнуляли, и вторая регистрация проверялась против строки
+  // «null» — то есть против заранее известного всем текста.
+  const forged = { roomId: 'room-b', peerId: aliceId.peerId };
+  forged.signature = crypto
+    .sign(null, Buffer.from(`null\n${forged.roomId}\n${aliceId.peerId}`), aliceId.privateKey)
+    .toString('base64');
+  const refused = await new Promise((resolve) => alice.emit('register', forged, resolve));
+  assert.deepEqual(refused, { ok: false, error: 'invalid_proof' });
+
+  // Проверка не пустая: с новой задачей та же перерегистрация проходит —
+  // так на живом сокете меняется профиль.
+  const honest = { roomId: 'room-b', peerId: aliceId.peerId };
+  honest.signature = crypto
+    .sign(null, Buffer.from(`${next}\n${honest.roomId}\n${aliceId.peerId}`), aliceId.privateKey)
+    .toString('base64');
+  const accepted = await new Promise((resolve) => alice.emit('register', honest, resolve));
+  assert.deepEqual(accepted, { ok: true, roomId: 'room-b', peerId: aliceId.peerId });
+});
+
+test('журнал звонков ограничен и по числу записей (v4.32.617)', async (t) => {
+  // Пределы «двадцать звонивших» и «десять тысяч получателей» перемножаются
+  // плохо; общий предел считает записи целиком.
+  const server = createSignalingServer({ port: 0, missedCallEntries: 2 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const first = identity();
+  const second = identity();
+  const third = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  for (const who of [first, second, third]) {
+    const unavailable = waitForEvent(alice, 'peer_unavailable');
+    alice.emit('offer', { roomId: 'room-a', targetPeerId: who.peerId, sdp: 'v=0' });
+    await unavailable;
+  }
+
+  // Третья запись вытеснила первую: получателей трое, а записей разрешено две.
+  const firstSocket = await connectedClient(port);
+  t.after(() => firstSocket.close());
+  let firstDelivery = null;
+  firstSocket.on('missed_calls', (value) => { firstDelivery = value; });
+  await registerClient(firstSocket, first, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(firstDelivery, null);
+
+  // Проверка не пустая: последний звонок на месте.
+  const thirdSocket = await connectedClient(port);
+  t.after(() => thirdSocket.close());
+  const thirdMissed = waitForMissedCalls(thirdSocket);
+  await registerClient(thirdSocket, third, 'room-a');
+  assert.equal((await thirdMissed).calls.length, 1);
+});
+
+test('расписки не занимают больше отведённого (v4.32.617)', async (t) => {
+  const receipt = 'r'.repeat(64);
+  const tight = createSignalingServer({ port: 0, missedCallReceiptBytes: 8 });
+  const roomy = createSignalingServer({ port: 0, missedCallReceiptBytes: 1024 });
+  t.after(async () => {
+    await tight.close();
+    await roomy.close();
+  });
+
+  async function missedAfterReceipt(server) {
+    const port = await server.listen();
+    const caller = await connectedClient(port);
+    const callerId = identity();
+    const calleeId = identity();
+    await registerClient(caller, callerId, 'room-a');
+    const unavailable = waitForEvent(caller, 'peer_unavailable');
+    caller.emit('offer', { roomId: 'room-a', targetPeerId: calleeId.peerId, sdp: 'v=0' });
+    await unavailable;
+    caller.emit('missed_receipt', { targetPeerId: calleeId.peerId, e: receipt });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const callee = await connectedClient(port);
+    let delivery = null;
+    callee.on('missed_calls', (value) => { delivery = value; });
+    await registerClient(callee, calleeId, 'room-a');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    caller.close();
+    callee.close();
+    return delivery;
+  }
+
+  // Расписка длиннее отведённого объёма — запись вытесняется целиком.
+  assert.equal(await missedAfterReceipt(tight), null);
+  // Проверка не пустая: при обычном запасе расписка доезжает.
+  const kept = await missedAfterReceipt(roomy);
+  assert.equal(kept.calls.length, 1);
+  assert.equal(kept.calls[0].e, receipt);
+});
+
+test('за прокси предел на адрес считает клиента, а не прокси (v4.32.617)', async (t) => {
+  const server = createSignalingServer({ port: 0, maxConnectionsPerIp: 1, trustProxy: true });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+
+  const open = (forwarded) => new Promise((resolve) => {
+    const socket = connect(`http://127.0.0.1:${port}`, {
+      transports: ['polling'],
+      extraHeaders: { 'x-forwarded-for': forwarded },
+    });
+    socket.on('connect', () => resolve({ socket, ok: true }));
+    socket.on('connect_error', () => resolve({ socket, ok: false }));
+  });
+
+  // Все три идут с одной машины, но прокси называет разных клиентов.
+  const a = await open('10.0.0.1');
+  const b = await open('10.0.0.2');
+  t.after(() => { a.socket.close(); b.socket.close(); });
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+
+  // Проверка не пустая: второй с того же клиента предел уже нарушает,
+  // и подделанный левый участок цепочки от него не спасает.
+  const c = await open('9.9.9.9, 10.0.0.1');
+  t.after(() => c.socket.close());
+  assert.equal(c.ok, false);
+});
+
+test('журнал переживает обрыв на самой доставке (v4.32.617)', async (t) => {
+  const server = createSignalingServer({ port: 0, missedDeliveryAckMs: 100 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  // Боб входит и обрывается, не подтвердив получение: раньше журнал удалялся
+  // в тот же миг, когда отправлялся, и звонок пропадал навсегда.
+  const bob = await connectedClient(port);
+  const arrived = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  await arrived;
+  bob.close();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  const bobAgain = await connectedClient(port);
+  t.after(() => bobAgain.close());
+  const again = waitForMissedCalls(bobAgain);
+  await registerClient(bobAgain, bobId, 'room-a');
+  assert.equal((await again).calls.length, 1);
+
+  // Проверка не пустая: подтверждённый журнал во второй раз не приходит.
+  bobAgain.close();
+  const bobThird = await connectedClient(port);
+  t.after(() => bobThird.close());
+  let third = null;
+  bobThird.on('missed_calls', (value) => { third = value; });
+  await registerClient(bobThird, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(third, null);
+});
+
+test('старая сборка без расписки журнал всё же исчерпывает (v4.32.617)', async (t) => {
+  // Ждать расписки вечно нельзя: сборки до 4.32.617 её не шлют, и журнал
+  // приходил бы им заново при каждом входе.
+  const server = createSignalingServer({ port: 0, missedDeliveryAckMs: 100 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  const arrived = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  assert.equal((await arrived).calls.length, 1);
+  // Расписки нет, но связь есть — значит доехало. Ждём истечения срока.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  bob.close();
+  const bobAgain = await connectedClient(port);
+  t.after(() => bobAgain.close());
+  let secondDelivery = null;
+  bobAgain.on('missed_calls', (value) => { secondDelivery = value; });
+  await registerClient(bobAgain, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(secondDelivery, null);
+});
+

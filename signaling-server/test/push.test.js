@@ -42,8 +42,11 @@ function makeIdentity() {
 async function withRoutes(overrides, run) {
   const sent = [];
   const routes = createPushRoutes({
-    registry: createTokenRegistry(overrides.registryOptions),
+    registry: overrides.registry ?? createTokenRegistry(overrides.registryOptions),
     limiter: overrides.limiter,
+    targetLimiter: overrides.targetLimiter,
+    registerLimiter: overrides.registerLimiter,
+    trustProxy: overrides.trustProxy,
     // Пустое окружение: иначе набор ключей на машине, где идут тесты, менял бы
     // их исход. Web-push подставляется явно тем тестом, которому он нужен.
     env: overrides.env ?? {},
@@ -607,3 +610,93 @@ test('открытый ключ VAPID отдаётся браузеру без �
     assert.equal(response.status, 404);
   });
 });
+
+test('переполненный реестр не отвечает успехом (v4.32.617)', async () => {
+  const first = makeIdentity();
+  const second = makeIdentity();
+  // Место ровно на одну запись: вторая уже не ляжет никуда.
+  await withRoutes({ registryOptions: { maxTokens: 1 } }, async ({ post, routes }) => {
+    const register = (who) => post('/register-token', who.sign({
+      peerId: who.peerId, platform: 'android', token: ANDROID_TOKEN, ts: Date.now(),
+    }));
+    assert.equal((await register(first)).status, 204);
+    const response = await register(second);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'not_stored' });
+    // Обещания без записи быть не должно: токена в реестре нет.
+    assert.equal(routes.registry.get(second.peerId), null);
+  });
+});
+
+test('проверка не пустая: повтор той же метки успехом и остаётся (v4.32.617)', async () => {
+  const me = makeIdentity();
+  await withRoutes({}, async ({ post, routes }) => {
+    const envelope = me.sign({
+      peerId: me.peerId, platform: 'android', token: ANDROID_TOKEN, ts: Date.now(),
+    });
+    assert.equal((await post('/register-token', envelope)).status, 204);
+    // Тот же конверт второй раз: реестр отвечает отказом, но запись на месте
+    // и не хуже присланной — устройству отвечаем как об успехе.
+    assert.equal((await post('/register-token', envelope)).status, 204);
+    assert.equal(routes.registry.get(me.peerId).token, ANDROID_TOKEN);
+  });
+});
+
+test('счётчик на адрес не даёт набить реестр (v4.32.617)', async () => {
+  await withRoutes({ registerLimiter: createSendLimiter({ limit: 2 }) }, async ({ post }) => {
+    const register = () => {
+      const who = makeIdentity();
+      return post('/register-token', who.sign({
+        peerId: who.peerId, platform: 'android', token: ANDROID_TOKEN, ts: Date.now(),
+      }));
+    };
+    assert.equal((await register()).status, 204);
+    assert.equal((await register()).status, 204);
+    // Ключи бесплатны, а адрес — нет: третья регистрация с того же адреса
+    // не проходит, хотя подпись у неё честная.
+    assert.equal((await register()).status, 429);
+  });
+});
+
+test('предел на получателя не обходится сменой ключа (v4.32.617)', async () => {
+  const peer = makeIdentity();
+  const other = makeIdentity();
+  await withRoutes({ targetLimiter: createSendLimiter({ limit: 2 }) }, async ({ post, routes }) => {
+    routes.registry.set(peer.peerId, ANDROID_TOKEN, 'android', Date.now());
+    routes.registry.set(other.peerId, ANDROID_TOKEN, 'android', Date.now());
+    const send = (from, to) => post('/send-push', from.sign({
+      cid: 'bafyreiabc123',
+      kind: 'dm',
+      senderDid: 'did:key:z6MkExample',
+      senderPeerId: from.peerId,
+      targetPeerId: to.peerId,
+      ts: Date.now(),
+    }));
+    assert.equal((await send(makeIdentity(), peer)).status, 204);
+    assert.equal((await send(makeIdentity(), peer)).status, 204);
+    // Третий отправитель — третий ключ, свой счётчик отправителя пуст.
+    // Считается получатель, и его предел уже выбран.
+    assert.equal((await send(makeIdentity(), peer)).status, 429);
+    // Проверка не пустая: другому получателю тот же отправитель доезжает.
+    assert.equal((await send(makeIdentity(), other)).status, 204);
+  });
+});
+
+test('счётчик отправок не растёт без предела (v4.32.617)', () => {
+  const bounded = createSendLimiter({ limit: 1, bucketsMax: 2 });
+  assert.equal(bounded('a'), true);
+  assert.equal(bounded('a'), false);
+  // Два новых ключа вытесняют самое старое окно — счёт «a» начинается заново.
+  bounded('b');
+  bounded('c');
+  assert.equal(bounded('a'), true);
+
+  // Проверка не пустая: пока места хватает, окно живёт и предел держится.
+  const roomy = createSendLimiter({ limit: 1, bucketsMax: 100 });
+  assert.equal(roomy('a'), true);
+  assert.equal(roomy('a'), false);
+  roomy('b');
+  roomy('c');
+  assert.equal(roomy('a'), false);
+});
+

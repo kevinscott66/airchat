@@ -22,7 +22,15 @@
 
 const crypto = require('crypto');
 
-const { hasExactKeys, isBoundedString, isPeerId, isSignature, verifyEd25519 } = require('./wire');
+const {
+  hasExactKeys,
+  isBoundedString,
+  isPeerId,
+  isSignature,
+  verifyEd25519,
+  trustProxyEnabled,
+  clientAddressFrom,
+} = require('./wire');
 const { createWebPushClient, parseSubscription } = require('./webpush');
 const {
   MAX_TOKENS,
@@ -73,6 +81,30 @@ const MAX_DID_LENGTH = 256;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const SEND_RATE_WINDOW_MS = 60 * 1000;
 const SEND_RATE_LIMIT = 60;
+/**
+ * Второй счётчик — на получателя (v4.32.617).
+ *
+ * Первый считает отправителя, а отправитель здесь — это `senderPeerId` из
+ * подписанного конверта. Подпись говорит только, что ключ и правда его; завести
+ * новый ключ ничего не стоит. Пара сотен ключей — и один человек получает
+ * уведомление за уведомлением, каждое по своему счётчику и потому в пределах.
+ * Предел на получателя такого не разрешает: сколько бы ключей ни было, до него
+ * дойдёт столько, сколько он в состоянии прочитать.
+ */
+const SEND_TARGET_RATE_LIMIT = 120;
+/** Счётчик на адрес: регистрация токена подписана, но ключи бесплатны. */
+const REGISTER_RATE_WINDOW_MS = 60 * 1000;
+const REGISTER_RATE_LIMIT = 20;
+/**
+ * Предел числа окон в счётчике (v4.32.617).
+ *
+ * Уборка ниже выбрасывает только истёкшие окна, а внутри одного окна не
+ * истекло ни одно: с новым ключом на каждый запрос карта росла без предела, и
+ * каждая новая запись сверх десяти тысяч заводила полный обход карты — цена
+ * запроса росла вместе с ней. Теперь сверх предела вытесняется самое старое
+ * окно: карта не растёт, обход остаётся разовым.
+ */
+const RATE_BUCKETS_MAX = 20000;
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 60 * 1000;
 // v4.32.560: 'web' — установленная как PWA страница. Токеном ей служит не
@@ -160,6 +192,7 @@ function createSendLimiter(options = {}) {
   const windowMs = options.windowMs ?? SEND_RATE_WINDOW_MS;
   const limit = options.limit ?? SEND_RATE_LIMIT;
   const now = options.now ?? (() => Date.now());
+  const bucketsMax = options.bucketsMax ?? RATE_BUCKETS_MAX;
   const buckets = new Map();
   return function allow(key) {
     const at = now();
@@ -172,6 +205,9 @@ function createSendLimiter(options = {}) {
           if (at - b.startedAt >= windowMs) buckets.delete(k);
         }
       }
+      // Уборка не помогла — значит окна ещё живы, и их слишком много. Порядок
+      // вставки в Map — он же порядок давности: выбрасываем самые старые.
+      while (buckets.size > bucketsMax) buckets.delete(buckets.keys().next().value);
       return true;
     }
     if (bucket.count >= limit) return false;
@@ -366,6 +402,15 @@ function createPushRoutes(options = {}) {
   const log = options.log ?? (() => {});
   const registry = options.registry ?? createTokenStore({ env: options.env, now, log });
   const allowSend = options.limiter ?? createSendLimiter({ now });
+  const allowTarget = options.targetLimiter
+    ?? createSendLimiter({ now, limit: SEND_TARGET_RATE_LIMIT });
+  const allowRegister = options.registerLimiter
+    ?? createSendLimiter({ now, windowMs: REGISTER_RATE_WINDOW_MS, limit: REGISTER_RATE_LIMIT });
+  const trustProxy = options.trustProxy ?? trustProxyEnabled(options.env ?? process.env);
+
+  function addressOf(request) {
+    return clientAddressFrom(request.headers, request.socket?.remoteAddress, trustProxy);
+  }
   let fcm = options.fcm ?? null;
   if (!fcm) {
     const account = options.serviceAccount ?? loadServiceAccount(options.env);
@@ -377,13 +422,35 @@ function createPushRoutes(options = {}) {
     ?? createWebPushClient({ env: options.env, now, fetch: options.fetch });
 
   async function handleRegister(request, response) {
+    // Подпись говорит, что ключ настоящий, но ключи ничего не стоят: без
+    // счётчика реестр наполнялся с одного адреса до предела за минуту, и
+    // дальше он не принимал уже никого (v4.32.617).
+    if (!allowRegister(addressOf(request))) {
+      respond(response, 429, { error: 'rate_limited' });
+      return;
+    }
     const body = await readJsonBody(request);
     const claim = openEnvelope(body, ['peerId', 'platform', 'token', 'ts'], 'peerId', now());
     if (!claim || !PLATFORMS.has(claim.platform) || !isRegistrationToken(claim.token, claim.platform)) {
       respond(response, 400, { error: 'bad_request' });
       return;
     }
-    registry.set(claim.peerId, claim.token, claim.platform, claim.ts);
+    // Реестр отвечает `false` по двум разным поводам, и ответ у них разный.
+    // Метка не новее сохранённой — это повтор: запись на месте и не хуже
+    // присланной, устройству отвечаем как об успехе. Записи нет вовсе —
+    // значит хранилище переполнено, и уведомлений у человека не будет. Раньше
+    // ответ реестра отбрасывался молча, и во втором случае устройство слышало
+    // 204: считало, что уведомления у него есть (v4.32.617).
+    if (!registry.set(claim.peerId, claim.token, claim.platform, claim.ts)) {
+      if (!registry.get(claim.peerId)) {
+        log('push_token_rejected', { platform: claim.platform, tokens: registry.size });
+        respond(response, 503, { error: 'not_stored' });
+        return;
+      }
+      log('push_token_replayed', { platform: claim.platform, tokens: registry.size });
+      respond(response, 204);
+      return;
+    }
     log('push_token_registered', { platform: claim.platform, tokens: registry.size });
     respond(response, 204);
   }
@@ -404,7 +471,7 @@ function createPushRoutes(options = {}) {
       respond(response, 400, { error: 'bad_request' });
       return;
     }
-    if (!allowSend(claim.senderPeerId)) {
+    if (!allowSend(claim.senderPeerId) || !allowTarget(claim.targetPeerId)) {
       respond(response, 429, { error: 'rate_limited' });
       return;
     }
@@ -492,6 +559,10 @@ module.exports = {
     MAX_TOKENS,
     SEND_RATE_WINDOW_MS,
     SEND_RATE_LIMIT,
+    SEND_TARGET_RATE_LIMIT,
+    REGISTER_RATE_WINDOW_MS,
+    REGISTER_RATE_LIMIT,
+    RATE_BUCKETS_MAX,
     IOS_ALERT_TITLE,
     IOS_ALERT_BODY,
     IOS_CALL_BODY,

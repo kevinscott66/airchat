@@ -11,7 +11,7 @@ export type { MeshReceiptKind, MeshReceipt } from './receipt';
 export { createReceipt } from './receipt';
 export type { MeshRuntimeConfig } from './config';
 export { defaultMeshRuntimeConfig, mergeMeshConfig } from './config';
-export { markSeenOrDuplicate, allowRelayForContactPubKey } from './security';
+export { markSeenOrDuplicate } from './security';
 export type { MeshQueuedItem } from './storeForward';
 export { enqueueMesh, dequeueNextMesh, removeMeshQueued } from './storeForward';
 export { MeshScheduler, type MeshSchedulerHandlers } from './scheduler';

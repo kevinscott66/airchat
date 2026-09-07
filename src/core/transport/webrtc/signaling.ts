@@ -295,9 +295,26 @@ export class WebRTCSignaling {
     this.socket?.on('peer_unavailable', handler);
   }
 
-  onMissedCalls(handler: (msg: MissedCallsPayload) => void): void {
+  /**
+   * Журнал непринятых звонков с сервера.
+   *
+   * v4.32.617: обработчику отвечаем распиской. Раньше сервер убирал журнал в
+   * тот же миг, когда отправлял его, — сокет, оборвавшийся на этой секунде,
+   * уносил пропущенные звонки навсегда. Расписка уходит после того, как
+   * обработчик отработал: не отработал — сервер отдаст журнал ещё раз.
+   */
+  onMissedCalls(handler: (msg: MissedCallsPayload) => void | Promise<void>): void {
     this.socket?.off('missed_calls');
-    this.socket?.on('missed_calls', handler);
+    this.socket?.on('missed_calls', (msg: MissedCallsPayload, ack?: () => void) => {
+      void Promise.resolve()
+        .then(() => handler(msg))
+        .then(() => {
+          if (typeof ack === 'function') ack();
+        })
+        .catch(() => {
+          /* журнал останется на сервере до следующего входа */
+        });
+    });
   }
 
   /** @deprecated use register(roomId, peerId) */

@@ -12,6 +12,8 @@ const {
   isPeerId,
   isSignature,
   verifyEd25519,
+  trustProxyEnabled,
+  clientAddressFrom,
 } = require('./wire');
 const { createPushRoutes } = require('./push');
 
@@ -55,6 +57,30 @@ const MAX_MISSED_RECEIPT_LENGTH = 4 * 1024;
 const MISSED_CALLS_PER_PEER = 20;
 /** Скольким получателям сразу. Выше — вытесняем тех, чья запись старше всех. */
 const MISSED_CALL_PEERS = 10_000;
+/**
+ * Общий предел журнала (v4.32.617).
+ *
+ * Пределы выше считают каждый своё: двадцать звонивших одному получателю,
+ * десять тысяч получателей. Перемножаются они плохо — двести тысяч записей, и
+ * к каждой расписка до четырёх килобайт, то есть под гигабайт на машине, у
+ * которой всей памяти 256 МБ. Сами пределы менять не надо: они про смысл, а не
+ * про память. Поэтому рядом стоят два общих — на число записей и на объём
+ * расписок; при переполнении вытесняется запись того получателя, к чьему
+ * журналу дольше всех не обращались.
+ */
+const MISSED_CALL_ENTRIES = 20_000;
+/**
+ * Сколько ждать расписки о получении журнала (v4.32.617).
+ *
+ * Журнал удалялся до отправки: сокет, оборвавшийся в эту же секунду, уносил
+ * пропущенные звонки навсегда — человек о них не узнавал никогда, потому что
+ * заново их никто не создаст. Теперь удаление ждёт подтверждения от клиента.
+ * Старые сборки его не шлют, и ждать их вечно нельзя: по истечении срока
+ * журнал убирается, если сокет всё ещё на связи (значит, доехало), и
+ * остаётся, если связь оборвалась.
+ */
+const MISSED_DELIVERY_ACK_MS = 10 * 1000;
+const MISSED_CALL_RECEIPT_BYTES = 4 * 1024 * 1024;
 /**
  * Скольких собеседников помним одному подключению (v4.32.581).
  *
@@ -188,6 +214,12 @@ function createSignalingServer(options = {}) {
   const missedCalls = new Map();
   const missedCallTtlMs = options.missedCallTtlMs ?? MISSED_CALL_TTL_MS;
   const missedCallPeers = options.missedCallPeers ?? MISSED_CALL_PEERS;
+  const missedCallEntriesMax = options.missedCallEntries ?? MISSED_CALL_ENTRIES;
+  const missedDeliveryAckMs = options.missedDeliveryAckMs ?? MISSED_DELIVERY_ACK_MS;
+  const missedCallReceiptBytesMax = options.missedCallReceiptBytes ?? MISSED_CALL_RECEIPT_BYTES;
+  let missedCallEntries = 0;
+  let missedCallReceiptBytes = 0;
+  const trustProxy = options.trustProxy ?? trustProxyEnabled(options.env ?? process.env);
 
   /**
    * Порядок вставки в Map — он же порядок давности (v4.32.615).
@@ -204,7 +236,64 @@ function createSignalingServer(options = {}) {
     map.set(key, value);
   }
 
+  /** Единственное место, где запись исчезает поштучно: счётчики держатся тут. */
+  function dropMissedCall(byCaller, targetPeerId, fromPeerId) {
+    const entry = byCaller.get(fromPeerId);
+    if (!entry) return;
+    byCaller.delete(fromPeerId);
+    missedCallEntries -= 1;
+    if (entry.e) missedCallReceiptBytes -= entry.e.length;
+    if (byCaller.size === 0) missedCalls.delete(targetPeerId);
+  }
+
+  /** То же для целого получателя. */
+  function dropMissedTarget(targetPeerId) {
+    const byCaller = missedCalls.get(targetPeerId);
+    if (!byCaller) return;
+    for (const entry of byCaller.values()) {
+      missedCallEntries -= 1;
+      if (entry.e) missedCallReceiptBytes -= entry.e.length;
+    }
+    missedCalls.delete(targetPeerId);
+  }
+
+  /**
+   * Срок записи проверялся только при выдаче — а выдача бывает, если человек
+   * вернулся. Кто не вернулся, тот занимал память сутки и дольше. Обход идёт с
+   * головы: порядок вставки здесь — порядок последнего обращения, и на первом
+   * же непросроченном получателе можно остановиться.
+   */
+  function sweepMissedCalls(now) {
+    for (const [targetPeerId, byCaller] of missedCalls) {
+      let newest = 0;
+      for (const entry of byCaller.values()) if (entry.at > newest) newest = entry.at;
+      if (now - newest <= missedCallTtlMs) break;
+      dropMissedTarget(targetPeerId);
+    }
+  }
+
+  /** Вытеснить самую давнюю запись самого давнего получателя. */
+  function evictOldestMissedCall() {
+    const targetPeerId = missedCalls.keys().next().value;
+    if (targetPeerId === undefined) return false;
+    const byCaller = missedCalls.get(targetPeerId);
+    const fromPeerId = byCaller.keys().next().value;
+    if (fromPeerId === undefined) {
+      missedCalls.delete(targetPeerId);
+      return true;
+    }
+    dropMissedCall(byCaller, targetPeerId, fromPeerId);
+    return true;
+  }
+
+  function enforceMissedCallBudget() {
+    while (missedCallEntries > missedCallEntriesMax || missedCallReceiptBytes > missedCallReceiptBytesMax) {
+      if (!evictOldestMissedCall()) break;
+    }
+  }
+
   function rememberMissedCall(targetPeerId, fromPeerId, now = Date.now()) {
+    sweepMissedCalls(now);
     let byCaller = missedCalls.get(targetPeerId);
     if (!byCaller) byCaller = new Map();
     touchNewest(missedCalls, targetPeerId, byCaller);
@@ -218,13 +307,15 @@ function createSignalingServer(options = {}) {
       touchNewest(byCaller, fromPeerId, existing);
     } else {
       byCaller.set(fromPeerId, { at: now, attempts: 1, e: null });
+      missedCallEntries += 1;
     }
     while (byCaller.size > MISSED_CALLS_PER_PEER) {
-      byCaller.delete(byCaller.keys().next().value);
+      dropMissedCall(byCaller, targetPeerId, byCaller.keys().next().value);
     }
     while (missedCalls.size > missedCallPeers) {
-      missedCalls.delete(missedCalls.keys().next().value);
+      dropMissedTarget(missedCalls.keys().next().value);
     }
+    enforceMissedCallBudget();
   }
 
   /**
@@ -237,7 +328,9 @@ function createSignalingServer(options = {}) {
     if (!byCaller) return false;
     const entry = byCaller.get(fromPeerId);
     if (!entry) return false;
+    missedCallReceiptBytes += e.length - (entry.e ? entry.e.length : 0);
     entry.e = e;
+    enforceMissedCallBudget();
     return true;
   }
 
@@ -249,14 +342,13 @@ function createSignalingServer(options = {}) {
   function forgetMissedCall(targetPeerId, fromPeerId) {
     const byCaller = missedCalls.get(targetPeerId);
     if (!byCaller) return;
-    byCaller.delete(fromPeerId);
-    if (byCaller.size === 0) missedCalls.delete(targetPeerId);
+    dropMissedCall(byCaller, targetPeerId, fromPeerId);
   }
 
-  function takeMissedCalls(peerId, now = Date.now()) {
+  /** Прочитать журнал, ничего не удаляя: удаление ждёт расписки о получении. */
+  function readMissedCalls(peerId, now = Date.now()) {
     const byCaller = missedCalls.get(peerId);
     if (!byCaller) return [];
-    missedCalls.delete(peerId);
     const calls = [];
     for (const [fromPeerId, entry] of byCaller) {
       if (now - entry.at > missedCallTtlMs) continue;
@@ -319,7 +411,11 @@ function createSignalingServer(options = {}) {
   }
 
   function remoteAddress(socket) {
-    return socket.handshake.address || socket.conn.remoteAddress || 'unknown';
+    return clientAddressFrom(
+      socket.handshake.headers,
+      socket.handshake.address || socket.conn.remoteAddress,
+      trustProxy
+    );
   }
 
   function rejectConnection(socket, error) {
@@ -409,16 +505,33 @@ function createSignalingServer(options = {}) {
         if (previous && peers.get(previous.peerId)?.socket === socket) peers.delete(previous.peerId);
         const registration = { roomId: value.roomId, peerId: value.peerId, socket, counterparts: new Set() };
         socket.data.registration = registration;
-        socket.data.registrationChallenge = null;
+        // v4.32.617: задача не обнуляется, а меняется. Обнулённую проверяли
+        // как строку «null» — второй `register` по тому же сокету подписывал
+        // заранее известный текст, и подписью годилась любая старая. Заодно
+        // чинится смена профиля на живом сокете: раньше она перерегистрацию
+        // не проходила никогда.
+        socket.data.registrationChallenge = crypto
+          .randomBytes(REGISTRATION_CHALLENGE_BYTES)
+          .toString('base64url');
+        socket.emit('registration_challenge', { challenge: socket.data.registrationChallenge });
         clearTimeout(socket.data.registrationTimer);
         socket.data.registrationTimer = null;
         peers.set(value.peerId, registration);
         socket.emit('registered', { roomId: value.roomId, peerId: value.peerId });
         if (typeof ack === 'function') ack({ ok: true, roomId: value.roomId, peerId: value.peerId });
         // Первым делом после регистрации — то, что человек пропустил, пока
-        // его не было. Отправляем и уносим: журнал живёт до доставки.
-        const missed = takeMissedCalls(value.peerId);
-        if (missed.length > 0) socket.emit('missed_calls', { calls: missed });
+        // его не было. Журнал живёт до подтверждённой доставки.
+        const missed = readMissedCalls(value.peerId);
+        if (missed.length > 0) {
+          const forPeerId = value.peerId;
+          socket.timeout(missedDeliveryAckMs).emit('missed_calls', { calls: missed }, (error) => {
+            // Ошибка здесь — истёкшее ожидание. Если сокет на связи, значит
+            // журнал доехал, а расписки не шлёт старая сборка: убираем. Если
+            // связь оборвалась — журнал остаётся до следующего входа.
+            if (error && !socket.connected) return;
+            dropMissedTarget(forPeerId);
+          });
+        }
       }, false, ack);
     });
 

@@ -142,3 +142,54 @@ describe('WebRTCSignaling — listener deduplication', () => {
     expect(s.isRegistered()).toBe(true);
   });
 });
+
+describe('WebRTCSignaling — расписка о получении журнала (v4.32.617)', () => {
+  test('расписка уходит только после обработчика', async () => {
+    const s = await connectedSignaling();
+    const seen: unknown[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    s.onMissedCalls(async (msg) => {
+      seen.push(msg);
+      await gate;
+    });
+
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await Promise.resolve();
+    expect(seen).toHaveLength(1);
+    // Обработчик ещё не закончил — сервер журнал не убирает.
+    expect(ack).not.toHaveBeenCalled();
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  test('обработчик упал — расписки нет, журнал придёт снова', async () => {
+    const s = await connectedSignaling();
+    s.onMissedCalls(() => {
+      throw new Error('storage down');
+    });
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ack).not.toHaveBeenCalled();
+  });
+
+  test('проверка не пустая: обычный обработчик расписку шлёт', async () => {
+    const s = await connectedSignaling();
+    const seen: unknown[] = [];
+    s.onMissedCalls((msg) => {
+      seen.push(msg);
+    });
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toHaveLength(1);
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+});
+
