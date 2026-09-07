@@ -368,17 +368,22 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       ON group_messages (group_id, owner_profile_id, created_at DESC);
     DROP INDEX IF EXISTS idx_grp_msg;
     CREATE INDEX IF NOT EXISTS idx_grp_members ON group_members (group_id, owner_profile_id);
+    -- Ключ составной по той же причине, что у chat_messages и group_messages:
+    -- id чужой сторис строится из ключа автора и id конверта (localStoryId) и
+    -- в двух профилях одного телефона совпадает. Ср. ensureStoriesProfileScopedKey.
     CREATE TABLE IF NOT EXISTS stories (
-      id TEXT PRIMARY KEY NOT NULL,
+      id TEXT NOT NULL,
       author_pub_b64 TEXT NOT NULL,
       media_uri TEXT,
       text TEXT,
       expires_at INTEGER NOT NULL,
       viewed_by TEXT,
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_stories ON stories (author_pub_b64, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stories
+      ON stories (owner_profile_id, author_pub_b64, created_at DESC);
     /*
      * v4.32.576: альбомы историй. История живёт сутки и уходит вместе со
      * своим файлом — это обещание, а не недоделка. Альбом — обещание
@@ -852,7 +857,7 @@ ${decls},
  * смене DEK (reencryptAtRest) и уборка служебных конвертов.
  */
 async function ensureChatMessagesProfileScopedKey(database: SQLite.SQLiteDatabase): Promise<void> {
-  await ensureMessageTableCompositeKey(database, {
+  await ensureTableCompositeKey(database, {
     table: 'chat_messages',
     index: 'CREATE INDEX IF NOT EXISTS idx_chat_contact_profile '
       + 'ON chat_messages (contact_pub_b64, owner_profile_id, created_at DESC);',
@@ -860,7 +865,7 @@ async function ensureChatMessagesProfileScopedKey(database: SQLite.SQLiteDatabas
 }
 
 async function ensureGroupMessagesProfileScopedKey(database: SQLite.SQLiteDatabase): Promise<void> {
-  await ensureMessageTableCompositeKey(database, {
+  await ensureTableCompositeKey(database, {
     table: 'group_messages',
     index: 'CREATE INDEX IF NOT EXISTS idx_grp_msg_profile '
       + 'ON group_messages (group_id, owner_profile_id, created_at DESC);',
@@ -868,14 +873,45 @@ async function ensureGroupMessagesProfileScopedKey(database: SQLite.SQLiteDataba
 }
 
 /**
- * Общая часть обеих пересборок.
+ * Составной ключ у сторис (v4.32.615).
  *
- * Одной функцией на две таблицы, потому что расходиться им нельзя: они
- * повторяют друг друга колонка в колонку по смыслу, и разъехавшиеся пересборки
- * означали бы, что в одной из таблиц ключ так и остался прежним — а заметно
- * это стало бы только на чужом телефоне с двумя аккаунтами.
+ * Тот же дефект, что у групп в v4.32.467 и у переписки в v4.32.519, только
+ * найден позже: первичным ключом stories был один `id`. Своя сторис получает
+ * uuid, а чужая — `localStoryId(authorPubB64, envelopeId)`, то есть строку,
+ * одинаковую на всех устройствах и во всех профилях. Вставка идёт
+ * `INSERT OR IGNORE`, и на телефоне с двумя аккаунтами, у которых есть общий
+ * знакомый, второй профиль сторис просто не получал: строка уже занята первым,
+ * вставка молча ничего не делала — ни ошибки, ни записи в журнале.
+ *
+ * Остальные обращения к таблице профиль и так учитывают (выборка, отметка о
+ * просмотре, удаление), так что после смены ключа менять их не нужно.
+ *
+ * Индекс заодно переставлен профилем вперёд: все запросы к таблице начинаются
+ * с owner_profile_id, а прежний idx_stories вёл по author_pub_b64 и в них не
+ * годился.
  */
-async function ensureMessageTableCompositeKey(
+async function ensureStoriesProfileScopedKey(database: SQLite.SQLiteDatabase): Promise<void> {
+  await ensureTableCompositeKey(database, {
+    table: 'stories',
+    index: 'CREATE INDEX IF NOT EXISTS idx_stories '
+      + 'ON stories (owner_profile_id, author_pub_b64, created_at DESC);',
+  });
+}
+
+/**
+ * Общая часть всех таких пересборок.
+ *
+ * Одной функцией на все таблицы, потому что расходиться им нельзя: беда у них
+ * одна и та же — id приходит снаружи и уникален у отправителя, а не на нашем
+ * телефоне, — и разъехавшиеся пересборки означали бы, что где-то ключ так и
+ * остался прежним, а заметно это стало бы только на чужом телефоне с двумя
+ * аккаунтами.
+ *
+ * v4.32.615: сюда же приехали `stories` — тот же дефект, найденный позже.
+ * Слово «message» из имени поэтому ушло: таблиц три и они не только о
+ * переписке.
+ */
+async function ensureTableCompositeKey(
   database: SQLite.SQLiteDatabase,
   spec: { table: string; index: string },
 ): Promise<void> {
@@ -895,7 +931,7 @@ async function ensureMessageTableCompositeKey(
       // Упали между DROP и RENAME — доименовать и закончить.
       await database.execAsync(`ALTER TABLE ${tmp} RENAME TO ${table};`);
       await database.execAsync(index);
-      log.info('messages_migrate_recovered_from_rename_gap', { table });
+      log.info('table_migrate_recovered_from_rename_gap', { table });
       return;
     } else {
       return; // чистая установка — таблицу создаст CREATE TABLE IF NOT EXISTS
@@ -903,9 +939,9 @@ async function ensureMessageTableCompositeKey(
 
     const cols = await database.getAllAsync<ColumnInfo>(`PRAGMA table_info(${table})`);
     const { decls, names, skipped } = rebuildColumns(cols, '          ');
-    if (skipped.length) log.warn('messages_migrate_columns_skipped', { table, skipped: skipped.join(',') });
+    if (skipped.length) log.warn('table_migrate_columns_skipped', { table, skipped: skipped.join(',') });
     if (!names.includes('id') || !names.includes('owner_profile_id')) {
-      log.warn('messages_migrate_skipped_unexpected_schema', { table });
+      log.warn('table_migrate_skipped_unexpected_schema', { table });
       return;
     }
 
@@ -914,7 +950,7 @@ async function ensureMessageTableCompositeKey(
       // INSERT без OR IGNORE: в старой таблице id — первичный ключ, значит
       // пара (id, owner_profile_id) заведомо уникальна, и «пропустить строку»
       // здесь может означать только настоящую поломку. Пусть она откатит
-      // транзакцию, а не потеряет сообщение молча.
+      // транзакцию, а не потеряет строку молча.
       await database.execAsync(`
         CREATE TABLE IF NOT EXISTS ${tmp} (
 ${decls},
@@ -926,13 +962,13 @@ ${decls},
         ${index}
       `);
       await txn.commit();
-      log.info('messages_migrated_to_composite_key', { table, cols: names.split(', ').length });
+      log.info('table_migrated_to_composite_key', { table, cols: names.split(', ').length });
     } catch (inner) {
       await txn.rollback().catch(() => { /* ignore */ });
       throw inner;
     }
   } catch (e) {
-    log.warn('messages_migrate_failed', { table, err: e instanceof Error ? e.message : String(e) });
+    log.warn('table_migrate_failed', { table, err: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -1737,6 +1773,10 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
       // реакции одного профиля поверх строки другого.
       await ensureChatMessagesProfileScopedKey(database);
       await ensureGroupMessagesProfileScopedKey(database);
+      // После ensureStoryMediaTypeColumn: пересборка переливает те колонки,
+      // что есть в базе сейчас, — добавленная позже media_type до неё не
+      // дожила бы.
+      await ensureStoriesProfileScopedKey(database);
       // После ensureLocalCryptoMigration: тот тоже берёт DEK, и порядок здесь
       // тот же — сперва ключ определён, потом им что-то шифруется.
       await ensureGroupMemberNamesEncrypted(database);

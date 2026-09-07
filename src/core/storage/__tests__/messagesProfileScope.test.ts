@@ -59,11 +59,11 @@ function slice(from: string, to: string): string {
   return LOCAL.slice(a, b);
 }
 
-const MIGRATION = bodyOf(LOCAL, 'async function ensureMessageTableCompositeKey(');
+const MIGRATION = bodyOf(LOCAL, 'async function ensureTableCompositeKey(');
 
 describe('проверка не пустая', () => {
   it('bodyOf вырезает именно одну функцию', () => {
-    expect(MIGRATION).toContain('ensureMessageTableCompositeKey');
+    expect(MIGRATION).toContain('ensureTableCompositeKey');
     expect(MIGRATION).not.toContain('async function ensureGroupMemberNamesEncrypted(');
     expect(MIGRATION.trimEnd().endsWith('}')).toBe(true);
   });
@@ -131,13 +131,13 @@ describe('миграция: четыре состояния диска посл�
 
   it('обрыв между DROP и RENAME — доименовываем, а не теряем переписку', () => {
     expect(MIGRATION).toContain('ALTER TABLE ${tmp} RENAME TO ${table};');
-    expect(MIGRATION).toContain('messages_migrate_recovered_from_rename_gap');
+    expect(MIGRATION).toContain('table_migrate_recovered_from_rename_gap');
   });
 
   it('после доименования индекс восстанавливается: он ушёл вместе с таблицей', () => {
     const gap = MIGRATION.slice(
       MIGRATION.indexOf('ALTER TABLE ${tmp} RENAME TO ${table};'),
-      MIGRATION.indexOf('messages_migrate_recovered_from_rename_gap'),
+      MIGRATION.indexOf('table_migrate_recovered_from_rename_gap'),
     );
     expect(gap).toContain('await database.execAsync(index);');
   });
@@ -166,7 +166,7 @@ describe('миграция: четыре состояния диска посл�
 
   it('ошибка внутри — откат, а не полутаблица', () => {
     expect(MIGRATION).toContain('await txn.rollback()');
-    expect(MIGRATION).toContain('messages_migrate_failed');
+    expect(MIGRATION).toContain('table_migrate_failed');
   });
 
   it('перелив без OR IGNORE: потерянное сообщение не должно быть тихим', () => {
@@ -186,17 +186,31 @@ describe('миграция: четыре состояния диска посл�
   });
 });
 
-describe('одна пересборка на две таблицы', () => {
-  it('обе обёртки зовут общее тело', () => {
-    expect(count(LOCAL, 'await ensureMessageTableCompositeKey(database, {')).toBe(2);
-    for (const t of ["table: 'chat_messages',", "table: 'group_messages',"]) {
-      expect(LOCAL).toContain(t);
-    }
+describe('одна пересборка на три таблицы', () => {
+  // v4.32.615: третья — stories, тот же дефект найден позже. Число здесь
+  // точное, а не «не меньше»: обёртка мимо общего тела означала бы свою
+  // пересборку со своими четырьмя состояниями диска, а их и заводили общими.
+  const WRAPPED = ["table: 'chat_messages',", "table: 'group_messages',", "table: 'stories',"];
+
+  it('все обёртки зовут общее тело', () => {
+    expect(count(LOCAL, 'await ensureTableCompositeKey(database, {')).toBe(WRAPPED.length);
+    for (const t of WRAPPED) expect(LOCAL).toContain(t);
   });
 
   it('каждая вызывается ровно один раз при открытии базы', () => {
     expect(count(LOCAL, 'await ensureChatMessagesProfileScopedKey(database);')).toBe(1);
     expect(count(LOCAL, 'await ensureGroupMessagesProfileScopedKey(database);')).toBe(1);
+    expect(count(LOCAL, 'await ensureStoriesProfileScopedKey(database);')).toBe(1);
+  });
+
+  it('сторис пересобираются после того, как им добавили media_type', () => {
+    // Пересборка переливает те колонки, что есть в базе сейчас. Встань она
+    // раньше ensureStoryMediaTypeColumn — media_type до неё бы не дожила.
+    const colAt = LOCAL.indexOf('await ensureStoryMediaTypeColumn(database);');
+    const keyAt = LOCAL.indexOf('await ensureStoriesProfileScopedKey(database);');
+    expect(count(LOCAL, 'await ensureStoryMediaTypeColumn(database);')).toBe(1);
+    expect(colAt).toBeGreaterThan(-1);
+    expect(keyAt).toBeGreaterThan(colAt);
   });
 
   it('до разового шифрования реакций: тот правит строки по ключу', () => {
