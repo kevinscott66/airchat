@@ -224,3 +224,61 @@ describe('конверт звонка: чужой не проходит', () => 
     ).toBeNull();
   });
 });
+
+describe('конверт завершения (v4.32.615)', () => {
+  const expectHangup = { kind: 'hangup' as const, from: ALICE.pub, to: BOB.pub, callId: CALL_ID };
+  const hangupFromAlice = (): Promise<string> =>
+    sealCallEnvelope(ALICE.pair, ALICE.pub, { kind: 'hangup', to: BOB.pub, callId: CALL_ID });
+
+  it('свой конверт вскрывается и несёт номер звонка', async () => {
+    const body = await openCallEnvelope(await hangupFromAlice(), expectHangup);
+    expect(body).toMatchObject({ kind: 'hangup', from: ALICE.pub, to: BOB.pub, callId: CALL_ID });
+    expect(body?.sdp).toBeUndefined();
+  });
+
+  it('подпись сервера под завершением не годится', async () => {
+    const forged = await sealCallEnvelope(MALLORY.pair, MALLORY.pub, {
+      kind: 'hangup', to: BOB.pub, callId: CALL_ID,
+    });
+    expect(await openCallEnvelope(forged, expectHangup)).toBeNull();
+  });
+
+  it('завершение прошлого звонка не обрывает текущий', async () => {
+    const old = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'hangup', to: BOB.pub, callId: 'ffffffffffffffff',
+    });
+    expect(await openCallEnvelope(old, expectHangup)).toBeNull();
+  });
+
+  it('завершение, адресованное другому, нам не завершение', async () => {
+    const toMallory = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'hangup', to: MALLORY.pub, callId: CALL_ID,
+    });
+    expect(await openCallEnvelope(toMallory, expectHangup)).toBeNull();
+  });
+
+  it('виды не подменяют друг друга', async () => {
+    // Завершение нельзя выдать за ответ — иначе им гасили бы дозвон.
+    const hangup = await hangupFromAlice();
+    expect(
+      await openCallEnvelope(hangup, { kind: 'answer', from: ALICE.pub, to: BOB.pub, callId: CALL_ID })
+    ).toBeNull();
+    // И ответ нельзя выдать за завершение.
+    const answer = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'answer', to: BOB.pub, callId: CALL_ID, sdp: SDP,
+    });
+    expect(await openCallEnvelope(answer, expectHangup)).toBeNull();
+  });
+
+  it('ни SDP, ни причины отказа в завершении быть не должно', async () => {
+    const withSdp = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'hangup', to: BOB.pub, callId: CALL_ID, sdp: SDP,
+    });
+    expect(await openCallEnvelope(withSdp, expectHangup)).toBeNull();
+
+    const withControl = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'hangup', to: BOB.pub, callId: CALL_ID, control: 'declined',
+    });
+    expect(await openCallEnvelope(withControl, expectHangup)).toBeNull();
+  });
+});

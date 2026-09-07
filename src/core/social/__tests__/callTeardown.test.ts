@@ -28,10 +28,11 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
-import { envelopeBody, makePeer, sealAnswer, sealOffer, testCallId } from './callTestPeers';
+import { envelopeBody, makePeer, sealAnswer, sealHangup, sealOffer, testCallId } from './callTestPeers';
 
 const mockOfferHandler: { current: ((msg: { fromPeerId: string; sdp: string }) => void) | null } = { current: null };
 const mockHangupHandler: { current: ((msg: { fromPeerId?: string }) => void) | null } = { current: null };
+const mockIceHandler: { current: ((msg: { fromPeerId?: string; candidate: unknown }) => void) | null } = { current: null };
 const mockAnswerHandler: { current: ((msg: { fromPeerId?: string; sdp: string }) => void) | null } = { current: null };
 const mockPeerConnections: MockPeerConnection[] = [];
 const mockSendHangup = jest.fn();
@@ -104,7 +105,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     sendOffer = (room: string, peer: string, sdp: string): void => { mockSendOffer(room, peer, sdp); };
     onOffer = (handler: typeof mockOfferHandler.current): void => { mockOfferHandler.current = handler; };
     onAnswer = (handler: typeof mockAnswerHandler.current): void => { mockAnswerHandler.current = handler; };
-    onIceCandidate = jest.fn();
+    onIceCandidate = (handler: typeof mockIceHandler.current): void => { mockIceHandler.current = handler; };
     onHangup = (handler: typeof mockHangupHandler.current): void => { mockHangupHandler.current = handler; };
     onPeerUnavailable = jest.fn();
     onMissedCalls = jest.fn();
@@ -255,7 +256,12 @@ describe('поведение сервиса звонков', () => {
     // Это и есть починка: раньше здесь не уходило ничего, и телефон
     // собеседника продолжал звонить.
     expect(mockSendHangup).toHaveBeenCalledWith(PEER);
-    expect(mockSendIceCandidate).toHaveBeenCalledWith(PEER, { type: 'hangup' });
+    // v4.32.615: у сентинела появилась подпись, а сам ключ `type` остался —
+    // по нему кладут трубку клиенты прошлых версий.
+    expect(mockSendIceCandidate).toHaveBeenCalledWith(
+      PEER,
+      expect.objectContaining({ type: 'hangup', e: expect.any(String) })
+    );
   });
 
   it('раньше срока исходящий звонок никто не рвёт', async () => {
@@ -267,10 +273,16 @@ describe('поведение сервиса звонков', () => {
 
   it('трубку положил собеседник — сигнал ему назад не летит', async () => {
     await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    // Номер звонка знает только конверт своего предложения.
+    const callId = String(envelopeBody(mockSendOffer.mock.calls.at(-1)?.[2]).callId);
     mockSendHangup.mockClear();
     mockSendIceCandidate.mockClear();
 
-    mockHangupHandler.current?.({ fromPeerId: PEER });
+    // v4.32.615: завершение приезжает подписанным сентинелом, а не событием.
+    mockIceHandler.current?.({
+      fromPeerId: PEER,
+      candidate: { type: 'hangup', e: await sealHangup(peer, ME, { callId }) },
+    });
     await settle();
 
     expect(getCurrentCall()?.state).toBe('ended');
@@ -387,9 +399,11 @@ describe('форма исходников', () => {
   });
 
   it('завершения от собеседника помечены как чужие', () => {
-    // Три места, откуда завершение приходит с той стороны: ответ «занято» /
-    // «отклонён», ICE-сентинел и явный hangup.
-    expect(SERVICE.match(/, 'remote'\)/g)?.length).toBe(3);
+    // Два места, откуда завершение приходит с той стороны: ответ «занято» /
+    // «отклонён» и подписанный ICE-сентинел. Третьим был голый `hangup`
+    // сигнального сервера — с v4.32.615 по нему не рвут: подписать его
+    // нечем, и сервер обрывал бы им любой разговор.
+    expect(SERVICE.match(/, 'remote'\)/g)?.length).toBe(2);
   });
 
   it('кнопка больше не дублирует сигнал — он один, внутри _hangup', () => {

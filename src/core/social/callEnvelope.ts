@@ -20,6 +20,14 @@
  *   kind     — чтобы предложение не подсунули вместо ответа;
  *   callId   — чтобы ответ от прошлого звонка не приняли за ответ на текущий;
  *   ts       — чтобы записанный когда-то конверт не проигрывали заново.
+ *
+ * v4.32.615: под подписью теперь и завершение звонка. Предложение и ответ были
+ * закрыты, а положить трубку за собеседника сервер по-прежнему мог: событие
+ * `hangup` он подписывал собой же. Для звонка, который уже соединился, это была
+ * единственная оставшаяся у него власть — медиа идёт напрямую, слушать её он не
+ * может, но оборвать разговор в любой момент мог. Завершение — отдельный вид
+ * конверта, а не разновидность ответа: так конверт завершения нельзя выдать за
+ * ответ на предложение, и наоборот.
  */
 import { signJson, verifySignedJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
@@ -35,7 +43,7 @@ export const CALL_ENVELOPE_MAX_SKEW_MS = 10 * 60 * 1000;
 /** Тот же предел, что и у голого SDP в callService. */
 const MAX_SDP_LEN = 64 * 1024;
 
-export type CallEnvelopeKind = 'offer' | 'answer';
+export type CallEnvelopeKind = 'offer' | 'answer' | 'hangup';
 export type CallControl = 'busy' | 'declined';
 
 export type CallEnvelopeBody = {
@@ -43,7 +51,7 @@ export type CallEnvelopeBody = {
   from: string;
   to: string;
   callId: string;
-  /** SDP — у обычных предложений и ответов. У отказа его нет. */
+  /** SDP — у обычных предложений и ответов. У отказа и завершения его нет. */
   sdp?: string;
   /** Только у предложения. */
   isVideo?: boolean;
@@ -148,6 +156,17 @@ export async function openCallEnvelope(
     return {
       kind: 'answer', from: body.from as string, to: body.to as string,
       callId: body.callId as string, control, ts,
+    };
+  }
+
+  if (expect.kind === 'hangup') {
+    // Завершение — только завершение: ни SDP, ни признака видео в нём нет.
+    // Причина завершения не подписывается намеренно: собеседнику важно, что
+    // разговор окончен, а не как его назвали на другой стороне.
+    if (body.sdp !== undefined || body.isVideo !== undefined) return null;
+    return {
+      kind: 'hangup', from: body.from as string, to: body.to as string,
+      callId: body.callId as string, ts,
     };
   }
 

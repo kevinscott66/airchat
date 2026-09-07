@@ -222,7 +222,12 @@ describe('call media layer', () => {
     await hangupCall();
 
     expect(mockSendHangup).toHaveBeenCalledWith(PEER);
-    expect(mockSendIceCandidate).toHaveBeenCalledWith(PEER, { type: 'hangup' });
+    // v4.32.615: сентинел несёт подписанный конверт; ключ `type` остался на
+    // месте — по нему кладут трубку клиенты прошлых версий.
+    expect(mockSendIceCandidate).toHaveBeenCalledWith(
+      PEER,
+      expect.objectContaining({ type: 'hangup' })
+    );
     expect(mockAudioTrack.stop).toHaveBeenCalled();
     expect(mockFrontVideoTrack.stop).toHaveBeenCalled();
     expect(remoteTrack.stop).toHaveBeenCalled();

@@ -774,14 +774,34 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     }
   });
 
+  // v4.32.615: завершение принимается только под подписью собеседника.
+  // Конверт едет внутри самого объекта кандидата — поле `type: 'hangup'`
+  // осталось на прежнем месте, поэтому сигнальному серверу менять нечего:
+  // он и раньше пересылал кандидат как есть.
+  const handleSignedHangup = async (sealed: unknown): Promise<void> => {
+    const peer = currentCall?.peerPubB64;
+    if (!peer) return;
+    const envelope = await openCallEnvelope(sealed, {
+      kind: 'hangup',
+      from: peer,
+      to: myPub,
+      ...(activeCallId ? { callId: activeCallId } : {}),
+    });
+    if (!envelope) {
+      log.warn('call_hangup_unverified', { from: peer.slice(0, 8) });
+      return;
+    }
+    log.info('call_remote_hangup_received');
+    // Собеседник положил трубку. Если разговор ещё не начался, для нас это
+    // несостоявшийся звонок, а не наш отказ.
+    void _hangup('unanswered', 'Завершён', 'remote');
+  };
+
   sig.onIceCandidate((msg) => {
     if (!isFromPeer(msg.fromPeerId, currentCall?.peerPubB64)) return;
-    // Keep the sentinel branch for older signaling servers during rollout.
-    if (msg.candidate && (msg.candidate as { type?: string }).type === 'hangup') {
-      log.info('call_remote_hangup_received');
-      // Собеседник положил трубку. Если разговор ещё не начался, для нас это
-      // несостоявшийся звонок, а не наш отказ.
-      void _hangup('unanswered', 'Завершён', 'remote');
+    const sentinel = msg.candidate as { type?: string; e?: unknown } | null | undefined;
+    if (sentinel && sentinel.type === 'hangup') {
+      void handleSignedHangup(sentinel.e);
       return;
     }
     if (!msg.candidate) return;
@@ -806,11 +826,17 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     } catch { /* ignore */ }
   });
 
+  // Событие `hangup` сигнального сервера ничего не подписывает: `fromPeerId`
+  // в нём проставляет сам сервер, а места под конверт в нём нет — его формат
+  // проверяется сервером по точному набору полей. Слушателя оставляем, чтобы
+  // событие не считалось необработанным, но рвать по нему звонок нельзя:
+  // именно этим сервер и обрывал бы любой разговор. Клиенты прошлых версий
+  // шлют его вместе с сентинелом в ICE — там же приедет и их конверт, когда
+  // они обновятся. До обновления цена такая: соединённый звонок закроется по
+  // разрыву ICE (10 с), звонящий на входящем — по таймеру дозвона.
   const handleRemoteHangup = (msg: { fromPeerId?: string }): void => {
-    const peer = currentCall?.peerPubB64;
-    if (!isFromPeer(msg.fromPeerId, peer)) return;
-    log.info('call_remote_hangup_received');
-    void _hangup('unanswered', 'remote_hangup', 'remote');
+    if (!isFromPeer(msg.fromPeerId, currentCall?.peerPubB64)) return;
+    log.info('call_hangup_event_ignored');
   };
   const callSig = sig as unknown as CallSignaling;
   if (typeof callSig.onHangup === 'function') {
@@ -957,7 +983,23 @@ async function sendHangupSignal(peer: string, state: CallState, callId: string |
       callSig.socket?.emit('hangup', { targetPeerId: peer });
     }
   } catch { /* legacy signaling fallback still runs */ }
-  try { sig.sendIceCandidate(peer, { type: 'hangup' }); } catch { /* ignore */ }
+  // Ключ `type` остаётся прежним: клиент прошлой версии рвёт звонок по нему и
+  // лишнего поля не замечает. Новый клиент рвёт только по конверту, поэтому
+  // без подписи (нет ключа или номера звонка) уходит голый сентинел — он
+  // достанется старым клиентам, а новые его не примут, и это верная сторона.
+  let sealedHangup: string | null = null;
+  const hangupPair = mySigningPair;
+  const hangupPub = myPubB64Global;
+  if (hangupPair && hangupPub && callId) {
+    try {
+      sealedHangup = await sealCallEnvelope(hangupPair, hangupPub, {
+        kind: 'hangup', to: peer, callId,
+      });
+    } catch { sealedHangup = null; }
+  }
+  try {
+    sig.sendIceCandidate(peer, sealedHangup ? { type: 'hangup', e: sealedHangup } : { type: 'hangup' });
+  } catch { /* ignore */ }
 }
 
 /**

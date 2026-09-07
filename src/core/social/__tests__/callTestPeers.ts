@@ -52,6 +52,19 @@ export function sealAnswer(
   });
 }
 
+/** Завершение звонка (v4.32.615): ни SDP, ни причины — только номер звонка. */
+export function sealHangup(
+  from: TestPeer,
+  to: TestPeer | string,
+  opts: { callId?: string } = {}
+): Promise<string> {
+  return sealCallEnvelope(from.pair, from.pub, {
+    kind: 'hangup',
+    to: pubOf(to),
+    callId: opts.callId ?? testCallId(),
+  });
+}
+
 /** Содержимое конверта без проверки подписи — тесту довольно и этого. */
 export function envelopeBody(raw: unknown): Record<string, unknown> {
   const outer = JSON.parse(String(raw)) as { payload?: string };
