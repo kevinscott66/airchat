@@ -77,19 +77,33 @@ export async function lanBlobCacheDelete(idHex: string): Promise<void> {
   }
 }
 
-/** Сохранить ciphertext в blob-кэш (sender: для последующего LAN-push и идемпотентности). */
-export async function lanBlobCacheWrite(idHex: string, cipher: Uint8Array): Promise<void> {
+/**
+ * Сохранить ciphertext в blob-кэш (sender: для последующего LAN-push и
+ * идемпотентности; receiver: это единственная копия принятого вложения).
+ *
+ * v4.32.617: возвращает результат. Неудача записи отдавалась наружу как
+ * `Promise<void>`, и принимающая сторона писала в журнал `lan_blob_recv_ok`
+ * сразу после неё — при том, что собранные байты к этому моменту уже удалены
+ * из inflight, перезапросить blob нечем (протокола повторного запроса нет), и
+ * вложение теряется насовсем. Ошибку по-прежнему не выбрасываем: полный диск
+ * не должен ронять слушателя LAN.
+ *
+ * @returns true, если ciphertext лёг на диск
+ */
+export async function lanBlobCacheWrite(idHex: string, cipher: Uint8Array): Promise<boolean> {
   const p = blobCachePath(idHex);
   if (!p) {
     log.warn('lan_blob_cache_write_bad_id');
-    return;
+    return false;
   }
   try {
     await FileSystem.writeAsStringAsync(p, Buffer.from(cipher).toString('base64'), {
       encoding: FileSystem.EncodingType.Base64,
     });
+    return true;
   } catch (e) {
     log.warn('lan_blob_cache_write_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 
@@ -148,7 +162,13 @@ export async function receiveLanBlobFrame(payload: Uint8Array): Promise<void> {
     }
     if (res.kind !== 'complete') return;
 
-    await lanBlobCacheWrite(header.idHex, res.bytes);
+    // Собранные байты сборщик уже забыл, и запросить их заново нечем: приём
+    // «удался» ровно настолько, насколько удалась запись.
+    const stored = await lanBlobCacheWrite(header.idHex, res.bytes);
+    if (!stored) {
+      log.warn('lan_blob_recv_not_stored', { id: header.idHex.slice(0, 8), bytes: res.bytes.length });
+      return;
+    }
     log.info('lan_blob_recv_ok', { id: header.idHex.slice(0, 8), bytes: res.bytes.length });
   } catch (e) {
     log.warn('lan_blob_recv_failed', { err: e instanceof Error ? e.message : String(e) });

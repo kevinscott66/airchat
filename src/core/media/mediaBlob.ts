@@ -49,7 +49,15 @@ async function uploadCloudMediaCopy(idHex: string, cipher: Uint8Array, mime: str
     if (!mnemonic) return;
     if (getMnemonicGeneration() !== generation) return;
     const pair = deriveKeyPairFromMnemonic(mnemonic);
-    await uploadSyncMedia(mnemonic, pair, idHex, cipher, mime);
+    // v4.32.617: ответ читается. uploadSyncMedia возвращает `response.ok`, и
+    // отброшенный результат превращал сервер, ответивший `{"ok":false}`, в
+    // запись `blob_upload_cloud_ok` — то есть в утверждение, что долговечная
+    // копия есть, когда её нет.
+    const stored = await uploadSyncMedia(mnemonic, pair, idHex, cipher, mime);
+    if (!stored) {
+      log.warn('blob_upload_cloud_rejected', { id: idHex.slice(0, 8), bytes: cipher.length });
+      return;
+    }
     log.info('blob_upload_cloud_ok', { id: idHex.slice(0, 8), bytes: cipher.length });
   } catch (e) {
     // The relay/LAN paths remain authoritative for this send. Cloud media is
@@ -302,9 +310,22 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
       log.warn('blob_upload_bad_size', { bytes: declared, beforeRead: true });
       return null;
     }
-    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    // v4.32.617: когда размер неизвестен, читается не весь файл, а предел плюс
+    // байт. Проверка ниже была единственной защитой в этом случае, но
+    // срабатывала уже ПОСЛЕ base64-строки и двух двоичных буферов — то есть
+    // после втрое большего файла в памяти. Ровно тот же дефект, что описан на
+    // пять строк выше, только на ветке `declared === null`, а её комментарий
+    // прямо признаёт: размер файловая система сообщает не всегда.
+    // position и length действуют только вместе и только для base64.
+    const b64 = declared === null
+      ? await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+          position: 0,
+          length: MAX_BLOB_BYTES + 1,
+        })
+      : await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
     const plain = new Uint8Array(Buffer.from(b64, 'base64'));
-    // Остаётся как страховка: размер файловая система сообщает не всегда.
+    // Лишний байт и ловится здесь: прочитали больше предела — файл больше.
     if (plain.length === 0 || plain.length > MAX_BLOB_BYTES) {
       log.warn('blob_upload_bad_size', { bytes: plain.length });
       return null;
@@ -314,7 +335,11 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     const idHex = Buffer.from(randomBytes(16)).toString('hex');
     // Локальный кэш ciphertext'а: идемпотентный LAN-push + повторная отправка.
     const { lanBlobCacheWrite, lanBlobPush } = await import('../transport/lan/lanBlob');
-    await lanBlobCacheWrite(idHex, cipher);
+    // Отправку это не срывает — ciphertext уже в памяти, — но без кэша не
+    // будет ни идемпотентного LAN-push, ни повторной отправки.
+    if (!(await lanBlobCacheWrite(idHex, cipher))) {
+      log.warn('blob_cache_write_failed', { id: idHex.slice(0, 8) });
+    }
     // Keep the existing relay/LAN behavior responsive. The VPS receives the
     // same ciphertext asynchronously and never sees the per-blob key.
     void uploadCloudMediaCopy(idHex, cipher, mime, generation);
