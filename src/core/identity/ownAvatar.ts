@@ -30,12 +30,13 @@
  */
 import * as FileSystem from 'expo-file-system/legacy';
 import { avatarFileName, avatarUriFromName, newAvatarUri } from '../media/avatarFiles';
+import { AVATAR_NAME_KEY } from './avatarKeep';
 import { ownFieldGetFor, ownFieldSetFor } from './ownProfile';
 import { profileManager } from './profileManager';
 import { log } from '../logger';
 
-/** Где лежит имя файла. */
-const NAME_KEY = 'user_avatar_uri' as const;
+/** Где лежит имя файла: то же имя ключа, что читает уборка (см. avatarKeep). */
+const NAME_KEY = AVATAR_NAME_KEY;
 /** Где лежат сами байты: base64 того же JPEG, что и в файле. */
 const IMG_KEY = 'user_avatar_img' as const;
 

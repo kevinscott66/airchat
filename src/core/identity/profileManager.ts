@@ -654,21 +654,18 @@ class ProfileManager {
    * ошибкой — путь прошлой установки не совпадает ни с одним файлом на диске,
    * и уборка сносила аватары живых профилей после каждого обновления.
    *
-   * Если хоть один путь прочитать не удалось, не удаляем ничего: неполный
+   * Если хоть одну запись прочитать не удалось, не удаляем ничего: неполный
    * список «оставить» здесь неотличим от «этих аватаров больше нет», и уборка
-   * снесла бы аватар живого профиля.
+   * снесла бы аватар живого профиля. v4.32.636: за это отвечает
+   * collectAvatarsToKeep — строковое чтение, стоявшее здесь, сводило «не
+   * открылось» к «записи нет», и правило не действовало ровно тогда, когда
+   * было нужно.
    */
   private async sweepOrphanedAvatars(): Promise<void> {
     try {
-      const { kvGetSecretScoped, kvGetSecret } = await import('../storage/local');
+      const { collectAvatarsToKeep } = await import('./avatarKeep');
       const { sweepAvatarFiles } = await import('../media/avatarFiles');
-      const keep: (string | null)[] = [];
-      for (const p of this.state?.profiles ?? []) {
-        keep.push(await kvGetSecretScoped(p.id, 'user_avatar_uri'));
-        // Общая запись до v4.32.288 принадлежит первому профилю и до его
-        // первого захода в карточку так и лежит неперенесённой.
-        if (p.id === 1) keep.push(await kvGetSecret('user_avatar_uri'));
-      }
+      const keep = await collectAvatarsToKeep((this.state?.profiles ?? []).map((p) => p.id));
       await sweepAvatarFiles(keep);
     } catch (e) {
       log.warn('delete_profile_avatar_sweep_failed', {
