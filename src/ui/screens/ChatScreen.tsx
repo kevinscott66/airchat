@@ -31,7 +31,7 @@ import { showPermissionDeniedAlert } from '../permissionAlert';
 // Pressable (AppPressable) внутри модалок получал касания на Android.
 import { AppModal as Modal } from '../components/AppModal';
 import { AttachSheet } from '../components/AttachSheet';
-import { resolveDmPinned, toggleDmPinAndSync, clearDmPinnedAndSync, type DmPinnedEntry } from '../../core/social/dmPinSync';
+import { resolveDmPinned, toggleDmPinAndSync, clearDmPinnedAndSync, dmPinRefusalText, type DmPinnedEntry } from '../../core/social/dmPinSync';
 import { announceDmPin } from '../dmPinAnnounce';
 import { setDisappearAndSync } from '../../core/social/disappearSync';
 import { syncLastSeenPrefTo } from '../../core/social/presencePrefSync';
@@ -1976,6 +1976,7 @@ function ChatThreadView({
   const unpinFromList = useCallback((id: string) => {
     void (async () => {
       const res = await toggleDmPinAndSync({ peerPubB64: peerB64, msgId: id, on: false });
+      if (!res.ok) { showError(dmPinRefusalText(res.reason)); return; }
       announceDmPin(res.sync);
       const newList = res.entries;
       setPinnedMsgList(newList);
@@ -2647,6 +2648,7 @@ function ChatThreadView({
       // только в своей БД — баннер появлялся у одного, у второго не
       // менялось ничего.
       const res = await toggleDmPinAndSync({ peerPubB64: peerB64, msgId: id, on: !isRowPinned(id) });
+      if (!res.ok) { showError(dmPinRefusalText(res.reason)); return; }
       announceDmPin(res.sync);
       const list = res.entries;
       setPinnedMsgList(list);
@@ -3552,6 +3554,7 @@ function ChatThreadView({
                 } else {
                   void (async () => {
                     const res = await clearDmPinnedAndSync(peerB64);
+                    if (!res.ok) { showError(dmPinRefusalText(res.reason)); return; }
                     announceDmPin(res.sync);
                     setPinnedMsgList(res.entries);
                     setPinnedMsg(null);

@@ -129,7 +129,13 @@ describe('форма исходников', () => {
       const s = src(f);
       expect(s).not.toContain('kvGet(pinListKey(');
       expect(s).not.toContain('kvSet(pinListKey(');
-      expect(s).toContain('scopedKvGetFor(ownerProfileId, pinListKey(');
+      // v4.32.643: номер профиля называется по-прежнему, но требование
+      // усилено — чтение стало отличать «ничего не закреплено» от «не
+      // прочиталось». Прежняя форма запрещена явно: по ней список читался
+      // перед каждой записью и один сбой базы сводил полсотни закреплений
+      // к одному.
+      expect(s).toContain('scopedKvTryGetFor(ownerProfileId, pinListKey(');
+      expect(s).not.toContain('scopedKvGetFor(ownerProfileId, pinListKey(');
       expect(s).toContain('scopedKvSetFor(ownerProfileId, pinListKey(');
     }
   });

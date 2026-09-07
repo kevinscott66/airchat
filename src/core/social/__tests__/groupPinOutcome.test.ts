@@ -49,12 +49,18 @@ function count(haystack: string, needle: string): number {
 }
 
 describe('отказ закрепления назван причиной, а не одним null', () => {
-  it('причин три, и каждая — свой вариант', () => {
-    expect(PIN).toContain("export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied';");
+  it('причин четыре, и каждая — свой вариант', () => {
+    // v4.32.643: четвёртая — «список закреплений не прочитался». Она не
+    // «нет прав» и не «нет группы»: права есть, группа на месте, а записи не
+    // было, и повтор через секунду обычно проходит.
+    expect(PIN).toContain(
+      "export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied' | 'read_failed';"
+    );
     const body = bodyOf(PIN, 'export async function togglePinAndSync(');
     expect(body).toContain("return { ok: false, reason: 'no_identity' };");
     expect(body).toContain("return { ok: false, reason: 'no_group' };");
     expect(body).toContain("return { ok: false, reason: 'denied' };");
+    expect(body).toContain("if (entries === null) return { ok: false, reason: 'read_failed' };");
     // Голого null в ответе больше нет — иначе три причины снова слились бы.
     expect(body).not.toContain('return null;');
   });

@@ -13,7 +13,7 @@
  * (массив объектов) на чтении понимается.
  */
 import { setGroupPinnedMessage, listGroupMembers, getGroup, getGroupMessageTexts } from '../storage/local';
-import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { canPinInGroup, type PinRole } from './groupPinPolicy';
 import type { GroupControlOutcome } from './groupControlOutcome';
@@ -45,11 +45,23 @@ function pinListKey(groupId: string): string {
  * один аккаунт открепил, исчезало и у второго, а уборка удалённого профиля
  * (`p<id>:%`) под общее имя не подпадала.
  */
-export async function loadPinnedIds(groupId: string, ownerProfileId: number): Promise<string[]> {
-  const raw = await scopedKvGetFor(ownerProfileId, pinListKey(groupId));
-  if (!raw) return [];
+/**
+ * Тот же список, но «не прочиталось» отличимо от «ничего не закреплено»
+ * (v4.32.643).
+ *
+ * scopedKvGetFor отвечает одним null на оба случая, а список читается перед
+ * КАЖДОЙ записью и пишется целиком. Заминка базы приходила сюда как пустой
+ * список: одно новое закрепление ложилось поверх полусотни настоящих и
+ * стирало их — при том что человек всего лишь добавил ещё одно, и ни одной
+ * ошибки на экране при этом не было. null здесь значит «не знаем», и по нему
+ * не пишут.
+ */
+async function readPinnedIds(groupId: string, ownerProfileId: number): Promise<string[] | null> {
+  const read = await scopedKvTryGetFor(ownerProfileId, pinListKey(groupId));
+  if (read === null) return null;
+  if (!read.value) return [];
   try {
-    const p = JSON.parse(raw) as unknown;
+    const p = JSON.parse(read.value) as unknown;
     if (!Array.isArray(p)) return [];
     return p
       .map((e) => (typeof e === 'string' ? e : (e as { id?: unknown } | null)?.id))
@@ -58,6 +70,16 @@ export async function loadPinnedIds(groupId: string, ownerProfileId: number): Pr
   } catch {
     return [];
   }
+}
+
+/**
+ * То же для показа: баннер рисуется по тому, что удалось прочитать, и пустая
+ * шапка при заминке базы сама себя чинит следующим чтением. Отменить показ
+ * можно, отменить запись поверх — нет, поэтому различает провал только тот,
+ * кто пишет.
+ */
+export async function loadPinnedIds(groupId: string, ownerProfileId: number): Promise<string[]> {
+  return (await readPinnedIds(groupId, ownerProfileId)) ?? [];
 }
 
 /**
@@ -88,9 +110,15 @@ export async function applyLocalPin(params: {
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<PinnedEntry[]> {
+}): Promise<PinnedEntry[] | null> {
   const { groupId, ownerProfileId, msgId, on } = params;
-  const current = await loadPinnedIds(groupId, ownerProfileId);
+  // v4.32.643: список не прочитался — не пишем ничего. Прежде сюда приходил
+  // пустой массив, и объявление группы сводило все закрепления к одному.
+  const current = await readPinnedIds(groupId, ownerProfileId);
+  if (current === null) {
+    log.warn('group_pin_list_read_failed', { gid: groupId.slice(0, 8), pid: ownerProfileId });
+    return null;
+  }
   const nextIds = on
     ? [msgId, ...current.filter((id) => id !== msgId)].slice(0, MAX_PINNED)
     : current.filter((id) => id !== msgId);
@@ -132,7 +160,7 @@ async function myRoleIn(groupId: string, myPubB64: string, ownerProfileId: numbe
  * группы. Совет «попросите администратора» в таком положении бесполезен, а
  * настоящая причина не называется никогда.
  */
-export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied';
+export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied' | 'read_failed';
 
 /**
  * Итог закрепления.
@@ -152,6 +180,7 @@ const REFUSAL: Record<GroupPinRefusal, string> = {
   no_identity: 'Профиль ещё загружается — попробуйте снова через несколько секунд.',
   no_group: 'Группа не найдена — возможно, её только что удалили.',
   denied: 'Закреплять и откреплять сообщения в этой группе могут только администраторы.',
+  read_failed: 'Не удалось прочитать закреплённые в этой группе — попробуйте ещё раз.',
 };
 
 /** Текст отказа для человека. */
@@ -189,6 +218,9 @@ export async function togglePinAndSync(params: {
   }
 
   const entries = await applyLocalPin({ groupId, ownerProfileId: pid, msgId, on });
+  // Ничего не записано — и рассылать нечего: у остальных закрепление
+  // появилось бы, а у себя нет.
+  if (entries === null) return { ok: false, reason: 'read_failed' };
   const { fanoutGroupControl } = await import('./groupMessaging');
   const sync = fanoutGroupControl(groupId, pid, myPub, { op: 'pin', msgId, on }, params.actorName ?? undefined);
   return { ok: true, entries, sync };

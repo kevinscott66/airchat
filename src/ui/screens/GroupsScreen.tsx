@@ -709,7 +709,9 @@ function GroupChatScreen({
       // не попадали. Переносим один раз, иначе баннер пропал бы при первом же
       // обновлении списка.
       if (!list.length && group.pinnedMessageId) {
-        list = await applyLocalPin({ groupId: group.id, ownerProfileId: pid, msgId: group.pinnedMessageId, on: true });
+        // v4.32.643: перенос не состоялся (список не прочитался) — оставляем
+        // как было. Ещё одна попытка будет при следующем открытии группы.
+        list = (await applyLocalPin({ groupId: group.id, ownerProfileId: pid, msgId: group.pinnedMessageId, on: true })) ?? list;
       }
       setGrpPinnedList(list);
       if (list.length) { setPinnedMsgId(list[0].id); setPinnedMsgText(list[0].text); }

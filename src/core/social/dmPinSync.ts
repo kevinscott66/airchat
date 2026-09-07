@@ -26,7 +26,7 @@ import {
   getChatMessageTexts,
   notifyChatStorageChanged,
 } from '../storage/local';
-import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope } from './controlFanout';
 import { log } from '../logger';
@@ -69,14 +69,26 @@ function pinListKey(peerPubB64: string): string {
  * двоих. Уборка удалённого профиля (`p<id>:%`) под общее имя не подпадала,
  * и новый профиль с тем же номером получал закрепления предыдущего.
  */
-export async function loadDmPinnedIds(
+/**
+ * Тот же список, но «не прочиталось» отличимо от «ничего не закреплено»
+ * (v4.32.643).
+ *
+ * scopedKvGetFor отвечает одним null на оба случая, а список читается перед
+ * КАЖДОЙ записью и пишется целиком. Заминка базы приходила сюда как пустой
+ * список: одно новое закрепление ложилось поверх полусотни настоящих и
+ * стирало их — при том что человек всего лишь добавил ещё одно, и ни одной
+ * ошибки на экране при этом не было. null здесь значит «не знаем», и по нему
+ * не пишут.
+ */
+async function readDmPinnedIds(
   peerPubB64: string,
   ownerProfileId: number
-): Promise<string[]> {
-  const raw = await scopedKvGetFor(ownerProfileId, pinListKey(peerPubB64));
-  if (!raw) return [];
+): Promise<string[] | null> {
+  const read = await scopedKvTryGetFor(ownerProfileId, pinListKey(peerPubB64));
+  if (read === null) return null;
+  if (!read.value) return [];
   try {
-    const p = JSON.parse(raw) as unknown;
+    const p = JSON.parse(read.value) as unknown;
     if (!Array.isArray(p)) return [];
     return p
       .map((e) => (typeof e === 'string' ? e : (e as { id?: unknown } | null)?.id))
@@ -85,6 +97,19 @@ export async function loadDmPinnedIds(
   } catch {
     return [];
   }
+}
+
+/**
+ * То же для показа: баннер рисуется по тому, что удалось прочитать, и пустая
+ * шапка при заминке базы сама себя чинит следующим чтением. Отменить показ
+ * можно, отменить запись поверх — нет, поэтому различает провал только тот,
+ * кто пишет.
+ */
+export async function loadDmPinnedIds(
+  peerPubB64: string,
+  ownerProfileId: number
+): Promise<string[]> {
+  return (await readDmPinnedIds(peerPubB64, ownerProfileId)) ?? [];
 }
 
 /**
@@ -117,9 +142,15 @@ export async function applyLocalDmPin(params: {
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<DmPinnedEntry[]> {
+}): Promise<DmPinnedEntry[] | null> {
   const { peerPubB64, ownerProfileId, msgId, on } = params;
-  const current = await loadDmPinnedIds(peerPubB64, ownerProfileId);
+  // v4.32.643: список не прочитался — не пишем ничего. Прежде сюда приходил
+  // пустой массив, и запись сводила все закрепления переписки к одному.
+  const current = await readDmPinnedIds(peerPubB64, ownerProfileId);
+  if (current === null) {
+    log.warn('dm_pin_list_read_failed', { pid: ownerProfileId });
+    return null;
+  }
   const nextIds = on
     ? [msgId, ...current.filter((id) => id !== msgId)].slice(0, MAX_PINNED)
     : current.filter((id) => id !== msgId);
@@ -161,10 +192,25 @@ async function sendDmPin(
  * прежде отправка уходила немым `void`, и отказ не доходил ни до кого, кроме
  * лога.
  */
-export type DmPinSyncResult = {
-  entries: DmPinnedEntry[];
-  sync: Promise<DmPinOutcome>;
+export type DmPinSyncResult =
+  | { ok: true; entries: DmPinnedEntry[]; sync: Promise<DmPinOutcome> }
+  | { ok: false; reason: DmPinRefusal };
+
+/**
+ * Почему закрепление не состоялось (v4.32.643). Пока причина одна, но Record
+ * ниже не даст завести вторую без фразы для человека — ровно как у группы.
+ */
+export type DmPinRefusal = 'read_failed';
+
+/** Record по всем причинам: новая не соберётся, пока ей не написали фразу. */
+const DM_PIN_REFUSAL: Record<DmPinRefusal, string> = {
+  read_failed: 'Не удалось прочитать закреплённые в этой переписке — попробуйте ещё раз.',
 };
+
+/** Текст отказа для человека. */
+export function dmPinRefusalText(reason: DmPinRefusal): string {
+  return DM_PIN_REFUSAL[reason];
+}
 
 /** Закрепляет/открепляет локально и сообщает решение собеседнику. */
 export async function toggleDmPinAndSync(params: {
@@ -175,8 +221,11 @@ export async function toggleDmPinAndSync(params: {
   const { peerPubB64, msgId, on } = params;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
   const entries = await applyLocalDmPin({ peerPubB64, ownerProfileId: pid, msgId, on });
+  // Ничего не записано — и рассылать нечего: у собеседника закрепление
+  // появилось бы, а у себя нет.
+  if (entries === null) return { ok: false, reason: 'read_failed' };
   const sync = sendDmPin(on ? 'pin' : 'unpin', peerPubB64, { msgId, on, ts: Date.now() });
-  return { entries, sync };
+  return { ok: true, entries, sync };
 }
 
 /** «Открепить всё» локально + у собеседника. */
@@ -184,7 +233,7 @@ export async function clearDmPinnedAndSync(peerPubB64: string): Promise<DmPinSyn
   const pid = profileManager.getActiveProfile()?.id ?? 1;
   await clearDmPinned(peerPubB64, pid);
   const sync = sendDmPin('clear', peerPubB64, { msgId: '', on: false, ts: Date.now(), all: true });
-  return { entries: [], sync };
+  return { ok: true, entries: [], sync };
 }
 
 /**
@@ -227,6 +276,13 @@ export async function handleIncomingDmPin(
     msgId: env.msgId,
     on: env.on,
   });
+  // v4.32.643: конверт наш в любом случае — обычным сообщением его сохранять
+  // нельзя, человек увидел бы служебную строку. Но применить его не вышло, и
+  // молчать об этом в логе не о чем: у собеседника закрепление есть, у нас нет.
+  if (entries === null) {
+    log.warn('dm_pin_not_applied', { from: senderPubB64.slice(0, 12) });
+    return true;
+  }
   notifyChatStorageChanged();
   log.info('dm_pin_applied', { from: senderPubB64.slice(0, 12), on: env.on, total: entries.length });
   return true;

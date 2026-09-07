@@ -73,17 +73,24 @@ describe('v4.32.454 — отправка закрепления в личке н
   });
 
   it('вызывающий не может выбросить исход', () => {
-    expect(PIN).toContain('export type DmPinSyncResult = {');
-    expect(PIN).toContain('sync: Promise<DmPinOutcome>;');
+    // v4.32.643: тип стал развилкой — «записали» и «не смогли прочитать
+    // список» больше не выглядят одинаково. Требование усилено: обе ветки
+    // названы поимённо, а прежняя безусловная форма запрещена явно.
+    expect(PIN).toContain('export type DmPinSyncResult =');
+    expect(PIN).toContain('| { ok: true; entries: DmPinnedEntry[]; sync: Promise<DmPinOutcome> }');
+    expect(PIN).toContain("| { ok: false; reason: DmPinRefusal };");
+    expect(PIN).not.toContain('export type DmPinSyncResult = {');
+    expect(PIN).toContain('sync: Promise<DmPinOutcome> }');
     expect(PIN).not.toContain('void sendDmPin(');
     const toggle = bodyOf(PIN, 'export async function toggleDmPinAndSync(');
     expect(toggle).toContain('): Promise<DmPinSyncResult> {');
     expect(toggle).toContain("const sync = sendDmPin(on ? 'pin' : 'unpin', peerPubB64,");
-    expect(toggle).toContain('return { entries, sync };');
+    expect(toggle).toContain('return { ok: true, entries, sync };');
+    expect(toggle).toContain("if (entries === null) return { ok: false, reason: 'read_failed' };");
     const clear = bodyOf(PIN, 'export async function clearDmPinnedAndSync(');
     expect(clear).toContain('): Promise<DmPinSyncResult> {');
     expect(clear).toContain("const sync = sendDmPin('clear', peerPubB64,");
-    expect(clear).toContain('return { entries: [], sync };');
+    expect(clear).toContain('return { ok: true, entries: [], sync };');
   });
 
   it('все три места закрепления в чате объявляют исход', () => {
