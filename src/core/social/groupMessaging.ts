@@ -15,6 +15,7 @@ import { profileManager } from '../identity/profileManager';
 import { getOwnDisplayNameFor, getOwnUsernameFor } from '../identity/ownProfile';
 import {
   listGroupMembers,
+  listGroupMembersRead,
   getGroup,
   getGroupMessageTexts,
   getGroupMessageTarget,
@@ -491,8 +492,14 @@ export async function handleIncomingGroupEnvelope(
   // restricted не проверялась вовсе). Системные сообщения протокола проходят
   // всегда — иначе участник не узнает, что режим включили.
   try {
+    // v4.32.648: состав, который не прочитался, — не пустая группа. Прежде
+    // listGroupMembers отдавал на сбое пустой список, вердикт по нему выходил
+    // «не участник», и сообщение живого участника пропадало с записью «отказ
+    // по правам». Отказ чтения — это отказ проверки, и он идёт в ветку ниже.
+    const members = await listGroupMembersRead(env.groupId, pid);
+    if (!members) throw new Error('group_members_unreadable');
     const verdict = canSendToGroup({
-      role: roleOf(await listGroupMembers(env.groupId, pid), senderPubB64),
+      role: roleOf(members, senderPubB64),
       type: group.type,
       adminOnlyPosting: !!group.adminOnlyPosting,
       media: mediaKindOfText(env.text),
@@ -506,10 +513,13 @@ export async function handleIncomingGroupEnvelope(
       return true;
     }
   } catch (e) {
-    // v4.32.581. Отказ проверки прав — это отказ, а не пропуск. Сейчас ветка
-    // почти недостижима (listGroupMembers гасит свои ошибки и отдаёт пустой
-    // список, а на нём вердикт и так «не участник»), но «почти» — не то
-    // основание, на котором записывают чужое сообщение в группу.
+    // v4.32.581. Отказ проверки прав — это отказ, а не пропуск: записывать в
+    // группу сообщение, прав на которое проверить не удалось, нельзя.
+    // v4.32.648: до этого круга ветка была почти недостижима — listGroupMembers
+    // гасил свои ошибки и отдавал пустой список, а на нём вердикт и так выходил
+    // «не участник». Теперь сюда приходит и непрочитанный состав, и сообщение
+    // живого участника отбрасывается хотя бы честно — с записью «проверить не
+    // удалось», а не «отказано по правам».
     log.warn('group_msg_verdict_failed_drop', {
       gid: env.groupId.slice(0, 8),
       err: e instanceof Error ? e.message : String(e),

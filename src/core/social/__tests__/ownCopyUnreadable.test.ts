@@ -38,6 +38,9 @@ jest.mock('../../storage/local', () => ({
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
+  // v4.32.648: приём различает «в группе никого» и «состав не прочитался».
+  listGroupMembersRead: jest.fn(async (gid: string, pid: number) =>
+    (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => mockOwnText),
   insertGroupMessage: jest.fn(async (row: { replyToId: string | null; replyToPreview: string | null }) => {
     mockInserted.push(row);

@@ -60,6 +60,9 @@ jest.mock('../../storage/local', () => ({
     mockGroups.filter((g) => g.ownerProfileId === pid && !g.archived)),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
+  // v4.32.648: приём различает «в группе никого» и «состав не прочитался».
+  listGroupMembersRead: jest.fn(async (gid: string, pid: number) =>
+    (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async (row: { groupId: string; text: string }) => { mockInserted.push(row); return true; }),
   touchGroupConversation: jest.fn(async () => {}),

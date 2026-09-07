@@ -16,7 +16,7 @@ import {
   getChatMessageAuthor,
   getChatMessageTarget,
   getGroupMessageTarget,
-  listGroupMembers,
+  listGroupMembersRead,
   notifyChatStorageChanged,
   setPollVote,
 } from '../storage/local';
@@ -116,6 +116,16 @@ export type PollDelivery = FanoutResult;
  * базу — если не прочиталось, записать почти наверняка тоже не выйдет.
  */
 const POLL_STATE_UNKNOWN = 'Не удалось проверить, не завершён ли опрос. Попробуйте ещё раз.';
+/**
+ * Состав группы не прочитался (v4.32.648).
+ *
+ * Пустой состав — законный ответ, и по нему делаются два вывода: «вас нет
+ * среди участников» и «рассылать некому». Сбой чтения давал ровно такой же
+ * пустой список, то есть один заблокированный миг базы отказывал человеку в
+ * голосе в его собственной группе, а завершение опроса объявлял разосланным,
+ * не отправив ничего.
+ */
+const MEMBERS_UNKNOWN = 'Не удалось прочитать состав группы. Попробуйте ещё раз.';
 
 /** Завершён ли опрос. `null` — прочитать не удалось, см. POLL_STATE_UNKNOWN. */
 async function pollIsClosed(pid: number, msgId: string): Promise<boolean | null> {
@@ -157,7 +167,12 @@ export async function castAndSyncPollVote(params: {
   }
 
   // Роль в группе — до записи в свою БД. Проверка та же, что на приёме.
-  const members = groupId ? await listGroupMembers(groupId, pid) : [];
+  // v4.32.648: состав, который не прочитался, — не пустая группа.
+  const members = groupId ? await listGroupMembersRead(groupId, pid) : [];
+  if (members === null) {
+    log.warn('poll_vote_members_read_failed', { gid: groupId?.slice(0, 8) });
+    return { ok: false, reason: MEMBERS_UNKNOWN };
+  }
   if (groupId) {
     const verdict = canInteractInGroup(roleOf(members, myPubB64));
     if (!verdict.allowed) {
@@ -386,6 +401,17 @@ export async function closeAndSyncPoll(params: {
   const { msgId, myPubB64, peerPubB64, groupId } = params;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
 
+  // v4.32.648: состав читается ДО записи, по той же причине, по которой ниже
+  // рассылка идёт после неё. Пустой состав — законный ответ, и рассылать тогда
+  // правда некому; но сбой чтения давал такой же пустой список, а
+  // fanoutControlEnvelope при нуле получателей считает отправку удавшейся —
+  // человек видел «Опрос завершён» при живом опросе у всех остальных.
+  const members = groupId ? await listGroupMembersRead(groupId, pid) : [];
+  if (members === null) {
+    log.warn('poll_close_members_read_failed', { gid: groupId?.slice(0, 8) });
+    return { ok: false, reason: MEMBERS_UNKNOWN };
+  }
+
   // v4.32.644: отказ записи — это отказ завершения. Незамеченным он печатал
   // «Опрос завершён» при живом у себя опросе, а конверт закрывал его всем
   // остальным: расхождение зеркально тому, что чинила v4.32.251. Рассылки до
@@ -406,7 +432,7 @@ export async function closeAndSyncPoll(params: {
     'poll_close',
     payload,
     groupId
-      ? { kind: 'group', recipients: activeRecipients(await listGroupMembers(groupId, pid), myPubB64) }
+      ? { kind: 'group', recipients: activeRecipients(members, myPubB64) }
       : { kind: 'dm', peerPubB64 }
   );
   if (!delivery.sent) {

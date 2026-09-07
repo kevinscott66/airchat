@@ -73,6 +73,10 @@ jest.mock('../../storage/local', () => ({
     { peerPubB64: mockMe, role: 'owner' },
     { peerPubB64: mockPeer, role: 'member' },
   ],
+  listGroupMembersRead: async () => [
+    { peerPubB64: mockMe, role: 'owner' },
+    { peerPubB64: mockPeer, role: 'member' },
+  ],
   getGroup: async () => ({ id: mockGroup, type: 'group', adminOnlyPosting: false }),
   notifyChatStorageChanged: () => {
     mockNotifies += 1;
