@@ -2242,9 +2242,19 @@ export function contactNoteKey(contactPubB64: string): string {
  * пустая строка от `decryptAtRestString` означала «прежнего не было» и уходила
  * в базу поверх чужого шифртекста. Недоступный DEK тоже даёт `unreadable`, а
  * не «пусто»: не открыв запись, разрешать её перезапись нельзя.
+ *
+ * v4.32.615: и несостоявшееся чтение — тоже `unreadable`. Здесь стоял `kvGet`,
+ * а он сводит отказ базы к тому же `null`, что и отсутствие строки; правило
+ * «не открыв запись, не переписывай» на этот случай не распространялось, хотя
+ * он ровно такой же. Кончалось это тем, что при заблокированной базе
+ * `kvUpdateSecretScoped` получал «записи нет», собирал корзину «недавно
+ * удалённые» (30 дней в переписке, 7 в группе) или заметку о контакте с чистого
+ * листа и клал получившееся поверх целой прежней.
  */
 export async function kvGetSecretCell(key: string): Promise<AtRestCell> {
-  const stored = await kvGet(key);
+  const read = await kvTryGet(key);
+  if (read === null) return { state: 'unreadable' };
+  const stored = read.value;
   if (stored == null) return classifyAtRestCell(null, null);
   try {
     const dek = await getOrCreateDataEncryptionKey();
