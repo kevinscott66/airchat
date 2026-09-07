@@ -573,6 +573,8 @@ async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId:
   if (!getConfigSync().cloudBackup?.enabled) return;
   const generation = syncGeneration;
   const shouldContinue = () => generation === syncGeneration;
+  /** Набор, отвергнутый прошлым проходом. Подпись, а не список: нужен только факт совпадения. */
+  let lastRejected: string | null = null;
   for (let pass = 0; pass < MAX_SYNC_PASSES; pass += 1) {
     if (!shouldContinue()) return;
     const collected = await collectPending(mnemonic, ownerProfileId);
@@ -635,8 +637,27 @@ async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId:
     // соберёт отправку целиком. Обычные условия выхода тут не применимы —
     // отправлять пока было нечего именно потому, что головы врали.
     if (result.status === 'reset') continue;
-    const hasRejected = (result.pushed?.rejectedMutationIds.length ?? 0) > 0;
+    const rejected = result.pushed?.rejectedMutationIds ?? [];
+    const accepted = result.pushed?.acceptedMutationIds.length ?? 0;
+    const hasRejected = rejected.length > 0;
     const hasMorePush = collected.mutations.length >= MAX_PUSH_MUTATIONS;
+    // v4.32.617: отказ сервера перестал быть вечным поводом зайти на новый
+    // круг. Голову отвергнутой записи мы не сохраняем — и правильно, — но
+    // из-за этого следующий проход собирает ровно ту же запись, сервер
+    // отвергает её ровно так же, и так все двадцать проходов. Каждый из них
+    // — полная выгрузка всей местной базы (семь выгрузок: переписка, диалоги,
+    // настройки, группы, лента, альбомы), то есть двадцать пустых выгрузок
+    // подряд при каждом заходе, навсегда. Признак «топчемся на месте» —
+    // проход, который не принял НИЧЕГО и отверг тот же самый набор.
+    const rejectedSignature = hasRejected ? [...rejected].sort().join(',') : null;
+    const stuck = hasRejected && accepted === 0 && rejectedSignature === lastRejected;
+    lastRejected = rejectedSignature;
+    if (stuck) {
+      log.warn('live_sync_push_stuck', { ownerProfileId, rejected: rejected.length, pass });
+      // Тянуть входящее это не мешает: там движение есть.
+      if (!result.pulled?.hasMore) return;
+      continue;
+    }
     if (!hasRejected && !hasMorePush && !result.pulled?.hasMore) return;
   }
   log.warn('live_sync_pass_limit', { ownerProfileId, limit: MAX_SYNC_PASSES });
