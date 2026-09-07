@@ -18,7 +18,7 @@ import {
   importRawChatMessageRows,
   rebuildConversationsFromMessages,
   saveSyncEntityHeads,
-  clearSyncEntityHeads,
+  forgetSyncEntityFingerprints,
   type SyncEntityHead,
 } from '../storage/local';
 import {
@@ -600,7 +600,13 @@ async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId:
         if (messagesChanged) await rebuildConversationsFromMessages(ownerProfileId);
       },
       onServerReset: async () => {
-        await clearSyncEntityHeads(ownerProfileId);
+        // v4.32.615: сбрасываются отпечатки, а НЕ строки целиком. Номера
+        // ревизий — местный счётчик и единственная защита от отката: сервер,
+        // отдавший новую метку вместе со старыми мутациями, без них вернул бы
+        // переписку в прошлое (см. forgetSyncEntityFingerprints).
+        await forgetSyncEntityFingerprints(ownerProfileId);
+        // Головы этого прохода собраны ДО сброса и после него не врут: в них
+        // те же номера. Отпечатков в них нет, они здесь и не читаются.
       },
       onPushAccepted: async (response: SyncPushResponse) => {
         const accepted = response.acceptedMutationIds
