@@ -17,7 +17,7 @@
  * одного правила про имена ключей уже стоили нам чужих заметок в соседнем
  * профиле (v4.32.278) и потерянных контактов при восстановлении (v4.32.280).
  */
-import { kvDelete, kvListKeysByPrefix, kvSet, kvTryGet } from './local';
+import { kvDelete, kvListKeysByPrefix, kvSetChecked, kvTryGet } from './local';
 import { profileScopedKey } from './kvKeys';
 import { profileManager } from '../identity/profileManager';
 
@@ -69,8 +69,13 @@ export async function scopedKvTryGetFor(
   const legacy = await kvTryGet(key);
   if (legacy === null) return null;
   if (legacy.value == null) return { value: null };
-  // Сначала копия, потом удаление: падение между ними стоит записи.
-  await kvSet(profileScopedKey(pid, key), legacy.value);
+  // Сначала копия, потом удаление: падение между ними стоит записи. Копию
+  // поэтому делает kvSetChecked, а не kvSet: тот гасит свою ошибку и возвращает
+  // void, то есть «не влезло на диск» было неотличимо от «легло», и общая
+  // запись стиралась следом за несостоявшейся копией (ср. v4.32.341, где на
+  // том же месте терялись вложения поста). Не переписалось — оставляем как
+  // было: значение цело под старым именем, следующее чтение попробует снова.
+  if (!await kvSetChecked(profileScopedKey(pid, key), legacy.value)) return legacy;
   await kvDelete(key);
   return legacy;
 }
@@ -91,10 +96,16 @@ export async function scopedKvSet(key: string, value: string): Promise<void> {
  * подмена чужой.
  */
 export async function scopedKvSetFor(pid: number, key: string, value: string): Promise<void> {
-  await kvSet(profileScopedKey(pid, key), value);
-  if (pid === 1) {
+  const written = await kvSetChecked(profileScopedKey(pid, key), value);
+  if (pid === 1 && written) {
     // Общая запись первого профиля больше не нужна: своя новее, а оставленная
     // лежать она перебила бы её при чтении по старому имени.
+    //
+    // v4.32.615: только если своя действительно легла. Иначе снятие старой
+    // записи означало бы, что не записалось НИЧЕГО, и настройка приватности
+    // молча вернулась бы к значению по умолчанию — при том, что человек её
+    // менял. Уцелевшая общая запись хуже не делает: чтение предпочитает свою,
+    // а её нет.
     await kvDelete(key);
   }
 }
@@ -145,7 +156,11 @@ export async function scopedKvListKeysByPrefix(prefix: string): Promise<string[]
       const bare = await kvTryGet(legacy);
       if (bare === null) continue;
       if (bare.value != null) {
-        await kvSet(profileScopedKey(1, legacy), bare.value);
+        // v4.32.615: не переписалось — общее имя не трогаем и в список его не
+        // добавляем. Раньше `has` ставился до проверки: заглушённый чат после
+        // неудачной копии оказывался и вычеркнут из обоих namespace, и
+        // объявлен существующим — то есть беззвучно начинал звонить.
+        if (!await kvSetChecked(profileScopedKey(1, legacy), bare.value)) continue;
         has = true;
       }
     }

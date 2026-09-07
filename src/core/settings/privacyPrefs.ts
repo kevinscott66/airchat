@@ -19,7 +19,7 @@
  * правила про имена ключей уже стоили чужих заметок в соседнем профиле
  * (v4.32.278) и потерянных контактов при восстановлении (v4.32.280).
  */
-import { kvDelete, kvGet, kvSet } from '../storage/local';
+import { kvDelete, kvGet, kvSetChecked } from '../storage/local';
 import { notifyOnlineKey, profileScopedKey, type PrivacyPrefKey } from '../storage/kvKeys';
 import { scopedKvGet, scopedKvGetFor, scopedKvTryGetFor, scopedKvSet } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
@@ -168,6 +168,11 @@ export async function notifyOnlineGet(peerPubB64: string): Promise<boolean> {
 export async function notifyOnlineSet(peerPubB64: string, on: boolean): Promise<void> {
   const pid = activeProfileId();
   const key = notifyOnlineKey(peerPubB64);
-  await kvSet(profileScopedKey(pid, key), on ? '1' : '0');
-  if (pid === 1) await kvDelete(key);
+  // v4.32.615: общее имя снимается только после того, как своё действительно
+  // легло. kvSet гасит свою ошибку и возвращает void, поэтому «диск полон»
+  // означало «просьбу забыли, а старую запись стёрли» — то же место, что и в
+  // profileScopedKv.
+  if (await kvSetChecked(profileScopedKey(pid, key), on ? '1' : '0') && pid === 1) {
+    await kvDelete(key);
+  }
 }

@@ -16,6 +16,7 @@ let mockActiveId = 1;
 jest.mock('../../storage/local', () => ({
   kvTryGet: async (k: string) => ({ value: mockKv.get(k) ?? null }),
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
+  kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
 }));

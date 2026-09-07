@@ -9,6 +9,8 @@
  */
 const kv: Record<string, string> = {};
 let mockKvBroken = false;
+/** true — база не принимает запись (диск полон, лок). */
+let mockWriteFails = false;
 jest.mock('../../storage/local', () => ({
   kvGet: jest.fn(async (k: string) => {
     if (mockKvBroken) throw new Error('kv unavailable');
@@ -16,6 +18,11 @@ jest.mock('../../storage/local', () => ({
   }),
   kvTryGet: jest.fn(async (k: string) => (mockKvBroken ? null : { value: kv[k] ?? null })),
   kvSet: jest.fn(async (k: string, v: string) => { kv[k] = v; }),
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    if (mockWriteFails) return false;
+    kv[k] = v;
+    return true;
+  }),
   kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
 }));
 
@@ -40,6 +47,7 @@ beforeEach(() => {
   for (const k of Object.keys(kv)) delete kv[k];
   mockActiveProfileId = 1;
   mockKvBroken = false;
+  mockWriteFails = false;
 });
 
 describe('переключатели приватности', () => {
@@ -116,6 +124,17 @@ describe('«сообщить, когда появится»', () => {
     expect(await notifyOnlineGet(PEER)).toBe(true);
     mockActiveProfileId = 2;
     expect(await notifyOnlineGet(PEER)).toBe(false);
+  });
+
+  it('база не приняла запись — прежняя просьба остаётся в силе', async () => {
+    // v4.32.615: снятие общего имени шло безусловно, а запись под префиксом
+    // гасила свою ошибку. Значит «диск полон» стирало просьбу, о которой
+    // человек не узнавал: уведомления просто не приходило.
+    kv[`notify_online_${PEER}`] = '1';
+    mockWriteFails = true;
+    await notifyOnlineSet(PEER, true);
+    expect(kv[`notify_online_${PEER}`]).toBe('1');
+    expect(await notifyOnlineGet(PEER)).toBe(true);
   });
 });
 

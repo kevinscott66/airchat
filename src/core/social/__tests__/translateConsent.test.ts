@@ -25,6 +25,7 @@ jest.mock('../../storage/local', () => ({
   kvTryGet: async (k: string) => (mockReadFails ? null : { value: mockKv.get(k) ?? null }),
   kvGet: async (k: string) => mockKv.get(k) ?? null,
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
+  kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
 }));
 

@@ -2,11 +2,19 @@
  * kv в namespace активного профиля (v4.32.325).
  */
 const kv: Record<string, string> = {};
+/** true — записи в этот namespace база не принимает (диск полон, лок). */
+let mockWriteFails = false;
 jest.mock('../local', () => ({
   kvGet: jest.fn(async (k: string) => kv[k] ?? null),
   kvTryGet: jest.fn(async (k: string) => ({ value: kv[k] ?? null })),
-  kvSet: jest.fn(async (k: string, v: string) => { kv[k] = v; }),
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    if (mockWriteFails) return false;
+    kv[k] = v;
+    return true;
+  }),
   kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
+  kvListKeysByPrefix: jest.fn(async (prefix: string) =>
+    Object.keys(kv).filter((k) => k.startsWith(prefix))),
 }));
 
 let mockActiveProfileId = 1;
@@ -14,11 +22,12 @@ jest.mock('../../identity/profileManager', () => ({
   profileManager: { getActiveProfile: () => ({ id: mockActiveProfileId }) },
 }));
 
-import { scopedKvGet, scopedKvSet } from '../profileScopedKv';
+import { scopedKvGet, scopedKvListKeysByPrefix, scopedKvSet } from '../profileScopedKv';
 
 beforeEach(() => {
   for (const k of Object.keys(kv)) delete kv[k];
   mockActiveProfileId = 1;
+  mockWriteFails = false;
 });
 
 describe('запись и чтение', () => {
@@ -79,5 +88,47 @@ describe('записи, сделанные когда профиль был од
     await scopedKvSet('profile:sent', 'новое');
     expect(kv['p2:profile:sent']).toBe('новое');
     expect(kv['profile:sent']).toBe('старое');
+  });
+});
+
+/**
+ * v4.32.615: kvSet гасил свою ошибку и возвращал void, поэтому переезд общей
+ * записи под префикс шёл «скопировали (может быть) — удалили (точно)».
+ */
+describe('база не приняла запись', () => {
+  it('общая запись переживает неудавшийся переезд', async () => {
+    kv['profile:sent'] = 'старое';
+    mockWriteFails = true;
+    expect(await scopedKvGet('profile:sent')).toBe('старое');
+    // Ничего не потеряно: значение цело под старым именем.
+    expect(kv['profile:sent']).toBe('старое');
+    expect(kv['p1:profile:sent']).toBeUndefined();
+    // А когда база отпустит — переезд состоится.
+    mockWriteFails = false;
+    expect(await scopedKvGet('profile:sent')).toBe('старое');
+    expect(kv['p1:profile:sent']).toBe('старое');
+    expect(kv['profile:sent']).toBeUndefined();
+  });
+
+  it('неудавшаяся запись не стирает прежнее значение', async () => {
+    kv['profile:sent'] = 'старое';
+    mockWriteFails = true;
+    await scopedKvSet('profile:sent', 'новое');
+    // Новое не легло — но и старое на месте, а не сброс к умолчанию.
+    expect(kv['p1:profile:sent']).toBeUndefined();
+    expect(kv['profile:sent']).toBe('старое');
+    expect(await scopedKvGet('profile:sent')).toBe('старое');
+  });
+
+  it('скан по префиксу не вычёркивает то, что не переехало', async () => {
+    kv['mute:peer-a'] = '1';
+    mockWriteFails = true;
+    expect(await scopedKvListKeysByPrefix('mute:')).toEqual([]);
+    expect(kv['mute:peer-a']).toBe('1');
+
+    mockWriteFails = false;
+    expect(await scopedKvListKeysByPrefix('mute:')).toEqual(['mute:peer-a']);
+    expect(kv['p1:mute:peer-a']).toBe('1');
+    expect(kv['mute:peer-a']).toBeUndefined();
   });
 });

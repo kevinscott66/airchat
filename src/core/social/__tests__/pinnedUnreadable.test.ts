@@ -29,6 +29,7 @@ const mockSetConvPinned = jest.fn();
 jest.mock('../../storage/local', () => ({
   kvTryGet: async (k: string) => ({ value: mockKv.get(k) ?? null }),
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
+  kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
   setConversationPinnedMessage: (...a: unknown[]) => { mockSetConvPinned(...a); return Promise.resolve(); },
   setGroupPinnedMessage: (...a: unknown[]) => { mockSetGroupPinned(...a); return Promise.resolve(); },

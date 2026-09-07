@@ -19,6 +19,7 @@ jest.mock('../../storage/local', () => ({
   // v4.32.474: чтение, у которого провал отличим от «ключа нет».
   kvTryGet: jest.fn(async (k: string) => ({ value: kv[k] ?? null })),
   kvSet: jest.fn(async (k: string, v: string) => { kv[k] = v; }),
+  kvSetChecked: jest.fn(async (k: string, v: string) => { kv[k] = v; return true; }),
   kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
 }));
 

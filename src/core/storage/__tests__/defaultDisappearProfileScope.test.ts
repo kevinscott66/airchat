@@ -19,6 +19,7 @@ let mockReadFails = false;
 jest.mock('../local', () => ({
   kvTryGet: jest.fn(async (k: string) => (mockReadFails ? null : { value: mockKv[k] ?? null })),
   kvSet: jest.fn(async (k: string, v: string) => { mockKv[k] = v; }),
+  kvSetChecked: jest.fn(async (k: string, v: string) => { mockKv[k] = v; return true; }),
   kvDelete: jest.fn(async (k: string) => { delete mockKv[k]; }),
 }));
 

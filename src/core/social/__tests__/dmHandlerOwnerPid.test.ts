@@ -23,6 +23,7 @@ const mockKv = new Map<string, string>();
 jest.mock('../../storage/local', () => ({
   kvGet: async (k: string) => mockKv.get(k) ?? null,
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
+  kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   // v4.32.484: закрепления читаются через profileScopedKv — ему нужны эти два.
   kvTryGet: async (k: string) => ({ value: mockKv.get(k) ?? null }),
   kvDelete: async (k: string) => { mockKv.delete(k); },
