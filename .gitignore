@@ -73,3 +73,8 @@ service-account*.json
 
 # Локальная база cloud-vault: рантайм-артефакт, не исходник.
 server/cloud-vault/data/
+
+# Скомпилированный Xray-core для модуля VPN (~73 МБ на две ABI). README рядом
+# с каталогом говорит, что бинарники сюда не коммитятся, но правила не было —
+# и `git add -A` утащил бы их в публичный репозиторий.
+modules/*/android/src/main/jniLibs/*/*.so
