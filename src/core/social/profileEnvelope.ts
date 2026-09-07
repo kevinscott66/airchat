@@ -19,6 +19,8 @@ import { readEnvelopeBody } from './envelopeBody';
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { displayNameOrNull, sanitizeParagraphText } from './sysLineGuard';
 import { normalizeUsername } from '../identity/username';
+import { sanitizePeerPronouns } from './peerPronouns';
+import { sanitizePeerStatus } from './peerStatus';
 import { MAX_GRANT_LEN } from '../identity/verificationGrant';
 import { sanitizeProfileLinks, type ProfileLink } from '../identity/profileLinks';
 
@@ -50,6 +52,21 @@ export type PeerProfileEnvelope = {
   username?: string | null;
   /** «О себе». null — не задано. */
   bio: string | null;
+  /**
+   * v4.32.616: местоимения и статус — те же поля, что в редакторе профиля.
+   *
+   * До этой версии их видел только владелец: в конверт они не входили, и
+   * «Работаю в IT» доезжало до собеседника единственным путём — конвертом
+   * присутствия, то есть лишь пока человек в сети и лишь в шапку переписки.
+   * В карточке профиля не было ни того, ни другого. Оба поля однострочные и
+   * чистятся правилом имени (peerPronouns, peerStatus).
+   *
+   * Отсутствуют в конвертах до 4.32.616, поэтому необязательные: конверт без
+   * них не должен стирать то, что уже показано.
+   */
+  pronouns?: string | null;
+  /** Статус «под именем». Отсутствует в конвертах до 4.32.616. */
+  status?: string | null;
   /** Фото профиля: обычный CID или `nb:`-дескриптор вложения. */
   avatarCid: string | null;
   /**
@@ -94,6 +111,8 @@ export function encodeProfileEnvelope(env: PeerProfileEnvelope): string {
     name: displayNameOrNull(env.name, MAX_NAME_LEN),
     ...(env.username !== undefined ? { username: normalizeUsername(env.username) } : {}),
     bio: sanitizeParagraphText(env.bio, MAX_BIO_LEN),
+    ...(env.pronouns !== undefined ? { pronouns: sanitizePeerPronouns(env.pronouns) } : {}),
+    ...(env.status !== undefined ? { status: sanitizePeerStatus(env.status) } : {}),
     avatarCid: env.avatarCid,
     ...(env.badge ? { badge: env.badge } : {}),
     ...(links ? { links } : {}),
@@ -146,10 +165,17 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
   if (env.name != null && typeof env.name !== 'string') return null;
   if (env.username != null && typeof env.username !== 'string') return null;
   if (env.bio != null && typeof env.bio !== 'string') return null;
+  if (env.pronouns != null && typeof env.pronouns !== 'string') return null;
+  if (env.status != null && typeof env.status !== 'string') return null;
   if (env.badge != null && typeof env.badge !== 'string') return null;
   const name = displayNameOrNull(env.name, MAX_NAME_LEN);
   const username = env.username === undefined ? undefined : normalizeUsername(env.username);
   const bio = sanitizeParagraphText(env.bio, MAX_BIO_LEN);
+  // undefined значит «конверт этого поля не касается» — так же, как у
+  // username: клиенты до 4.32.616 их не слали, и записывать за них пустоту
+  // нельзя. А присланное пустое поле значит «стёрто» и записывается.
+  const pronouns = env.pronouns === undefined ? undefined : sanitizePeerPronouns(env.pronouns);
+  const status = env.status === undefined ? undefined : sanitizePeerStatus(env.status);
   // Слишком длинная бумага — не повод отбросить весь конверт: имя, фото и «О
   // себе» в нём настоящие, а галочки просто не будет. Обрезать её, в отличие
   // от текста, бессмысленно: обрезанная подпись не проверится никогда.
@@ -186,6 +212,8 @@ export function decodeProfileEnvelope(text: string, now: number): PeerProfileEnv
     name,
     ...(username !== undefined ? { username } : {}),
     bio,
+    ...(pronouns !== undefined ? { pronouns } : {}),
+    ...(status !== undefined ? { status } : {}),
     avatarCid,
     badge,
     links,

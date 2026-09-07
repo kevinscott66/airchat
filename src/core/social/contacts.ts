@@ -4,6 +4,9 @@ import { deriveSymmetricKey } from '../crypto/encrypt';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { displayNameOrNull, sanitizeDisplayName, sanitizeParagraphText } from './sysLineGuard';
 import { profileLinksKey, sanitizeProfileLinks, type ProfileLink } from '../identity/profileLinks';
+import { normalizeUsername } from '../identity/username';
+import { sanitizePeerPronouns } from './peerPronouns';
+import { sanitizePeerStatus } from './peerStatus';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import {
   kvGet,
@@ -171,6 +174,16 @@ export type Contact = {
   peerUsername?: string;
   /** «О себе» контакта — из его же конверта профиля. */
   bio?: string;
+  /**
+   * v4.32.616: местоимения и статус контакта — из того же конверта.
+   *
+   * Оба поля есть в редакторе профиля с прошлых версий, но до этой их видел
+   * только владелец. Статус приезжал ещё и конвертом присутствия, но там он
+   * живёт в памяти, пока человек в сети; здесь он лежит рядом с именем и
+   * показывается в карточке всегда.
+   */
+  pronouns?: string;
+  peerStatus?: string;
   /** Фото контакта: обычный CID или `nb:`-дескриптор вложения. */
   avatarCid?: string;
   /** Метка времени применённого конверта — отбрасываем устаревшие. */
@@ -446,7 +459,9 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
       try {
         const j = JSON.parse(row) as {
           displayName?: unknown; profileCid?: unknown; implicit?: unknown;
-          peerName?: unknown; bio?: unknown; avatarCid?: unknown; profileTs?: unknown;
+          peerName?: unknown; peerUsername?: unknown; bio?: unknown;
+          peerPronouns?: unknown; peerStatus?: unknown;
+          avatarCid?: unknown; profileTs?: unknown;
           peerVerified?: unknown;
           peerLinks?: unknown;
         };
@@ -465,6 +480,14 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
         // из разобранного конверта: строки лежат там с прошлых версий и с
         // импорта профиля (identity/profile), где чистки нет вовсе.
         const bio = sanitizeParagraphText(j.bio, 512);
+        // v4.32.616: юзернейм читался обратно НИГДЕ. Он записывался
+        // конвертом профиля с v4.32.4xx и сравнивался при записи, но в разбор
+        // строки не входил — значит `contact.peerUsername` всегда был
+        // undefined, и карточка контакта, которая его показывает, не
+        // показывала его никогда.
+        const peerUsername = normalizeUsername(j.peerUsername);
+        const peerPronouns = sanitizePeerPronouns(j.peerPronouns);
+        const peerStatus = sanitizePeerStatus(j.peerStatus);
         const peerLinks = sanitizeProfileLinks(j.peerLinks);
         out.push({
           peerPublicKey: id,
@@ -477,7 +500,10 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
           // v4.32.247: поля профиля контакта. Пределы те же, что при записи, —
           // строка в базе могла попасть туда из старого импорта.
           ...(peerName ? { peerName } : {}),
+          ...(peerUsername ? { peerUsername } : {}),
           ...(bio ? { bio } : {}),
+          ...(peerPronouns ? { pronouns: peerPronouns } : {}),
+          ...(peerStatus ? { peerStatus } : {}),
           ...(typeof j.avatarCid === 'string' && j.avatarCid ? { avatarCid: j.avatarCid } : {}),
           ...(typeof j.profileTs === 'number' && Number.isFinite(j.profileTs) ? { profileTs: j.profileTs } : {}),
           // Единственное допустимое значение сверяется здесь, а не приводится:
@@ -628,6 +654,9 @@ export type PeerProfilePatch = {
   name: string | null;
   username?: string | null;
   bio: string | null;
+  /** v4.32.616: местоимения и статус. Отсутствуют в конвертах до 4.32.616. */
+  pronouns?: string | null;
+  status?: string | null;
   avatarCid: string | null;
   /** v4.32.547: результат проверки бумаги на галочку. Проверяет profileSync. */
   verified?: 'official' | null;
@@ -654,6 +683,12 @@ export async function setPeerProfileFor(
         peerName: profile.name ?? '',
         ...(profile.username !== undefined ? { peerUsername: profile.username ?? '' } : {}),
         bio: profile.bio ?? '',
+        // Пустая строка записывается так же обязательно, как пустая галочка:
+        // стёртый статус обязан исчезнуть и у собеседника. А отсутствие поля
+        // в конверте (undefined) значит «конверт его не касается» — так шлют
+        // клиенты до 4.32.616, и стирать за них нечего.
+        ...(profile.pronouns !== undefined ? { peerPronouns: profile.pronouns ?? '' } : {}),
+        ...(profile.status !== undefined ? { peerStatus: profile.status ?? '' } : {}),
         avatarCid: profile.avatarCid ?? '',
         // Пустая строка — «галочки нет», и записывается она так же обязательно,
         // как удалённое «О себе»: отсутствие поля в конверте не должно
@@ -668,6 +703,8 @@ export async function setPeerProfileFor(
         (j.peerName ?? '') === next.peerName &&
         (profile.username === undefined || (j.peerUsername ?? '') === next.peerUsername) &&
         (j.bio ?? '') === next.bio &&
+        (profile.pronouns === undefined || (j.peerPronouns ?? '') === (profile.pronouns ?? '')) &&
+        (profile.status === undefined || (j.peerStatus ?? '') === (profile.status ?? '')) &&
         (profile.verified === undefined || (j.peerVerified ?? '') === (profile.verified ?? '')) &&
         (profile.links === undefined ||
           profileLinksKey(sanitizeProfileLinks(j.peerLinks)) === profileLinksKey(profile.links)) &&

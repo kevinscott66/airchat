@@ -28,8 +28,14 @@
 import type { UsernameRejection } from '../../../../core/identity/reservedUsernames';
 import { USERNAME_MIN_SELF_SERVICE } from '../../../../core/identity/reservedUsernames';
 
-/** Местоимения: короткая строка, а не второе «О себе». */
-export const PRONOUNS_MAX = 30;
+/**
+ * Местоимения: короткая строка, а не второе «О себе».
+ *
+ * v4.32.616: правило переехало в core/social/peerPronouns — поле теперь едет
+ * в конверте профиля, и предел должен быть один на своего редактора и на
+ * чужой конверт. Здесь остаётся имя, которым его знает редактор.
+ */
+export { PRONOUNS_MAX } from '../../../../core/social/peerPronouns';
 /** Ссылка профиля. Столько же принимает и чистка на записи. */
 export const PROFILE_LINK_MAX = 256;
 

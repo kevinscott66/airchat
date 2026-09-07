@@ -29,6 +29,8 @@ import {
   normalizeOwnBio,
   type PeerProfileEnvelope,
 } from './profileEnvelope';
+import { normalizeOwnPronouns } from './peerPronouns';
+import { normalizeOwnStatus } from './peerStatus';
 import { ownBadgeGrantFor } from '../identity/ownBadge';
 // v4.32.575: привязки едут тем же конвертом, что и имя. Едут именем и адресом
 // публикации, а не признаком «подтверждено»: проверяет получатель — см.
@@ -189,13 +191,20 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   // символов заполненным полем, и всем контактам уходил конверт, в котором
   // после чистки не оставалось ничего, кроме отметки времени.
   const bio = normalizeOwnBio(await ownFieldGetFor(pid, 'user_bio')) || null;
+  // v4.32.616: местоимения и статус едут тем же конвертом, что имя и «О
+  // себе», — это поля того же редактора профиля, и место им там же. Статус
+  // ездил и раньше, но конвертом присутствия: значит доезжал только пока
+  // человек в сети и только в шапку переписки, а в карточке профиля его не
+  // было. Чистятся тем же правилом, каким чистятся на приёме.
+  const pronouns = normalizeOwnPronouns(await ownFieldGetFor(pid, 'user_pronouns')) || null;
+  const status = normalizeOwnStatus(await ownFieldGetFor(pid, 'user_custom_status')) || null;
   // v4.32.556: имя файла, а не путь к нему. Путь входил в свёртку версии ниже
   // и менялся при каждом обновлении приложения — то есть после каждого
   // обновления карточка заново уезжала всем контактам, не сообщая им ничего
   // нового.
   const avatarName = await ownAvatarNameFor(pid);
   const links = await ownLinksFor(pid);
-  if (!name && !username && !bio && !avatarName && !links) return null;
+  if (!name && !username && !bio && !pronouns && !status && !avatarName && !links) return null;
   const now = Date.now();
   let stamp = Number(await scopedKvGetFor(pid, CHANGED_AT_KEY)) || 0;
   if (!stamp) {
@@ -214,8 +223,11 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
   // и спрятанная она бесполезна.
   const badge = await ownBadgeGrantFor(pid);
   return {
-    env: { name, username, bio, avatarCid, badge, links, ts: stamp },
-    version: versionOf(stamp, name, username, bio, shareAvatar ? avatarName : '', avatarCid != null, badge, links),
+    env: { name, username, bio, pronouns, status, avatarCid, badge, links, ts: stamp },
+    version: versionOf(
+      stamp, name, username, bio, pronouns, status,
+      shareAvatar ? avatarName : '', avatarCid != null, badge, links
+    ),
   };
 }
 
@@ -245,6 +257,8 @@ function versionOf(
   name: string | null,
   username: string | null,
   bio: string | null,
+  pronouns: string | null,
+  status: string | null,
   avatarName: string,
   avatarOk: boolean,
   badge: string | null,
@@ -256,7 +270,10 @@ function versionOf(
   // v4.32.575: привязки входят в свёртку по той же причине, что и бумага на
   // галочку: подтверждённая учётная запись не меняет отметку правки профиля, и
   // без неё в свёртке новая привязка не уехала бы ни одному контакту.
-  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${avatarName}|${avatarOk ? '1' : '0'}|${badge ?? ''}|${profileLinksKey(links)}`;
+  // v4.32.616: местоимения и статус входят в свёртку по той же причине, что
+  // бумага и привязки: отметка правки профиля их не всегда касается, а без
+  // них в свёртке новая строка не уехала бы ни одному контакту.
+  const src = `${ts}|${name ?? ''}|${username ?? ''}|${bio ?? ''}|${pronouns ?? ''}|${status ?? ''}|${avatarName}|${avatarOk ? '1' : '0'}|${badge ?? ''}|${profileLinksKey(links)}`;
   // FNV-1a: нужен не криптостойкий хэш, а стабильное число для сравнения
   // «то же самое или уже другое» — обе стороны сравнения свои.
   let h = 0x811c9dc5;

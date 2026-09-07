@@ -38,8 +38,9 @@ import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet } from '../
 import { readLinkProofRecord } from '../../core/identity/linkProof';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../core/identity/verification';
-import { sanitizeDisplayName } from '../../core/social/sysLineGuard';
+
 import { normalizeOwnStatus } from '../../core/social/peerStatus';
+import { normalizeOwnPronouns } from '../../core/social/peerPronouns';
 import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { ownAvatarUri, saveOwnAvatar } from '../../core/identity/ownAvatar';
 import { refreshAvatarTable } from '../../core/social/avatarRegistry';
@@ -110,8 +111,7 @@ type Props = {
  * теми же невидимыми метками (v4.32.378). Стоит и на чтении: записанное
  * прежним редактором чистить некому.
  */
-const PRONOUNS_MAX = 30;
-const cleanPronouns = (v: unknown): string => sanitizeDisplayName(v, PRONOUNS_MAX) ?? '';
+const cleanPronouns = normalizeOwnPronouns;
 
 const appVersion =
   Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? '1.0.0';

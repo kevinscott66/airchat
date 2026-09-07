@@ -68,6 +68,7 @@ import { loadKeyPair } from '../../../../core/crypto/keyManager';
 import { sanitizeDisplayName } from '../../../../core/social/sysLineGuard';
 import { normalizeOwnBio, OWN_BIO_MAX } from '../../../../core/social/profileEnvelope';
 import { MAX_CUSTOM_STATUS_LEN, normalizeOwnStatus } from '../../../../core/social/peerStatus';
+import { normalizeOwnPronouns } from '../../../../core/social/peerPronouns';
 import { LinkProofSheet } from './LinkProofSheet';
 import {
   PLATFORM_LABEL,
@@ -78,7 +79,7 @@ import {
   type LinkRecord,
 } from '../../../../core/identity/linkProof';
 
-const cleanPronouns = (v: unknown): string => sanitizeDisplayName(v, PRONOUNS_MAX) ?? '';
+const cleanPronouns = normalizeOwnPronouns;
 const cleanLink = (s: string): string => (sanitizeDisplayName(s, 256) ?? '').trim();
 
 export interface ProfileEditModalProps {
@@ -303,7 +304,13 @@ export function ProfileEditModal({
       }
 
       const pronouns = cleanPronouns(draft.pronouns);
-      if (pronouns !== saved.pronouns) await ownFieldSet('user_pronouns', pronouns);
+      if (pronouns !== saved.pronouns) {
+        await ownFieldSet('user_pronouns', pronouns);
+        // v4.32.616: местоимения теперь едут в конверте профиля, значит их
+        // правка — такая же новая версия карточки, как правка имени. Без
+        // этой отметки поле записывалось бы в базу и не уезжало никому.
+        touchedProfile = true;
+      }
 
       const website = cleanLink(draft.website);
       const twitter = cleanLink(draft.twitter).replace(/^@/, '');

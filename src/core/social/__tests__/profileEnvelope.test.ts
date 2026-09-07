@@ -238,3 +238,63 @@ describe('свой профиль чистится тем же правилом,
     expect(normalizeOwnBio('б'.repeat(500))).toHaveLength(OWN_BIO_MAX);
   });
 });
+
+/**
+ * v4.32.616: местоимения и статус — те же поля, что в редакторе профиля.
+ *
+ * До этой версии в конверт входили три поля из шести, и владелец, заполнивший
+ * профиль целиком, у собеседника видел половину. Проверяется и обратное:
+ * конверт клиента, который этих полей не знает, не должен стирать уже
+ * показанное — поэтому «нет поля» и «поле пустое» различаются.
+ */
+describe('profileEnvelope: местоимения и статус', () => {
+  it('едут в конверте и возвращаются как есть', () => {
+    const env = base({ pronouns: 'он/его', status: 'Работаю в IT' });
+    const back = decodeProfileEnvelope(encodeProfileEnvelope(env), NOW);
+    expect(back?.pronouns).toBe('он/его');
+    expect(back?.status).toBe('Работаю в IT');
+  });
+
+  it('чистятся правилом имени: перевод строки становится пробелом', () => {
+    const back = decodeProfileEnvelope(
+      encodeProfileEnvelope(base({ pronouns: 'он\nего', status: 'на\nсозвоне' })),
+      NOW
+    );
+    expect(back?.pronouns).toBe('он его');
+    expect(back?.status).toBe('на созвоне');
+  });
+
+  it('режутся по своим пределам, а не по общему', () => {
+    const back = decodeProfileEnvelope(
+      encodeProfileEnvelope(base({ pronouns: 'я'.repeat(200), status: 'с'.repeat(200) })),
+      NOW
+    );
+    expect(back?.pronouns).toHaveLength(30);
+    expect(back?.status).toHaveLength(60);
+  });
+
+  it('строка из одних невидимых символов — «не задано», а не пустая подпись', () => {
+    const back = decodeProfileEnvelope(
+      encodeProfileEnvelope(base({ pronouns: '‍', status: '‍' })),
+      NOW
+    );
+    expect(back?.pronouns).toBeNull();
+    expect(back?.status).toBeNull();
+  });
+
+  it('конверт без этих полей их не касается, а с пустыми — стирает', () => {
+    const silent = decodeProfileEnvelope(encodeProfileEnvelope(base()), NOW);
+    expect(silent).not.toHaveProperty('pronouns');
+    expect(silent).not.toHaveProperty('status');
+    const wiped = decodeProfileEnvelope(encodeProfileEnvelope(base({ pronouns: null, status: null })), NOW);
+    expect(wiped?.pronouns).toBeNull();
+    expect(wiped?.status).toBeNull();
+  });
+
+  it('нестроковое поле — битый конверт', () => {
+    const bad = PROFILE_PREFIX + JSON.stringify({ ...base(), pronouns: 42 });
+    expect(decodeProfileEnvelope(bad, NOW)).toBeNull();
+    const bad2 = PROFILE_PREFIX + JSON.stringify({ ...base(), status: { a: 1 } });
+    expect(decodeProfileEnvelope(bad2, NOW)).toBeNull();
+  });
+});

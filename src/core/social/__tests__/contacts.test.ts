@@ -46,6 +46,7 @@ import {
   findContactPubKeyByHash,
   invalidateContactsList,
   parseContactId,
+  setPeerProfile,
 } from '../contacts';
 import { buildContactLink, buildDmLink } from '../../net/appLink';
 import { publicKeyHash4 } from '../../crypto/keyManager';
@@ -323,5 +324,62 @@ describe('parseContactId читает ссылку на профиль', () => {
   test('чужая ссылка контактом не становится', () => {
     expect(parseContactId('https://example.com/l/whatever/x')).toBeNull();
     expect(parseContactId('https://example.com/blog')).toBeNull();
+  });
+});
+
+/**
+ * v4.32.616: поля профиля контакта возвращаются из строки обратно.
+ *
+ * Юзернейм записывался конвертом с v4.32.4xx и сравнивался при записи, но в
+ * разбор строки не входил — то есть `contact.peerUsername` был undefined
+ * всегда, и карточка, которая его показывает, не показывала его никогда.
+ * Местоимения и статус появились здесь в этой же версии.
+ */
+describe('contacts — поля профиля из конверта возвращаются в список', () => {
+  beforeEach(clearKv);
+
+  test('юзернейм, местоимения и статус читаются обратно', async () => {
+    const alice = makeKeyPair();
+    const bob = makeKeyPair();
+    await addContact(alice, bob.publicKey, 'Рита');
+    const bobB64 = Buffer.from(bob.publicKey).toString('base64');
+    await setPeerProfile(bobB64, {
+      name: 'Рита',
+      username: 'margarita',
+      bio: 'дизайнер',
+      pronouns: 'она/её',
+      status: 'Работаю в IT',
+      avatarCid: null,
+      ts: 1_700_000_000_000,
+    });
+    invalidateContactsList();
+    const c = (await listContacts())[0];
+    expect(c.peerUsername).toBe('margarita');
+    expect(c.pronouns).toBe('она/её');
+    expect(c.peerStatus).toBe('Работаю в IT');
+    expect(c.bio).toBe('дизайнер');
+  });
+
+  test('мусор в строке не доезжает до карточки', async () => {
+    const alice = makeKeyPair();
+    const bob = makeKeyPair();
+    await addContact(alice, bob.publicKey, 'Рита');
+    const bobB64 = Buffer.from(bob.publicKey).toString('base64');
+    await setPeerProfile(bobB64, {
+      name: 'Рита',
+      // Ни одно из трёх не проходит правила: юзернейм с точкой, местоимения
+      // из одних невидимых символов, статус длиннее предела.
+      username: 'not.a.username',
+      bio: null,
+      pronouns: '‍‍',
+      status: 'с'.repeat(200),
+      avatarCid: null,
+      ts: 1_700_000_000_000,
+    });
+    invalidateContactsList();
+    const c = (await listContacts())[0];
+    expect(c.peerUsername).toBeUndefined();
+    expect(c.pronouns).toBeUndefined();
+    expect(c.peerStatus).toHaveLength(60);
   });
 });
