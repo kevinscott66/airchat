@@ -35,6 +35,7 @@ import {
   profileKvGet,
   kvDeleteScoped,
   type GroupMessageRow,
+  type MemberRole,
 } from '../storage/local';
 import { type GroupRecipient } from './groupRecipient';
 import { getMessagingService } from './messaging';
@@ -121,6 +122,16 @@ export function decodeGroupMsgEnvelope(text: string): GroupMsgEnvelope | null {
  *
  * Строки группы нет — вердикт положительный: проверять нечего, и запрет
  * «на всякий случай» превратил бы сбой чтения в невозможность писать.
+ *
+ * v4.32.615: состав спрашивается у профиля СЛУЖБЫ, а не у активного. Правку
+ * v4.32.466 получил только fanoutGroupMessage, а вердикт остался на
+ * getActiveProfile — и эти двое расходились. Сообщение уходит ключом службы её
+ * составу; если активный профиль про эту группу не знает, `actor.group`
+ * оказывался null, вердикт по разобранному выше правилу выходил
+ * положительным — и «пишут только администраторы» вместе с ролью restricted
+ * переставали действовать ровно там, где их и проверяют. Приём же (отметки о
+ * прочтении, реакции, голоса) с самого начала считает по `rcpt.pid`, так что
+ * своя копия сохранялась, а до участников не доходила.
  */
 export async function groupSendVerdict(
   groupId: string,
@@ -128,7 +139,8 @@ export async function groupSendVerdict(
   text: string
 ): Promise<SendVerdict> {
   try {
-    const pid = profileManager.getActiveProfile()?.id ?? 1;
+    const svc = getMessagingService();
+    const pid = svc ? (await svc.groupRecipient()).pid : (profileManager.getActiveProfile()?.id ?? 1);
     const actor = await lookupGroupActor(groupId, senderPubB64, pid);
     if (!actor.group) return { allowed: true };
     return canSendToGroup({
@@ -1050,10 +1062,15 @@ export async function sendGroupInvite(
   // пришлось бы править все вызовы, а приглашённый до сих пор видел бы кружок
   // с буквой, пока админ не изменит какую-нибудь настройку.
   let avatarCid: string | undefined;
+  // v4.32.615: и владельца — тем же запросом к своей базе, а не параметром.
+  // Роль 'owner' до сих пор не покидала устройство создателя (см. ownerPub в
+  // кодеке), поэтому у приглашённого её неоткуда было взять.
+  let ownerPub: string | undefined;
   try {
     const pid = profileManager.getActiveProfile()?.id ?? 1;
     avatarCid = (await getGroup(groupId, pid))?.avatarCid ?? undefined;
-  } catch { /* без аватара приглашение всё равно уходит */ }
+    ownerPub = (await listGroupMembers(groupId, pid)).find((m) => m.role === 'owner')?.peerPubB64;
+  } catch { /* без аватара и владельца приглашение всё равно уходит */ }
   // v4.32.379: последняя остановка перед отправкой. Разбор приглашения требует
   // непустого названия и отбрасывает конверт целиком, если его нет, — а
   // названия, набранные до этой версии, чистку не проходили. Уйди такое имя как
@@ -1067,6 +1084,7 @@ export async function sendGroupInvite(
     groupType,
     members: members.slice(0, 200),
     avatarCid,
+    ownerPub,
     ts: Date.now(),
     actorName,
   });
@@ -1140,6 +1158,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     }
     const myPub = rcpt.myPub;
     const myName = (await getOwnDisplayNameFor(pid)) ?? 'Вы';
+    // v4.32.615: владелец из конверта. Роль назначается ровно одному ключу и
+    // только вместо той, что стояла бы иначе, — списком ролей приглашение не
+    // распоряжается (см. ownerPub в кодеке).
+    const inviteRole = (pub: string, fallback: 'admin' | 'member'): MemberRole =>
+      env.ownerPub && pub === env.ownerPub ? 'owner' : fallback;
     // isAdmin=false — приглашённый не администратор (см. createGroup).
     await createGroup(env.groupId, pid, env.groupName, env.groupType ?? 'group', undefined, false);
     // Пригласивший — администратор: именно его ctl-конверты мы будем принимать.
@@ -1147,12 +1170,12 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // строку там, где имя ничего не рисует, и через `??` она доезжала до
     // списка участников как полноценное имя — участник без подписи, которого
     // не отличить от соседнего такого же.
-    await upsertGroupMember({ groupId: env.groupId, peerPubB64: senderPubB64, role: 'admin', displayName: env.actorName || null, joinedAt: env.ts, ownerProfileId: pid });
+    await upsertGroupMember({ groupId: env.groupId, peerPubB64: senderPubB64, role: inviteRole(senderPubB64, 'admin'), displayName: env.actorName || null, joinedAt: env.ts, ownerProfileId: pid });
     for (const m of env.members) {
       if (m.pub === senderPubB64 || m.pub === myPub) continue;
-      await upsertGroupMember({ groupId: env.groupId, peerPubB64: m.pub, role: 'member', displayName: m.name || null, joinedAt: env.ts, ownerProfileId: pid });
+      await upsertGroupMember({ groupId: env.groupId, peerPubB64: m.pub, role: inviteRole(m.pub, 'member'), displayName: m.name || null, joinedAt: env.ts, ownerProfileId: pid });
     }
-    if (myPub) await upsertGroupMember({ groupId: env.groupId, peerPubB64: myPub, role: 'member', displayName: myName, joinedAt: env.ts, ownerProfileId: pid });
+    if (myPub) await upsertGroupMember({ groupId: env.groupId, peerPubB64: myPub, role: inviteRole(myPub, 'member'), displayName: myName, joinedAt: env.ts, ownerProfileId: pid });
     // v4.32.267: считаем по только что записанным строкам, а не по env.members:
     // приглашение от создателя группы список себя не содержит, приглашение
     // одобренному заявителю — содержит (там снимок group_members админа

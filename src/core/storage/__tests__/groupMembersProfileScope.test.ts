@@ -168,6 +168,18 @@ describe('групповые пути спрашивают состав у св�
     expect(f).toContain('await listGroupMembers(groupId, (await svc.groupRecipient()).pid)');
   });
 
+  it('вердикт отправки считается по тому же профилю, что и рассылка', () => {
+    // v4.32.615: правку v4.32.466 получила только рассылка. Вердикт остался на
+    // активном профиле, и при расхождении `actor.group` выходил null — а по
+    // правилу «строки нет — проверять нечего» это положительный ответ. То есть
+    // «пишут только администраторы» и роль restricted отключались ровно там,
+    // где их проверяют.
+    const f = bodyOf(GM, 'export async function groupSendVerdict(');
+    expect(f).toContain('const svc = getMessagingService();');
+    expect(f).toContain('(await svc.groupRecipient()).pid');
+    expect(f).not.toMatch(/const pid = profileManager\.getActiveProfile\(\)\?\.id \?\? 1;/);
+  });
+
   it('ни одного вызова состава без второго аргумента', () => {
     expect(count(GM, 'listGroupMembers(')).toBeGreaterThan(4);
     expect(GM).not.toMatch(/listGroupMembers\([^,)]*\)/);

@@ -7,6 +7,9 @@
  * through is written straight into group_members / groups.
  */
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import {
   GROUP_CTL_PREFIX,
   encodeGroupCtlEnvelope,
@@ -156,6 +159,26 @@ describe('group control envelope', () => {
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ ...base, groupName: 42 }))).toBeNull();
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ groupId: 'g1', ts: 1, op: 'invite', groupName: 'Ok', members: 'все' }))).toBeNull();
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ ...base, groupName: 'Ok', groupType: 'admin' }))).toBeNull();
+  });
+
+  it('invite: ключ владельца доезжает, мусорный — вырезается без потери конверта', () => {
+    // v4.32.615. Роль 'owner' ставилась только на устройстве создателя, и обе
+    // строчки canModerate про владельца в остальном мире не значили ничего:
+    // настоящий владелец лежал рядовым участником. Приглашения сборок до этой
+    // версии поля не несут, поэтому кривое значение обязано вырезаться, а не
+    // отбрасывать приглашение целиком — иначе группа не завелась бы вовсе.
+    const owner = 'B'.repeat(43);
+    const withOwner = decodeGroupCtlEnvelope(
+      GROUP_CTL_PREFIX + JSON.stringify({ groupId: 'g1', ts: 1, op: 'invite', groupName: 'Ok', members: [], ownerPub: owner })
+    );
+    expect((withOwner as unknown as { ownerPub?: string }).ownerPub).toBe(owner);
+    for (const bad of ['', 'не ключ', 'A'.repeat(200), 42, null, {}]) {
+      const d = decodeGroupCtlEnvelope(
+        GROUP_CTL_PREFIX + JSON.stringify({ groupId: 'g1', ts: 1, op: 'invite', groupName: 'Ok', members: [], ownerPub: bad })
+      );
+      expect(d).not.toBeNull();
+      expect((d as unknown as { ownerPub?: unknown }).ownerPub).toBeUndefined();
+    }
   });
 
   it('invite: мусорные участники выбрасываются, список режется до 200', () => {
@@ -389,5 +412,37 @@ describe('group control envelope', () => {
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ ...env(), groupId: 'g'.repeat(200) }))).toBeNull();
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ ...env(), ts: 'вчера' }))).toBeNull();
     expect(decodeGroupCtlEnvelope(GROUP_CTL_PREFIX + JSON.stringify({ ...env(), ts: NaN }))).toBeNull();
+  });
+});
+
+/**
+ * Владелец группы уезжает в приглашении (v4.32.615).
+ *
+ * Ратчет по тексту исходника: проверить применение конверта юнит-тестом нельзя
+ * (handleIncomingGroupControl тянет SQLite и синглтон переписки), но правило
+ * достаточно простое, чтобы его нарушение было видно в самом коде.
+ */
+describe('роль владельца покидает устройство создателя', () => {
+  const GM = readFileSync(join(__dirname, '..', 'groupMessaging.ts'), 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+
+  it('приглашение несёт владельца из своей же таблицы участников', () => {
+    expect(GM).toContain("find((m) => m.role === 'owner')?.peerPubB64");
+    expect(GM).toContain('ownerPub,');
+  });
+
+  it('на приёме роль владельца ставится вместо той, что была бы иначе', () => {
+    expect(GM).toContain("env.ownerPub && pub === env.ownerPub ? 'owner' : fallback");
+    // Все три записи участника при вступлении идут через одну эту функцию:
+    // хардкод роли мимо неё вернул бы прежнее расхождение.
+    expect(GM).toContain("role: inviteRole(senderPubB64, 'admin')");
+    expect(GM).toContain("role: inviteRole(m.pub, 'member')");
+    expect(GM).toContain("role: inviteRole(myPub, 'member')");
+    const invite = GM.slice(GM.indexOf("if (env.op === 'invite') {"));
+    const body = invite.slice(0, invite.indexOf('\n  if (!group) {'));
+    expect(body).not.toContain("role: 'admin'");
+    expect(body).not.toContain("role: 'member'");
   });
 });
