@@ -46,6 +46,9 @@ const TILE_GAP = 2;
 /** Сколько плиток в ряду. Три — как в галерее телефона. */
 const TILE_COLUMNS = 3;
 
+/** Что показать вместо «ничего нет», когда прочитать не удалось (v4.32.640). */
+const CSM_READ_FAILED = 'Не удалось прочитать переписку';
+
 /**
  * SharedMediaPane — содержимое одной вкладки без окна вокруг (v4.32.577).
  *
@@ -94,6 +97,13 @@ export function SharedMediaPane({
   const [sharedVoice, setSharedVoice] = useState<Array<{ id: string; durationMs: number; createdAt: number; outgoing: boolean }>>([]);
   /** Ширина места под сетку: в карточке профиля она уже, чем экран. */
   const [gridWidth, setGridWidth] = useState(0);
+  /**
+   * v4.32.640: сбой чтения — не пустая переписка. Обе выборки окна отвечали
+   * пустым списком на любой отказ базы, и вкладки писали «Нет медиафайлов»,
+   * «Нет ссылок», «Нет файлов» — то есть утверждали, что вложений нет. В
+   * группах это закрыто с v4.32.532, здесь оставалось.
+   */
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     if (!active) return;
@@ -104,8 +114,11 @@ export function SharedMediaPane({
      * следующего. Это не мерцание, а неверная подпись к чужой переписке.
      */
     let cancelled = false;
+    setReadFailed(false);
     void listConversationMedia(contactPubB64, ownerProfileId).then((rows) => {
-      if (!cancelled) setItems(rows);
+      if (cancelled) return;
+      if (!shouldApplyRows(rows)) { setReadFailed(true); return; }
+      setItems([...rows]);
     });
     // Load links and docs from messages
     void import('../../../../core/storage/local').then(async (m) => {
@@ -113,7 +126,7 @@ export function SharedMediaPane({
       if (cancelled) return;
       // v4.32.604: сбой чтения — не «ссылок и файлов нет». Прежние списки
       // остаются как были, вкладка не рисует пустоту как факт.
-      if (!shouldApplyRows(msgs)) return;
+      if (!shouldApplyRows(msgs)) { setReadFailed(true); return; }
       const links: Array<{ url: string; text: string; createdAt: number }> = [];
       const docs: Array<{ name: string; size: string; createdAt: number; text: string }> = [];
       const music: Array<{ name: string; size: string; createdAt: number; text: string }> = [];
@@ -150,7 +163,7 @@ export function SharedMediaPane({
       setSharedDocs(docs.reverse());
       setSharedMusic(music.reverse());
       setSharedVoice(voice.reverse());
-    }).catch(() => {});
+    }).catch(() => { if (!cancelled) setReadFailed(true); });
     return () => { cancelled = true; };
   }, [active, contactPubB64, ownerProfileId]);
 
@@ -234,10 +247,14 @@ export function SharedMediaPane({
     ) : null
   ), [onShowAll, colors]);
 
+  // Причина у всех вкладок одна, поэтому и текст один: разные формулировки
+  // про «ссылки» и «файлы» намекали бы, что не прочиталось что-то одно.
   const empty = (icon: React.ComponentProps<typeof Ionicons>['name'], text: string) => (
     <View style={paneStyles.empty}>
-      <Ionicons name={icon} size={44} color={colors.textMuted} />
-      <Text style={[paneStyles.emptyText, { color: colors.textMuted }]}>{text}</Text>
+      <Ionicons name={readFailed ? 'alert-circle-outline' : icon} size={44} color={colors.textMuted} />
+      <Text style={[paneStyles.emptyText, { color: colors.textMuted }]}>
+        {readFailed ? CSM_READ_FAILED : text}
+      </Text>
     </View>
   );
 

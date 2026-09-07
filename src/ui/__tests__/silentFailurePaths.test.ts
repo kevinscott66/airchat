@@ -212,8 +212,13 @@ describe('U8: медиа одного собеседника не попадаю
     const at = lines.findIndex((l) => l.includes('let cancelled = false;'));
     if (at < 0) return false;
     const block = lines.slice(at, at + 60).join('\n');
-    return block.includes('if (!cancelled) setItems(rows);')
-      && block.includes('if (cancelled) return;')
+    // v4.32.640: обе выборки окна проверяют отмену ДО того, как что-то
+    // применить. Раньше медиа применялись через `if (!cancelled) setItems`,
+    // теперь у чтения три исхода и проверка стоит первой строкой — важна не
+    // форма, а то, что ни одна ветка не пишет в состояние после отмены.
+    const guards = block.match(/if \(cancelled\) return;/g) ?? [];
+    return guards.length >= 2
+      && !block.includes('.then(setItems)')
       && block.includes('return () => { cancelled = true; };');
   };
 
@@ -225,6 +230,19 @@ describe('U8: медиа одного собеседника не попадаю
     const before = [
       'void listConversationMedia(contactPubB64, ownerProfileId).then(setItems);',
       '}, [active, contactPubB64, ownerProfileId]);',
+    ].join('\n');
+    expect(honest(before)).toBe(false);
+  });
+
+  it('BEFORE: отмена была объявлена, но медиа применялись без неё', () => {
+    // Контроль на сам предикат: одной проверки отмены мало, их две.
+    const before = [
+      'let cancelled = false;',
+      'void listConversationMedia(contactPubB64, ownerProfileId).then(setItems);',
+      'void loadLinks().then(() => {',
+      'if (cancelled) return;',
+      '});',
+      'return () => { cancelled = true; };',
     ].join('\n');
     expect(honest(before)).toBe(false);
   });

@@ -100,7 +100,11 @@ describe('четыре поиска в local.ts читают текст трёх
     ['searchGroupMessages', 'export async function searchGroupMessages(', '// ─── Cross-Group Message Search'],
     ['searchAllGroupMessages', 'export async function searchAllGroupMessages(', '// v4.32.301: updateGroupMessageReactions'],
     ['searchMessages', 'export async function searchMessages(', ' * Поиск внутри одной личной переписки.'],
-    ['searchChatMessages', 'export async function searchChatMessages(', '/** Returns all messages that have at least one media CID'],
+    // v4.32.640: конец куска берётся по объявлению следующей функции, а не по
+    // её комментарию. Комментарий переписали (listConversationMedia научили
+    // отличать сбой чтения от пустоты) — и якорь исчез, хотя проверяемый код
+    // не менялся. Объявление живёт дольше пояснения к нему.
+    ['searchChatMessages', 'export async function searchChatMessages(', 'export async function listConversationMedia('],
   ];
 
   it.each(BOUNDS)('%s не глотает непрочитанную строку молча', (_name, from, to) => {

@@ -188,7 +188,11 @@ describe('оба места выгрузки чата отказываются �
       'listAllChatMessages({ contactPubB64, ownerProfileId })',
       'for (const msg of msgs)'
     );
-    expect(body).toMatch(/if \(!shouldApplyRows\(msgs\)\) return;/);
+    // v4.32.640: одной остановки мало. Раньше выборка молча выходила, и вкладка
+    // оставалась со старым (на первом открытии — пустым) списком: снаружи это
+    // ровно та же пустота, ради которой проверку и заводили. Теперь отказ
+    // виден в самом окне, поэтому держим и остановку, и пометку.
+    expect(body).toMatch(/if \(!shouldApplyRows\(msgs\)\) \{ setReadFailed\(true\); return; \}/);
   });
 });
 

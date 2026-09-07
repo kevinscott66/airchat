@@ -150,8 +150,15 @@ describe('окна галереи говорят про непрочитанны
   // списка она не заводила: разошлись бы именно на непрочитанных.
   it('карточка профиля считает только показываемое и открывает общую галерею', () => {
     const src = CONTACT_INFO();
-    expect(src).toContain('setMediaCount(readableMediaCount(m));');
+    // v4.32.640: счёт стал трёхзначным. Читаемое считается по-прежнему только
+    // показываемое, но НЕпрочитанное — это `null`, а не ноль: ноль утверждал бы,
+    // что вложений в переписке нет, тогда как их просто не смогли прочитать.
+    expect(src).toContain(
+      'setMediaCount(shouldApplyRows(m) ? readableMediaCount(m) : null);'
+    );
     expect(src).not.toContain('setMediaCount(m.length);');
+    expect(src).toContain('useState<number | null>(0)');
+    expect(src).toContain("{mediaCount ?? '—'}");
     expect(src).toContain('onPress={onOpenMedia}');
     expect(src).not.toContain('FlatList');
   });

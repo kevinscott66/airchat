@@ -8339,12 +8339,19 @@ export type SharedMediaRow = {
   unreadable?: boolean;
 };
 
-/** Returns all messages that have at least one media CID for a given conversation. */
+/**
+ * Медиа переписки либо `null` — прочитать не удалось (v4.32.640).
+ *
+ * Возвращался пустой список, и окно общих медиа писало «Нет медиафайлов»: то
+ * есть утверждало, что вложений в переписке нет, хотя просто не смогло их
+ * прочитать. В группах этот же случай закрыт с v4.32.532
+ * (listGroupConversationMedia) — в переписке он оставался открытым.
+ */
 export async function listConversationMedia(
   contactPubB64: string,
   ownerProfileId: number,
   limit = 200
-): Promise<SharedMediaRow[]> {
+): Promise<DbRead<SharedMediaRow>> {
   try {
     const d = await db();
     const rows = await d.getAllAsync<{ id: string; media_cids: string; created_at: number }>(
@@ -8374,7 +8381,7 @@ export async function listConversationMedia(
       .filter((r) => r.unreadable === true || r.mediaCids !== '');
   } catch (e) {
     log.warn('list_conversation_media_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    return null;
   }
 }
 

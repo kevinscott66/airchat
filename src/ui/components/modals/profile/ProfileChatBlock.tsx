@@ -69,7 +69,9 @@ export function ProfileChatBlock({
   const [msgCount, setMsgCount] = useState(0);
   const [sentCount, setSentCount] = useState(0);
   const [firstMsgDate, setFirstMsgDate] = useState<number | null>(null);
-  const [mediaCount, setMediaCount] = useState(0);
+  // v4.32.640: счёт неизвестен — это `null`, а не ноль. Ноль означал бы, что
+  // вложений в переписке нет, тогда как их просто не прочитали.
+  const [mediaCount, setMediaCount] = useState<number | null>(0);
   const [mutualGroups, setMutualGroups] = useState<GroupRow[]>([]);
   const [contactNote, setContactNote] = useState('');
   const [noteEditVisible, setNoteEditVisible] = useState(false);
@@ -81,8 +83,8 @@ export function ProfileChatBlock({
     // v4.32.584: счётчик считает только то, что и правда покажем, а о
     // непрочитанном говорит подпись в самой галерее.
     void listConversationMedia(peerB64, activeProfileId)
-      .then((m) => { if (!cancelled) setMediaCount(readableMediaCount(m)); })
-      .catch(() => { /* галерея переживёт неизвестный счёт */ });
+      .then((m) => { if (!cancelled) setMediaCount(shouldApplyRows(m) ? readableMediaCount(m) : null); })
+      .catch(() => { if (!cancelled) setMediaCount(null); });
     void import('../../../../core/storage/local')
       .then((m) => m.getChatMessageStats(peerB64, activeProfileId))
       .then((stats) => {
@@ -241,8 +243,8 @@ export function ProfileChatBlock({
           accessibilityRole="button"
           accessibilityLabel="Общие медиа"
         >
-          <Text style={[styles.statNum, { color: mediaCount > 0 ? colors.accent : colors.text }]}>
-            {mediaCount}
+          <Text style={[styles.statNum, { color: (mediaCount ?? 0) > 0 ? colors.accent : colors.text }]}>
+            {mediaCount ?? '—'}
           </Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>медиа</Text>
         </AppPressable>
