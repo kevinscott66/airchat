@@ -53,6 +53,24 @@ export function isOlderThan(
 }
 
 /**
+ * Порядок строк переписки: время, при совпадении — id побайтно (v4.32.653).
+ *
+ * То же правило, что у `isOlderThan` и у `ORDER BY created_at DESC, id DESC`
+ * в запросе. Раньше оно было выписано отдельно в `getMessages` и в
+ * `getOlderMessages`, и третьему читателю окна пришлось бы выписать его в
+ * третий раз. Разъехавшийся порядок здесь уже стоил пропавших сообщений
+ * (v4.32.581), поэтому правило одно на всех.
+ */
+export function compareChatRows(
+  a: { createdAt: number; id: string },
+  b: { createdAt: number; id: string },
+): number {
+  const t = a.createdAt - b.createdAt;
+  if (t !== 0) return t;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
  * Курсор на самой старой строке страницы.
  *
  * Порядок входа не предполагается: минимум ищется явно. Строки без пригодных

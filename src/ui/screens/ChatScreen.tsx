@@ -1377,20 +1377,31 @@ function ChatThreadView({
     await appendTaskRef.current.run(async () => {
       const svc = getMessagingService();
       if (!svc || !peerB64) return;
-      // v4.32.17: timing для getMessages — подозреваемый в 2.2с SQLite lock contention.
+      // v4.32.17: timing чтения окна — подозреваемый в 2.2с SQLite lock contention.
       const _t0 = Date.now();
-      const latest = await svc.getMessages(peerB64, POLL_BATCH, 0);
+      // v4.32.653: окно берётся у читателя, у которого сбой виден в типе.
+      // getMessages отдавал пустой список и на пустой переписке, и на
+      // сорвавшемся чтении, а склейка понимает пустое окно как «в базе не
+      // осталось ничего»: одно неудачное открытие базы стирало переписку с
+      // экрана целиком и не возвращало до повторного входа в чат. Он же
+      // отдаёт строки НЕОТФИЛЬТРОВАННЫМИ — getMessages выбрасывал надгробия
+      // сам, и «окно», которым задаётся граница, было уже без них.
+      const win = await svc.readMessageWindow(peerB64, POLL_BATCH);
       if (!isMountedRef.current) return;
       const _dt = Date.now() - _t0;
-    if (_dt > 150) log.info('ui_chat_poll_getmsgs', { ms: _dt, n: latest.length });
-    const filtered = latest.filter((m) => m.text !== '\u200b');
+      if (win === null) {
+        log.warn('ui_chat_window_read_failed', { ms: _dt });
+        return;
+      }
+      if (_dt > 150) log.info('ui_chat_poll_getmsgs', { ms: _dt, n: win.length });
+      const filtered = win.filter((m) => m.text !== '\u200b');
 
       // O(N + M) сведение: сохраняет DESC-инвариант и обрабатывает
       // out-of-order доставку; ссылка на массив сохраняется, если ничего не
       // изменилось, — иначе список перерисовывался бы на каждом опросе.
-      // Границу окна задаёт `latest`, а не `filtered`: надгробия из выборки
+      // Границу окна задаёт `win`, а не `filtered`: надгробия из выборки
       // не рисуются, но место в ней занимают.
-      setLines((prev) => mergeChatWindow(prev, filtered, latest));
+      setLines((prev) => mergeChatWindow(prev, filtered, win));
 
       setOptimisticOutgoing((opt) => {
       if (!opt) return null;

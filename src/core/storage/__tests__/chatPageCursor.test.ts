@@ -24,6 +24,7 @@ const read = (rel: string): string =>
 const LOCAL = read('../local.ts');
 const MESSAGING = read('../../social/messaging.ts');
 const CHAT = read('../../../ui/screens/ChatScreen.tsx');
+const CURSOR = read('../chatPageCursor.ts');
 
 /** Тело функции: от строки-заголовка до первой закрывающей скобки в нулевой колонке. */
 function bodyOf(src: string, head: string): string {
@@ -273,10 +274,16 @@ describe('экран переписки: подгрузка старых', () =>
    * сообщения одной миллисекунды первая страница и подгрузка следующей
    * раскладывали в разном порядке.
    */
-  it('обе выдачи сообщений доразбирают одинаковые метки одним правилом', () => {
+  it('все выдачи сообщений доразбирают одинаковые метки одним правилом', () => {
     expect(MESSAGING).not.toContain('a.id.localeCompare(b.id)');
     const tie = 'return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;';
-    // Обе: getMessages и getOlderMessages.
-    expect(MESSAGING.split(tie).length - 1).toBe(2);
+    // v4.32.653: правило переехало в общий compareChatRows — в messaging.ts
+    // его больше нет ни разу, а в чистом модуле оно ровно одно.
+    expect(MESSAGING.split(tie).length - 1).toBe(0);
+    expect(CURSOR.split(tie).length - 1).toBe(1);
+    // Три выдачи: getMessages, getOlderMessages и readMessageWindow — и все
+    // берут порядок у общего правила, а не выписывают своё.
+    expect(MESSAGING.split('.sort(compareChatRows)').length - 1).toBe(3);
+    expect(MESSAGING).toContain("import { compareChatRows, oldestCursor,");
   });
 });

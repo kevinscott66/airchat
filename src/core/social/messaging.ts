@@ -16,6 +16,7 @@ import {
   getChatMessageAuthor,
   getChatMessageTexts,
   listChatMessages,
+  readChatMessageWindow,
   upsertChatMessage,
   saveChatMessage,
   updateChatMessageStatus,
@@ -23,7 +24,7 @@ import {
   touchConversation,
   type ChatMessageRow,
 } from '../storage/local';
-import { oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
+import { compareChatRows, oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
 import { checkOnlineWrite, requireOnlineWrite } from '../sync/cachePolicy';
 import { combineHalves, selfChatOutcome, shouldTryPeerHalf, type TwoSidedOutcome } from './twoSidedEdit';
 import { handleIncomingGroupEnvelope, handleIncomingGroupReadReceipt, handleIncomingGroupJoinRequest, handleIncomingGroupControl, GROUP_READ_RECEIPT_PREFIX, GROUP_JOIN_REQUEST_PREFIX, GROUP_CTL_PREFIX } from './groupMessaging';
@@ -2146,20 +2147,33 @@ export class MessagingService {
     const rows = await listChatMessages({ contactPubB64, limit, offset, ownerProfileId: pid });
     const _t2 = Date.now();
     if (_t2 - _t0 > 150) log.info('getmsgs_phases', { profileMs: _t1 - _t0, listMs: _t2 - _t1, n: rows.length });
+    // v4.32.653: правило порядка — общее (compareChatRows). Раньше оно было
+    // выписано здесь и в getOlderMessages по отдельности, и третий читатель
+    // окна выписал бы его в третий раз.
     return [...rows]
       .filter((r) => r.text !== '\u200b')
-      .sort((a, b) => {
-        const t = a.createdAt - b.createdAt;
-        if (t !== 0) return t;
-        // v4.32.581: побайтно, а не localeCompare. Запрос упорядочивает строки
-        // по 'ORDER BY created_at DESC, id DESC', курсор страницы сравнивает
-        // 'id < ?' — и то и другое в SQLite побайтно. Свой идентификатор —
-        // uuidv4, где расхождения нет, но идентификатор входящего сообщения
-        // приходит из конверта собеседника и бывает любым: у двух сообщений с
-        // одинаковой меткой времени первая страница и подгрузка следующей
-        // раскладывали их в разном порядке.
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
+      .sort(compareChatRows);
+  }
+
+  /**
+   * Окно последних сообщений целиком; null — прочитать не удалось (v4.32.653).
+   *
+   * Отдельно от `getMessages` по двум причинам, и обе стоили экрана переписки.
+   *
+   * Первая: `getMessages` не отличает пустую переписку от сорвавшегося чтения
+   * (`listChatMessages` гасит сбой пустым списком). Склейка окна понимает
+   * пустое окно как «в базе ничего не осталось» и убирает с экрана всё —
+   * одно неудачное открытие базы стирало переписку целиком.
+   *
+   * Вторая: `getMessages` сам отбрасывает надгробия, поэтому границу окна по
+   * его выдаче не посчитать. Здесь строки отдаются как есть; отбор для показа
+   * делает вызывающий.
+   */
+  async readMessageWindow(contactPubB64: string, limit: number): Promise<ChatMessageRow[] | null> {
+    const pid = await this.ownerProfileId();
+    const rows = await readChatMessageWindow({ contactPubB64, limit, ownerProfileId: pid });
+    if (rows === null) return null;
+    return [...rows].sort(compareChatRows);
   }
 
   /**
@@ -2188,11 +2202,7 @@ export class MessagingService {
     });
     const messages = [...rows]
       .filter((r) => r.text !== '\u200b')
-      .sort((a, b) => {
-        const t = a.createdAt - b.createdAt;
-        if (t !== 0) return t;
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
+      .sort(compareChatRows);
     return { messages, hasMore: rows.length >= limit, cursor: oldestCursor(rows) };
   }
 

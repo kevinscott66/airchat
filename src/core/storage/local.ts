@@ -4108,6 +4108,25 @@ export type ChatMessagePage = {
   before?: ChatPageCursor;
 };
 
+/**
+ * Окно последних сообщений, где сбой виден в типе (v4.32.653).
+ *
+ * `listChatMessages` отдаёт пустой список и на пустой переписке, и на
+ * сорвавшемся чтении. Экрану чата этого мало: он сводит прочитанное окно с
+ * тем, что уже нарисовано, и пустое окно означает для склейки «в базе не
+ * осталось ничего» — то есть «всё удалено». Одно неудачное открытие базы
+ * (окно остывания при переоткрытии) стирало переписку с экрана целиком, и
+ * до повторного входа в чат она не возвращалась.
+ *
+ * Отдаются ВСЕ строки окна, включая надгробия: невидимая строка занимает
+ * место в выборке, и без неё граница окна уезжает вверх.
+ */
+export async function readChatMessageWindow(
+  { contactPubB64, limit, ownerProfileId }: { contactPubB64: string; limit: number; ownerProfileId: number }
+): Promise<ChatMessageRow[] | null> {
+  return listChatMessagesPage({ contactPubB64, limit, offset: 0, ownerProfileId });
+}
+
 export async function listChatMessages(
   { contactPubB64, limit, offset, ownerProfileId, before }: ChatMessagePage
 ): Promise<ChatMessageRow[]> {
