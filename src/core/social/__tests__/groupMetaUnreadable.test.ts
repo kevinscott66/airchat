@@ -110,9 +110,27 @@ describe('форма исходников', () => {
 
   it('системная строка пишется только по разрешению, а молчание — не молчание', () => {
     const body = slice(GROUP_MSG(), "if (env.op === 'meta') {", "if (env.adminOnlyPosting != null");
-    expect(body).toContain('if (nameDecision.announce) events.push(`Группа переименована в «${env.name}»`);');
+    expect(body).toContain(
+      "if (nameDecision.announce) events.push({ field: 'name', text: `Группа переименована в «${env.name}»` });"
+    );
     expect(body).toContain("else log.warn('group_meta_name_unreadable'");
-    expect(body).toContain("if (avatarDecision.announce) events.push('Аватар группы обновлён');");
+    expect(body).toContain(
+      "if (avatarDecision.announce) events.push({ field: 'avatarCid', text: 'Аватар группы обновлён' });"
+    );
     expect(body).toContain("else log.warn('group_meta_avatar_unreadable'");
+  });
+
+  it('у каждого события настроек своё поле — id системных строк не совпадают', () => {
+    /**
+     * v4.32.618: один конверт настроек несёт несколько изменений сразу, а id
+     * системной строки собирался из ts и слова 'meta' — один на все. INSERT
+     * OR IGNORE оставлял первую строку, остальные исчезали молча. Поле в id
+     * различает их и не зависит от порядка событий в списке.
+     */
+    const body = slice(GROUP_MSG(), "if (env.op === 'meta') {", 'log.info(\'group_ctl_meta_applied\'');
+    const pushes = body.match(/events\.push\(/g) ?? [];
+    expect(pushes.length).toBeGreaterThanOrEqual(9);
+    expect(body.match(/events\.push\(\{\s*\n?\s*field: '/g) ?? []).toHaveLength(pushes.length);
+    expect(body).toContain('await insertCtlSysMessage(env, pid, ev.text, ev.field)');
   });
 });

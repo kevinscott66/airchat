@@ -131,10 +131,55 @@ export async function acceptGroupControlTs(
   pid: number,
   ts: number
 ): Promise<boolean> {
-  return acceptTs(groupWatermarkKey(slot, groupId), `grp:${slot.split(':')[0]}`, pid, ts);
+  return acceptTs(groupWatermarkKey(slot, groupId), groupKindLabel(slot), pid, ts);
+}
+
+/**
+ * Та же проверка, но БЕЗ сдвига отметки (v4.32.618).
+ *
+ * Нужна там, где решение «применить» принимается уже после проверки прав и
+ * может кончиться ничем: ban по уже забаненному, role с той же ролью, add по
+ * уже состоящему — все эти ветки возвращают управление, ничего не изменив.
+ * Сдвинутая отметка при этом оставалась бы навсегда, и следующий конверт с
+ * меньшей меткой отвергался бы как повтор, хотя применить его было надо.
+ *
+ * Пример, который это ломало: `add` (ts=T1) и `role` (ts=T2 > T1) пришли
+ * пачкой в обратном порядке. `role` не нашёл участника и вышел, но знак уже
+ * стоял на T2 — и `add` с T1 отвергался. Человек исчезал из группы навсегда.
+ *
+ * Пара к ней — `commitGroupControlTs`, её вызывают ровно тогда, когда
+ * изменение действительно применено.
+ */
+export async function groupControlTsFresh(
+  slot: GroupControlSlot,
+  groupId: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  return freshTs(groupWatermarkKey(slot, groupId), groupKindLabel(slot), pid, ts);
+}
+
+/** Сдвинуть отметку слота вперёд — после того, как изменение применено. */
+export async function commitGroupControlTs(
+  slot: GroupControlSlot,
+  groupId: string,
+  pid: number,
+  ts: number
+): Promise<void> {
+  await commitTs(groupWatermarkKey(slot, groupId), groupKindLabel(slot), pid, ts);
+}
+
+function groupKindLabel(slot: GroupControlSlot): string {
+  return `grp:${slot.split(':')[0]}`;
 }
 
 async function acceptTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
+  if (!(await freshTs(key, kind, pid, ts))) return false;
+  await commitTs(key, kind, pid, ts);
+  return true;
+}
+
+async function freshTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
   if (!Number.isFinite(ts) || ts <= 0) {
     log.warn('control_ts_malformed', { kind, ts });
     return false;
@@ -160,10 +205,13 @@ async function acceptTs(key: string, kind: string, pid: number, ts: number): Pro
     log.warn('control_ts_replay_rejected', { kind, ts, prev });
     return false;
   }
+  return true;
+}
+
+async function commitTs(key: string, kind: string, pid: number, ts: number): Promise<void> {
   try {
     await scopedKvSetFor(pid, key, String(Math.floor(ts)));
   } catch (e) {
     log.warn('control_ts_write_failed', { kind, err: e instanceof Error ? e.message : String(e) });
   }
-  return true;
 }

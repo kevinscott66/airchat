@@ -78,3 +78,52 @@ describe('groupJoinPolicy.acceptJoinRequest', () => {
     }
   });
 });
+
+/**
+ * Исключённый не возвращает себя сам (v4.32.618).
+ *
+ * op:'kick' стирает строку из group_members, и без отдельной памяти
+ * исключённый выглядел новым. Пригласительный токен есть только у
+ * администраторов — обычному участнику decideInviteToken отдаёт
+ * 'unenforceable', и такую ссылку пропускают. Итог: исключённый по старой
+ * ссылке возвращался ко всем, кроме администраторов, и группа расходилась
+ * пополам.
+ */
+describe('decideJoin помнит об исключении', () => {
+  it('исключённый идёт в заявки, а не в участники', () => {
+    expect(decideJoin({ ...base, wasRemoved: true, iAmAdmin: true })).toBe('queue');
+    // Не администратор заявку разобрать не может — молчит и не добавляет.
+    expect(decideJoin({ ...base, wasRemoved: true, iAmAdmin: false })).toBe('ignore');
+  });
+
+  it('отметка сильнее выключенного одобрения', () => {
+    for (const iAmAdmin of [true, false]) {
+      expect(decideJoin({ ...base, requireApproval: false, wasRemoved: true, iAmAdmin })).not.toBe('add');
+    }
+  });
+
+  it('проверка не пустая: без отметки тот же человек входит сразу', () => {
+    expect(decideJoin({ ...base, wasRemoved: false, iAmAdmin: true })).toBe('add');
+    expect(decideJoin({ ...base, iAmAdmin: false })).toBe('add');
+  });
+
+  it('отметка не переигрывает бан и не трогает уже состоящих', () => {
+    expect(decideJoin({ ...base, knownRole: 'banned', wasRemoved: true, iAmAdmin: true })).toBe('banned');
+    expect(decideJoin({ ...base, knownRole: 'member', wasRemoved: true, iAmAdmin: true })).toBe('ignore');
+  });
+
+  it('фильтр «только контакты» действует и на возвращение', () => {
+    expect(
+      decideJoin({ ...base, wasRemoved: true, iAmAdmin: true, onlyContactsMayRequest: true })
+    ).toBe('ignore');
+    expect(
+      decideJoin({
+        ...base,
+        wasRemoved: true,
+        iAmAdmin: true,
+        onlyContactsMayRequest: true,
+        requesterIsContact: true,
+      })
+    ).toBe('queue');
+  });
+});

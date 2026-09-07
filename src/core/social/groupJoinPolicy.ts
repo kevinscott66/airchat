@@ -42,13 +42,32 @@ export function decideJoin(params: {
   requesterIsContact?: boolean;
   /** Настройка «Добавление в группы — только контакты» включена. */
   onlyContactsMayRequest?: boolean;
+  /**
+   * Этого человека отсюда исключали (v4.32.618).
+   *
+   * op:'kick' стирает строку из group_members, и без отдельной памяти
+   * исключённый выглядел здесь новым: у обычного участника пригласительного
+   * токена нет, сверять его ссылку не с чем, — и он возвращался ко всем,
+   * кроме администраторов. Группа расходилась пополам. Подробности и разбор
+   * отвергнутой альтернативы — в groupRemovalMark.ts.
+   */
+  wasRemoved?: boolean;
 }): JoinVerdict {
-  const { knownRole, requireApproval, iAmAdmin, requesterIsContact = false, onlyContactsMayRequest = false } = params;
+  const {
+    knownRole,
+    requireApproval,
+    iAmAdmin,
+    requesterIsContact = false,
+    onlyContactsMayRequest = false,
+    wasRemoved = false,
+  } = params;
   if (knownRole === 'banned') return 'banned';
   // Уже участник — повторное представление ничего не меняет. Проверка идёт
   // раньше гейта: одобренному не нужно одобряться заново при переустановке.
   if (knownRole !== undefined) return 'ignore';
-  if (!requireApproval) return 'add';
+  // Исключённый не возвращает себя сам, даже если одобрение выключено: его
+  // дорога обратно — заявка тому, кто его убирал.
+  if (!requireApproval && !wasRemoved) return 'add';
   // Конверт 'join' рассылается всем известным вступающему участникам, но
   // заявку кладёт себе только тот, кто её сможет разобрать.
   if (!iAmAdmin) return 'ignore';

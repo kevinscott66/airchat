@@ -51,8 +51,9 @@ import { sanitizeReplyRef } from './replyRef';
 import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
 import { rateLimiter } from '../security/rateLimiter';
-import { acceptGroupControlTs } from './controlWatermark';
-import { roleChangeSysText } from './groupRolePolicy';
+import { acceptGroupControlTs, commitGroupControlTs, groupControlTsFresh } from './controlWatermark';
+import { GROUP_BANLIST_MAX, countBanned, countsAsMember, roleChangeSysText } from './groupRolePolicy';
+import { clearGroupRemoval, markGroupRemoval, wasRemovedFromGroup } from './groupRemovalMark';
 import { sanitizeMediaCids } from '../media/mediaCidPolicy';
 import { withinMessageTextLimit } from './messageTextLimit';
 import { privacyPrefTryBoolFor, readReceiptsAllowedFor } from '../settings/privacyPrefs';
@@ -1100,9 +1101,20 @@ export async function sendGroupInvite(
     : { op: 'invite', sent: false, reason: res.reason };
 }
 
-/** Записать системное сообщение группы с детерминированным id (INSERT OR IGNORE ⇒ повтор безопасен). */
-async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: string): Promise<void> {
-  const key = 'target' in env && env.target ? env.target.slice(0, 12) : 'meta';
+/**
+ * Записать системное сообщение группы с детерминированным id (INSERT OR IGNORE ⇒
+ * повтор безопасен).
+ *
+ * `slot` различает несколько строк ОДНОГО конверта (v4.32.618). Смена настроек
+ * группы приходит одним кадром и может нести сразу несколько изменений —
+ * переименование плюс «только для администраторов», например. Все строки о них
+ * собирали один и тот же id (`ctl-<gid>-<ts>-meta-meta`), INSERT OR IGNORE
+ * молча оставлял первую, и второе изменение применялось без единого следа в
+ * истории. Слот — имя поля: оно детерминированное и не зависит от того, в
+ * каком порядке события легли в список.
+ */
+async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: string, slot?: string): Promise<void> {
+  const key = slot ?? ('target' in env && env.target ? env.target.slice(0, 12) : 'meta');
   // v4.32.239: время берётся из чужого конверта, а сортировка переписки идёт по
   // created_at. Без ограничения ts из 2100 года навсегда прибивал системную
   // строку к низу группы — и убрать её было нечем, потому что удалять
@@ -1289,11 +1301,15 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      */
     // v4.32.264: фильтр «только контакты» действует и здесь — иначе настройку
     // приватности обходила та же правка ссылки, что и сам гейт одобрения.
+    // v4.32.618: исключённый не возвращает себя сам — см. groupRemovalMark.ts.
+    const wasRemoved =
+      knownRole === undefined && (await wasRemovedFromGroup(env.groupId, senderPubB64, pid));
     const verdict = decideJoin({
       knownRole,
       requireApproval: !!group.requireApproval,
       iAmAdmin,
-      ...(group.requireApproval && iAmAdmin ? await joinRequestIntake(senderPubB64, pid) : {}),
+      wasRemoved,
+      ...((group.requireApproval || wasRemoved) && iAmAdmin ? await joinRequestIntake(senderPubB64, pid) : {}),
     });
     if (verdict === 'banned') {
       // Бан держится: забаненный не вернётся, просто переслав себе ссылку.
@@ -1540,7 +1556,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
 
   if (env.op === 'meta') {
     const patch: Parameters<typeof updateGroupMeta>[2] = {};
-    const events: string[] = [];
+    const events: { field: string; text: string }[] = [];
     /**
      * v4.32.615: водяной знак на КАЖДОЕ поле, а не один на группу.
      *
@@ -1567,7 +1583,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     const nameDecision = decideMetaField(env.name, group.name, group.nameUnreadable);
     if (nameDecision.apply && env.name != null && (await fresh('name'))) {
       patch.name = env.name;
-      if (nameDecision.announce) events.push(`Группа переименована в «${env.name}»`);
+      if (nameDecision.announce) events.push({ field: 'name', text: `Группа переименована в «${env.name}»` });
       else log.warn('group_meta_name_unreadable', { gid: env.groupId.slice(0, 8) });
     }
     // v4.32.579: описание — тем же решением, что название и аватар. Пока
@@ -1583,16 +1599,16 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     const avatarDecision = decideMetaField(env.avatarCid, group.avatarCid ?? '', group.avatarCidUnreadable);
     if (avatarDecision.apply && env.avatarCid != null && (await fresh('avatarCid'))) {
       patch.avatarCid = env.avatarCid;
-      if (avatarDecision.announce) events.push('Аватар группы обновлён');
+      if (avatarDecision.announce) events.push({ field: 'avatarCid', text: 'Аватар группы обновлён' });
       else log.warn('group_meta_avatar_unreadable', { gid: env.groupId.slice(0, 8) });
     }
     if (env.adminOnlyPosting != null && env.adminOnlyPosting !== group.adminOnlyPosting && (await fresh('adminOnlyPosting'))) {
       patch.adminOnlyPosting = env.adminOnlyPosting;
-      events.push(env.adminOnlyPosting ? 'Режим «только для администраторов» включён' : 'Режим «только для администраторов» выключен');
+      events.push({ field: 'adminOnlyPosting', text: env.adminOnlyPosting ? 'Режим «только для администраторов» включён' : 'Режим «только для администраторов» выключен' });
     }
     if (env.adminOnlyPinning != null && env.adminOnlyPinning !== group.adminOnlyPinning && (await fresh('adminOnlyPinning'))) {
       patch.adminOnlyPinning = env.adminOnlyPinning;
-      events.push(env.adminOnlyPinning ? 'Закреплять сообщения могут только администраторы' : 'Закреплять сообщения могут все участники');
+      events.push({ field: 'adminOnlyPinning', text: env.adminOnlyPinning ? 'Закреплять сообщения могут только администраторы' : 'Закреплять сообщения могут все участники' });
     }
     // v4.32.256: обе настройки раньше не рассылались вовсе. requireApproval
     // читается при выдаче пригласительной ссылки, поэтому без синхронизации
@@ -1601,11 +1617,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // синхронизации «анонимными» посты были ровно у включившего.
     if (env.requireApproval != null && env.requireApproval !== group.requireApproval && (await fresh('requireApproval'))) {
       patch.requireApproval = env.requireApproval;
-      events.push(env.requireApproval ? 'Вход по ссылке теперь требует одобрения' : 'Вход по ссылке без одобрения');
+      events.push({ field: 'requireApproval', text: env.requireApproval ? 'Вход по ссылке теперь требует одобрения' : 'Вход по ссылке без одобрения' });
     }
     if (env.anonymousPosting != null && env.anonymousPosting !== group.anonymousPosting && (await fresh('anonymousPosting'))) {
       patch.anonymousPosting = env.anonymousPosting;
-      events.push(env.anonymousPosting ? 'Имена отправителей скрыты' : 'Имена отправителей видны');
+      events.push({ field: 'anonymousPosting', text: env.anonymousPosting ? 'Имена отправителей скрыты' : 'Имена отправителей видны' });
     }
     /**
      * v4.32.303: новый токен пригласительной ссылки от другого администратора.
@@ -1624,27 +1640,29 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      */
     if (env.inviteToken != null && iAmAdmin && env.inviteToken !== group.inviteToken && (await fresh('inviteToken'))) {
       patch.inviteToken = env.inviteToken;
-      events.push('Пригласительная ссылка сброшена: прежние больше не действуют');
+      events.push({ field: 'inviteToken', text: 'Пригласительная ссылка сброшена: прежние больше не действуют' });
     }
     if (Object.keys(patch).length) await updateGroupMeta(env.groupId, pid, patch);
     if (env.slowModeSeconds != null && env.slowModeSeconds !== group.slowModeSeconds && (await fresh('slowModeSeconds'))) {
       await setGroupSlowMode(env.groupId, pid, env.slowModeSeconds);
       // v4.32.265: строку собирает slowModeSysLine — та же, что пишет себе
       // включивший. Раньше он видел «5 мин», а все остальные «300 сек».
-      events.push(slowModeSysLine(env.slowModeSeconds));
+      events.push({ field: 'slowModeSeconds', text: slowModeSysLine(env.slowModeSeconds) });
     }
     if (env.disappearMs != null && env.disappearMs !== (group.disappearAfterMs ?? 0) && (await fresh('disappearMs'))) {
       const { formatDisappearLabel } = await import('./disappearEnvelope');
       // Своя переписка до этого момента не трогается: setGroupDisappearTimer
       // записывает disappear_set_at, и удаление ограничено им.
       await setGroupDisappearTimer(env.groupId, pid, env.disappearMs > 0 ? env.disappearMs : null);
-      events.push(
-        env.disappearMs > 0
-          ? `Исчезающие сообщения включены: ${formatDisappearLabel(env.disappearMs)}`
-          : 'Исчезающие сообщения выключены'
-      );
+      events.push({
+        field: 'disappearMs',
+        text:
+          env.disappearMs > 0
+            ? `Исчезающие сообщения включены: ${formatDisappearLabel(env.disappearMs)}`
+            : 'Исчезающие сообщения выключены',
+      });
     }
-    for (const ev of events) await insertCtlSysMessage(env, pid, ev);
+    for (const ev of events) await insertCtlSysMessage(env, pid, ev.text, ev.field);
     log.info('group_ctl_meta_applied', { gid: env.groupId.slice(0, 8), events: events.length });
     return true;
   }
@@ -1677,8 +1695,15 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
    * Проверки «уже забанен — выйти» в ветках ниже от повтора не спасали: они
    * идемпотентные, а не монотонные, и конверт с ДРУГИМ прежним состоянием
    * применялся целиком.
+   *
+   * v4.32.618: отметка СВЕРЯЕТСЯ здесь, а сдвигается после switch — ветки ниже
+   * сплошь могут выйти, ничего не изменив (бан уже забаненного, та же роль,
+   * add уже состоящего). Сдвиг до них хоронил законный конверт: `add` (T1) и
+   * `role` (T2) пришли из relay пачкой в обратном порядке — `role` не нашёл
+   * участника и вышел, знак встал на T2, `add` с T1 отвергся как повтор, и
+   * человек пропал из группы навсегда.
    */
-  if (!(await acceptGroupControlTs(`m:${env.target}`, env.groupId, pid, env.ts))) {
+  if (!(await groupControlTsFresh(`m:${env.target}`, env.groupId, pid, env.ts))) {
     log.warn('group_ctl_replay_rejected', { gid: env.groupId.slice(0, 8), op: env.op, target: env.target.slice(0, 12) });
     return true;
   }
@@ -1697,7 +1722,21 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // самого начала — теперь и ban.
       if (target?.role === 'banned') return true;
       if (target) await updateGroupMemberRole(env.groupId, env.target, 'banned', pid);
-      else await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'banned', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
+      else {
+        /**
+         * v4.32.618: упреждающий бан заводит строку на того, кого в группе
+         * нет, — и такая строка не видна нигде: в «N участников» забаненные не
+         * входят, в списке участников их прячут. Потолка у таблицы не было
+         * вовсе, то есть администратор мог набить чужую базу произвольным
+         * числом ключей, ничем себя не выдав. Своих участников потолок не
+         * задевает: бан уже состоящего идёт веткой выше.
+         */
+        if (countBanned(members) >= GROUP_BANLIST_MAX) {
+          log.warn('group_banlist_full', { gid: env.groupId.slice(0, 8) });
+          return true;
+        }
+        await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'banned', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
+      }
       await recountGroupMembers(env.groupId, pid);
       await insertCtlSysMessage(env, pid, isMe ? `Вы заблокированы в группе (${actorLabel})` : `${label} заблокирован(а) в группе`);
       break;
@@ -1705,6 +1744,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     case 'unban': {
       if (target?.role !== 'banned') return true;
       await updateGroupMemberRole(env.groupId, env.target, 'member', pid);
+      await clearGroupRemoval(env.groupId, env.target, pid);
       await recountGroupMembers(env.groupId, pid);
       await insertCtlSysMessage(env, pid, isMe ? 'Блокировка снята' : `${label} разблокирован(а)`);
       break;
@@ -1712,6 +1752,9 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     case 'kick': {
       if (!target) return true;
       await removeGroupMember(env.groupId, env.target, pid);
+      // Строки в group_members больше нет — память об исключении хранится
+      // отдельно, иначе исключённый вернётся сам по старой ссылке.
+      await markGroupRemoval(env.groupId, env.target, pid, env.ts);
       await recountGroupMembers(env.groupId, pid);
       await insertCtlSysMessage(env, pid, isMe ? `Вас исключили из группы (${actorLabel})` : `${label} исключён(а) из группы`);
       break;
@@ -1733,6 +1776,8 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         return true;
       }
       await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'member', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
+      // Администратор вернул исключённого — отметка своё отработала.
+      await clearGroupRemoval(env.groupId, env.target, pid);
       await recountGroupMembers(env.groupId, pid);
       await insertCtlSysMessage(env, pid, `${label} вступил(а) в группу`);
       break;
@@ -1744,10 +1789,19 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // ограничения и снятие админских прав описывались бы одинаково.
       const prev = target.role;
       await updateGroupMemberRole(env.groupId, env.target, env.role, pid);
+      // v4.32.618: смена роли обычно счётчик не трогает — но через op:'role'
+      // снимают и блокировку, а забаненный в «N участников» не входит. Без
+      // пересчёта разблокированный этим путём оставался невидимым для счётчика
+      // навсегда: арифметику ±1 здесь никто не вёл, а сам пересчёт был только
+      // в соседних ветках.
+      if (countsAsMember(prev) !== countsAsMember(env.role)) await recountGroupMembers(env.groupId, pid);
       await insertCtlSysMessage(env, pid, roleChangeSysText(env.role, prev, label, isMe));
       break;
     }
   }
+
+  // Изменение применено — только теперь двигаем водяной знак вперёд.
+  await commitGroupControlTs(`m:${env.target}`, env.groupId, pid, env.ts);
 
   /**
    * v4.32.512: собственную роль поменяли — значит, флаг `groups.is_admin`

@@ -1,4 +1,14 @@
-import { countMembers, countsAsMember, isAssignableRole, roleChangeSysText, roleLabel, roleTone } from '../groupRolePolicy';
+import {
+  GROUP_BANLIST_MAX,
+  countBanned,
+  countMembers,
+  countsAsMember,
+  isAssignableRole,
+  roleChangeSysText,
+  roleLabel,
+  roleTone,
+} from '../groupRolePolicy';
+import { INVITE_MEMBERS_CAP } from '../groupInviteLink';
 import type { MemberRole } from '../../storage/local';
 import { darkColors, lightColors } from '../../../ui/theme';
 
@@ -133,5 +143,70 @@ describe('число участников', () => {
     expect(countMembers(before)).toBe(3);
     expect(countMembers(afterBan)).toBe(2);
     expect(countMembers(afterBan)).toBe(countMembers(afterBan));
+  });
+});
+
+/**
+ * Смена роли по заблокированному (v4.32.618).
+ *
+ * Конверт op:'role' по забаненному проходит: canModerate придирается только к
+ * владельцу и чужому админу. Прежняя роль 'banned' в тексте не разбиралась
+ * вовсе, и снятие блокировки объявлялось как «снят(а) с должности
+ * администратора» — неправда в обе стороны.
+ */
+describe('снятие блокировки через смену роли называется своим именем', () => {
+  it('никакой текст не путает блокировку с должностью', () => {
+    for (const next of ['member', 'admin', 'restricted'] as const) {
+      const them = roleChangeSysText(next, 'banned', 'Рита', false);
+      const me = roleChangeSysText(next, 'banned', 'Рита', true);
+      for (const line of [them, me]) {
+        expect(line).toMatch(/блокиров/i);
+        expect(line).not.toContain('снят(а) с должности администратора');
+        expect(line).not.toContain('С вас сняты права администратора');
+      }
+      expect(them).toContain('Рита');
+      expect(me).not.toContain('Рита');
+    }
+  });
+
+  it('снятие блокировки без новой роли звучит как обычный разбан', () => {
+    // Тот же текст, что пишет ветка op:'unban': для человека это одно событие.
+    expect(roleChangeSysText('member', 'banned', 'Рита', false)).toBe('Рита разблокирован(а)');
+    expect(roleChangeSysText('member', 'banned', 'Рита', true)).toBe('Блокировка снята');
+  });
+
+  it('проверка не пустая: прежние ветки не задеты', () => {
+    expect(roleChangeSysText('member', 'admin', 'Рита', false)).toBe('Рита снят(а) с должности администратора');
+    expect(roleChangeSysText('member', 'restricted', 'Рита', false)).toBe('Рита снова может писать');
+    expect(roleChangeSysText('admin', 'member', 'Рита', false)).toBe('Рита назначен(а) администратором');
+    expect(roleChangeSysText('restricted', 'admin', 'Рита', false)).toBe(
+      'Рита снят(а) с администраторов и ограничен(а) в отправке сообщений'
+    );
+  });
+});
+
+/**
+ * Потолок чёрного списка (v4.32.618). Забаненный не виден нигде: ни в «N
+ * участников», ни в списке участников, — а забанить можно и того, кого в
+ * группе никогда не было. Роста таблицы это ничем не ограничивало.
+ */
+describe('чёрный список группы считается и ограничен', () => {
+  it('считаются только забаненные', () => {
+    const rows = [
+      { role: 'owner' as const },
+      { role: 'member' as const },
+      { role: 'banned' as const },
+      { role: 'restricted' as const },
+      { role: 'banned' as const },
+    ];
+    expect(countBanned(rows)).toBe(2);
+    expect(countMembers(rows)).toBe(3);
+    expect(countBanned([])).toBe(0);
+  });
+
+  it('потолок есть и он выше любого честного списка приглашения', () => {
+    expect(Number.isInteger(GROUP_BANLIST_MAX)).toBe(true);
+    expect(GROUP_BANLIST_MAX).toBeGreaterThan(INVITE_MEMBERS_CAP);
+    expect(GROUP_BANLIST_MAX).toBeLessThanOrEqual(4096);
   });
 });

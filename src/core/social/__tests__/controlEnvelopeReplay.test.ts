@@ -74,7 +74,15 @@ jest.mock('../../logger', () => ({
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { acceptControlTs, acceptGroupControlTs, groupWatermarkKey, watermarkKey, WATERMARK_PREFIX } from '../controlWatermark';
+import {
+  acceptControlTs,
+  acceptGroupControlTs,
+  commitGroupControlTs,
+  groupControlTsFresh,
+  groupWatermarkKey,
+  watermarkKey,
+  WATERMARK_PREFIX,
+} from '../controlWatermark';
 import { handleIncomingDisappear, encodeDisappearEnvelope } from '../disappearSync';
 import { handleIncomingCopyGuard, encodeCopyGuardEnvelope } from '../copyGuardSync';
 import { handleIncomingLastSeenPref } from '../presencePrefSync';
@@ -275,16 +283,77 @@ describe('водяной знак управляющих конвертов гр
   });
 });
 
+/**
+ * Проверка и сдвиг знака разделены (v4.32.618).
+ *
+ * Обработчик состава сдвигал знак ДО switch, а ветки внутри сплошь
+ * идемпотентные: бан уже забаненного, та же роль, add уже состоящего — каждая
+ * выходит, ничего не изменив. Знак при этом оставался сдвинутым навсегда, и
+ * следующий законный конверт с меньшей меткой отвергался как повтор.
+ */
+describe('свежесть проверяется отдельно от сдвига знака', () => {
+  const GID = 'g-9';
+  const MEMBER = 'участник-ключ==';
+
+  it('проверка ничего не пишет — её можно повторить', async () => {
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    expect(mockKv.size).toBe(0);
+  });
+
+  it('проверка не пустая: после сдвига та же метка уже не проходит', async () => {
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    await commitGroupControlTs(`m:${MEMBER}`, GID, PID, 2000);
+    expect(mockKv.size).toBe(1);
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2000)).toBe(false);
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 1999)).toBe(false);
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2001)).toBe(true);
+  });
+
+  it('пачка в обратном порядке: не применённый role не хоронит законный add', async () => {
+    // role (T2) пришёл раньше add (T1), участника не нашёл и вышел — знак
+    // двигать было не за что.
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    // add (T1) применяется и двигает знак сам.
+    expect(await groupControlTsFresh(`m:${MEMBER}`, GID, PID, 1000)).toBe(true);
+    await commitGroupControlTs(`m:${MEMBER}`, GID, PID, 1000);
+    // А вот прежнее поведение (сдвиг до switch) участника теряло навсегда.
+    mockKv.clear();
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 1000)).toBe(false);
+  });
+
+  it('сдвиг знака одного слота не задевает соседние', async () => {
+    await commitGroupControlTs(`m:${MEMBER}`, GID, PID, 5000);
+    expect(await groupControlTsFresh(`m:${OTHER}`, GID, PID, 1000)).toBe(true);
+    expect(await groupControlTsFresh('meta:name', GID, PID, 1000)).toBe(true);
+    expect(await groupControlTsFresh(`m:${MEMBER}`, 'g-10', PID, 1000)).toBe(true);
+  });
+});
+
 describe('проверка стоит в обработчике группы до применения', () => {
   const SRC = readFileSync(join(__dirname, '..', 'groupMessaging.ts'), 'utf8')
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n');
 
-  it('ban/unban/kick/add/role гасятся раньше switch', () => {
-    const at = SRC.indexOf('acceptGroupControlTs(`m:${env.target}`');
-    expect(at).toBeGreaterThan(0);
-    expect(at).toBeLessThan(SRC.indexOf('switch (env.op) {'));
+  it('ban/unban/kick/add/role гасятся раньше switch, а знак двигается после', () => {
+    const sw = SRC.indexOf('switch (env.op) {');
+    expect(sw).toBeGreaterThan(0);
+    const check = SRC.indexOf('groupControlTsFresh(`m:${env.target}`');
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(sw);
+    /**
+     * v4.32.618: сдвиг знака — строго ПОСЛЕ switch. Ветки внутри сплошь
+     * идемпотентные: бан уже забаненного, та же роль, add уже состоящего —
+     * каждая возвращает управление, ничего не изменив. Знак, сдвинутый до
+     * них, хоронил законный конверт: add (T1) и role (T2) пришли из relay
+     * пачкой в обратном порядке, role не нашёл участника и вышел, знак встал
+     * на T2 — и add с T1 отвергся как повтор.
+     */
+    const commit = SRC.indexOf('commitGroupControlTs(`m:${env.target}`');
+    expect(commit).toBeGreaterThan(sw);
+    expect(SRC).not.toContain('acceptGroupControlTs(`m:${env.target}`');
   });
 
   it('«вышел сам» делит знак с составом, а не заводит свой', () => {
