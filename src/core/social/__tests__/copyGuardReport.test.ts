@@ -10,6 +10,7 @@
  */
 const kv: Record<string, string> = {};
 let mockBroken = false;
+let mockWriteFails = false;
 
 // v4.32.571: запрет двухсторонний, и copyGuard пишет ключи через варианты
 // «для названного профиля» — тот, чьим ключом расшифрован конверт. Подделка kv
@@ -30,6 +31,22 @@ jest.mock('../../storage/profileScopedKv', () => {
     }),
     scopedKvSetFor: jest.fn(async (pid: number, k: string, v: string) => { kv[scoped(pid, k)] = v; }),
     scopedKvDeleteFor: jest.fn(async (pid: number, k: string) => { delete kv[scoped(pid, k)]; }),
+    // v4.32.655: три значения — null у отказа базы, { value: null } у пустоты.
+    // Настоящий scopedKvTryGetFor не бросает никогда, поэтому и подделка не
+    // бросает: она отдаёт отказ значением, как оригинал.
+    scopedKvTryGetFor: jest.fn(async (pid: number, k: string) =>
+      mockBroken ? null : { value: kv[scoped(pid, k)] ?? null }
+    ),
+    scopedKvSetCheckedFor: jest.fn(async (pid: number, k: string, v: string) => {
+      if (mockWriteFails) return false;
+      kv[scoped(pid, k)] = v;
+      return true;
+    }),
+    // Настоящий scopedKvDeleteCheckedFor отчитывается броском, а не значением.
+    scopedKvDeleteCheckedFor: jest.fn(async (pid: number, k: string) => {
+      if (mockWriteFails) throw new Error('db closed');
+      delete kv[scoped(pid, k)];
+    }),
   };
 });
 jest.mock('../../identity/profileManager', () => ({
@@ -61,6 +78,7 @@ const DID = 'did:key:z6MkTest';
 beforeEach(() => {
   for (const k of Object.keys(kv)) delete kv[k];
   mockBroken = false;
+  mockWriteFails = false;
 });
 
 describe('запрет на копирование', () => {
@@ -86,10 +104,55 @@ describe('запрет на копирование', () => {
     await expect(isCopyGuarded('b3RoZXI=')).resolves.toBe(false);
   });
 
-  it('сбой чтения отвечает «выключено», а не запирает переписку сам', async () => {
+  // v4.32.655: раньше сбой чтения отвечал «выключено» — и переписка, которую
+  // человек запер, снова разрешала копирование, пересылку и снимок экрана. Из
+  // двух ошибок эта дороже: лишний замок человек снимет сам, а утёкшую
+  // переписку не вернуть.
+  it('сбой чтения запирает переписку, а не открывает её', async () => {
     await setCopyGuard(PEER, true);
     mockBroken = true;
+    await expect(isCopyGuarded(PEER)).resolves.toBe(true);
+    // ПРОВЕРКА НЕ ПУСТАЯ: без сбоя тот же вызов отвечает по записи.
+    mockBroken = false;
+    await setCopyGuard(PEER, false);
     await expect(isCopyGuarded(PEER)).resolves.toBe(false);
+  });
+
+  it('сбой чтения запирает и переписку, где вообще ничего не записано', async () => {
+    mockBroken = true;
+    await expect(isCopyGuarded(PEER)).resolves.toBe(true);
+  });
+
+  it('карточке профиля сбой чтения не рисует включённый переключатель', async () => {
+    // Экрану отвечают мягко: иначе профиль без единой записи выглядел бы
+    // запертым, и человек снимал бы запрет, которого не ставил.
+    mockBroken = true;
+    expect(await copyGuardState(PEER)).toEqual({ mine: false, theirs: false });
+  });
+
+  it('не легшая запись отчитывается отказом, а не молчит', async () => {
+    mockWriteFails = true;
+    await expect(setCopyGuard(PEER, true)).resolves.toBe(false);
+    expect(Object.keys(kv)).not.toContain(copyGuardKey(PEER));
+    await expect(setPeerCopyGuardFor(1, PEER, true)).resolves.toBe(false);
+    expect(Object.keys(kv)).not.toContain(peerCopyGuardKey(PEER));
+  });
+
+  it('не удавшееся снятие тоже отчитывается отказом', async () => {
+    await setCopyGuard(PEER, true);
+    mockWriteFails = true;
+    await expect(setCopyGuard(PEER, false)).resolves.toBe(false);
+    // Ключ на месте — экран не должен показать снятый запрет.
+    expect(Object.keys(kv)).toContain(copyGuardKey(PEER));
+  });
+
+  it('экран не перекрашивается решением, которое не легло', async () => {
+    const seen: Array<[string, boolean]> = [];
+    const off = subscribeCopyGuard((pub, on) => seen.push([pub, on]));
+    mockWriteFails = true;
+    await setCopyGuard(PEER, true);
+    off();
+    expect(seen).toEqual([]);
   });
 
   it('экран диалога узнаёт о переключении из карточки профиля', async () => {
@@ -106,7 +169,7 @@ describe('запрет на копирование', () => {
     const seen: boolean[] = [];
     const offBad = subscribeCopyGuard(() => { throw new Error('boom'); });
     const offGood = subscribeCopyGuard((_p, on) => seen.push(on));
-    await expect(setCopyGuard(PEER, true)).resolves.toBeUndefined();
+    await expect(setCopyGuard(PEER, true)).resolves.toBe(true);
     offBad(); offGood();
     expect(seen).toEqual([true]);
     await expect(isCopyGuarded(PEER)).resolves.toBe(true);

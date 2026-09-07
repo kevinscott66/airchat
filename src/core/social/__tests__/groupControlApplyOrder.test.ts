@@ -63,6 +63,11 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvSetFor: jest.fn(async (pid: number, key: string, value: string) => {
     mockKv.set(`${pid}|${key}`, value);
   }),
+  // v4.32.655: сдвиг знака пишет проверенной формой — иначе отказ базы молчал.
+  scopedKvSetCheckedFor: jest.fn(async (pid: number, key: string, value: string) => {
+    mockKv.set(`${pid}|${key}`, value);
+    return true;
+  }),
   scopedKvDeleteFor: jest.fn(async (pid: number, key: string) => {
     mockKv.delete(`${pid}|${key}`);
   }),

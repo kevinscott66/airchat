@@ -32,7 +32,7 @@ import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from 
 import { log } from '../logger';
 import { SYS_LINE_PREFIX } from './sysLineGuard';
 import { setCopyGuard, setPeerCopyGuardFor } from './copyGuard';
-import { acceptControlTs } from './controlWatermark';
+import { commitControlTs, controlTsFresh } from './controlWatermark';
 import {
   COPY_GUARD_PREFIX,
   encodeCopyGuardEnvelope,
@@ -92,6 +92,13 @@ export type CopyGuardSyncResult = { synced: true } | { synced: false; warning: s
  * что уже сделано у себя, и то, чего теперь не будет у него, — иначе человек
  * решит, что не сработало ничего, и щёлкнет обратно.
  */
+/** Локальная запись не легла — рассылать нечего, решение не сохранено. */
+function copyGuardLocalFailText(on: boolean): string {
+  return on
+    ? 'Запрет не включился: устройство не сохранило решение. Попробуйте ещё раз.'
+    : 'Запрет не снялся: устройство не сохранило решение. Попробуйте ещё раз.';
+}
+
 function copyGuardWarning(on: boolean, reason: FanoutUndelivered): string {
   const head = on ? 'Запрет включён только у вас' : 'Запрет снят только у вас';
   const why = fanoutReasonText(reason, 'dm');
@@ -109,7 +116,12 @@ export async function setCopyGuardAndSync(params: {
   const { peerPubB64, on } = params;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
   const ts = Date.now();
-  await setCopyGuard(peerPubB64, on);
+  // v4.32.655: раньше отказ базы здесь проходил молча — служебная строка и
+  // конверт уходили от имени решения, которого на устройстве нет. Собеседник
+  // выключал у себя копирование, а у автора запрета оно продолжало работать.
+  if (!(await setCopyGuard(peerPubB64, on))) {
+    return { synced: false, warning: copyGuardLocalFailText(on) };
+  }
   await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true });
 
   const delivery = await fanoutControlEnvelope('copy_guard', encodeCopyGuardEnvelope({ on, ts }), {
@@ -139,11 +151,19 @@ export async function handleIncomingCopyGuard(
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await acceptControlTs('copyguard', senderPubB64, ownerPid, env.ts))) return true;
+  if (!(await controlTsFresh('copyguard', senderPubB64, ownerPid, env.ts))) return true;
   // Переписка определяется ПОДПИСАННЫМ отправителем: иначе любой контакт
   // запирал бы чужой разговор. Профиль-владелец приходит от службы переписки —
   // активным к этому моменту может быть уже другой (v4.32.481).
-  await setPeerCopyGuardFor(ownerPid, senderPubB64, env.on);
+  const applied = await setPeerCopyGuardFor(ownerPid, senderPubB64, env.on);
+  // v4.32.655: отметку двигаем ПОСЛЕ применения, как в группе. Сдвиг до него
+  // делал отказ вечным: повтор того же конверта отвергался как старый, и
+  // запрет собеседника не включался уже никогда.
+  if (!applied) {
+    log.warn('copy_guard_apply_failed', { from: senderPubB64.slice(0, 12), on: env.on });
+    return true;
+  }
+  await commitControlTs('copyguard', senderPubB64, ownerPid, env.ts);
   await insertSysRow({
     peerPubB64: senderPubB64,
     ownerProfileId: ownerPid,

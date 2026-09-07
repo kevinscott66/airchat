@@ -70,11 +70,33 @@ describe('решение уходит собеседнику', () => {
   });
 
   it('у себя записано до отправки — отказ рассылки этого не отменяет', () => {
-    const local = sync.indexOf('await setCopyGuard(peerPubB64, on);');
+    const local = sync.indexOf('if (!(await setCopyGuard(peerPubB64, on))) {');
     const send = sync.indexOf('fanoutControlEnvelope(');
     expect(local).toBeGreaterThan(-1);
     expect(send).toBeGreaterThan(local);
     expect(sync.indexOf('if (!delivery.sent)')).toBeGreaterThan(send);
+  });
+
+  it('несостоявшаяся запись у себя останавливает и строку, и рассылку', () => {
+    // v4.32.655: setCopyGuard отчитывается о записи. Раньше ответ терялся, и
+    // при отказе базы собеседник получал конверт про решение, которого на
+    // устройстве нет.
+    const local = sync.indexOf('if (!(await setCopyGuard(peerPubB64, on))) {');
+    const row = sync.indexOf('await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true });');
+    const send = sync.indexOf('fanoutControlEnvelope(');
+    expect(local).toBeGreaterThan(-1);
+    expect(row).toBeGreaterThan(local);
+    expect(send).toBeGreaterThan(row);
+    expect(sync).toContain('return { synced: false, warning: copyGuardLocalFailText(on) };');
+    // Отказ базы и недоставка описаны разными словами: чинить их надо по-разному.
+    expect(sync).toContain(
+      "? 'Запрет не включился: устройство не сохранило решение. Попробуйте ещё раз.'"
+    );
+    expect(sync).toContain(
+      ": 'Запрет не снялся: устройство не сохранило решение. Попробуйте ещё раз.';"
+    );
+    // ПРОВЕРКА НЕ ПУСТАЯ: повод для правки жив — обе ветки отказа существуют.
+    expect(sync.indexOf('copyGuardLocalFailText')).toBeLessThan(local);
   });
 
   it('входящий конверт разбирается в переписке и пузырём не становится', () => {
@@ -96,7 +118,25 @@ describe('чужое решение отделено от своего', () => {
 
   it('переписка закрыта, пока горит хотя бы один ключ', () => {
     expect(guard).toContain('return state.mine || state.theirs;');
-    expect(guard).toContain('return copyGuardOn(await copyGuardState(peerPubB64));');
+    expect(guard).toContain('return guardedNow(activeProfileId(), peerPubB64);');
+  });
+
+  it('нечитаемая база запирает переписку, а не открывает её', () => {
+    // v4.32.655: copyGuardStateFor гасил отказ чтения в { mine: false,
+    // theirs: false }, и экран снимал запрет сам собой, без строки в журнале.
+    expect(guard).toContain('return state === null ? true : copyGuardOn(state);');
+    expect(guard).toContain("log.warn('copy_guard_read_failed', { pid });");
+    // Три значения даёт scopedKvTryGetFor: null — отказ, { value: null } — пусто.
+    expect(guard).toContain('scopedKvTryGetFor(pid, copyGuardKey(peerPubB64))');
+    expect(guard).toContain('scopedKvTryGetFor(pid, peerCopyGuardKey(peerPubB64))');
+    expect(guard).toContain('if (mine === null || theirs === null) {');
+    // ПРОВЕРКА НЕ ПУСТАЯ: ответ экрану остаётся мягким — иначе профиль без
+    // единой записи выглядел бы запертым.
+    expect(guard).toContain("?? { mine: false, theirs: false };");
+    // Строгий ответ идёт только через guardedNow, экранный — через copyGuardStateFor.
+    expect(guard.indexOf('async function guardedNow(')).toBeGreaterThan(
+      guard.indexOf('export async function copyGuardStateFor(')
+    );
   });
 
   it('своя запись не трогает чужую и наоборот', () => {
@@ -111,9 +151,26 @@ describe('чужое решение отделено от своего', () => {
   it('приём конверта пишет в профиль-владелец, а не в активный', () => {
     // Активным к моменту разбора может быть уже другой аккаунт (v4.32.481).
     const body = guard.slice(guard.indexOf('export async function setPeerCopyGuardFor('));
-    expect(body).toContain('scopedKvSetFor(pid, peerCopyGuardKey(peerPubB64)');
-    expect(body).toContain('scopedKvDeleteFor(pid, peerCopyGuardKey(peerPubB64))');
-    expect(sync).toContain('await setPeerCopyGuardFor(ownerPid, senderPubB64, env.on);');
+    expect(body).toContain('writeGuardKey(pid, peerCopyGuardKey(peerPubB64), on)');
+    expect(sync).toContain('const applied = await setPeerCopyGuardFor(ownerPid, senderPubB64, env.on);');
+  });
+
+  it('записи проверяются, а не пишутся вслепую', () => {
+    // v4.32.655: scopedKvSetFor и scopedKvDeleteFor отдают void и гасят отказ
+    // базы внутри — запрет «включался» и не сохранялся.
+    const writer = guard.slice(
+      guard.indexOf('async function writeGuardKey('),
+      guard.indexOf('export async function setCopyGuard(')
+    );
+    expect(writer.length).toBeGreaterThan(120);
+    expect(writer).toContain("const written = await scopedKvSetCheckedFor(pid, key, '1');");
+    expect(writer).toContain('await scopedKvDeleteCheckedFor(pid, key);');
+    expect(writer).toContain("log.warn('copy_guard_write_failed', { pid, on });");
+    // ПРОВЕРКА НЕ ПУСТАЯ: слепых форм записи в файле не осталось.
+    expect(guard).not.toContain('await scopedKvSetFor(');
+    expect(guard).not.toContain('await scopedKvDeleteFor(');
+    // Оба ключа идут через один и тот же проверенный писатель.
+    expect(guard).toContain('writeGuardKey(pid, copyGuardKey(peerPubB64), on)');
   });
 
   it('экран не перекрашивается решением из чужого профиля', () => {

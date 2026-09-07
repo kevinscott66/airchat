@@ -27,7 +27,7 @@
  * делили бы один водяной знак. Заодно ключ попадает под уборку `p<id>:%` при
  * удалении профиля и отличает «не читается база» от «ещё ничего не было».
  */
-import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { log } from '../logger';
 
 export const WATERMARK_PREFIX = 'ctl_ts_v1:';
@@ -89,6 +89,38 @@ export async function acceptControlTs(
   ts: number
 ): Promise<boolean> {
   return acceptTs(watermarkKey(kind, peerPubB64), kind, pid, ts);
+}
+
+/**
+ * Та же проверка для личной переписки, но БЕЗ сдвига отметки (v4.32.655).
+ *
+ * Ровно та же пара, что `groupControlTsFresh` и `commitGroupControlTs` в
+ * группе, и заведена по той же причине: `acceptControlTs` двигает знак ДО
+ * применения, а применение умеет не удаться. Тогда изменение не применено, но
+ * знак уже стоит, и повторная присылка того же конверта отвергается как
+ * повтор — отказ становится вечным. Пара «проверить свежесть → применить →
+ * сдвинуть» оставляет отправителю возможность повторить.
+ *
+ * Пара к ней — {@link commitControlTs}; её вызывают ровно тогда, когда
+ * изменение действительно применено.
+ */
+export async function controlTsFresh(
+  kind: ControlKind,
+  peerPubB64: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  return freshTs(watermarkKey(kind, peerPubB64), kind, pid, ts);
+}
+
+/** Сдвинуть отметку личной переписки — после того, как изменение применено. */
+export async function commitControlTs(
+  kind: ControlKind,
+  peerPubB64: string,
+  pid: number,
+  ts: number
+): Promise<void> {
+  await commitTs(watermarkKey(kind, peerPubB64), kind, pid, ts);
 }
 
 /**
@@ -243,10 +275,19 @@ async function freshTs(key: string, kind: string, pid: number, ts: number): Prom
   return true;
 }
 
+/**
+ * Сдвиг отметки. Пишет проверенной формой (v4.32.655).
+ *
+ * Раньше здесь стоял scopedKvSetFor внутри try/catch. Та форма отдаёт void и
+ * гасит отказ базы внутри, так что catch не срабатывал ни разу и строки
+ * control_ts_write_failed не было в журнале никогда: неудавшийся сдвиг
+ * выглядел точно как удавшийся. Само поведение остаётся прежним — пропустить,
+ * а не отвергнуть (см. заголовок файла): без доступа к базе приложение не
+ * должно переставать применять настройки собеседника. Меняется только то, что
+ * причина теперь видна.
+ */
 async function commitTs(key: string, kind: string, pid: number, ts: number): Promise<void> {
-  try {
-    await scopedKvSetFor(pid, key, String(Math.floor(ts)));
-  } catch (e) {
-    log.warn('control_ts_write_failed', { kind, err: e instanceof Error ? e.message : String(e) });
+  if (!(await scopedKvSetCheckedFor(pid, key, String(Math.floor(ts))))) {
+    log.warn('control_ts_write_failed', { kind });
   }
 }

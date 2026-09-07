@@ -40,6 +40,7 @@ jest.mock('../../storage/local', () => ({
 const mockTimers: { peer: string; pid: number; ms: number }[] = [];
 const mockRows: string[] = [];
 const mockGuards: { pid: number; peer: string; on: boolean }[] = [];
+let mockGuardApplyFails = false;
 const mockPresence: { pid: number; peer: string; show: boolean }[] = [];
 
 jest.mock('../../identity/profileManager', () => ({
@@ -50,9 +51,12 @@ jest.mock('../controlFanout', () => ({
   fanoutReasonText: () => '',
 }));
 jest.mock('../copyGuard', () => ({
-  setCopyGuard: async () => {},
+  setCopyGuard: async () => true,
   setPeerCopyGuardFor: async (pid: number, peer: string, on: boolean) => {
+    // v4.32.655: запись отчитывается о себе — отказ базы больше не молчит.
+    if (mockGuardApplyFails) return false;
     mockGuards.push({ pid, peer, on });
+    return true;
   },
 }));
 jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
@@ -77,7 +81,9 @@ import { join } from 'path';
 import {
   acceptControlTs,
   acceptGroupControlTs,
+  commitControlTs,
   commitGroupControlTs,
+  controlTsFresh,
   groupControlTsFresh,
   groupWatermarkKey,
   watermarkKey,
@@ -98,6 +104,7 @@ beforeEach(() => {
   mockTimers.length = 0;
   mockRows.length = 0;
   mockGuards.length = 0;
+  mockGuardApplyFails = false;
   mockPresence.length = 0;
 });
 
@@ -202,9 +209,10 @@ describe('проверка стоит во всех трёх обработчи�
       .join('\n');
   }
 
+  // copyGuardSync.ts проверяется отдельно: у него свежесть и сдвиг знака
+  // разнесены (v4.32.655) — см. describe ниже.
   it.each([
     ['disappearSync.ts', 'disappear'],
-    ['copyGuardSync.ts', 'copyguard'],
     ['presencePrefSync.ts', 'presence'],
   ])('%s гасит устаревший конверт до применения', (file, kind) => {
     const c = code(file);
@@ -222,6 +230,67 @@ describe('проверка стоит во всех трёх обработчи�
     );
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(applyAt);
+  });
+});
+
+describe('запрет копирования: знак двигается после применения', () => {
+  /**
+   * Пара «проверить свежесть → применить → сдвинуть» вместо acceptControlTs
+   * (v4.32.655). Сдвиг до применения делал отказ вечным: запись у себя могла не
+   * лечь, а повтор того же конверта отвергался уже как старый — запрет
+   * собеседника не включался никогда, и никто об этом не узнавал.
+   */
+  it('проверка свежести ничего не пишет', async () => {
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
+    expect(mockKv.size).toBe(0);
+  });
+
+  it('проверка не пустая: после сдвига та же метка уже не проходит', async () => {
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
+    await commitControlTs('copyguard', PEER, PID, 2000);
+    expect(mockKv.size).toBe(1);
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(false);
+    expect(await controlTsFresh('copyguard', PEER, PID, 1999)).toBe(false);
+    expect(await controlTsFresh('copyguard', PEER, PID, 2001)).toBe(true);
+  });
+
+  it('не легшая запись оставляет конверт повторяемым', async () => {
+    const on = encodeCopyGuardEnvelope({ on: true, ts: Date.now() - 10_000 });
+    mockGuardApplyFails = true;
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(mockGuards).toEqual([]);
+    // Знак не сдвинут — собеседник может прислать конверт заново.
+    expect(mockKv.size).toBe(0);
+    expect(mockRows).toEqual([]);
+    mockGuardApplyFails = false;
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(mockGuards.map((g) => g.on)).toEqual([true]);
+    expect(mockKv.size).toBe(1);
+  });
+
+  it('удавшееся применение знак двигает — повтор не проходит', async () => {
+    const on = encodeCopyGuardEnvelope({ on: true, ts: Date.now() - 10_000 });
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(mockGuards.map((g) => g.on)).toEqual([true]);
+  });
+
+  it('порядок в исходнике: свежесть → применение → сдвиг', () => {
+    const c = readFileSync(join(__dirname, '..', 'copyGuardSync.ts'), 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    const fresh = c.indexOf("controlTsFresh('copyguard'");
+    const apply = c.indexOf('setPeerCopyGuardFor(ownerPid');
+    const commit = c.indexOf("commitControlTs('copyguard'");
+    expect(fresh).toBeGreaterThan(0);
+    expect(apply).toBeGreaterThan(fresh);
+    expect(commit).toBeGreaterThan(apply);
+    // Старой формы «сдвинуть и применить одним движением» здесь больше нет.
+    expect(c).not.toContain("acceptControlTs('copyguard'");
+    // Отказ применения виден в журнале, а не только по отсутствию знака.
+    expect(c).toContain("log.warn('copy_guard_apply_failed'");
   });
 });
 

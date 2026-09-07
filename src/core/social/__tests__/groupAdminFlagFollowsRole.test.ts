@@ -46,6 +46,8 @@ const mockJoinRequests: unknown[][] = [];
 const mockRoleWrites: Array<{ peerPubB64: string; role: string }> = [];
 const mockMetaPatches: Array<Record<string, unknown>> = [];
 
+const mockKv = new Map<string, string>();
+
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
@@ -82,6 +84,20 @@ jest.mock('../../storage/local', () => ({
   setGroupDisappearTimer: jest.fn(async () => {}),
   profileKvGet: jest.fn(async () => null),
   kvDeleteScoped: jest.fn(async () => {}),
+  // v4.32.655: водяные знаки конвертов ходят в kv через profileScopedKv. Раньше
+  // подделка их не знала, и обращения падали TypeError внутри try/catch
+  // controlWatermark — то есть суть проверки повтора здесь не работала вовсе.
+  kvTryGet: jest.fn(async (k: string) => ({ value: mockKv.get(k) ?? null })),
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    mockKv.set(k, v);
+    return true;
+  }),
+  kvSet: jest.fn(async (k: string, v: string) => {
+    mockKv.set(k, v);
+  }),
+  kvDelete: jest.fn(async (k: string) => {
+    mockKv.delete(k);
+  }),
 }));
 
 jest.mock('../../identity/profileManager', () => ({
@@ -196,6 +212,7 @@ function opCtl(op: 'ban' | 'unban' | 'kick', target: string): string {
 }
 
 beforeEach(() => {
+  mockKv.clear();
   mockGroups.length = 0;
   mockJoinRequests.length = 0;
   mockRoleWrites.length = 0;
@@ -280,6 +297,9 @@ describe('флаг группы догоняет собственную роль
     mockMetaPatches.length = 0;
     mockGroups.length = 0;
     mockMembers[GID] = [];
+    // Вторая половина — отдельный случай, и знак от первой её не касается:
+    // обе метки берутся из одной миллисекунды (v4.32.655).
+    mockKv.clear();
     group('admin', true);
     await handleIncomingGroupControl(opCtl('kick', ME), RCPT, OWNER);
     expect(mockMetaPatches).toEqual([{ isAdmin: false }]);
