@@ -56,7 +56,10 @@ describe('чтение переписки группы различает пус
   });
 
   it('local.ts берёт тип у общего правила, а не объявляет свой', () => {
-    expect(LOCAL).toContain("import type { DbRead } from './readResult';");
+    // v4.32.628: оттуда же берётся и shouldApplyRows — пересчёт состава
+    // группы разбирает третий исход сам (см. groupMemberRecount628).
+    expect(LOCAL).toContain("import { shouldApplyRows, type DbRead } from './readResult';");
+    expect(LOCAL).not.toMatch(/^type DbRead\b/m);
   });
 });
 

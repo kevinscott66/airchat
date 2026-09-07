@@ -260,9 +260,13 @@ describe('удаление сообщения — только своя стро
   });
 
   it('и вложения ищутся тоже в своём профиле', () => {
+    // v4.32.628: к запросу добавлена колонка авторства — уборка стирает файл
+    // по адресу из текста только у своих строк (см. voiceUriTrust628). Профиль
+    // при этом остался обязательным условием.
     expect(body).toContain(
-      "'SELECT text, media_cids FROM chat_messages WHERE id = ? AND owner_profile_id = ?'",
+      "\"SELECT text, media_cids, direction = 'out' AS mine FROM chat_messages WHERE id = ? AND owner_profile_id = ?\"",
     );
+    expect(body).not.toMatch(/FROM chat_messages WHERE id = \?(?! AND owner_profile_id)/);
   });
 });
 

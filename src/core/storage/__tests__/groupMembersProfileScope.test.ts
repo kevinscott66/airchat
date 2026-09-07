@@ -189,7 +189,12 @@ describe('групповые пути спрашивают состав у св�
 describe('проверка не пустая', () => {
   it('исходники прочитаны, а bodyOf находит тела', () => {
     expect(LOCAL.length).toBeGreaterThan(10000);
-    expect(bodyOf(LOCAL, 'export async function listGroupMembers(')).toContain('FROM group_members WHERE group_id = ?');
+    // v4.32.628: сам запрос переехал в readGroupMembers, а listGroupMembers
+    // остался обёрткой, снимающей третий исход (см. groupMemberRecount628).
+    expect(bodyOf(LOCAL, 'export async function listGroupMembers(')).toContain(
+      'return (await readGroupMembers(groupId, ownerProfileId))?.slice() ?? [];'
+    );
+    expect(bodyOf(LOCAL, 'async function readGroupMembers(')).toContain('FROM group_members WHERE group_id = ?');
     expect(bodyOf(LOCAL, 'нет такой функции')).toBe('');
   });
 

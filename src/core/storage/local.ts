@@ -47,7 +47,7 @@ import {
   type LookupResult,
 } from '../utils/lookupResult';
 import type { ChatPageCursor } from './chatPageCursor';
-import type { DbRead } from './readResult';
+import { shouldApplyRows, type DbRead } from './readResult';
 import {
   INLINE_BLOB_PREFIX,
   decodeInlineBlob,
@@ -4343,9 +4343,10 @@ export async function deleteChatMessage(id: string, ownerProfileId: number): Pro
     await collectAttachmentRefs(
       d,
       dek,
-      'SELECT text, media_cids FROM chat_messages WHERE id = ? AND owner_profile_id = ?',
+      "SELECT text, media_cids, direction = 'out' AS mine FROM chat_messages WHERE id = ? AND owner_profile_id = ?",
       [id, ownerProfileId],
       doomed,
+      'own',
     );
     // v4.32.623: строка и следы опроса уходят одной транзакцией, а файлы —
     // после неё. Порознь удаление рвалось посередине: сообщения нет, а его
@@ -5205,6 +5206,37 @@ function newAttachmentRefs(): AttachmentRefs {
 }
 
 /**
+ * Верить ли адресу файла, записанному прямо в тексте строки.
+ *
+ * v4.32.628. Голосовое несёт в тексте `\x01voice:{"uri":"file://…"}`, и этот
+ * адрес — единственное место во всей базе, где путь к файлу приходит СТРОКОЙ
+ * СООБЩЕНИЯ, а не вычисляется нами по дескриптору вложения. Строку же пишет
+ * отправитель: собеседнику ничто не мешало прислать конверт с чужим путём —
+ * скажем, с именем расшифрованного вложения в кэше (`airchat_media_…`, имя
+ * считается по id и ключу, а не хранится ни в одной строке, поэтому список
+ * живых ссылок его не защищает) — а потом удалить сообщение. Уборка
+ * подхватывала адрес из удаляемой строки и стирала у получателя чужой файл.
+ * На Android каталог кэша предсказуем целиком, там достаточно знать имя.
+ *
+ * Настоящее правило уже записано в voiceUriPolicy: адрес в конверте всегда
+ * указывает на запись, лежащую на устройстве ОТПРАВИТЕЛЯ, и получателю
+ * бесполезен. Значит уборка вправе слушать его только у своих строк.
+ *
+ *  - `'any'` — список живых ссылок: он файлы только СОХРАНЯЕТ, и лишний
+ *    адрес в нём означает «файл кому-то ещё нужен», то есть безопасен;
+ *  - `'own'` — список обречённых: он файлы СТИРАЕТ, и в нём учитывается
+ *    только строка с `mine = 1`.
+ *
+ * У chat_messages авторство в строке есть — это `direction`. У group_messages
+ * его нет: чья строка, видно только по sender_pub_b64, а своего ключа этот
+ * слой не знает. Поэтому групповые запросы отдают `0 AS mine` намеренно: своя
+ * запись в группе доживёт в кэше до уборки системой, зато ни одно нажатие
+ * «удалить» не сотрёт файл, названный участником группы. Ошибка в эту сторону
+ * оставляет лишний файл, ошибка в другую — стирает чужой.
+ */
+type VoiceUriTrust = 'any' | 'own';
+
+/**
  * Ссылки на файлы из строк, которые вот-вот будут удалены.
  *
  * Текст и media_cids лежат зашифрованными, поэтому отобрать нужное запросом
@@ -5216,9 +5248,10 @@ async function collectAttachmentRefs(
   dek: Uint8Array,
   sql: string,
   params: SQLite.SQLiteBindValue[],
-  into: AttachmentRefs
+  into: AttachmentRefs,
+  voiceUris: VoiceUriTrust
 ): Promise<void> {
-  const rows = await d.getAllAsync<{ text: string | null; media_cids: string | null }>(sql, params);
+  const rows = await d.getAllAsync<{ text: string | null; media_cids: string | null; mine?: number | null }>(sql, params);
   for (const r of rows) {
     countScannedRow(into.scan);
     // v4.32.564: читаем состоянием, а не строкой. decryptAtRestString отдаёт
@@ -5229,7 +5262,11 @@ async function collectAttachmentRefs(
     countScannedCell(into.scan, textCell.state);
     const text = textCell.state === 'plain' ? textCell.text : null;
     for (const id of blobCacheIdsIn(text)) into.ids.add(id);
-    for (const uri of voiceFileUrisIn(text)) into.uris.add(uri);
+    // v4.32.628: см. VoiceUriTrust. Отсутствие колонки `mine` — тоже «не наша»:
+    // запрос, забывший о ней, не должен получать право стирать по чужому слову.
+    if (voiceUris === 'any' || r.mine === 1) {
+      for (const uri of voiceFileUrisIn(text)) into.uris.add(uri);
+    }
     const cidsCell = readAtRestCell(r.media_cids ?? null, dek);
     countScannedCell(into.scan, cidsCell.state);
     for (const id of blobCacheIdsIn(cidsCell.state === 'plain' ? cidsCell.text : null)) into.ids.add(id);
@@ -5273,7 +5310,7 @@ export async function liveAttachmentRefs(): Promise<AttachmentRefs> {
   const dek = await getOrCreateDataEncryptionKey();
   const alive = newAttachmentRefs();
   for (const sql of ATTACHMENT_REF_SOURCES) {
-    await collectAttachmentRefs(d, dek, sql, [], alive);
+    await collectAttachmentRefs(d, dek, sql, [], alive, 'any');
   }
   return alive;
 }
@@ -5441,9 +5478,10 @@ export async function purgeDisappearedMessages(): Promise<void> {
       await collectAttachmentRefs(
         d,
         dek,
-        'SELECT text, media_cids FROM chat_messages WHERE contact_pub_b64 = ? AND owner_profile_id = ? AND created_at < ? AND created_at >= ?',
+        "SELECT text, media_cids, direction = 'out' AS mine FROM chat_messages WHERE contact_pub_b64 = ? AND owner_profile_id = ? AND created_at < ? AND created_at >= ?",
         disappearScope,
-        doomedBlobs
+        doomedBlobs,
+        'own'
       );
       await deletePollArtifactsBySelect(
         d,
@@ -5478,9 +5516,10 @@ export async function purgeDisappearedMessages(): Promise<void> {
       await collectAttachmentRefs(
         d,
         dek,
-        'SELECT text, media_cids FROM group_messages WHERE group_id = ? AND owner_profile_id = ? AND created_at < ? AND created_at >= ?',
+        'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE group_id = ? AND owner_profile_id = ? AND created_at < ? AND created_at >= ?',
         grpScope,
-        doomedBlobs
+        doomedBlobs,
+        'own'
       );
       await deletePollArtifactsBySelect(
         d,
@@ -6497,9 +6536,10 @@ export async function deleteGroup(id: string, ownerProfileId: number): Promise<v
   await collectAttachmentRefs(
     d,
     dek,
-    'SELECT text, media_cids FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
+    'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
     [id, ownerProfileId],
-    doomed
+    doomed,
+    'own'
   );
   await eraseAtomically(
     d,
@@ -6570,10 +6610,40 @@ export async function upsertGroupMember(member: GroupMemberRow): Promise<void> {
   );
 }
 
+/**
+ * Состав группы списком: строки либо пусто — сбой чтения тоже пусто.
+ *
+ * Обёртка над readGroupMembers для тех мест, которым состав нужен, чтобы его
+ * показать или перебрать: пустой список там — честное «показывать нечего», а
+ * лишний третий исход пришлось бы разбирать пятнадцати вызывающим. Кому исход
+ * важен — берёт readGroupMembers напрямую (см. recountGroupMembers).
+ */
 export async function listGroupMembers(
   groupId: string,
   ownerProfileId: number
 ): Promise<GroupMemberRow[]> {
+  // Копия, а не сама строка результата: DbRead отдаёт readonly-массив, а
+  // вызывающие вправе его сортировать и резать у себя.
+  return (await readGroupMembers(groupId, ownerProfileId))?.slice() ?? [];
+}
+
+/**
+ * Состав группы тремя состояниями: строки, пусто, чтение не удалось (v4.32.628).
+ *
+ * Раньше здесь стоял `return []`, и на этом стоял пересчёт числа участников.
+ * Число живёт в `groups.member_count` отдельно от самого состава и меняется
+ * только по событию — вошёл, вышел, сменил роль. Значит одна секундная
+ * блокировка базы во время пересчёта записывала «0 человек», и запись эта не
+ * исправлялась сама: следующего события можно ждать месяцами, а состав всё
+ * время лежит на месте и цел. Группа с людьми показывалась пустой.
+ *
+ * Общее правило — в readResult.ts: сбой чтения не даёт права ни менять
+ * список, ни делать по нему вывод.
+ */
+async function readGroupMembers(
+  groupId: string,
+  ownerProfileId: number
+): Promise<DbRead<GroupMemberRow>> {
   try {
     const d = await db();
     const rows = await d.getAllAsync<{
@@ -6609,7 +6679,7 @@ export async function listGroupMembers(
           : a.role.localeCompare(b.role)
       );
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -6623,7 +6693,15 @@ export async function listGroupMembers(
  * прячет забаненных.
  */
 export async function recountGroupMembers(groupId: string, ownerProfileId: number): Promise<number> {
-  const n = countMembers(await listGroupMembers(groupId, ownerProfileId));
+  const rows = await readGroupMembers(groupId, ownerProfileId);
+  // v4.32.628: по неудавшемуся чтению не пересчитывают. Ноль, записанный сюда
+  // из-за занятой базы, останется до следующего события в группе — см.
+  // readGroupMembers.
+  if (!shouldApplyRows(rows)) {
+    log.warn('group_member_recount_skipped', { groupId });
+    return (await getGroup(groupId, ownerProfileId))?.memberCount ?? 0;
+  }
+  const n = countMembers(rows);
   await updateGroupMeta(groupId, ownerProfileId, { memberCount: n });
   return n;
 }
@@ -7214,9 +7292,10 @@ export async function clearChatHistory(
   await collectAttachmentRefs(
     d,
     dek,
-    'SELECT text, media_cids FROM chat_messages WHERE contact_pub_b64 = ? AND owner_profile_id = ?',
+    "SELECT text, media_cids, direction = 'out' AS mine FROM chat_messages WHERE contact_pub_b64 = ? AND owner_profile_id = ?",
     [contactPubB64, ownerProfileId],
-    doomed
+    doomed,
+    'own'
   );
   await eraseAtomically(
     d,
@@ -7413,9 +7492,10 @@ export async function deleteGroupMessage(
     await collectAttachmentRefs(
       d,
       dek,
-      'SELECT text, media_cids FROM group_messages WHERE id = ? AND owner_profile_id = ?',
+      'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE id = ? AND owner_profile_id = ?',
       [messageId, ownerProfileId],
-      doomed
+      doomed,
+      'own'
     );
     // v4.32.623: строка и следы опроса уходят одной транзакцией, а файлы —
     // после неё. Порознь удаление рвалось посередине: сообщения нет, а его
@@ -7449,9 +7529,10 @@ export async function clearGroupMessages(groupId: string, ownerProfileId: number
     await collectAttachmentRefs(
       d,
       dek,
-      'SELECT text, media_cids FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
+      'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
       [groupId, ownerProfileId],
-      doomed
+      doomed,
+      'own'
     );
     await eraseAtomically(
       d,
@@ -8578,8 +8659,8 @@ export async function clearAllMessageHistory(ownerProfileId: number): Promise<bo
     // поэтому уцелевшие профили проверяются в dropOrphanBlobCache.
     const dek = await getOrCreateDataEncryptionKey();
     const doomed = newAttachmentRefs();
-    await collectAttachmentRefs(d, dek, 'SELECT text, media_cids FROM chat_messages WHERE owner_profile_id = ?', [ownerProfileId], doomed);
-    await collectAttachmentRefs(d, dek, 'SELECT text, media_cids FROM group_messages WHERE owner_profile_id = ?', [ownerProfileId], doomed);
+    await collectAttachmentRefs(d, dek, "SELECT text, media_cids, direction = 'out' AS mine FROM chat_messages WHERE owner_profile_id = ?", [ownerProfileId], doomed, 'own');
+    await collectAttachmentRefs(d, dek, 'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE owner_profile_id = ?', [ownerProfileId], doomed, 'own');
     await eraseAtomically(
       d,
       'clear_all_message_history',
