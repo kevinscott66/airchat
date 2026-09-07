@@ -2751,6 +2751,14 @@ function ChatThreadView({
   /**
    * Корзина «Недавно удалённые» перед фактическим удалением.
    *
+   * Возвращает, есть ли откуда восстановить: `false` — копия не легла, и после
+   * этого удаления «Недавно удалённые» останутся без сообщения.
+   *
+   * v4.32.631: провал записи гасился, а человеку всё равно говорили
+   * «Сообщение удалено». Корзина существует ровно затем, чтобы удаление можно
+   * было отменить, — и когда копия не легла, отменять оказывалось нечего;
+   * узнать об этом можно было только открыв пустой список.
+   *
    * v4.32.578: раньше это делал только iOS-путь ActionSheetIOS, а модалка
    * (Android) удаляла без копии — на Android «Недавно удалённые» всегда были
    * пусты. Теперь путь один.
@@ -2761,22 +2769,27 @@ function ChatThreadView({
    * удалённых сообщений, которые и собирались вернуть, исчезали от одного
    * нажатия «Удалить».
    */
-  const saveRecentlyDeleted = useCallback(async (row: ChatMessageRow) => {
+  const saveRecentlyDeleted = useCallback(async (row: ChatMessageRow): Promise<boolean> => {
+    // Медиа, пустое и слишком длинное в корзину не кладутся по замыслу — копии
+    // тут никто не ждёт, и отказом это называть незачем.
+    if (!row.text || row.text.length >= 2000 || row.text.startsWith('\x01')) return true;
     try {
       const { kvUpdateSecretScoped } = await import('../../core/storage/local');
       const now = Date.now();
-      await kvUpdateSecretScoped(activeProfileId, recentlyDeletedKey(peerB64), (raw) => {
+      const res = await kvUpdateSecretScoped(activeProfileId, recentlyDeletedKey(peerB64), (raw) => {
         let list: Array<{ id: string; text: string; createdAt: number; deletedAt: number; direction: string }> = [];
         if (raw) { try { const p = JSON.parse(raw); if (Array.isArray(p)) list = p; } catch { /* */ } }
         // v4.32.183 (Round-13 #8): defense — if parse yielded non-array, list stays [].
         list = list.filter((m) => m && now - m.deletedAt < DM_RECENTLY_DELETED_TTL_MS);
-        if (row.text && row.text.length < 2000 && !row.text.startsWith('\x01')) {
-          list.unshift({ id: row.id, text: row.text, createdAt: row.createdAt, deletedAt: now, direction: row.direction });
-        }
+        list.unshift({ id: row.id, text: row.text, createdAt: row.createdAt, deletedAt: now, direction: row.direction });
         if (list.length > 50) list = list.slice(0, 50);
         return JSON.stringify(list);
       });
-    } catch { /* ignore */ }
+      return res === 'written';
+    } catch (e) {
+      log.warn('chat_recently_deleted_copy_failed', { err: rawErrorText(e) });
+      return false;
+    }
   }, [activeProfileId, peerB64]);
 
   // v4.32.239: поиск по переписке ходит в базу, а не фильтрует загруженную
@@ -3677,9 +3690,20 @@ function ChatThreadView({
                       const svc = getMessagingService();
                       if (!svc) return;
                       runGuardedOp(async () => {
+                        // v4.32.631: выбранные сообщения тоже попадают в корзину —
+                        // раньше пачка удалялась мимо неё, и «Недавно удалённые»
+                        // после «Удалить» на десяти сообщениях оставались пусты.
+                        // Копии кладутся по одной: kvUpdateSecretScoped — это
+                        // чтение-правка-запись одной ячейки, и параллельные вызовы
+                        // затирали бы друг друга.
+                        let allKept = true;
+                        for (const m of msgs) {
+                          if (!(await saveRecentlyDeleted(m))) allKept = false;
+                        }
                         await Promise.all(ids.map((id) => svc.deleteMessageLocally(id)));
                         setSelectedIds(new Set());
                         void appendNewMessages();
+                        if (!allKept) showError('Часть сообщений удалена без копии в «Недавно удалённые»');
                       }, 'Не удалось удалить сообщения', 'ui_chat_delete_selected_failed');
                     }},
                   ]);
@@ -4083,10 +4107,11 @@ function ChatThreadView({
             title: 'Удалить сообщение',
             actions: [
               { label: 'Удалить у себя', destructive: true, onPress: () => runGuardedOp(async () => {
-                await saveRecentlyDeleted(q);
+                const kept = await saveRecentlyDeleted(q);
                 await svc2.deleteMessageLocally(q.id);
                 await appendNewMessages();
-                showSuccess('Сообщение удалено');
+                if (kept) showSuccess('Сообщение удалено');
+                else showError('Сообщение удалено. Копия в «Недавно удалённые» не сохранилась');
               }, 'Не удалось удалить сообщение', 'ui_chat_delete_local_failed') },
               ...(isOut2 ? [{ label: 'Удалить у всех', destructive: true, onPress: () => runGuardedOp(async () => {
                 const echo = await svc2.deleteMessageForEveryone(peerB64, q.id);
