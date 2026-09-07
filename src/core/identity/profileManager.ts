@@ -439,13 +439,48 @@ class ProfileManager {
     // профилем, а getActiveKeyPair() читал state и отвечал новым ключом: один
     // и тот же вопрос имел два ответа, а какой достанется — решал возраст
     // кеша.
+    const prevActiveId = this.state.activeProfileId;
+    const prevLastUsed = row.lastUsed;
     this.state.activeProfileId = profileId;
     row.lastUsed = Date.now();
     this.invalidateProfileCache();
     await this.persistState();
     const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, row.derivationIndex);
     if (!isSame) {
-      await persistKeyPair(pair);
+      try {
+        await persistKeyPair(pair);
+      } catch (e) {
+        // v4.32.637: ключ устройства не лёг — откатываем и номер профиля.
+        // Состояние к этому моменту уже записано, и без отката устройство
+        // остаётся с новым профилем в state и СТАРЫМ ключом в SecureStore, а
+        // вызывающий получает исключение, которого не ждёт: onIdentityUpdated
+        // он не позовёт, все службы продолжат работать под прежней личностью,
+        // тогда как getActiveIdentity ответит новой. Это ровно то расхождение
+        // «кто я», которое v4.32.480 закрыла внутри этого метода — здесь оно
+        // возвращалось, только уже на всё приложение. null единственный
+        // вызывающий показать умеет.
+        log.warn('switch_profile_key_persist_failed', {
+          profileId,
+          err: e instanceof Error ? e.message : String(e),
+        });
+        this.state.activeProfileId = prevActiveId;
+        row.lastUsed = prevLastUsed;
+        this.invalidateProfileCache();
+        try {
+          await this.persistState();
+        } catch (e2) {
+          // Откат не записался: в памяти прежний профиль, на диске новый.
+          // Следующий запуск поднимет записанный и приведёт к нему ключ сам
+          // (App.tsx, applyActiveKeyPairToDevice) — расхождение не переживёт
+          // перезапуска, а сделать отсюда больше нечего.
+          log.warn('switch_profile_rollback_failed', {
+            profileId,
+            err: e2 instanceof Error ? e2.message : String(e2),
+          });
+        }
+        this.invalidateProfileCache();
+        return null;
+      }
     }
     this.invalidateProfileCache();
     return toProfile(row, pair);
@@ -496,11 +531,35 @@ class ProfileManager {
       createdAt: now,
       lastUsed: now,
     };
+    const prevActiveId = this.state.activeProfileId;
     this.state.profiles.push(row);
     this.state.activeProfileId = id;
     await this.persistState();
     const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, derivationIndex);
-    await persistKeyPair(pair);
+    try {
+      await persistKeyPair(pair);
+    } catch (e) {
+      // v4.32.637: не лёг ключ — профиля не будет. Иначе человеку говорят
+      // «Ошибка создания» (единственный вызывающий показывает именно это), а
+      // профиль при этом создан и объявлен активным, только под ключом
+      // прежнего: сообщения ушли бы подписанными не тем аккаунтом, который
+      // показан в шапке. Счётчики nextProfileId/nextDerivationIndex обратно не
+      // откручиваем — под этим номером ничего не писалось, а сжечь номер
+      // дешевле, чем рискнуть выдать его дважды.
+      const at = this.state.profiles.indexOf(row);
+      if (at !== -1) this.state.profiles.splice(at, 1);
+      this.state.activeProfileId = prevActiveId;
+      this.invalidateProfileCache();
+      try {
+        await this.persistState();
+      } catch (e2) {
+        log.warn('add_profile_rollback_failed', {
+          err: e2 instanceof Error ? e2.message : String(e2),
+        });
+      }
+      this.invalidateProfileCache();
+      throw e;
+    }
     return toProfile(row, pair);
   }
 
@@ -578,8 +637,22 @@ class ProfileManager {
     await this.persistState();
     const active = this.rowById(this.state.activeProfileId);
     if (active) {
-      const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, active.derivationIndex);
-      await persistKeyPair(pair);
+      // v4.32.637: сюда нельзя ронять весь deleteProfile. Строка профиля уже
+      // вычеркнута и записана, а ниже идут уборки — база, лента, копия
+      // диалогов, файлы аватаров и историй. Исключение отсюда пропускало их
+      // все разом, и данные удалённого аккаунта оставались на устройстве
+      // навсегда: адресов их больше нигде нет, подобрать некому. Ключ же
+      // приведёт к активному профилю следующий запуск (App.tsx,
+      // applyActiveKeyPairToDevice), как и любое другое расхождение.
+      try {
+        const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, active.derivationIndex);
+        await persistKeyPair(pair);
+      } catch (e) {
+        log.warn('delete_profile_key_persist_failed', {
+          profileId,
+          err: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
     // v4.32.49: очистка данных удалённого профиля. Если тут упадёт — профиль
     // уже исключён из state, поэтому orphaned данные не приведут к UI-регрессу

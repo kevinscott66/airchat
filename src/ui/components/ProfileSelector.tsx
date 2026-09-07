@@ -187,7 +187,16 @@ export function ProfileSelector({
       onClose();
       return;
     }
-    const switched = await profileManager.switchProfile(profile.id);
+    // v4.32.637: своя ошибка тоже доходит до человека. Без catch отказ
+    // становился необработанным промисом: лист не закрывался, ни одной строки
+    // не появлялось, и оставалось гадать, переключился профиль или нет.
+    let switched: Profile | null = null;
+    try {
+      switched = await profileManager.switchProfile(profile.id);
+    } catch (error) {
+      showError(userErrorText(error, 'Не удалось переключить профиль'));
+      return;
+    }
     if (!switched) {
       showError('Не удалось переключить профиль');
       return;
