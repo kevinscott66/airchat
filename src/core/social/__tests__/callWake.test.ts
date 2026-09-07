@@ -20,11 +20,11 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
-import { envelopeBody, makePeer, sealOffer, testCallId } from './callTestPeers';
+import { envelopeBody, makePeer, sealMissed, sealOffer, testCallId } from './callTestPeers';
 
 type OfferMsg = { fromPeerId: string; sdp: string };
 type UnavailableMsg = { targetPeerId: string; roomId: string };
-type MissedMsg = { calls: Array<{ fromPeerId: string; at: number; attempts: number }> };
+type MissedMsg = { calls: Array<{ fromPeerId: string; at: number; attempts: number; e?: string }> };
 
 const mockOfferHandler: { current: ((msg: OfferMsg) => void) | null } = { current: null };
 const mockUnavailableHandler: { current: ((msg: UnavailableMsg) => void) | null } = { current: null };
@@ -37,6 +37,7 @@ const mockSendOffer = jest.fn();
 const mockSendCallPush = jest.fn(async () => undefined);
 const mockCancelNotification = jest.fn(async () => undefined);
 const mockNotifyMissedCall = jest.fn(async () => undefined);
+const mockSendMissedReceipt = jest.fn();
 
 const mockAudioTrack = { enabled: true, stop: jest.fn() };
 const mockLocalStream = {
@@ -99,6 +100,7 @@ jest.mock('../../transport/webrtc/signaling', () => ({
     sendIceCandidate = (peer: string, candidate: unknown): void => { mockSendIceCandidate(peer, candidate); };
     sendAnswer = (peer: string, sdp: string): void => { mockSendAnswer(peer, sdp); };
     sendOffer = (room: string, peer: string, sdp: string): void => { mockSendOffer(room, peer, sdp); };
+    sendMissedReceipt = (peer: string, e: string): void => { mockSendMissedReceipt(peer, e); };
     onOffer = (handler: typeof mockOfferHandler.current): void => { mockOfferHandler.current = handler; };
     onAnswer = jest.fn();
     onIceCandidate = jest.fn();
@@ -177,6 +179,7 @@ describe('дозвон до телефона, которого нет в сет�
     mockSendCallPush.mockClear();
     mockCancelNotification.mockClear();
     mockNotifyMissedCall.mockClear();
+    mockSendMissedReceipt.mockClear();
     mockGetUserMedia.mockClear();
     mockAudioTrack.enabled = true;
     mockAudioTrack.stop.mockClear();
@@ -301,9 +304,37 @@ describe('дозвон до телефона, которого нет в сет�
     });
   });
 
+  it('не дозвонились — звонящий оставляет серверу подписанную расписку', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await settle();
+    await peerOffline();
+
+    expect(mockSendMissedReceipt).toHaveBeenCalledTimes(1);
+    const [to, sealed] = mockSendMissedReceipt.mock.calls[0] as unknown as [string, string];
+    expect(to).toBe(PEER);
+    expect(envelopeBody(sealed)).toMatchObject({
+      kind: 'missed', from: ME, to: PEER, callId: lastOfferBody().callId,
+    });
+    // Содержимого в расписке нет: сервер и не должен узнать из неё большего,
+    // чем уже знает, передавая предложение.
+    expect(envelopeBody(sealed).sdp).toBeUndefined();
+  });
+
+  it('повторы «нет в сети» идут каждые три секунды — расписка одна', async () => {
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await settle();
+    await peerOffline();
+    await peerOffline();
+    await peerOffline();
+
+    expect(mockSendMissedReceipt).toHaveBeenCalledTimes(1);
+  });
+
   it('звонок, случившийся без нас, приезжает в журнал при следующем входе', async () => {
     const at = Date.now() - 60_000;
-    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 4 }] });
+    // v4.32.615: время записи берётся из расписки звонившего, а не с сервера.
+    const e = await sealMissed(peer, ME, { now: at });
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at: Date.now(), attempts: 4, e }] });
     await settle();
     await settle();
 
@@ -322,10 +353,13 @@ describe('дозвон до телефона, которого нет в сет�
 
   it('повторная доставка того же журнала не раздваивает звонок', async () => {
     const at = Date.now() - 60_000;
-    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1 }] });
+    const e = await sealMissed(peer, ME, { now: at });
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1, e }] });
+    await settle();
     await settle();
     mockNotifyMissedCall.mockClear();
-    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1 }] });
+    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at, attempts: 1, e }] });
+    await settle();
     await settle();
 
     expect(getCallLog()).toHaveLength(1);
@@ -340,7 +374,10 @@ describe('дозвон до телефона, которого нет в сет�
     await settle();
     expect(getCurrentCall()?.state).toBe('incoming');
 
-    mockMissedHandler.current?.({ calls: [{ fromPeerId: PEER, at: Date.now(), attempts: 1 }] });
+    mockMissedHandler.current?.({
+      calls: [{ fromPeerId: PEER, at: Date.now(), attempts: 1, e: await sealMissed(peer, ME) }],
+    });
+    await settle();
     await settle();
 
     expect(getCallLog()).toHaveLength(0);

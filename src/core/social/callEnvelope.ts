@@ -28,6 +28,14 @@
  * может, но оборвать разговор в любой момент мог. Завершение — отдельный вид
  * конверта, а не разновидность ответа: так конверт завершения нельзя выдать за
  * ответ на предложение, и наоборот.
+ *
+ * v4.32.615: и расписка о непринятом звонке. Сервер придерживает звонок для
+ * того, кого не застал, и отдаёт списком при следующем входе — а список этот
+ * он сочинял сам. Значит мог вписать в историю звонки, которых не было, и
+ * вытеснить ими настоящие: журнал держит сто последних. Расписку выдаёт сам
+ * звонящий, когда узнаёт, что не дозвонился; сервер её только хранит и
+ * пересылает. Ни SDP, ни адресов устройства в ней нет — сервер и не должен
+ * их помнить.
  */
 import { signJson, verifySignedJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
@@ -40,10 +48,17 @@ export const CALL_ENVELOPE_MAX_AGE_MS = 10 * 60 * 1000;
 /** Столько же вперёд — на случай, если часы отправителя убежали. */
 export const CALL_ENVELOPE_MAX_SKEW_MS = 10 * 60 * 1000;
 
+/**
+ * Расписку сервер держит сутки (MISSED_CALL_TTL_MS сигнального сервера), и
+ * столько же она обязана считаться свежей — иначе непринятый ночью звонок
+ * утром не примут. Запас сверху — на расхождение часов.
+ */
+export const MISSED_RECEIPT_MAX_AGE_MS = 24 * 60 * 60 * 1000 + CALL_ENVELOPE_MAX_SKEW_MS;
+
 /** Тот же предел, что и у голого SDP в callService. */
 const MAX_SDP_LEN = 64 * 1024;
 
-export type CallEnvelopeKind = 'offer' | 'answer' | 'hangup';
+export type CallEnvelopeKind = 'offer' | 'answer' | 'hangup' | 'missed';
 export type CallControl = 'busy' | 'declined';
 
 export type CallEnvelopeBody = {
@@ -107,6 +122,8 @@ export type OpenExpectation = {
   to: string;
   /** Для ответа — номер звонка, который мы начали. Для предложения не задаётся. */
   callId?: string;
+  /** Окно свежести. По умолчанию — общее; у расписки о звонке оно суточное. */
+  maxAgeMs?: number;
   now?: number;
 };
 
@@ -144,7 +161,7 @@ export async function openCallEnvelope(
   const ts = body.ts;
   if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
   const now = expect.now ?? Date.now();
-  if (now - ts > CALL_ENVELOPE_MAX_AGE_MS) return null;
+  if (now - ts > (expect.maxAgeMs ?? CALL_ENVELOPE_MAX_AGE_MS)) return null;
   if (ts - now > CALL_ENVELOPE_MAX_SKEW_MS) return null;
 
   const control = body.control;
@@ -159,13 +176,14 @@ export async function openCallEnvelope(
     };
   }
 
-  if (expect.kind === 'hangup') {
-    // Завершение — только завершение: ни SDP, ни признака видео в нём нет.
-    // Причина завершения не подписывается намеренно: собеседнику важно, что
-    // разговор окончен, а не как его назвали на другой стороне.
+  if (expect.kind === 'hangup' || expect.kind === 'missed') {
+    // Ни у завершения, ни у расписки нет содержимого: только кто, кому и о
+    // каком звонке. Причина завершения не подписывается намеренно —
+    // собеседнику важно, что разговор окончен, а не как его назвали на той
+    // стороне.
     if (body.sdp !== undefined || body.isVideo !== undefined) return null;
     return {
-      kind: 'hangup', from: body.from as string, to: body.to as string,
+      kind: expect.kind, from: body.from as string, to: body.to as string,
       callId: body.callId as string, ts,
     };
   }

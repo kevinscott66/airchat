@@ -11,7 +11,7 @@
  * полагается видеть ровно то же, что при выключенном телефоне.
  */
 type OfferHandler = (msg: { fromPeerId?: string; sdp: string }) => void;
-type MissedHandler = (msg: { calls: Array<{ fromPeerId: string; at: number; attempts: number }> }) => void;
+type MissedHandler = (msg: { calls: Array<{ fromPeerId: string; at: number; attempts: number; e?: string }> }) => void;
 
 let mockOfferHandler: OfferHandler | null = null;
 let mockMissedHandler: MissedHandler | null = null;
@@ -54,7 +54,7 @@ import {
   initCallService,
   initiateCall,
 } from '../callService';
-import { makePeer, sealOffer, testCallId } from './callTestPeers';
+import { makePeer, sealMissed, sealOffer, testCallId } from './callTestPeers';
 
 const me = makePeer();
 const peer = makePeer();
@@ -123,18 +123,26 @@ describe('исходящий звонок заблокированному', () 
 });
 
 describe('пропущенные звонки, придержанные сервером', () => {
-  const AT = 1_700_000_000_000;
+  // v4.32.615: запись принимается только с распиской звонившего, и время
+  // берётся из неё, поэтому давность здесь — настоящая.
+  const AT = Date.now() - 60_000;
 
   it('заблокированный не попадает в журнал', async () => {
     mockBlocked.add(PEER);
     expect(mockMissedHandler).not.toBeNull();
-    mockMissedHandler?.({ calls: [{ fromPeerId: PEER, at: AT, attempts: 3 }] });
+    mockMissedHandler?.({
+      calls: [{ fromPeerId: PEER, at: AT, attempts: 3, e: await sealMissed(peer, ME, { now: AT }) }],
+    });
+    await settle();
     await settle();
     expect(getCallLog()).toEqual([]);
   });
 
   it('незаблокированный попадает', async () => {
-    mockMissedHandler?.({ calls: [{ fromPeerId: PEER, at: AT, attempts: 1 }] });
+    mockMissedHandler?.({
+      calls: [{ fromPeerId: PEER, at: AT, attempts: 1, e: await sealMissed(peer, ME, { now: AT }) }],
+    });
+    await settle();
     await settle();
     expect(getCallLog()).toMatchObject([{ peerPubB64: PEER, outcome: 'missed', direction: 'incoming' }]);
   });
@@ -143,11 +151,53 @@ describe('пропущенные звонки, придержанные серв
     mockBlocked.add(PEER);
     mockMissedHandler?.({
       calls: [
-        { fromPeerId: PEER, at: AT, attempts: 1 },
-        { fromPeerId: other.pub, at: AT + 1000, attempts: 1 },
+        { fromPeerId: PEER, at: AT, attempts: 1, e: await sealMissed(peer, ME, { now: AT }) },
+        {
+          fromPeerId: other.pub,
+          at: AT + 1000,
+          attempts: 1,
+          e: await sealMissed(other, ME, { now: AT + 1000 }),
+        },
       ],
     });
     await settle();
+    await settle();
     expect(getCallLog().map((e) => e.peerPubB64)).toEqual([other.pub]);
+  });
+
+  it('запись без расписки в журнал не попадает', async () => {
+    mockMissedHandler?.({ calls: [{ fromPeerId: PEER, at: AT, attempts: 1 }] });
+    await settle();
+    await settle();
+    expect(getCallLog()).toEqual([]);
+  });
+
+  it('расписка, выданная другому, не годится', async () => {
+    mockMissedHandler?.({
+      calls: [{
+        fromPeerId: PEER,
+        at: AT,
+        attempts: 1,
+        e: await sealMissed(peer, other, { now: AT }),
+      }],
+    });
+    await settle();
+    await settle();
+    expect(getCallLog()).toEqual([]);
+  });
+
+  it('расписку за звонившего сервер подписать не может', async () => {
+    // Конверт подписан ключом сервера, а `fromPeerId` в записи — чужой.
+    mockMissedHandler?.({
+      calls: [{
+        fromPeerId: PEER,
+        at: AT,
+        attempts: 1,
+        e: await sealMissed(other, ME, { now: AT }),
+      }],
+    });
+    await settle();
+    await settle();
+    expect(getCallLog()).toEqual([]);
   });
 });

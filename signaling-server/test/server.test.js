@@ -436,3 +436,155 @@ test('404 тоже отвечает с CORS — иначе ошибка не д�
   assert.equal(res.status, 404);
   assert.equal(res.headers.get('access-control-allow-origin'), '*');
 });
+
+test('расписка звонившего доезжает вместе с записью о непринятом звонке', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+  alice.emit('missed_receipt', { targetPeerId: bobId.peerId, e: 'sealed-receipt' });
+
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  const missed = waitForEvent(bob, 'missed_calls');
+  await registerClient(bob, bobId, 'room-a');
+  const payload = await missed;
+  assert.equal(payload.calls.length, 1);
+  assert.equal(payload.calls[0].e, 'sealed-receipt');
+});
+
+test('расписка не заводит записи: ею не сочинить звонок, которого не было', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const mallory = await connectedClient(port);
+  const malloryId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    mallory.close();
+    await server.close();
+  });
+
+  await registerClient(mallory, malloryId, 'room-a');
+  // Предложения не было — значит и записи нет, и класть расписку некуда.
+  mallory.emit('missed_receipt', { targetPeerId: bobId.peerId, e: 'sealed-receipt' });
+
+  const bob = await connectedClient(port);
+  t.after(() => bob.close());
+  let delivered = null;
+  bob.on('missed_calls', (value) => { delivered = value; });
+  await registerClient(bob, bobId, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(delivered, null);
+});
+
+test('расписка чужого размера и формы отвергается', async (t) => {
+  const server = createSignalingServer({ port: 0 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+
+  const tooLong = waitForEvent(alice, 'signaling_error');
+  alice.emit('missed_receipt', { targetPeerId: bobId.peerId, e: 'x'.repeat(4 * 1024 + 1) });
+  assert.deepEqual(await tooLong, { event: 'missed_receipt', error: 'invalid_payload' });
+
+  const extraKey = waitForEvent(alice, 'signaling_error');
+  alice.emit('missed_receipt', { targetPeerId: bobId.peerId, e: 'ok', sdp: 'v=0' });
+  assert.deepEqual(await extraKey, { event: 'missed_receipt', error: 'invalid_payload' });
+
+  const empty = waitForEvent(alice, 'signaling_error');
+  alice.emit('missed_receipt', { targetPeerId: bobId.peerId, e: '' });
+  assert.deepEqual(await empty, { event: 'missed_receipt', error: 'invalid_payload' });
+});
+
+test('переполнение журнала вытесняет того, к кому дольше всех не обращались', async (t) => {
+  const server = createSignalingServer({ port: 0, missedCallPeers: 2 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const first = identity();
+  const second = identity();
+  const third = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  for (const who of [first, second, third]) {
+    const unavailable = waitForEvent(alice, 'peer_unavailable');
+    alice.emit('offer', { roomId: 'room-a', targetPeerId: who.peerId, sdp: 'v=0' });
+    await unavailable;
+  }
+
+  // Первому места не осталось: журнал держит двоих.
+  const firstSocket = await connectedClient(port);
+  t.after(() => firstSocket.close());
+  let firstDelivery = null;
+  firstSocket.on('missed_calls', (value) => { firstDelivery = value; });
+  await registerClient(firstSocket, first, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(firstDelivery, null);
+
+  const thirdSocket = await connectedClient(port);
+  t.after(() => thirdSocket.close());
+  const thirdMissed = waitForEvent(thirdSocket, 'missed_calls');
+  await registerClient(thirdSocket, third, 'room-a');
+  assert.equal((await thirdMissed).calls.length, 1);
+});
+
+test('повторный звонок обновляет давность: вытесняется тот, кого не трогали', async (t) => {
+  const server = createSignalingServer({ port: 0, missedCallPeers: 2 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const first = identity();
+  const second = identity();
+  const third = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  // Порядок звонков: первому, второму, снова первому — и наконец третьему.
+  for (const who of [first, second, first, third]) {
+    const unavailable = waitForEvent(alice, 'peer_unavailable');
+    alice.emit('offer', { roomId: 'room-a', targetPeerId: who.peerId, sdp: 'v=0' });
+    await unavailable;
+  }
+
+  // Вытеснили второго: к нему не обращались дольше всех.
+  const secondSocket = await connectedClient(port);
+  t.after(() => secondSocket.close());
+  let secondDelivery = null;
+  secondSocket.on('missed_calls', (value) => { secondDelivery = value; });
+  await registerClient(secondSocket, second, 'room-a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(secondDelivery, null);
+
+  // А первый на месте, и оба его звонка сосчитаны как один.
+  const firstSocket = await connectedClient(port);
+  t.after(() => firstSocket.close());
+  const firstMissed = waitForEvent(firstSocket, 'missed_calls');
+  await registerClient(firstSocket, first, 'room-a');
+  const payload = await firstMissed;
+  assert.equal(payload.calls.length, 1);
+  assert.equal(payload.calls[0].attempts, 2);
+});

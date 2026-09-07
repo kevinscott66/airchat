@@ -65,6 +65,20 @@ export function sealHangup(
   });
 }
 
+/** Расписка о непринятом звонке (v4.32.615): содержимого нет, время — своё. */
+export function sealMissed(
+  from: TestPeer,
+  to: TestPeer | string,
+  opts: { callId?: string; now?: number } = {}
+): Promise<string> {
+  return sealCallEnvelope(from.pair, from.pub, {
+    kind: 'missed',
+    to: pubOf(to),
+    callId: opts.callId ?? testCallId(),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+  });
+}
+
 /** Содержимое конверта без проверки подписи — тесту довольно и этого. */
 export function envelopeBody(raw: unknown): Record<string, unknown> {
   const outer = JSON.parse(String(raw)) as { payload?: string };

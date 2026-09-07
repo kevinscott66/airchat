@@ -19,7 +19,7 @@ import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
-import { sealCallEnvelope, openCallEnvelope } from './callEnvelope';
+import { sealCallEnvelope, openCallEnvelope, MISSED_RECEIPT_MAX_AGE_MS } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
 import { callBannerId, newCallId } from '../../notifications/callPush';
 import { randomBytes } from '@noble/hashes/utils.js';
@@ -218,8 +218,23 @@ function recordCallEnd(info: CallInfo, endedAt: number, cause: CallEndCause): vo
  * Имени в записи нет: с сервера приезжает только открытый ключ, и подписью
  * ему служит тот же обрезок ключа, что и у входящего звонка, — имя подставит
  * экран истории из контактов.
+ *
+ * v4.32.615: запись принимается только с распиской звонившего. Список сочинял
+ * сервер, а мы верили ему на слово: он мог вписать звонки, которых не было, и
+ * этими выдумками вытеснить настоящие — журнал держит сто последних. Расписка
+ * подписана ключом звонившего и адресована лично нам, поэтому ни сочинить её,
+ * ни переслать чужую сервер не может. Время записи берём из расписки, а не с
+ * сервера: у него это последняя попытка дозвона, у расписки — сам звонок, и
+ * соврать о нём сервер уже не в силах.
+ *
+ * Записи без расписки отбрасываются молча. Цена — звонки со старых клиентов не
+ * попадут в журнал, пока те не обновятся; так же поступили с неподписанным
+ * предложением в v4.32.585.
  */
-export function recordMissedCalls(calls: Array<{ fromPeerId: string; at: number; attempts: number }>): number {
+export async function recordMissedCalls(
+  calls: Array<{ fromPeerId: string; at: number; attempts: number; e?: string }>,
+  myPub: string
+): Promise<number> {
   let added = 0;
   for (const call of calls) {
     if (!isPubKeyB64(call.fromPeerId)) continue;
@@ -230,7 +245,19 @@ export function recordMissedCalls(calls: Array<{ fromPeerId: string; at: number;
     // поднимал уведомление о пропущенных: третий канал мимо решения
     // v4.32.318, после живого сокета (onOffer) и фонового баннера.
     if (rateLimiter.isBlocked(call.fromPeerId)) continue;
-    const at = Number.isFinite(call.at) ? Math.min(Number(call.at), Date.now()) : Date.now();
+    // Расписку сервер держит до суток — обычное окно свежести конверта её бы
+    // не пропустило.
+    const receipt = await openCallEnvelope(call.e, {
+      kind: 'missed',
+      from: call.fromPeerId,
+      to: myPub,
+      maxAgeMs: MISSED_RECEIPT_MAX_AGE_MS,
+    });
+    if (!receipt) {
+      log.warn('call_missed_unverified', { from: call.fromPeerId.slice(0, 8) });
+      continue;
+    }
+    const at = Math.min(receipt.ts, Date.now());
     // Разговор с этим человеком идёт прямо сейчас — «вам звонили» о нём было
     // бы неправдой.
     if (currentCall && currentCall.peerPubB64 === call.fromPeerId
@@ -401,6 +428,12 @@ let outgoingRetryTimer: ReturnType<typeof setInterval> | null = null;
  */
 let activeCallId: string | null = null;
 let outgoingOffer: { myPub: string; peerPubB64: string; body: string } | null = null;
+/**
+ * Номер звонка, о котором расписка уже выдана (v4.32.615). `peer_unavailable`
+ * приходит на каждый повтор предложения, то есть каждые три секунды; расписка
+ * же нужна одна на звонок.
+ */
+let missedReceiptSentFor: string | null = null;
 /** Как часто повторять предложение звонка тому, кого не было в сети. */
 const OFFER_RETRY_INTERVAL_MS = 3000;
 
@@ -852,7 +885,7 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // когда блок-лист ещё поднимается с диска. Тот же приём, что в onOffer:
     // дождаться, иначе отсев не сработает ровно в момент своей нужды.
     await rateLimiter.whenReady();
-    const added = recordMissedCalls(calls);
+    const added = await recordMissedCalls(calls, myPub);
     if (added === 0) return;
     log.info('call_missed_delivered', { count: added });
     try {
@@ -874,6 +907,26 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // остаётся повторять предложение, пока телефон не появится; не появится
     // за 45 секунд — звонок кончится обычным «Нет ответа».
     if (currentCall.state === 'outgoing') {
+      // Человека нет в сети — сервер придержит звонок до его возвращения.
+      // Расписка нужна для того, чтобы придержанному звонку он потом поверил.
+      const receiptCallId = activeCallId;
+      const receiptPair = mySigningPair;
+      if (receiptCallId && receiptPair && missedReceiptSentFor !== receiptCallId) {
+        missedReceiptSentFor = receiptCallId;
+        const target = msg.targetPeerId;
+        void (async () => {
+          try {
+            const sealed = await sealCallEnvelope(receiptPair, myPub, {
+              kind: 'missed', to: target, callId: receiptCallId,
+            });
+            const s2 = await getSignaling();
+            s2?.sendMissedReceipt(target, sealed);
+          } catch {
+            // Не ушла — звонок просто не попадёт в чужой журнал.
+            if (missedReceiptSentFor === receiptCallId) missedReceiptSentFor = null;
+          }
+        })();
+      }
       if (!outgoingRetryTimer && outgoingOffer) {
         log.info('call_awaiting_wake', { to: msg.targetPeerId.slice(0, 8) });
         outgoingRetryTimer = setInterval(() => {

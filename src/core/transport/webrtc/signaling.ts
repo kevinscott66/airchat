@@ -45,8 +45,12 @@ export type HangupPayload = { fromPeerId?: string };
  *
  * Сервер отдаёт их первым же событием после регистрации — по одному на
  * звонившего, с временем последней попытки и числом попыток.
+ *
+ * v4.32.615: `e` — расписка звонившего, подписанный конверт вида `missed`.
+ * Всё остальное в записи проставляет сервер, а верить ему нельзя: без
+ * расписки запись в журнал не попадает.
  */
-export type MissedCall = { fromPeerId: string; at: number; attempts: number };
+export type MissedCall = { fromPeerId: string; at: number; attempts: number; e?: string };
 export type MissedCallsPayload = { calls: MissedCall[] };
 
 /**
@@ -256,6 +260,14 @@ export class WebRTCSignaling {
 
   sendHangup(targetPeerId: string): void {
     this.socket?.emit('hangup', { targetPeerId });
+  }
+
+  /**
+   * Расписка о том, что до человека не дозвонились (v4.32.615). Сервер кладёт
+   * её к своей записи о непринятом звонке и отдаёт вместе с ней.
+   */
+  sendMissedReceipt(targetPeerId: string, e: string): void {
+    this.socket?.emit('missed_receipt', { targetPeerId, e });
   }
 
   onOffer(handler: (msg: OfferPayload) => void): void {

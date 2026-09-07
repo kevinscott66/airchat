@@ -38,8 +38,19 @@ const REGISTRATION_CHALLENGE_BYTES = 32;
  * стороны, когда передаёт им предложение, — новым знанием это его не делает,
  * но знание перестало быть мгновенным, и потому у него есть срок. Ни sdp, ни
  * адресов устройства тут нет и быть не должно.
+ *
+ * v4.32.615: к записи прилагается расписка звонившего. Сам список сервер
+ * сочинял единолично, а клиент верил ему на слово — значит мог вписать звонки,
+ * которых не было, и вытеснить ими настоящие: журнал у клиента держит сто
+ * последних. Расписку выдаёт звонящий, когда узнаёт, что не дозвонился; сервер
+ * её только хранит и отдаёт вместе с записью. Внутри всё та же пара
+ * идентификаторов и время, но под подписью — содержимого в ней по-прежнему
+ * нет. Расписка кладётся только к уже существующей записи: сочинить нового
+ * получателя ею нельзя, память от неё не растёт.
  */
 const MISSED_CALL_TTL_MS = 24 * 60 * 60 * 1000;
+/** Расписка — короткий подписанный JSON; предел с большим запасом. */
+const MAX_MISSED_RECEIPT_LENGTH = 4 * 1024;
 /** Сколько разных звонивших помним одному получателю. */
 const MISSED_CALLS_PER_PEER = 20;
 /** Скольким получателям сразу. Выше — вытесняем тех, чья запись старше всех. */
@@ -91,6 +102,13 @@ function validIceCandidate(payload) {
 function validHangup(payload) {
   return hasExactKeys(payload, ['targetPeerId'])
     && isPeerId(payload.targetPeerId);
+}
+
+function validMissedReceipt(payload) {
+  return hasExactKeys(payload, ['e', 'targetPeerId'])
+    && isPeerId(payload.targetPeerId)
+    && isBoundedString(payload.e, MAX_MISSED_RECEIPT_LENGTH)
+    && payload.e.length > 0;
 }
 
 function verifyRegistration(peerId, roomId, signature, challenge) {
@@ -166,22 +184,30 @@ function createSignalingServer(options = {}) {
   });
   const peers = new Map();
   const connectionsByIp = new Map();
-  /** targetPeerId -> Map(fromPeerId -> { at, attempts }) */
+  /** targetPeerId -> Map(fromPeerId -> { at, attempts, e }) */
   const missedCalls = new Map();
   const missedCallTtlMs = options.missedCallTtlMs ?? MISSED_CALL_TTL_MS;
+  const missedCallPeers = options.missedCallPeers ?? MISSED_CALL_PEERS;
 
-  function newestMissedAt(byCaller) {
-    let newest = 0;
-    for (const entry of byCaller.values()) if (entry.at > newest) newest = entry.at;
-    return newest;
+  /**
+   * Порядок вставки в Map — он же порядок давности (v4.32.615).
+   *
+   * Раньше при переполнении сервер обходил все десять тысяч получателей и у
+   * каждого — до двадцати звонивших, чтобы выбросить ровно одну запись. Тот,
+   * кто держит журнал полным, платил за это чужим процессорным временем на
+   * каждом своём предложении. Теперь тронутая запись переставляется в конец, и
+   * выбрасывается первая — это делается за постоянное время и вытесняет ровно
+   * того, к кому дольше всех не обращались.
+   */
+  function touchNewest(map, key, value) {
+    map.delete(key);
+    map.set(key, value);
   }
 
   function rememberMissedCall(targetPeerId, fromPeerId, now = Date.now()) {
     let byCaller = missedCalls.get(targetPeerId);
-    if (!byCaller) {
-      byCaller = new Map();
-      missedCalls.set(targetPeerId, byCaller);
-    }
+    if (!byCaller) byCaller = new Map();
+    touchNewest(missedCalls, targetPeerId, byCaller);
     const existing = byCaller.get(fromPeerId);
     // Повторы одного и того же звонка идут каждые 3 секунды. Записью считаем
     // звонок, а не попытку: иначе один неотвеченный звонок вытеснил бы из
@@ -189,21 +215,30 @@ function createSignalingServer(options = {}) {
     if (existing) {
       existing.at = now;
       existing.attempts += 1;
+      touchNewest(byCaller, fromPeerId, existing);
     } else {
-      byCaller.set(fromPeerId, { at: now, attempts: 1 });
+      byCaller.set(fromPeerId, { at: now, attempts: 1, e: null });
     }
     while (byCaller.size > MISSED_CALLS_PER_PEER) {
       byCaller.delete(byCaller.keys().next().value);
     }
-    if (missedCalls.size > MISSED_CALL_PEERS) {
-      let oldestKey = null;
-      let oldestAt = Infinity;
-      for (const [key, value] of missedCalls) {
-        const at = newestMissedAt(value);
-        if (at < oldestAt) { oldestAt = at; oldestKey = key; }
-      }
-      if (oldestKey !== null) missedCalls.delete(oldestKey);
+    while (missedCalls.size > missedCallPeers) {
+      missedCalls.delete(missedCalls.keys().next().value);
     }
+  }
+
+  /**
+   * Расписка ложится только к записи, которая уже есть: она подтверждает
+   * звонок, а не создаёт его. Своей записи звонящий этим не заводит, чужую не
+   * трогает — ключ здесь его собственный peerId, проверенный при регистрации.
+   */
+  function attachMissedReceipt(targetPeerId, fromPeerId, e) {
+    const byCaller = missedCalls.get(targetPeerId);
+    if (!byCaller) return false;
+    const entry = byCaller.get(fromPeerId);
+    if (!entry) return false;
+    entry.e = e;
+    return true;
   }
 
   /**
@@ -225,7 +260,12 @@ function createSignalingServer(options = {}) {
     const calls = [];
     for (const [fromPeerId, entry] of byCaller) {
       if (now - entry.at > missedCallTtlMs) continue;
-      calls.push({ fromPeerId, at: entry.at, attempts: entry.attempts });
+      calls.push({
+        fromPeerId,
+        at: entry.at,
+        attempts: entry.attempts,
+        ...(entry.e ? { e: entry.e } : {}),
+      });
     }
     calls.sort((a, b) => a.at - b.at);
     return calls;
@@ -433,6 +473,12 @@ function createSignalingServer(options = {}) {
         }
         linkCounterparts(registration, target);
         target.socket.emit('hangup', { fromPeerId: registration.peerId });
+      });
+    });
+
+    socket.on('missed_receipt', (payload) => {
+      route(socket, 'missed_receipt', payload, validMissedReceipt, (registration, value) => {
+        attachMissedReceipt(value.targetPeerId, registration.peerId, value.e);
       });
     });
 

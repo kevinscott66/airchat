@@ -4,6 +4,7 @@ import {
   openCallEnvelope,
   CALL_ENVELOPE_MAX_AGE_MS,
   CALL_ENVELOPE_MAX_SKEW_MS,
+  MISSED_RECEIPT_MAX_AGE_MS,
 } from '../callEnvelope';
 import { publicKeyToB64 } from '../../crypto/pubKeyFormat';
 import type { KeyPairBytes } from '../../crypto/keyManager';
@@ -280,5 +281,91 @@ describe('конверт завершения (v4.32.615)', () => {
       kind: 'hangup', to: BOB.pub, callId: CALL_ID, control: 'declined',
     });
     expect(await openCallEnvelope(withControl, expectHangup)).toBeNull();
+  });
+});
+
+describe('расписка о непринятом звонке (v4.32.615)', () => {
+  const expectMissed = { kind: 'missed' as const, from: ALICE.pub, to: BOB.pub };
+
+  it('своя расписка вскрывается, содержимого в ней нет', async () => {
+    const sealed = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID,
+    });
+    const opened = await openCallEnvelope(sealed, expectMissed);
+    expect(opened).toMatchObject({ kind: 'missed', from: ALICE.pub, to: BOB.pub, callId: CALL_ID });
+    expect(opened?.sdp).toBeUndefined();
+    expect(opened?.isVideo).toBeUndefined();
+  });
+
+  it('сервер не подпишет её за звонившего', async () => {
+    const forged = await sealCallEnvelope(MALLORY.pair, MALLORY.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID,
+    });
+    expect(await openCallEnvelope(forged, expectMissed)).toBeNull();
+  });
+
+  it('расписку, выданную другому, переслать нельзя', async () => {
+    const toMallory = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: MALLORY.pub, callId: CALL_ID,
+    });
+    expect(await openCallEnvelope(toMallory, expectMissed)).toBeNull();
+  });
+
+  it('видом не подменяется: завершение — не расписка, и наоборот', async () => {
+    const hangup = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'hangup', to: BOB.pub, callId: CALL_ID,
+    });
+    expect(await openCallEnvelope(hangup, expectMissed)).toBeNull();
+
+    const missed = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID,
+    });
+    expect(
+      await openCallEnvelope(missed, { kind: 'hangup', from: ALICE.pub, to: BOB.pub })
+    ).toBeNull();
+  });
+
+  it('ни SDP, ни причины отказа в расписке быть не должно', async () => {
+    const withSdp = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID, sdp: SDP,
+    });
+    expect(await openCallEnvelope(withSdp, expectMissed)).toBeNull();
+
+    const withControl = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID, control: 'busy',
+    });
+    expect(await openCallEnvelope(withControl, expectMissed)).toBeNull();
+  });
+
+  it('живёт сутки: столько же сервер её и держит', async () => {
+    const now = Date.now();
+    const dayOld = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID, now: now - 23 * 60 * 60 * 1000,
+    });
+    // Обычным окном свежести суточная расписка не прошла бы.
+    expect(await openCallEnvelope(dayOld, { ...expectMissed, now })).toBeNull();
+    expect(
+      await openCallEnvelope(dayOld, { ...expectMissed, maxAgeMs: MISSED_RECEIPT_MAX_AGE_MS, now })
+    ).not.toBeNull();
+  });
+
+  it('но не вечно — вчерашней с запасом уже не верим', async () => {
+    const now = Date.now();
+    const stale = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID, now: now - MISSED_RECEIPT_MAX_AGE_MS - 1000,
+    });
+    expect(
+      await openCallEnvelope(stale, { ...expectMissed, maxAgeMs: MISSED_RECEIPT_MAX_AGE_MS, now })
+    ).toBeNull();
+  });
+
+  it('часы вперёд не помогают: запас на расхождение прежний', async () => {
+    const now = Date.now();
+    const future = await sealCallEnvelope(ALICE.pair, ALICE.pub, {
+      kind: 'missed', to: BOB.pub, callId: CALL_ID, now: now + CALL_ENVELOPE_MAX_SKEW_MS + 1000,
+    });
+    expect(
+      await openCallEnvelope(future, { ...expectMissed, maxAgeMs: MISSED_RECEIPT_MAX_AGE_MS, now })
+    ).toBeNull();
   });
 });
