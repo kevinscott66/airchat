@@ -148,11 +148,13 @@ async function probeSeedDek(): Promise<{ state: MnemonicState; dek: Uint8Array |
  * условие работы этого. Отказать сейчас из-за неё значило бы поменять
  * «приложение работает без страховки» на «приложение не открывается».
  */
-async function writeCanary(dek: Uint8Array): Promise<void> {
+async function writeCanary(dek: Uint8Array): Promise<string | null> {
+  const value = encryptAtRestString(CANARY_PLAINTEXT, dek);
   try {
-    await SecureStore.setItemAsync(DEK_CANARY_KEY, encryptAtRestString(CANARY_PLAINTEXT, dek));
+    await SecureStore.setItemAsync(DEK_CANARY_KEY, value);
+    return value;
   } catch {
-    /* страховка, а не условие работы */
+    return null;
   }
 }
 
@@ -210,8 +212,41 @@ export function getOrCreateDataEncryptionKey(): Promise<Uint8Array> {
   return p;
 }
 
+/** Сколько раз перечитываем хранилище, если ключ рядом сменили. */
+const DEK_RESOLVE_ATTEMPTS = 3;
+
+/**
+ * v4.32.615: чужая смена ключа отменяет наши записи, а не только память.
+ *
+ * Дефект. Проверка `dekGeneration === gen` стояла ПОСЛЕ обеих записей в
+ * постоянное хранилище. `performLocalWalletWipe` сбрасывает память (это и
+ * поднимает счётчик) на несколько шагов раньше, чем удаляет из SecureStore
+ * ключ и канарейку. Вызов, начавшийся до выхода из аккаунта, дописывал свой
+ * ключ уже после вытирания — на устройстве оставался рабочий ключ к данным
+ * аккаунта, который считается стёртым. Второй случай той же поломки — два
+ * параллельных вызова: любой сброс памяти обнуляет `dekInflight`, так что
+ * второй вызов начинает работу заново и может завести ВТОРОЙ случайный ключ.
+ *
+ * Теперь поколение сверяется перед каждой записью, а несовпадение не пишет
+ * ничего и перечитывает хранилище: за время наших await соседний вызов уже
+ * положил туда свой ключ, и попытка номер два его подхватит.
+ */
 async function resolveDataEncryptionKey(): Promise<Uint8Array> {
-  const gen = dekGeneration;
+  for (let attempt = 1; attempt <= DEK_RESOLVE_ATTEMPTS; attempt += 1) {
+    // Пока мы читали, ключ мог появиться в памяти — тогда он и есть верный.
+    const known = dekMemory;
+    if (known && known.length === SYMMETRIC_KEY_BYTES) return known;
+    const chosen = await resolveDekOnce(dekGeneration);
+    if (chosen) return chosen;
+    log.warn('dek_resolve_restarted', { attempt });
+  }
+  throw new DekUnavailableError('dek_changed_while_resolving');
+}
+
+/**
+ * Одна попытка. `null` — ключ рядом сменили, читать надо заново.
+ */
+async function resolveDekOnce(gen: number): Promise<Uint8Array | null> {
   const stored = await observeStoredDek();
   const canary = await readCanary();
   const storedOpensCanary = canaryOpens(canary.stored, stored.dek);
@@ -244,13 +279,41 @@ async function resolveDataEncryptionKey(): Promise<Uint8Array> {
     throw new DekUnavailableError(decision.reason);
   }
 
+  // Проверка стоит ДО записей: иначе они воскресили бы ключ аккаунта,
+  // который в это же время вытирают.
+  if (dekGeneration !== gen) return null;
+
+  let wroteKey: string | null = null;
   if (decision.action !== 'use-stored') {
-    await SecureStore.setItemAsync(DEK_KEY, Buffer.from(chosen).toString('base64'));
+    wroteKey = Buffer.from(chosen).toString('base64');
+    await SecureStore.setItemAsync(DEK_KEY, wroteKey);
   }
-  if (decision.writeCanary) await writeCanary(chosen);
-  // Ключ рядом могли поменять, пока шло чтение, — тогда наш уже чужой.
-  if (dekGeneration === gen) dekMemory = chosen;
+  let wroteCanary: string | null = null;
+  if (decision.writeCanary && dekGeneration === gen) wroteCanary = await writeCanary(chosen);
+  if (dekGeneration !== gen) {
+    await dropOwnWrite(DEK_CANARY_KEY, wroteCanary);
+    await dropOwnWrite(DEK_KEY, wroteKey);
+    return null;
+  }
+  dekMemory = chosen;
   return chosen;
+}
+
+/**
+ * Убрать собственную запись, если её успела обогнать чужая смена ключа.
+ *
+ * Сравнение с тем, что лежит сейчас, обязательно: за время наших await ключ
+ * рядом могли и стереть (выход из аккаунта — тогда наша запись осталась и её
+ * надо снять), и заменить своим (`persistDek` при восстановлении — тогда
+ * стирать нельзя, снесли бы рабочий ключ).
+ */
+async function dropOwnWrite(key: string, written: string | null): Promise<void> {
+  if (!written) return;
+  try {
+    if ((await SecureStore.getItemAsync(key)) === written) await SecureStore.deleteItemAsync(key);
+  } catch {
+    /* уборка, а не условие работы */
+  }
 }
 
 export function encryptAtRestString(plain: string, dek: Uint8Array): string {

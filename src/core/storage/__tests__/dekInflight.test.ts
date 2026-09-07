@@ -40,6 +40,8 @@ jest.mock('../../logger', () => ({
 
 import {
   DEK_KEY,
+  DEK_CANARY_KEY,
+  canaryOpensWith,
   clearDekMemory,
   setDekMemory,
   getOrCreateDataEncryptionKey,
@@ -121,17 +123,65 @@ describe('DEK: смена ключа во время чтения не отме�
     expect(hex(await getOrCreateDataEncryptionKey())).toBe(hex(known));
   });
 
-  it('clearDekMemory посреди вызова не оставляет старый ключ в памяти', async () => {
+  it('clearDekMemory посреди вызова заставляет начать заново', async () => {
     const inflight = getOrCreateDataEncryptionKey();
     await mockYield();
     clearDekMemory();
     const created = await inflight;
-    mockReads.length = 0;
 
-    // Ключ в памяти не восстановлен — следующий вызов идёт в хранилище.
-    const next = await getOrCreateDataEncryptionKey();
-    expect(mockReads).toContain(DEK_KEY);
-    expect(hex(next)).toBe(hex(created));
+    // Попытка после сброса перечитала хранилище, а не дописала свой ключ
+    // поверх чужой смены: чтений ключа две штуки, по одной на попытку.
+    expect(mockReads.filter((k) => k === DEK_KEY).length).toBeGreaterThanOrEqual(2);
+    const stored = new Uint8Array(Buffer.from(mockStore.get(DEK_KEY) as string, 'base64'));
+    expect(hex(stored)).toBe(hex(created));
+  });
+});
+
+/**
+ * Стирание аккаунта: `performLocalWalletWipe` сбрасывает память (это поднимает
+ * счётчик поколений) на несколько шагов раньше, чем удаляет ключ и канарейку
+ * из SecureStore. Вызов, начавшийся до выхода из аккаунта, дописывал свои
+ * значения уже ПОСЛЕ вытирания — на устройстве оставался рабочий ключ к данным
+ * аккаунта, который считается стёртым.
+ */
+describe('DEK: стирание аккаунта посреди вызова', () => {
+  const OLD = new Uint8Array(32).fill(3);
+
+  /** Так вытирает аккаунт: сначала память, потом секреты. */
+  const wipeMidFlight = () => {
+    clearDekMemory();
+    mockStore.delete(DEK_KEY);
+    mockStore.delete(DEK_CANARY_KEY);
+  };
+
+  const startWithOldKeyAndWipe = async (): Promise<Uint8Array> => {
+    mockStore.set(DEK_KEY, Buffer.from(OLD).toString('base64'));
+    const inflight = getOrCreateDataEncryptionKey();
+    await mockYield();
+    wipeMidFlight();
+    return inflight;
+  };
+
+  it('старый ключ не выдаётся как действующий', async () => {
+    const dek = await startWithOldKeyAndWipe();
+    expect(hex(dek)).not.toBe(hex(OLD));
+  });
+
+  it('канарейка стёртого аккаунта не восстанавливается', async () => {
+    await startWithOldKeyAndWipe();
+    expect(await canaryOpensWith(OLD)).not.toBe(true);
+  });
+
+  it('в хранилище не остаётся канарейки без ключа', async () => {
+    const dek = await startWithOldKeyAndWipe();
+    expect(mockStore.has(DEK_CANARY_KEY)).toBe(mockStore.has(DEK_KEY));
+    expect(await canaryOpensWith(dek)).toBe(true);
+  });
+
+  it('ключ в хранилище совпадает с выданным', async () => {
+    const dek = await startWithOldKeyAndWipe();
+    const stored = new Uint8Array(Buffer.from(mockStore.get(DEK_KEY) as string, 'base64'));
+    expect(hex(stored)).toBe(hex(dek));
   });
 });
 
@@ -153,10 +203,31 @@ describe('храповик: работа вынесена из склеиваю�
     expect(body).not.toContain('decideDek(');
   });
 
-  it('работа живёт отдельно и сверяет поколение перед записью в память', () => {
+  it('работа живёт отдельно, а внешняя функция её только повторяет', () => {
     const body = bodyOf('async function resolveDataEncryptionKey(');
-    expect(body).toContain('await observeStoredDek()');
-    expect(body).toContain('dekGeneration === gen');
+    expect(body).toContain('resolveDekOnce(dekGeneration)');
+    expect(body).toContain('DEK_RESOLVE_ATTEMPTS');
+    expect(body).toContain("DekUnavailableError('dek_changed_while_resolving')");
+    expect(body).not.toContain('decideDek(');
+  });
+
+  it('поколение сверяется ДО записей в хранилище, а не после них', () => {
+    const body = bodyOf('async function resolveDekOnce(');
+    const guard = body.indexOf('if (dekGeneration !== gen) return null;');
+    expect(guard).toBeGreaterThan(-1);
+    expect(body.indexOf('await SecureStore.setItemAsync(DEK_KEY')).toBeGreaterThan(guard);
+    // Канарейка — тоже запись, и она тоже под проверкой.
+    expect(body).toContain('decision.writeCanary && dekGeneration === gen');
+  });
+
+  it('запись, обогнанная чужой сменой ключа, снимается', () => {
+    const body = bodyOf('async function resolveDekOnce(');
+    expect(body).toContain('await dropOwnWrite(DEK_CANARY_KEY, wroteCanary)');
+    expect(body).toContain('await dropOwnWrite(DEK_KEY, wroteKey)');
+    // Стираем только СВОЁ: запись persistDek трогать нельзя.
+    expect(bodyOf('async function dropOwnWrite(')).toContain(
+      'await SecureStore.getItemAsync(key)) === written'
+    );
   });
 
   it('сбросы памяти снимают и обещание', () => {
