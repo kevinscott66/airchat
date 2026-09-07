@@ -1045,9 +1045,15 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       }
       return;
     }
-    if (currentCall.state === 'incoming' || currentCall.state === 'connected') {
-      void _hangup('unanswered', 'Недоступен');
-    }
+    // v4.32.633: `peer_unavailable` сервер сочиняет сам — подписи в событии
+    // нет, а `targetPeerId` он же и проставляет, так что сверка с
+    // `currentCall.peerPubB64` не даёт ничего. Рвать по нему разговор нельзя
+    // ровно по той причине, что разобрана выше у события `hangup`: этим
+    // сервер обрывал бы любой звонок между двумя людьми, и со стороны это
+    // выглядело бы не нападением, а плохой связью. Цена отказа от обрыва уже
+    // уплачена в другом месте: соединённый звонок закроет сторож ICE (разрыв
+    // — сразу, «потерян» — через 10 секунд), входящий — срок дозвона.
+    log.info('call_peer_unavailable_ignored', { state: currentCall.state });
   });
 }
 
@@ -1524,8 +1530,21 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
     return false;
   }
 
+  // v4.32.573: номер звонка. Он ничего не значит и ни с чем не связан — он
+  // нужен, чтобы push о звонке не склеился с прошлым баннером и чтобы
+  // разбудившийся телефон погасил баннер, когда предложение доедет.
+  // v4.32.633: рождается вместе с состоянием «исходящий», а не через
+  // несколько секунд после него. Раньше `activeCallId` присваивался только
+  // перед отправкой предложения — после прогрева камеры, запроса ICE-серверов
+  // по сети и подписи конверта. Всё это время ожидаемый номер в
+  // `openCallEnvelope` не подставлялся вовсе (`activeCallId ? … : {}`), а
+  // значит и не сверялся, и сигнальный сервер мог переиграть в это окно
+  // подписанный «Отклонён» от прошлого звонка тому же собеседнику. Человек
+  // видел отказ, которого не было: телефон собеседника даже не звонил.
+  const callId = newCallId(randomBytes(16));
   const generation = callGeneration + 1;
   callGeneration = generation;
+  activeCallId = callId;
   currentCall = {
     state: 'outgoing',
     peerPubB64,
@@ -1577,17 +1596,12 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
     // The signaling server authorizes offers against the sender's registered
     // room. Each peer is registered in its own room, so using the target's
     // room here makes the server reject every offer with room_mismatch.
-    // v4.32.573: номер звонка. Он ничего не значит и ни с чем не связан — он
-    // нужен, чтобы push о звонке не склеился с прошлым баннером и чтобы
-    // разбудившийся телефон погасил баннер, когда предложение доедет.
-    const callId = newCallId(randomBytes(16));
     if (!mySigningPair) { log.warn('call_no_signing_key'); return false; }
     // v4.32.585: предложение уходит подписанным — отпечаток DTLS внутри SDP
     // тем самым привязан к ключу личности звонящего.
     const offerBody = await sealCallEnvelope(mySigningPair, myPub, {
       kind: 'offer', to: peerPubB64, callId, sdp: offer.sdp ?? '', isVideo,
     });
-    activeCallId = callId;
     sig.sendOffer(myPub, peerPubB64, offerBody);
     outgoingOffer = { myPub, peerPubB64, body: offerBody };
     // Разбудить телефон, которого может не быть в сети. Уходят только номер
