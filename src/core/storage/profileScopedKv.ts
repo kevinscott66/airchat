@@ -80,6 +80,17 @@ export async function scopedKvTryGetFor(
   return legacy;
 }
 
+/**
+ * Прочитать запись активного профиля тремя состояниями (v4.32.628).
+ *
+ * `scopedKvGet` сводит «не прочиталось» и «нет записи» в один null, и там, где
+ * по отсутствию принимают решение (перенести старую запись поверх новой,
+ * например), этого мало. Разбор — в scopedKvTryGetFor.
+ */
+export async function scopedKvTryGet(key: string): Promise<{ value: string | null } | null> {
+  return scopedKvTryGetFor(activeProfileId(), key);
+}
+
 /** Записать значение активному профилю. */
 export async function scopedKvSet(key: string, value: string): Promise<void> {
   await scopedKvSetFor(activeProfileId(), key, value);
@@ -96,6 +107,25 @@ export async function scopedKvSet(key: string, value: string): Promise<void> {
  * подмена чужой.
  */
 export async function scopedKvSetFor(pid: number, key: string, value: string): Promise<void> {
+  await scopedKvSetCheckedFor(pid, key, value);
+}
+
+/**
+ * Записать активному профилю так, чтобы отказ базы дошёл до вызывающего
+ * (v4.32.628).
+ *
+ * Нужен там, где запись — первая половина переноса: скопировали под новое имя,
+ * сняли старое. `scopedKvSet` отдаёт void, то есть «не влезло» и «легло»
+ * приходили одинаково, и снятие старой записи шло следом за несостоявшейся
+ * копией — значение исчезало совсем. То же правило и по той же причине уже
+ * записано в scopedKvTryGetFor: сначала копия, потом удаление.
+ */
+export async function scopedKvSetChecked(key: string, value: string): Promise<boolean> {
+  return scopedKvSetCheckedFor(activeProfileId(), key, value);
+}
+
+/** То же для названного профиля — см. scopedKvSetFor про выбор номера. */
+export async function scopedKvSetCheckedFor(pid: number, key: string, value: string): Promise<boolean> {
   const written = await kvSetChecked(profileScopedKey(pid, key), value);
   if (pid === 1 && written) {
     // Общая запись первого профиля больше не нужна: своя новее, а оставленная
@@ -108,6 +138,7 @@ export async function scopedKvSetFor(pid: number, key: string, value: string): P
     // а её нет.
     await kvDelete(key);
   }
+  return written;
 }
 
 /** Удалить запись активного профиля — вместе с общей, если профиль первый. */

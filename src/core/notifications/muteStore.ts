@@ -35,6 +35,8 @@ import {
   scopedKvGet,
   scopedKvListKeysByPrefix,
   scopedKvSet,
+  scopedKvSetChecked,
+  scopedKvTryGet,
 } from '../storage/profileScopedKv';
 import { log } from '../logger';
 import {
@@ -226,8 +228,20 @@ export async function sweepExpiredMutes(): Promise<{ removed: number; migrated: 
       const target = keyFor(parsedKey.kind, parsedKey.id);
       // Свежая запись под правильным именем главнее: она сделана этой
       // сборкой и отражает последнее решение человека.
-      if ((await scopedKvGet(target)) === null) {
-        await scopedKvSet(target, parsed.untilMs === null ? '1' : `until:${parsed.untilMs}`);
+      //
+      // v4.32.628: спрашиваем тремя состояниями. По `scopedKvGet` сбой чтения
+      // был неотличим от «записи нет», и тогда перенос ставил старое значение
+      // поверх нового: человек снял глушение этой сборкой, база на секунду
+      // занята — и уборка вернула его обратно, да ещё навсегда.
+      const existing = await scopedKvTryGet(target);
+      if (existing === null) continue;
+      if (existing.value === null) {
+        // Сначала копия, потом удаление — общее правило profileScopedKv.
+        // Копия проверяемая: `scopedKvSet` гасит свою ошибку, и снятие старой
+        // записи шло следом за несостоявшейся копией. Заглушение при этом
+        // пропадало совсем — молча, на выходе приложения на передний план.
+        const value = parsed.untilMs === null ? '1' : `until:${parsed.untilMs}`;
+        if (!(await scopedKvSetChecked(target, value))) continue;
       }
       await scopedKvDelete(k);
       migrated++;
