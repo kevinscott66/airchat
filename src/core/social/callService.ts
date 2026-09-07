@@ -434,6 +434,37 @@ let outgoingOffer: { myPub: string; peerPubB64: string; body: string } | null = 
  * же нужна одна на звонок.
  */
 let missedReceiptSentFor: string | null = null;
+/**
+ * Номера предложений, которые уже разбирали (v4.32.615).
+ *
+ * Конверт предложения годен десять минут — ровно столько же его может слать
+ * заново тот, через кого он шёл. Подпись при этом сойдётся: она ручается за
+ * автора и за того, кому звонили, но не за то, что звонок ещё идёт. Значит
+ * сигнальный сервер, ничего не подделывая, мог звонить телефону снова и снова
+ * от имени настоящего собеседника — и после того, как разговор кончился, и
+ * пока трубку вовсе не брали.
+ *
+ * Номер звонка случайный (16 байт) и на каждый звонок свой, поэтому помнить
+ * разобранные — достаточно, чтобы отличить повтор от нового звонка. Список
+ * ограничен по длине: столько звонков за десять минут не бывает. Повтор самого
+ * звонящего (`peer_unavailable`, каждые три секунды) отсекается тем же
+ * списком — номер у повтора тот же.
+ */
+const SEEN_OFFER_MAX = 128;
+const seenOfferCallIds = new Set<string>();
+
+/** Запомнить номер звонка. `false` — такой уже был, это повтор. */
+function rememberOffer(callId: string): boolean {
+  if (seenOfferCallIds.has(callId)) return false;
+  seenOfferCallIds.add(callId);
+  // Set хранит порядок вставки: выбрасываем тот, что видели раньше всех.
+  while (seenOfferCallIds.size > SEEN_OFFER_MAX) {
+    const oldest = seenOfferCallIds.values().next().value;
+    if (oldest === undefined) break;
+    seenOfferCallIds.delete(oldest);
+  }
+  return true;
+}
 /** Как часто повторять предложение звонка тому, кого не было в сети. */
 const OFFER_RETRY_INTERVAL_MS = 3000;
 
@@ -710,10 +741,20 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     }
     const isVideo = offerEnvelope.isVideo === true;
 
-    // v4.32.573: повтор того же предложения — не «занято». Звонящий повторяет
-    // его, пока телефон не появится в сети, и первый же дошедший повтор ставит
-    // звонок в состояние «входящий». Ответить на следующий повтор «занято»
-    // значило бы обрывать ровно тот звонок, который только что зазвонил.
+    // v4.32.615: тот же номер звонка второй раз — это повтор, а не звонок.
+    // Молча: любой ответ отсюда сообщал бы пересылающему, что телефон на
+    // связи, а повтор он мог прислать и сам.
+    if (!rememberOffer(offerEnvelope.callId)) {
+      log.info('call_offer_replay', { from: fromPubB64.slice(0, 8) });
+      return;
+    }
+
+    // v4.32.573: новый звонок от того же человека, пока не убран прошлый, —
+    // не «занято». (Дословный повтор предложения сюда уже не доходит: его
+    // отсекает номер звонка выше.) Звонящий повторяет предложение, пока
+    // телефон не появится в сети, и первый же дошедший повтор ставит звонок в
+    // состояние «входящий». Ответить на следующий повтор «занято» значило бы
+    // обрывать ровно тот звонок, который только что зазвонил.
     if (currentCall
       && (currentCall.state === 'incoming' || currentCall.state === 'connected')
       && currentCall.peerPubB64 === fromPubB64) {
@@ -1257,6 +1298,9 @@ export async function disposeCallService(): Promise<void> {
   pendingOffer = null;
   currentCall = null;
   callProfileId = null;
+  // Номера чужих звонков привязаны к личности, под которой их принимали:
+  // после смены профиля они уже ничего не сторожат.
+  seenOfferCallIds.clear();
   if (outgoingTimeoutTimer) {
     clearTimeout(outgoingTimeoutTimer);
     outgoingTimeoutTimer = null;

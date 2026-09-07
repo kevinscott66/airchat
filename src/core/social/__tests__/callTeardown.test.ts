@@ -380,6 +380,40 @@ describe('поведение сервиса звонков', () => {
 
     expect(getCurrentCall()?.state).toBe('incoming');
   });
+
+  it('то же предложение, присланное заново, второй раз не звонит', async () => {
+    await receiveOffer();
+    expect(getCurrentCall()?.state).toBe('incoming');
+    await hangupCall();
+    await jest.advanceTimersByTimeAsync(INCOMING_RINGING_TIMEOUT_MS);
+    expect(getCurrentCall()).toBeNull();
+
+    // Конверт всё ещё свеж: подпись сойдётся, и пересылающий волен отправить
+    // его снова — хоть каждую минуту в течение десяти.
+    await receiveOffer();
+
+    expect(getCurrentCall()).toBeNull();
+  });
+
+  it('новый звонок того же человека проходит как ни в чём не бывало', async () => {
+    await receiveOffer();
+    await hangupCall();
+    await jest.advanceTimersByTimeAsync(INCOMING_RINGING_TIMEOUT_MS);
+
+    await receiveOffer(testCallId('d'));
+
+    expect(getCurrentCall()?.state).toBe('incoming');
+  });
+
+  it('на повтор предложения не уходит ни «занято», ни отказ', async () => {
+    await receiveOffer();
+    mockSendAnswer.mockClear();
+
+    await receiveOffer();
+
+    expect(mockSendAnswer).not.toHaveBeenCalled();
+    expect(getCurrentCall()?.state).toBe('incoming');
+  });
 });
 
 describe('форма исходников', () => {
@@ -392,6 +426,10 @@ describe('форма исходников', () => {
     const body = HANGUP_BODY();
     expect(body).toContain('shouldNotifyPeer(currentCall.state, origin)');
     expect(body).toContain('sendHangupSignal(currentCall.peerPubB64, currentCall.state, activeCallId)');
+  });
+
+  it('после смены личности номера чужих звонков не сторожат', () => {
+    expect(DISPOSE_BODY()).toContain('seenOfferCallIds.clear()');
   });
 
   it('у _hangup есть источник завершения со значением по умолчанию', () => {
