@@ -32,8 +32,18 @@ import { log } from './core/logger';
  * Имя звонящего сервером не присылается и здесь не показывается — то же
  * правило, что и у сообщений: сервер не должен уметь написать чужим именем на
  * экране блокировки. Кто звонит, приложение покажет само, когда поднимется.
+ *
+ * v4.32.615: блок-лист спрашивается и здесь. Решение v4.32.318 — «звонок из
+ * блокировки не исключение, звонящему полагается видеть ровно то же, что при
+ * выключенном телефоне» — держалось на одной проверке в onOffer, то есть в
+ * живом сокете. Пуш до неё не доходит: приложение в этот момент закрыто. Так
+ * этот баннер и стал каналом, которым заблокированный человек снова звонил на
+ * весь дом, — тем самым, который в v4.32.318 и закрывали.
  */
 async function showIncomingCallBanner(callId: string, contactDid?: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { isBackgroundBlocked } = require('./notifications/backgroundBlockList') as typeof import('./notifications/backgroundBlockList');
+  if (await isBackgroundBlocked(contactDid)) return;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { readBackgroundCallPrefs } = require('./notifications/backgroundNotifyPrefs') as typeof import('./notifications/backgroundNotifyPrefs');
   const prefs = await readBackgroundCallPrefs();
@@ -136,6 +146,15 @@ try {
       // человек, а не общая группа. Глушение самой группы при закрытом
       // приложении невозможно: её идентификатора в push нет и быть не должно.
       if (kind === 'dm' && (await isBackgroundMuted(contactDid))) return;
+      // v4.32.615: и блокировка. Конверт от заблокированного отбрасывается в
+      // messaging, но push отправитель шлёт независимо от того, приняли ли
+      // конверт, — и баннер приходил на сообщение, которого не будет.
+      // К группе это не относится: групповое сообщение переживает блокировку
+      // намеренно (см. core/social/blockPolicy) — заблокирован человек, а не
+      // общая беседа.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { isBackgroundBlocked } = require('./notifications/backgroundBlockList') as typeof import('./notifications/backgroundBlockList');
+      if (kind === 'dm' && (await isBackgroundBlocked(contactDid))) return;
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { bannerIdForCid } = require('./notifications/bannerId') as typeof import('./notifications/bannerId');
       // eslint-disable-next-line @typescript-eslint/no-require-imports
