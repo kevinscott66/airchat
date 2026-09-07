@@ -11,7 +11,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import {
   kvGet,
   kvDelete,
-  kvGetSecret,
+  kvGetSecretCell,
   kvSetSecret,
   profileKvGet,
   profileKvSet,
@@ -19,6 +19,7 @@ import {
   notifyChatStorageChanged,
 } from '../storage/local';
 import { profileScopedKey } from '../storage/kvKeys';
+import { cellTextOrNull, mayOverwrite, type AtRestCell } from '../storage/atRestCell';
 import { isPlainCid } from '../cid';
 import { log } from '../logger';
 import { publicKeyHash4 } from '../crypto/keyManager';
@@ -62,13 +63,31 @@ const CONTACTS_INDEX_MAX = 5000;
  * незашифрованное насквозь, и строка переезжает на шифртекст при первой же
  * перезаписи.
  */
-async function contactRowGet(pid: number, peerPubB64: string): Promise<string | null> {
-  const own = await kvGetSecret(profileScopedKey(pid, `${PREFIX}${peerPubB64}`));
-  if (own) return own;
+/**
+ * Строка контакта тремя состояниями: есть, нет, не прочиталась (v4.32.641).
+ *
+ * `kvGetSecret` сводит к `null` и отсутствие строки, и отказ базы, и недоступный
+ * DEK. Читающим местам этого хватает — показать нечего в любом случае. А вот
+ * трём местам ниже не хватало: разбор индекса считал непрочитанную строку
+ * испорченной и ВЫЧЁРКИВАЛ контакт из `contacts_index` навсегда, а две записи
+ * собирали строку заново с чистого листа поверх целого шифртекста. Одного
+ * неоткрытого хранилища (телефон только что перезагрузили, Keychain ещё
+ * заперт) хватало, чтобы вся записная книжка ушла в `badIds` и была стёрта
+ * фоновой починкой, которой человек не видит.
+ */
+async function contactRowCell(pid: number, peerPubB64: string): Promise<AtRestCell> {
+  const own = await kvGetSecretCell(profileScopedKey(pid, `${PREFIX}${peerPubB64}`));
+  // Непрочитанную свою строку глобальная заслонить не может: иначе запись
+  // легла бы поверх неё, а прочитать её мы как раз и не смогли.
+  if (own.state !== 'absent') return own;
   // Глобальный ключ до v4.32.124 наследует только первый профиль — он писался
   // тогда, когда профиль был один.
-  if (own == null && pid === 1) return (await kvGetSecret(`${PREFIX}${peerPubB64}`)) || null;
-  return null;
+  if (pid === 1) return await kvGetSecretCell(`${PREFIX}${peerPubB64}`);
+  return own;
+}
+
+async function contactRowGet(pid: number, peerPubB64: string): Promise<string | null> {
+  return cellTextOrNull(await contactRowCell(pid, peerPubB64)) || null;
 }
 
 async function contactRowSet(pid: number, peerPubB64: string, json: string): Promise<void> {
@@ -285,6 +304,9 @@ export function parseContactId(input: string): Uint8Array | null {
 /** Текст отказа: показывается человеку, поэтому по-русски и без деталей кривой. */
 export const BAD_PUBLIC_KEY_MESSAGE = 'Некорректный открытый ключ контакта';
 
+/** Тот же случай, что и выше: показывается человеку, поэтому по-русски. */
+export const CONTACT_ROW_UNREADABLE_MESSAGE = 'Не удалось прочитать запись контакта';
+
 export async function addContact(
   pair: KeyPairBytes,
   peerPublicKey: Uint8Array,
@@ -324,7 +346,14 @@ export async function addContact(
     // контакты того, с кем уже переписка, значило потерять его имя и
     // фотографию: контакт превращался в кружок с буквой и оставался им до
     // следующей рассылки профиля. Слияние — в contactRowMerge.
-    const existing = await contactRowGet(pid, b64);
+    // v4.32.641: непрочитанная строка — не «строки нет». mergeExplicitContactRow
+    // получал бы на неё `null` и собрал бы контакт из четырёх переданных полей,
+    // а профиль собеседника (имя, юзернейм, «О себе», фотография) лежит в той
+    // же строке — ровно та потеря, которую закрыли в v4.32.570, только теперь
+    // от сбоя чтения, а не от забытого слияния.
+    const cell = await contactRowCell(pid, b64);
+    if (!mayOverwrite(cell)) throw new Error(CONTACT_ROW_UNREADABLE_MESSAGE);
+    const existing = cellTextOrNull(cell);
     await contactRowSet(
       pid,
       b64,
@@ -370,16 +399,19 @@ export async function ensureImplicitContact(
   const myB64 = Buffer.from(pair.publicKey).toString('base64');
   if (b64 === myB64) return false;
   // Fast-path check outside the lock (avoids ECDH + lock acquisition for existing rows).
-  const pre = await contactRowGet(pid, b64);
-  if (pre) return false;
+  // v4.32.641: непрочитанная строка тоже значит «не заводить». Раньше отказ
+  // чтения давал здесь `null`, и неявная строка ложилась поверх явной: контакт
+  // терял имя, которое ему задал человек, флаг explicit и весь профиль.
+  const pre = await contactRowCell(pid, b64);
+  if (pre.state !== 'absent') return false;
   const [kA, kB] = [myB64, b64].sort();
   const shared = ecdhSharedSecret(pair.secretKey, peerPublicKey);
   const salt = new TextEncoder().encode(`airchat-dm:${kA}:${kB}`);
   const sym = deriveSymmetricKey(shared, salt);
   // v4.32.115: serialize via withContactLock + re-check under lock to close TOCTOU window.
   const created = await withContactLock(pid, async () => {
-    const existing = await contactRowGet(pid, b64);
-    if (existing) return false;
+    const existing = await contactRowCell(pid, b64);
+    if (existing.state !== 'absent') return false;
     await contactRowSet(
       pid,
       b64,
@@ -485,7 +517,13 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
     // every listContacts() call.
     const badIds: string[] = [];
     for (const id of ids) {
-      const row = await contactRowGet(pid, id);
+      const cell = await contactRowCell(pid, id);
+      // v4.32.641: непрочитанная строка НЕ попадает в badIds. Починка индекса
+      // ниже — удаление, и удалять по итогу неудавшегося чтения нельзя: строка
+      // цела, открыть её не вышло, а вычеркнутый из индекса контакт вернуть
+      // уже нечем. Один заблокированный Keychain стирал так всю книжку разом.
+      if (cell.state === 'unreadable') continue;
+      const row = cellTextOrNull(cell);
       // v4.32.71: skip empty-string rows (legacy artefact of old deleteContact
       // which wrote '' instead of DELETE'ing the row); JSON.parse('') would throw.
       if (!row || !row.trim()) {

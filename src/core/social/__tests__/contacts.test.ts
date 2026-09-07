@@ -22,6 +22,13 @@ jest.mock('../../storage/local', () => {
     // под какими ключами contacts.ts кладёт и ищет строки. Поэтому здесь —
     // тот же kv, что и у обычных kvGet/kvSet: сквозной проход, как у старых строк.
     kvGetSecret: jest.fn(async (key: string) => kvGet(key)),
+    // v4.32.641: contacts.ts читает строку контакта трёхзначно. Здесь шифра нет,
+    // поэтому «непрочитанная» из этой заглушки не приходит вовсе — приходят
+    // только «есть» и «нет», а отказ базы (mockReadFails) кидает, как и настоящая.
+    kvGetSecretCell: jest.fn(async (key: string) => {
+      const v = await kvGet(key);
+      return v == null ? { state: 'absent' } : { state: 'plain', text: v };
+    }),
     kvSetSecret: jest.fn(async (key: string, value: string) => kvSet(key, value)),
     profileKvGet: jest.fn(async (profileId: number, key: string) => kvGet(`p${profileId}:${key}`)),
     profileKvSet: jest.fn(async (profileId: number, key: string, value: string) =>
