@@ -148,7 +148,7 @@ export function LinkProofSheet({
     try {
       const res = await checkLinkProof(url.trim(), { platform, handle, publicKeyB64 });
       if (res.ok) {
-        onLinked(handle, { url: url.trim(), verifiedAt: Date.now() });
+        onLinked(handle, { url: url.trim(), verifiedAt: Date.now(), h: handle });
         showSuccess(`${label} привязан`);
         onClose();
         return;

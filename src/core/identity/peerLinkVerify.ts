@@ -17,14 +17,23 @@
  * каждый раз, когда он на кого-то нажал. Это не мелочь: так внешние площадки
  * узнают, кого и когда он смотрит.
  *
- * Ответ запоминается вместе с адресом. Не ради скорости: подтверждение — это
- * факт «в такой-то день по такому-то адресу лежала подписанная строка», и он
- * относится к КОНКРЕТНОМУ адресу. Прислали другой — прежний ответ ничего о
- * нём не говорит, и галочка гаснет до новой проверки.
+ * Ответ запоминается вместе с адресом И ИМЕНЕМ. Не ради скорости:
+ * подтверждение — это факт «в такой-то день по такому-то адресу лежала
+ * подписанная строка ТАКОГО-ТО имени», и он относится к этой паре целиком.
+ * Прислали другую — прежний ответ о ней ничего не говорит, и галочка гаснет
+ * до новой проверки.
+ *
+ * v4.32.638: имени в записи не было, сверялся один адрес. Проверить настоящую
+ * свою публикацию, а потом прислать тот же адрес под чужим именем, стоило
+ * ровно одного конверта профиля: галочка загоралась, в карточке писалось
+ * «публикация по указанному адресу принадлежит @имя», а кнопка «Проверить
+ * привязку» показывается только непроверенным — переспросить было нельзя.
+ * Выходило хуже, чем до v4.32.573: тогда чужое имя было просто словами, а
+ * стало словами с зелёной галочкой.
  */
 import { scopedKvGet, scopedKvSet } from '../storage/profileScopedKv';
 import { checkLinkProof } from './linkProofCheck';
-import { encodeLinkProofRecord, readLinkProofRecord, type ProofFailure } from './linkProof';
+import { encodeLinkProofRecord, readLinkProofRecord, sameHandle, type ProofFailure } from './linkProof';
 import type { ProfileLink } from './profileLinks';
 import { log } from '../logger';
 
@@ -40,8 +49,11 @@ function key(peerPubB64: string, platform: ProfileLink['p']): string {
 /**
  * Что уже проверено на этом устройстве: дата ответа или null.
  *
- * Ответ действителен только для того адреса, по которому его получили, —
- * поэтому адрес передаётся и сверяется.
+ * Ответ действителен только для той пары «адрес + имя», по которой его
+ * получили, — обе половины передаются и сверяются. Запись без имени (сделана
+ * до v4.32.638) подтверждением не считается: чьё имя тогда сошлось, из неё
+ * не узнать, а гадать тут нельзя. Человек нажмёт «Проверить привязку» ещё
+ * раз, и запись станет полной.
  */
 export async function peerLinkVerifiedAt(
   peerPubB64: string,
@@ -49,7 +61,9 @@ export async function peerLinkVerifiedAt(
 ): Promise<number | null> {
   if (!link.u) return null;
   const rec = readLinkProofRecord(await scopedKvGet(key(peerPubB64, link.p)));
-  return rec && rec.url === link.u ? rec.verifiedAt : null;
+  if (!rec || rec.url !== link.u) return null;
+  if (!rec.h || !sameHandle(rec.h, link.h)) return null;
+  return rec.verifiedAt;
 }
 
 export type PeerLinkResult = { ok: true; verifiedAt: number } | { ok: false; reason: ProofFailure };
@@ -78,7 +92,10 @@ export async function verifyPeerLink(
   }
   const verifiedAt = Date.now();
   try {
-    await scopedKvSet(key(peerPubB64, link.p), encodeLinkProofRecord({ url: link.u, verifiedAt }));
+    await scopedKvSet(
+      key(peerPubB64, link.p),
+      encodeLinkProofRecord({ url: link.u, verifiedAt, h: link.h })
+    );
   } catch (e) {
     // Ответ уже получен: не записался — просто спросим ещё раз в другой день.
     log.warn('peer_link_store_failed', { err: e instanceof Error ? e.message : String(e) });

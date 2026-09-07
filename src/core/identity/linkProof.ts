@@ -376,10 +376,26 @@ export function proofStatementText(token: string, accountRef: string, platform: 
  * человеку. Поэтому запись всегда предъявляется вместе с адресом и датой:
  * так её можно перепроверить, а не поверить на слово.
  */
-export type LinkRecord = { url: string; verifiedAt: number };
+/**
+ * Что именно было проверено: адрес публикации, имя учётной записи в ней и
+ * когда это сошлось.
+ *
+ * v4.32.638: имя добавлено, и это не украшение записи. Проверка сверяет автора
+ * публикации с ИМЕНЕМ (см. linkProofCheck, owner_mismatch), то есть ответ
+ * относится к паре «адрес + имя», а не к одному адресу. Записывали только
+ * адрес — и ответ на вопрос про @torvalds засчитывался как ответ про кого
+ * угодно другого по тому же адресу.
+ *
+ * Поле необязательное: записи, сделанные до v4.32.638, имени не несут. Читать
+ * их можно, а вот выдавать за подтверждение имени — нет; это решает тот, кто
+ * сверяет.
+ */
+export type LinkRecord = { url: string; verifiedAt: number; h?: string };
 
 export function encodeLinkProofRecord(rec: LinkRecord): string {
-  return JSON.stringify({ url: rec.url, verifiedAt: rec.verifiedAt });
+  return JSON.stringify(
+    rec.h ? { url: rec.url, verifiedAt: rec.verifiedAt, h: rec.h } : { url: rec.url, verifiedAt: rec.verifiedAt }
+  );
 }
 
 export function readLinkProofRecord(raw: unknown): LinkRecord | null {
@@ -391,10 +407,11 @@ export function readLinkProofRecord(raw: unknown): LinkRecord | null {
     return null;
   }
   if (typeof v !== 'object' || v === null) return null;
-  const o = v as { url?: unknown; verifiedAt?: unknown };
+  const o = v as { url?: unknown; verifiedAt?: unknown; h?: unknown };
   if (typeof o.url !== 'string' || o.url.length === 0) return null;
   if (typeof o.verifiedAt !== 'number' || !Number.isFinite(o.verifiedAt) || o.verifiedAt <= 0) return null;
-  return { url: o.url, verifiedAt: o.verifiedAt };
+  const h = typeof o.h === 'string' && o.h.length > 0 ? o.h : undefined;
+  return h ? { url: o.url, verifiedAt: o.verifiedAt, h } : { url: o.url, verifiedAt: o.verifiedAt };
 }
 
 /**

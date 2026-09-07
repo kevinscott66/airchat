@@ -77,3 +77,43 @@ describe('peerLinkVerify', () => {
     expect(mockCheck).not.toHaveBeenCalled();
   });
 });
+
+describe('ответ относится к паре «адрес + имя» (v4.32.638)', () => {
+  it('ПРОВЕРКА НЕ ПУСТАЯ: то же имя по тому же адресу остаётся подтверждённым', async () => {
+    await verifyPeerLink(PEER, link);
+    expect(await peerLinkVerifiedAt(PEER, link)).toEqual(expect.any(Number));
+  });
+
+  it('тот же адрес под другим именем не считается подтверждённым', async () => {
+    // Своя настоящая публикация: имя своё, ключ свой, проверка честно прошла.
+    await verifyPeerLink(PEER, link);
+    // Тот же адрес, но в конверте профиля заявлено чужое имя. Сверяется автор
+    // публикации, а его никто не спрашивал про torvalds.
+    const impostor: ProfileLink = { ...link, h: 'torvalds' };
+    expect(await peerLinkVerifiedAt(PEER, impostor)).toBeNull();
+  });
+
+  it('регистр имени различием не считается', async () => {
+    await verifyPeerLink(PEER, link);
+    expect(await peerLinkVerifiedAt(PEER, { ...link, h: 'OctoCat' })).toEqual(expect.any(Number));
+  });
+
+  it('запись без имени (до v4.32.638) подтверждением не считается', async () => {
+    // Ровно то, что лежит на устройствах со старой версии.
+    mockStore.set(
+      `peer_link:github:${PEER}`,
+      JSON.stringify({ url: GIST, verifiedAt: 1_700_000_000_000 })
+    );
+    expect(await peerLinkVerifiedAt(PEER, link)).toBeNull();
+    // И чинится обычной проверкой, а не переустановкой.
+    await verifyPeerLink(PEER, link);
+    expect(await peerLinkVerifiedAt(PEER, link)).toEqual(expect.any(Number));
+  });
+
+  it('имя действительно попадает в запись, а не сверяется вхолостую', async () => {
+    await verifyPeerLink(PEER, link);
+    const raw = mockStore.get(`peer_link:github:${PEER}`);
+    expect(raw).toBeDefined();
+    expect(JSON.parse(raw as string)).toMatchObject({ url: GIST, h: 'octocat' });
+  });
+});
