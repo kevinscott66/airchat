@@ -20,7 +20,7 @@ import {
   notifyChatStorageChanged,
   setPollVote,
 } from '../storage/local';
-import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { pollClosedKey } from '../storage/kvKeys';
 import { checkIncomingPollVote, type PollMessageFacts } from './pollVoteGuard';
 import {
@@ -101,6 +101,29 @@ export type PollUndelivered = FanoutUndelivered;
 /** Итог доставки конверта опроса — общий для всех служебных конвертов. */
 export type PollDelivery = FanoutResult;
 
+/**
+ * Отказ, когда состояние опроса неизвестно.
+ *
+ * v4.32.644: до этой версии флаг «завершён» читался через scopedKvGetFor,
+ * который отдаёт null и на «флага нет», и на «прочитать не удалось». Сбой базы
+ * означал «опрос открыт», и голос уходил в завершённый опрос: у себя человек
+ * видел +1, а все, у кого флаг прочитался, тот же конверт отбрасывали — ровно
+ * то расхождение, которое чинила v4.32.273. На входящем пути это вдобавок
+ * рычаг в чужих руках: голос в закрытый опрос попадал бы в счётчики, если у
+ * принимающего в этот миг не прочиталась одна строка kv.
+ *
+ * Цена отказа мала: чтение стоит непосредственно перед записью голоса в ту же
+ * базу — если не прочиталось, записать почти наверняка тоже не выйдет.
+ */
+const POLL_STATE_UNKNOWN = 'Не удалось проверить, не завершён ли опрос. Попробуйте ещё раз.';
+
+/** Завершён ли опрос. `null` — прочитать не удалось, см. POLL_STATE_UNKNOWN. */
+async function pollIsClosed(pid: number, msgId: string): Promise<boolean | null> {
+  const read = await scopedKvTryGetFor(pid, pollClosedKey(msgId));
+  if (read === null) return null;
+  return read.value === '1';
+}
+
 
 /**
  * Записывает свой голос локально и рассылает конверт.
@@ -124,7 +147,12 @@ export async function castAndSyncPollVote(params: {
   // Приёмная сторона такой голос отбрасывала с самого начала — значит без этой
   // проверки голос записывался ровно одному человеку, его автору: у себя он
   // видел +1, у всех остальных цифра не менялась.
-  if ((await scopedKvGetFor(pid, pollClosedKey(msgId))) === '1') {
+  const closed = await pollIsClosed(pid, msgId);
+  if (closed === null) {
+    log.warn('poll_closed_read_failed', { pid });
+    return { ok: false, reason: POLL_STATE_UNKNOWN };
+  }
+  if (closed) {
     return { ok: false, reason: 'Опрос завершён' };
   }
 
@@ -223,8 +251,12 @@ async function applyIncomingPollVote(
   // isClosed в пузыре, но по сети голос мог прийти от того, до кого конверт
   // завершения ещё не доехал (или не доедет — офлайн, старая версия), и
   // счётчики закрытого опроса продолжали бы расти.
-  const closed = await scopedKvGetFor(pid, pollClosedKey(env.msgId));
-  if (closed === '1') {
+  const closed = await pollIsClosed(pid, env.msgId);
+  if (closed === null) {
+    log.warn('poll_vote_closed_unknown_drop', { from: senderPubB64.slice(0, 12) });
+    return;
+  }
+  if (closed) {
     log.debug('poll_vote_closed_drop', { from: senderPubB64.slice(0, 12) });
     return;
   }
@@ -354,7 +386,15 @@ export async function closeAndSyncPoll(params: {
   const { msgId, myPubB64, peerPubB64, groupId } = params;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
 
-  await scopedKvSetFor(pid, pollClosedKey(msgId), '1');
+  // v4.32.644: отказ записи — это отказ завершения. Незамеченным он печатал
+  // «Опрос завершён» при живом у себя опросе, а конверт закрывал его всем
+  // остальным: расхождение зеркально тому, что чинила v4.32.251. Рассылки до
+  // удачной записи быть не должно — иначе закрытым он станет у кого угодно,
+  // кроме автора.
+  if (!(await scopedKvSetCheckedFor(pid, pollClosedKey(msgId), '1'))) {
+    log.warn('poll_close_write_failed', { pid });
+    return { ok: false, reason: 'Не удалось завершить опрос. Попробуйте ещё раз.' };
+  }
   notifyChatStorageChanged();
 
   const payload = encodePollCloseEnvelope({
@@ -448,7 +488,13 @@ export async function handleIncomingPollClose(
     }
   }
 
-  await scopedKvSetFor(pid, pollClosedKey(env.msgId), '1');
+  // v4.32.644: конверт наш и разобран, но если запись не легла — опрос у нас
+  // не закрылся. Строка «poll_close_applied» и побудка подписчиков соврали бы:
+  // пузырь перечитал бы флаг и снова нашёл опрос открытым.
+  if (!(await scopedKvSetCheckedFor(pid, pollClosedKey(env.msgId), '1'))) {
+    log.warn('poll_close_not_applied', { group: !!env.groupId });
+    return true;
+  }
   // Запись в kv не будит подписчиков chat-writes, а пузырь опроса перечитывает флаг
   // именно по ним — без этого закрытие увидели бы только после перезахода в чат.
   notifyChatStorageChanged();

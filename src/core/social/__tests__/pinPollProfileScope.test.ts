@@ -144,9 +144,17 @@ describe('форма исходников', () => {
     const s = src('core/social/pollVoteSync.ts');
     expect(s).not.toContain('kvGet(pollClosedKey(');
     expect(s).not.toContain('kvSet(pollClosedKey(');
-    // Все четыре места: свой голос, чужой голос, своё завершение, чужое.
-    expect(s.split('scopedKvGetFor(pid, pollClosedKey(').length - 1).toBe(2);
-    expect(s.split('scopedKvSetFor(pid, pollClosedKey(').length - 1).toBe(2);
+    // v4.32.644: номер профиля называется по-прежнему, но требование усилено.
+    // Чтение обязано отличать «флага нет» от «не прочиталось», запись — «легло»
+    // от «не влезло». Прежние формы запрещены явно: сбой чтения означал «опрос
+    // открыт» и пускал голос в завершённый опрос, а незамеченный сбой записи
+    // печатал «Опрос завершён» при живом у себя опросе.
+    expect(s).not.toContain('scopedKvGetFor(pid, pollClosedKey(');
+    expect(s).not.toContain('scopedKvSetFor(pid, pollClosedKey(');
+    // Оба чтения — через одну проверку, оба места записи — проверенной записью.
+    expect(s.split('scopedKvTryGetFor(pid, pollClosedKey(').length - 1).toBe(1);
+    expect(s.split('await pollIsClosed(pid,').length - 1).toBe(2);
+    expect(s.split('scopedKvSetCheckedFor(pid, pollClosedKey(').length - 1).toBe(2);
   });
 
   it('пузырь опроса читает флаг у своего профиля', () => {
