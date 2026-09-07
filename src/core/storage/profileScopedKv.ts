@@ -17,7 +17,7 @@
  * одного правила про имена ключей уже стоили нам чужих заметок в соседнем
  * профиле (v4.32.278) и потерянных контактов при восстановлении (v4.32.280).
  */
-import { kvDelete, kvListKeysByPrefix, kvSetChecked, kvTryGet } from './local';
+import { kvDelete, kvDeleteChecked, kvListKeysByPrefix, kvSetChecked, kvTryGet } from './local';
 import { profileScopedKey } from './kvKeys';
 import { profileManager } from '../identity/profileManager';
 
@@ -126,6 +126,28 @@ export async function scopedKvDelete(key: string): Promise<void> {
 export async function scopedKvDeleteFor(pid: number, key: string): Promise<void> {
   await kvDelete(profileScopedKey(pid, key));
   if (pid === 1) await kvDelete(key);
+}
+
+/**
+ * То же удаление, но отказ базы доходит до вызывающего (v4.32.626).
+ *
+ * `scopedKvDelete` его глотает, и снявшему запись говорили «готово»
+ * независимо от того, снялась ли она. Для настроек это ещё терпимо, а для
+ * снятия глушения — нет: строка уходила из списка «Заглушённые», человек
+ * оставался заглушённым, и вернуть его в список, чтобы попробовать ещё раз,
+ * было уже нечем.
+ *
+ * `kvDeleteScopedChecked` из local сюда не годится: он снимает безымянную
+ * запись у любого профиля, а здесь она принадлежит первому — см. выше.
+ */
+export async function scopedKvDeleteChecked(key: string): Promise<void> {
+  await scopedKvDeleteCheckedFor(activeProfileId(), key);
+}
+
+/** Та же проверенная форма для названного профиля. См. scopedKvDeleteFor. */
+export async function scopedKvDeleteCheckedFor(pid: number, key: string): Promise<void> {
+  await kvDeleteChecked(profileScopedKey(pid, key));
+  if (pid === 1) await kvDeleteChecked(key);
 }
 
 /**

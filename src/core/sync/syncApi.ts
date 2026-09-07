@@ -603,9 +603,20 @@ export async function lookupSyncUsername(username: string): Promise<UsernameDire
       `${base}/v1/username/${encodeURIComponent(username)}`,
       {},
       { timeoutMs: SYNC_REQUEST_TIMEOUT_MS },
-      async (response) => (response.ok
-        ? (await response.json()) as { taken?: unknown; pub?: unknown }
-        : null),
+      async (response) => {
+        // v4.32.626: тот же потолок, что у fetchSigned выше. Этот запрос —
+        // единственный, читающий тело мимо него, и ответ любого размера
+        // разбирался целиком; ходит он к серверу справочника без подписи, по
+        // одному нажатию на @юзернейм в переписке.
+        const declared = parseInt(response.headers?.get?.('content-length') ?? '', 10);
+        if (Number.isFinite(declared) && declared > MAX_SYNC_RESPONSE_BYTES) {
+          log.warn('sync_response_too_large', { status: response.status, declared });
+          return null;
+        }
+        return response.ok
+          ? (await response.json()) as { taken?: unknown; pub?: unknown }
+          : null;
+      },
     );
     if (!body || typeof body.taken !== 'boolean') return { status: 'unknown' };
     if (!body.taken) return { status: 'free' };

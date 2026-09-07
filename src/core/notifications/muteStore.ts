@@ -31,6 +31,7 @@
  */
 import {
   scopedKvDelete,
+  scopedKvDeleteChecked,
   scopedKvGet,
   scopedKvListKeysByPrefix,
   scopedKvSet,
@@ -135,18 +136,40 @@ export async function setMuted(
   log.info('mute_set', { kind, id: id.slice(0, 24), untilMs: until ?? null });
 }
 
-export async function unmute(kind: MuteKind, id: string): Promise<void> {
-  if (!id) return;
-  try { await scopedKvDelete(keyFor(kind, id)); } catch { /* noop */ }
+/**
+ * Снять глушение. `false` — база отказала, человек остался заглушённым.
+ *
+ * v4.32.626: прежде оба отказа глотались молча, функция не возвращала ничего,
+ * и экран настроек безусловно убирал строку из списка «Заглушённые» и писал
+ * «Включены уведомления». Запись при этом оставалась на месте: уведомления
+ * так и не приходили, а вернуть человека в список, чтобы повторить попытку,
+ * было уже нечем. Список заблокированных болел ровно этим в v4.32.617 и
+ * вылечен тем же — проверкой ответа.
+ */
+export async function unmute(kind: MuteKind, id: string): Promise<boolean> {
+  if (!id) return false;
+  let ok = true;
+  try {
+    await scopedKvDeleteChecked(keyFor(kind, id));
+  } catch (e) {
+    ok = false;
+    log.warn('mute_unset_failed', { kind, err: e instanceof Error ? e.message : String(e) });
+  }
   // v4.32.510: запись, сделанная прежней сборкой, лежит под неканоническим
   // именем. Снятие обязано забирать и её: иначе «включить уведомления» не
   // убирает человека из списка «Заглушённые», и убрать его оттуда становится
   // нечем вовсе.
   const raw = muteKey(kind, id);
   if (raw !== keyFor(kind, id)) {
-    try { await scopedKvDelete(raw); } catch { /* noop */ }
+    try {
+      await scopedKvDeleteChecked(raw);
+    } catch (e) {
+      ok = false;
+      log.warn('mute_unset_legacy_failed', { kind, err: e instanceof Error ? e.message : String(e) });
+    }
   }
-  log.info('mute_unset', { kind, id: id.slice(0, 24) });
+  log.info('mute_unset', { kind, id: id.slice(0, 24), ok });
+  return ok;
 }
 
 /**

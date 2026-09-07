@@ -11,5 +11,5 @@ import { announceLater } from './announceOutcome';
 
 /** При успехе молчит; при отказе называет, что теперь по-разному у нас двоих. */
 export function announceDmPin(sending: Promise<DmPinOutcome>): void {
-  announceLater(sending, dmPinProblem);
+  announceLater(sending, dmPinProblem, 'Не удалось сообщить собеседнику о закреплении');
 }

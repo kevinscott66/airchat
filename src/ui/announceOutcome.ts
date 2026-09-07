@@ -9,6 +9,7 @@
  */
 
 import { showError } from './components/userFeedback';
+import { userErrorText } from './components/userErrorText';
 
 /** Показывает расхождение, когда оно есть. Успех молчит. */
 export function announceNow<T>(outcome: T, problem: (o: T) => string | null): void {
@@ -19,7 +20,18 @@ export function announceNow<T>(outcome: T, problem: (o: T) => string | null): vo
 /**
  * То же для ещё не пришедшего исхода. Отдельная функция, а не `void` у каждого
  * вызова: потерянные отказы появлялись ровно так — по одному `void` за раз.
+ *
+ * `fallback` обязателен (v4.32.626): сорвавшаяся отправка — сеть, ключи, база —
+ * до исхода не доходит вовсе, и без этой ветки молчала совсем, хотя молчать
+ * тут нельзя тем более: у себя на экране изменение уже стоит. Соседняя воронка
+ * рассылки в группу получила такую же ветку в v4.32.622.
  */
-export function announceLater<T>(sending: Promise<T>, problem: (o: T) => string | null): void {
-  void sending.then((o) => announceNow(o, problem));
+export function announceLater<T>(
+  sending: Promise<T>,
+  problem: (o: T) => string | null,
+  fallback: string,
+): void {
+  void sending
+    .then((o) => announceNow(o, problem))
+    .catch((e: unknown) => showError(userErrorText(e, fallback)));
 }

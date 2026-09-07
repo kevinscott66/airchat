@@ -196,10 +196,20 @@ export function ProfileChatBlock({
   const deleteNote = useCallback(() => {
     // Строка удаляется целиком, а не затирается пустой: пустое значение —
     // это всё ещё запись «здесь была заметка».
-    void import('../../../../core/storage/local')
-      .then((m) => m.kvDeleteScoped(activeProfileId, m.contactNoteKey(peerB64)));
-    setContactNote('');
+    // v4.32.626: удаление под проверкой, как и запись рядом. Прежде отказ базы
+    // глотался: поле на экране очищалось, заметка оставалась в базе и
+    // возвращалась при следующем открытии карточки — со словами «удалено».
     setNoteEditVisible(false);
+    void (async () => {
+      const m = await import('../../../../core/storage/local');
+      try {
+        await m.kvDeleteScopedChecked(activeProfileId, m.contactNoteKey(peerB64));
+      } catch (e) {
+        showError(userErrorText(e, 'Не удалось удалить заметку'));
+        return;
+      }
+      setContactNote('');
+    })();
   }, [activeProfileId, peerB64]);
 
   const rowBorder = { borderTopColor: withAlpha(colors.text, glass.rim) };

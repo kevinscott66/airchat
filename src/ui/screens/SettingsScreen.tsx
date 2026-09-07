@@ -390,7 +390,13 @@ function SettingsScreenImpl({
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
-  useEffect(() => { void authGuard.hasPassword().then(setHasAppPassword); }, []);
+  // v4.32.626: отказ защищённого хранилища оставлял флаг на `false`, и строка
+  // безопасности предлагала «Установить пароль» — путь, который перезаписывает
+  // уже стоящий пароль, не спрашивая старого. Считаем пароль установленным:
+  // лишнее «Сменить пароль» неудобно, лишнее «Установить» — опасно.
+  useEffect(() => {
+    void authGuard.hasPassword().then(setHasAppPassword).catch(() => setHasAppPassword(true));
+  }, []);
   useEffect(() => { void isInternalDiagnosticsEnabled().then(setDiagUnlocked); }, []);
 
   useEffect(() => {
@@ -594,7 +600,8 @@ function SettingsScreenImpl({
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const refreshPasswordFlag = useCallback(() => {
-    void authGuard.hasPassword().then(setHasAppPassword);
+    // Тот же fail-closed, что и у чтения при открытии экрана, см. выше.
+    void authGuard.hasPassword().then(setHasAppPassword).catch(() => setHasAppPassword(true));
   }, []);
 
   /** Открыть окно установки пароля с первого шага. */
@@ -625,6 +632,19 @@ function SettingsScreenImpl({
     }
     setPwdBusy(true);
     try {
+      // v4.32.626: «Установить пароль» не должно затирать уже стоящий, а
+      // authGuard.setPassword пишет безусловно — старого он не спрашивает,
+      // это дело changePassword. Экранного флага для проверки мало: он
+      // читается один раз при открытии и остаётся `false`, если хранилище
+      // тогда отказало. Перечитываем здесь, и отказ чтения тоже закрывает
+      // дверь: единственный законный путь сюда — когда пароля ещё нет.
+      let already = true;
+      try { already = await authGuard.hasPassword(); } catch { already = true; }
+      if (already) {
+        showError('Пароль уже установлен — смените его через «Сменить пароль».');
+        setHasAppPassword(true);
+        return;
+      }
       const ok = await authGuard.setPassword(newPwd);
       if (!ok) { showError('Не удалось сохранить пароль'); return; }
       showSuccess('Пароль сохранён');
@@ -2072,7 +2092,12 @@ function SettingsScreenImpl({
   }, [subScreen]);
 
   const handleUnmute = useCallback(async (entry: MuteEntry) => {
-    await unmute(entry.kind, entry.id);
+    // v4.32.626: строка уходила из списка независимо от того, снялась ли
+    // запись, — см. unmute. Пока запись на месте, человек остаётся
+    // заглушённым, и убрать его из списка значило бы соврать дважды: и об
+    // уведомлениях, и о том, что глушения больше нет.
+    const ok = await unmute(entry.kind, entry.id);
+    if (!ok) { showError('Не удалось включить уведомления'); return; }
     setMutedList((prev) => prev.filter((m) => !(m.kind === entry.kind && m.id === entry.id)));
     showSuccess('Включены уведомления');
   }, []);
@@ -2406,7 +2431,19 @@ function SettingsScreenImpl({
                 maxLength={MAX_CUSTOM_STATUS_LEN}
                 autoFocus
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { const s = normalizeOwnStatus(statusInput); setCustomStatus(s); void ownFieldSet('user_custom_status', s); setStatusModal(false); }}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => {
+                // v4.32.626: ownFieldSet документирован как «false — не
+                // записалось», а здесь его ответ выбрасывался через `void`:
+                // статус вставал на экране и пропадал при следующем открытии
+                // настроек, ничего об этом не сказав.
+                const s = normalizeOwnStatus(statusInput);
+                const prev = customStatus;
+                setCustomStatus(s);
+                setStatusModal(false);
+                void ownFieldSet('user_custom_status', s)
+                  .then((ok) => { if (!ok) { setCustomStatus(prev); showError('Не удалось сохранить статус'); } })
+                  .catch((e: unknown) => { setCustomStatus(prev); showError(userErrorText(e, 'Не удалось сохранить статус')); });
+              }}>
                 <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
               </AppPressable>
               <AppPressable onPress={() => setStatusModal(false)}>

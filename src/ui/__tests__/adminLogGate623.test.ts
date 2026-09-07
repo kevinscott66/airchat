@@ -28,6 +28,12 @@ it('окно журнала открывается только после уд�
   const calls = SRC.split('loadAdminLog()').length - 1;
   // Ровно одно место вызова: если появится второе, эта проверка его не увидит.
   expect(calls).toBe(1);
-  expect(SRC).toContain('void loadAdminLog().then((ok) => { if (ok) setAdminLogVisible(true); });');
+  expect(SRC).toContain('.then((ok) => { if (ok) setAdminLogVisible(true); })');
+  // v4.32.626: до `.then` дело может и не дойти — listGroupMessages внутри
+  // loadAdminLog бросает, и без этой ветки нажатие на щит молчало совсем.
+  expect(SRC).toContain(
+    "      .catch((e: unknown) => { showError(userErrorText(e, 'Не удалось открыть журнал')); });"
+  );
   expect(SRC).not.toContain('void loadAdminLog().then(() => setAdminLogVisible(true));');
+  expect(SRC).not.toContain('void loadAdminLog().then((ok) => { if (ok) setAdminLogVisible(true); });');
 });

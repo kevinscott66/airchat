@@ -724,13 +724,18 @@ export class FeedStorage {
 
   async deleteSyncComment(commentId: string, postId: string, deletedAt: number): Promise<void> {
     const d = await this.ensureDb();
-    await d.runAsync('DELETE FROM feed_comments WHERE id = ?', [commentId]);
-    await d.runAsync(
-      `INSERT INTO feed_comment_tombstones (comment_id, post_id, deleted_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT (comment_id) DO UPDATE SET post_id = excluded.post_id, deleted_at = excluded.deleted_at`,
-      [commentId, postId, deletedAt],
-    );
+    // v4.32.626: та же транзакция, что и у deleteComment рядом. Путь этот —
+    // со второго устройства аккаунта, и разрыв между DELETE и надгробием тут
+    // тем вероятнее, что зовут его пачкой при разборе входящих изменений.
+    await d.withTransactionAsync(async () => {
+      await d.runAsync('DELETE FROM feed_comments WHERE id = ?', [commentId]);
+      await d.runAsync(
+        `INSERT INTO feed_comment_tombstones (comment_id, post_id, deleted_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (comment_id) DO UPDATE SET post_id = excluded.post_id, deleted_at = excluded.deleted_at`,
+        [commentId, postId, deletedAt],
+      );
+    });
   }
 
   /**
@@ -1043,13 +1048,20 @@ export class FeedStorage {
       'SELECT post_id FROM feed_comments WHERE id = ?',
       [commentId]
     );
-    await d.runAsync('DELETE FROM feed_comments WHERE id = ?', [commentId]);
-    if (row) {
-      await d.runAsync(
-        'INSERT OR IGNORE INTO feed_comment_tombstones (comment_id, post_id, deleted_at) VALUES (?, ?, ?)',
-        [commentId, row.post_id, Date.now()]
-      );
-    }
+    // v4.32.626: удаление и надгробие — одной транзакцией, как у deletePost
+    // (v4.32.623). Порознь они рвались: строка комментария уже стёрта, а
+    // приложение закрыли до надгробия — и следующий же конверт с тем же
+    // комментарием (addComment / upsertSyncComment) возвращал его навсегда,
+    // потому что запрета на возврат больше нет.
+    await d.withTransactionAsync(async () => {
+      await d.runAsync('DELETE FROM feed_comments WHERE id = ?', [commentId]);
+      if (row) {
+        await d.runAsync(
+          'INSERT OR IGNORE INTO feed_comment_tombstones (comment_id, post_id, deleted_at) VALUES (?, ?, ?)',
+          [commentId, row.post_id, Date.now()]
+        );
+      }
+    });
   }
 
   /**

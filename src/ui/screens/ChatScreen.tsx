@@ -3346,9 +3346,14 @@ function ChatThreadView({
                             text: 'Очистить',
                             style: 'destructive',
                             onPress: () => {
+                              // v4.32.626: у clearChatHistory нет своего try,
+                              // а лист подтверждения к этому мигу уже закрыт —
+                              // сорвавшаяся очистка выглядела как выполненная.
                               void clearChatHistory(peerB64, activeProfileId).then(() => {
                                 void reloadThread();
                                 showSuccess('История очищена');
+                              }).catch((e: unknown) => {
+                                showError(userErrorText(e, 'Не удалось очистить историю'));
                               });
                             },
                           },

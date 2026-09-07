@@ -157,7 +157,7 @@ describe('v4.32.449 — ни один вызов больше не выбрас�
     expect(now).not.toBe('');
     expect(now).toContain('announceNow(outcome, groupControlProblem);');
     expect(bodyOf(announceSrc, 'export function announceCtl(')).toContain(
-      'announceLater(sending, groupControlProblem);'
+      "announceLater(sending, groupControlProblem, 'Не удалось разослать изменение участникам группы');"
     );
     const rule = bodyOf(ruleSrc, 'export function announceNow<T>(');
     expect(rule).toContain('const text = problem(outcome);');

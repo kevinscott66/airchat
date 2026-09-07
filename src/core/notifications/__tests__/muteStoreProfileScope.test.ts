@@ -33,6 +33,8 @@ jest.mock('../../storage/local', () => ({
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
+  // v4.32.626: снятие глушения ходит через проверенную форму — см. unmute.
+  kvDeleteChecked: async (k: string) => { mockKv.delete(k); },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
 }));
 

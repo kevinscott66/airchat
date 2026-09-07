@@ -5321,7 +5321,13 @@ function GroupMembersScreen({
           </AppPressable>
         ) : null}
         {amAdmin ? (
-          <AppPressable style={gcStyles.iconBtn} onPress={() => { void loadAdminLog().then((ok) => { if (ok) setAdminLogVisible(true); }); }} accessibilityRole="button" accessibilityLabel="Журнал действий администраторов">
+          <AppPressable style={gcStyles.iconBtn} onPress={() => {
+            // v4.32.626: loadAdminLog зовёт listGroupMessages, который бросает.
+            // Без этой ветки нажатие на щит на отказе базы не делало ничего.
+            void loadAdminLog()
+              .then((ok) => { if (ok) setAdminLogVisible(true); })
+              .catch((e: unknown) => { showError(userErrorText(e, 'Не удалось открыть журнал')); });
+          }} accessibilityRole="button" accessibilityLabel="Журнал действий администраторов">
             <Ionicons name="shield-checkmark-outline" size={22} color={colors.accent} />
           </AppPressable>
         ) : null}

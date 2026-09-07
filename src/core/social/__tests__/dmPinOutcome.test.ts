@@ -95,10 +95,18 @@ describe('v4.32.454 — отправка закрепления в личке н
   });
 
   it('правило показа одно на все виды конвертов', () => {
-    expect(ANNOUNCE).toContain('announceLater(sending, dmPinProblem);');
+    expect(ANNOUNCE).toContain(
+      "announceLater(sending, dmPinProblem, 'Не удалось сообщить собеседнику о закреплении');"
+    );
     expect(RULE).toContain('export function announceNow<T>(outcome: T, problem: (o: T) => string | null): void {');
-    expect(RULE).toContain('export function announceLater<T>(sending: Promise<T>, problem: (o: T) => string | null): void {');
-    expect(count(RULE, 'showError(')).toBe(1);
+    // v4.32.626: запасная фраза обязательна. Сорвавшаяся отправка до исхода не
+    // доходит вовсе — без этой ветки она молчала совсем, хотя закрепление у
+    // себя на экране человек уже видит.
+    expect(RULE).toContain(
+      'export function announceLater<T>(\n  sending: Promise<T>,\n  problem: (o: T) => string | null,\n  fallback: string,\n): void {'
+    );
+    expect(RULE).toContain('.catch((e: unknown) => showError(userErrorText(e, fallback)));');
+    expect(count(RULE, 'showError(')).toBe(2);
     expect(count(ANNOUNCE, 'showError(')).toBe(0);
   });
 });

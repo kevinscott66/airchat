@@ -15,6 +15,7 @@ import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { showError, showSuccess } from '../components/userFeedback';
+import { userErrorText } from '../components/userErrorText';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { authCardRim, formColumn, primaryInk, radius } from '../theme';
 
@@ -124,6 +125,11 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
       }
       showSuccess('Новый пароль сохранён');
       onSuccess();
+    } catch (e: unknown) {
+      // v4.32.626: обе проверки выше ходят в защищённое хранилище и умеют
+      // бросать. Вызов стоит под `void submit()`, ловить отказ было некому —
+      // и нажатие «Сохранить» не делало ничего: ни пароля, ни объяснения.
+      showError(userErrorText(e, 'Не удалось сохранить пароль'));
     } finally {
       setBusy(false);
     }

@@ -250,11 +250,16 @@ export function ProfileSelector({
   const submitRename = async (): Promise<void> => {
     if (renameId == null) return;
     const ok = await profileManager.renameProfile(renameId, renameText);
-    if (ok) {
-      loadProfiles();
-      setRenameId(null);
-      showSuccess('Имя обновлено');
+    if (!ok) {
+      // v4.32.626: без этой ветки нажатие «Сохранить» на пустом или уже
+      // занятом имени не делало вовсе ничего — окно оставалось открытым
+      // молча, и отличить «не сохранилось» от «не нажалось» было нечем.
+      showError('Имя пустое или уже занято другим профилем');
+      return;
     }
+    loadProfiles();
+    setRenameId(null);
+    showSuccess('Имя обновлено');
   };
 
   const sheetContent = (

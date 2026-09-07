@@ -913,7 +913,13 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 text: 'Очистить',
                 style: 'destructive',
                 onPress: () => {
-                  void clearChatHistory(item.contactPubB64, pid).then(loadData);
+                  // v4.32.626: та же ветка, что и в экране переписки — без
+                  // неё отказ очистки молчал, а список просто не менялся.
+                  void clearChatHistory(item.contactPubB64, pid)
+                    .then(loadData)
+                    .catch((e: unknown) => {
+                      showError(userErrorText(e, 'Не удалось очистить историю'));
+                    });
                 },
               },
             ]);

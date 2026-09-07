@@ -18,6 +18,7 @@ import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
 import { PinPad } from '../components/PinPad';
 import { showError } from '../components/userFeedback';
+import { userErrorText } from '../components/userErrorText';
 import { useColors, useThemedStyles } from '../ThemeContext';
 import { AirChatLockup } from '../components/AirChatLockup';
 import { font, primaryInk, radius, spacing } from '../theme';
@@ -241,6 +242,12 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
           showError(`Неверный пароль. Осталось попыток: ${remaining}`);
         }
         return false;
+      } catch (e: unknown) {
+        // v4.32.626: checkPassword ходит в защищённое хранилище и умеет
+        // бросать. Все вызовы стоят под `void submitValue(...)`, ловить было
+        // некому — на отказ хранилища экран блокировки замирал беззвучно.
+        showError(userErrorText(e, 'Не удалось проверить пароль'));
+        return false;
       } finally {
         submittingRef.current = false;
         setLoading(false);
@@ -258,7 +265,15 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
    */
   const handleBiometric = useCallback(async (): Promise<boolean> => {
     if (submittingRef.current) return false;
-    const stored = await readBiometricPassword();
+    let stored: string | null = null;
+    try {
+      stored = await readBiometricPassword();
+    } catch {
+      // v4.32.626: сам SecureStore внутри уже под catch, а проверка «включён
+      // ли вход по лицу» перед ним — нет. Её отказ уходил мимо всех
+      // `void handleBiometric()` незамеченным отказом промиса.
+      return false;
+    }
     // Отказ или отмена — молча: на месте лица встанет клавиатура, код наберут сами.
     if (!stored) return false;
     return submitValue(stored);

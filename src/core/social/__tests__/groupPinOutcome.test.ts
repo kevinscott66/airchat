@@ -90,7 +90,9 @@ describe('исход рассылки закрепления дочитан', ()
 
   it('объявление исхода — одно правило на промис и на готовый ответ', () => {
     expect(ANNOUNCE).toContain('export function announceCtlNow(outcome: GroupControlOutcome): void {');
-    expect(ANNOUNCE).toContain('announceLater(sending, groupControlProblem);');
+    expect(ANNOUNCE).toContain(
+      "announceLater(sending, groupControlProblem, 'Не удалось разослать изменение участникам группы');"
+    );
     // Проверка показа живёт в одном месте: своей копии у обёрток нет.
     expect(count(ANNOUNCE, 'const problem = groupControlProblem(outcome);')).toBe(0);
   });

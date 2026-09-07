@@ -1017,6 +1017,10 @@ export function StoriesRow({
       {composerUri ? (
         <StoryComposer
           uri={composerUri}
+          // v4.32.626: ветка пустого состояния этот признак передавала, а
+          // основная — нет, и выбранное видео открывалось в <Image>: чёрный
+          // кадр вместо ролика на самом частом пути.
+          isVideo={composerMediaType === 'video'}
           onPublish={(text) => void publishFromComposer(text)}
           onCancel={() => setComposerUri(null)}
         />

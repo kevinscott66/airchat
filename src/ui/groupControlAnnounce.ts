@@ -20,7 +20,7 @@ import { announceLater, announceNow } from './announceOutcome';
  * и появлялся — по одному `void` за раз.
  */
 export function announceCtl(sending: Promise<GroupControlOutcome>): void {
-  announceLater(sending, groupControlProblem);
+  announceLater(sending, groupControlProblem, 'Не удалось разослать изменение участникам группы');
 }
 
 /** То же самое для уже полученного исхода — чтобы правило осталось одно. */
