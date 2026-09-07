@@ -54,6 +54,7 @@ import { rateLimiter } from '../security/rateLimiter';
 import { acceptGroupControlTs, commitGroupControlTs, groupControlTsFresh } from './controlWatermark';
 import { GROUP_BANLIST_MAX, countBanned, countsAsMember, roleChangeSysText } from './groupRolePolicy';
 import { clearGroupRemoval, markGroupRemoval, wasRemovedFromGroup } from './groupRemovalMark';
+import { clearGroupLeft, inviteNewerThanLeave } from './groupLeaveMark';
 import { sanitizeMediaCids } from '../media/mediaCidPolicy';
 import { withinMessageTextLimit } from './messageTextLimit';
 import { privacyPrefTryBoolFor, readReceiptsAllowedFor } from '../settings/privacyPrefs';
@@ -1208,6 +1209,15 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.warn('group_ctl_invite_untrusted_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return true;
     }
+    // v4.32.621: единственная защита приглашения от повтора — `if (group)`
+    // выше, и выход из группы её же и снимает: deleteGroup стирает строку, и
+    // те же байты, присланные ещё раз, заводят группу заново. Отметка выхода
+    // отличает повтор прошлого от нового приглашения по времени конверта —
+    // см. groupLeaveMark.ts.
+    if (!(await inviteNewerThanLeave(env.groupId, pid, env.ts))) {
+      log.warn('group_ctl_invite_after_leave_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
+      return true;
+    }
     const myPub = rcpt.myPub;
     const myName = (await getOwnDisplayNameFor(pid)) ?? 'Вы';
     // v4.32.615: владелец из конверта. Роль назначается ровно одному ключу и
@@ -1237,6 +1247,8 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     if (env.avatarCid) await updateGroupMeta(env.groupId, pid, { avatarCid: env.avatarCid });
     await insertCtlSysMessage(env, pid, `${env.actorName || 'Администратор'} добавил(а) вас в группу`);
     await kvDeleteScoped(pid, INVITE_PENDING_KEY_PREFIX + env.groupId);
+    // Приглашение принято — прежний выход больше ничего не значит.
+    await clearGroupLeft(env.groupId, pid);
     log.info('group_ctl_invite_applied', { gid: env.groupId.slice(0, 8), members: env.members.length });
     return true;
   }

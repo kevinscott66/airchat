@@ -161,6 +161,7 @@ import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { resolvePinned, togglePinAndSync, groupPinRefusalText, clearPinned, applyLocalPin, type PinnedEntry } from '../../core/social/groupPinSync';
 import { canPinInGroup, type PinRole } from '../../core/social/groupPinPolicy';
 import { buildGroupInviteLink } from '../../core/social/groupInviteLink';
+import { markGroupLeft } from '../../core/social/groupLeaveMark';
 import { buildGroupLink, webForm } from '../../core/net/appLink';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX, normalizeOwnGroupDescription, normalizeOwnGroupName } from '../../core/social/groupNameRule';
 import { canSendToGroup, slowModeRemaining, slowModeSysLine, formatSlowMode, MAX_SLOWMODE_SECONDS, type SendRole } from '../../core/social/groupSendPolicy';
@@ -5759,6 +5760,13 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
                   await fanoutGroupControl(g.id, pid, myPubB64, { op: 'leave', target: myPubB64, targetName: myName }, myName)
                 );
               }
+              // v4.32.621: отметку ставим ДО удаления строки. Промежуток
+              // между deleteGroup и записью — это промежуток, в котором повтор
+              // приглашения заводит группу обратно (см. groupLeaveMark.ts).
+              // Обратный порядок ошибок безвреден: отметка при несостоявшемся
+              // удалении ничего не меняет, пока строка группы на месте —
+              // ветка 'invite' выходит на `if (group)` раньше проверки.
+              await markGroupLeft(g.id, pid);
               await deleteGroup(g.id, pid);
               await loadGroups();
               if (problem) showError(problem);
