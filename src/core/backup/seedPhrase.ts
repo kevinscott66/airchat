@@ -12,7 +12,8 @@ import * as SecureStore from '../storage/secureStoreQueued';
 import { BACKUP_TEXT_MAX } from './backupFormat';
 import { generateMnemonic, validateMnemonic } from 'bip39';
 import type { KeyPairBytes } from '../crypto/keyManager';
-import { persistKeyPair } from '../crypto/keyManager';
+import { persistKeyPair, readKeyRecord } from '../crypto/keyManager';
+import { bytesEqualConstTime } from '../crypto/bytesEqual';
 import { encryptSymmetric, decryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
 import { mnemonicSeedCached, clearMnemonicSeedCache } from '../crypto/mnemonicSeed';
 import { acceptKdfIters } from '../crypto/kdfIters';
@@ -381,13 +382,53 @@ export async function generateMnemonicAndStore(): Promise<{ mnemonic: string; pa
   return { mnemonic, pair };
 }
 
+/**
+ * Восстановление поверх фразы, которую не удалось прочитать (v4.32.634).
+ *
+ * Дефект. `getStoredMnemonic()` отвечает `null` и на «фразы на устройстве
+ * нет», и на «фраза есть, но не открылась»: `tryDecryptLocalPayload` на любом
+ * сбое возвращает `null`, а ключ обёртки с v4.32.615 намеренно не заводится
+ * заново — негодные байты остаются лежать, вдруг починятся. Первый случай
+ * законный: чистая установка, поверх нечего писать. Второй — тот самый отказ
+ * ЧТЕНИЯ, который здесь превращался в необратимую ЗАПИСЬ: проверка «сначала
+ * выйдите из текущего кошелька» стоит под `previous &&` и не срабатывала
+ * вовсе, а `persistEncryptedMnemonic` с `persistKeyPair` записывали чужие
+ * слова поверх. Кошелёк A после этого не вернуть ничем: его слова стёрты, а
+ * больше их на устройстве нигде и не было.
+ *
+ * Отказывать на всякой нечитаемой записи нельзя: у кого сломался Keychain,
+ * тот чаще всего восстанавливает ТОТ ЖЕ кошелёк — и упирался бы в запрет на
+ * ровном месте. Сверить сами фразы нечем, но личность устройства лежит
+ * отдельно: если открытый ключ, выводимый из введённых слов, совпал с
+ * записанным в `keyManager`, — слова те же самые, и запись поверх не теряет
+ * ничего. Не совпал, или не читается и он, — чей это кошелёк, неизвестно, и
+ * стирать его вслепую нельзя. Выход тот же, что и у соседней проверки: выйти
+ * из аккаунта (`wipeMnemonicAndSessionFlags`) и восстановиться начисто.
+ *
+ * Ответ `true` заодно бережёт реестр профилей: `PROFILE_STATE_KEY` сносится
+ * ради того, чтобы ЧУЖОЙ seed не подобрал чужие профили, а здесь seed тот же.
+ */
+async function sameWalletBehindUnreadablePhrase(pair: KeyPairBytes): Promise<boolean> {
+  const stored = await SecureStore.getItemAsync(MNEMONIC_ENC_PAYLOAD_KEY);
+  if (!stored) return false;
+  const record = await readKeyRecord();
+  if (record.pair && bytesEqualConstTime(record.pair.publicKey, pair.publicKey)) {
+    log.warn('seed_restore_over_unreadable_phrase_same_identity');
+    return true;
+  }
+  log.error('seed_restore_refused_unreadable_phrase', { keys: record.state });
+  throw new Error('Слова на устройстве не читаются, и чей это кошелёк — неизвестно. Выйдите из аккаунта и восстановите заново.');
+}
+
 /** Restore identity from a BIP39 phrase (replaces local Ed25519 keys). */
 export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairBytes> {
   invalidateMnemonicGeneration();
   const pair = deriveKeyPairFromMnemonic(mnemonic);
   const normalized = mnemonic.trim().split(/\s+/).join(' ');
   const previous = await getStoredMnemonic();
-  if (!previous || previous !== normalized) {
+  const sameWallet =
+    previous !== null ? previous === normalized : await sameWalletBehindUnreadablePhrase(pair);
+  if (!sameWallet) {
     if (previous && !(await hasAccountVaultSnapshot(normalized))) {
       throw new Error('Сначала выйдите из текущего кошелька, затем восстановите новый.');
     }
