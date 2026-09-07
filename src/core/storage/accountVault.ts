@@ -13,6 +13,7 @@ import { deriveLocalDekFromMnemonic } from './dekDerivation';
 import { mnemonicSeedCached } from '../crypto/mnemonicSeed';
 import { ED25519_PUBLIC_KEY_BYTES } from '../crypto/pubKeyFormat';
 import { encryptSymmetric, decryptSymmetric } from '../crypto/encrypt';
+import { readDekFromSecureStoreRaw } from './localEncryption';
 import * as SecureStore from './secureStoreQueued';
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import { log } from '../logger';
@@ -29,6 +30,16 @@ type VaultManifestV1 = {
   dbFiles: string[];
   avatarFiles: string[];
   profileStateB64: string | null;
+  /**
+   * Отпечаток ключа, которым зашифрованы строки в снятых файлах (v4.32.615).
+   *
+   * Не секрет: по нему ключ не восстановить. Нужен, чтобы отличить копию,
+   * которую это устройство сможет прочитать, от копии с чужим ключом —
+   * вторая ложится поверх рабочей базы и молча превращает переписку в
+   * нечитаемые ячейки. Копии старых сборок поля не имеют; для них проверить
+   * нечего, и восстановление идёт как раньше.
+   */
+  dekFp?: string | null;
 };
 
 export type AccountVaultManifest = VaultManifestV1;
@@ -98,6 +109,40 @@ function encryptedProfileStateB64(raw: string, mnemonic: string): string {
     new TextEncoder().encode(raw),
   );
   return Buffer.from(encrypted).toString('base64');
+}
+
+/** Отпечаток ключа: сам ключ по нему не восстановить. */
+function dekFingerprint(dek: Uint8Array): string {
+  return Buffer.from(sha256(dek)).toString('hex').slice(0, 16);
+}
+
+/**
+ * Совпадает ли ключ копии с ключом этого устройства.
+ *
+ * Проверять надо ДО первой записи: восстановление затирает и базу, и список
+ * профилей, так что отказ после записи оставил бы устройство без обеих копий.
+ */
+async function vaultKeyMatches(manifest: VaultManifestV1, accountId: string): Promise<boolean> {
+  const fingerprint = manifest.dekFp;
+  if (typeof fingerprint !== 'string' || !fingerprint) return true;
+  const current = await readDekFromSecureStoreRaw();
+  if (!current) return true;
+  if (dekFingerprint(current) === fingerprint) return true;
+  log.warn('account_vault_dek_mismatch', { accountId });
+  return false;
+}
+
+/**
+ * Список профилей из копии: `null` — копия испорчена, `''` — профилей нет.
+ *
+ * Раньше нечитаемый список молча пропускали, и восстановление докладывало об
+ * успехе, оставив на устройстве список профилей от прошлого владельца: базу
+ * со всеми профилями восстановили, а видно только первый.
+ */
+function vaultProfileState(manifest: VaultManifestV1, mnemonic: string): string | null {
+  const raw = manifest.profileStateB64;
+  if (!raw) return '';
+  return decryptProfileState(raw, normalizeMnemonic(mnemonic));
 }
 
 function decryptProfileState(raw: string, mnemonic: string): string | null {
@@ -172,6 +217,7 @@ export async function snapshotAccountVault(
   await FileSystem.makeDirectoryAsync(`${stageDir}avatars/`, { intermediates: true });
 
   try {
+    const snapshotDek = await readDekFromSecureStoreRaw();
     const dbDir = `${base}SQLite/`;
     const dbNames = (await exists(dbDir) ? await FileSystem.readDirectoryAsync(dbDir) : [])
       .filter((name) => DB_FILE_RE.test(name));
@@ -188,6 +234,7 @@ export async function snapshotAccountVault(
       profileStateB64: profileStateRaw
         ? encryptedProfileStateB64(profileStateRaw, normalizeMnemonic(mnemonic))
         : null,
+      dekFp: snapshotDek ? dekFingerprint(snapshotDek) : null,
     };
     await FileSystem.writeAsStringAsync(`${stageDir}${MANIFEST_FILE}`, JSON.stringify(manifest));
     await replaceVaultDirectory(stageDir, finalDir, root, accountId);
@@ -242,12 +289,12 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
       !Array.isArray(manifest.avatarFiles)
     ) return false;
 
-    if (manifest.profileStateB64) {
-      const profileState = decryptProfileState(manifest.profileStateB64, normalizeMnemonic(mnemonic));
-      if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
-    } else {
-      await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    const profileState = vaultProfileState(manifest, mnemonic);
+    if (profileState === null) {
+      log.warn('account_vault_profile_state_unreadable', { accountId });
+      return false;
     }
+    if (!(await vaultKeyMatches(manifest, accountId))) return false;
 
     const dbDir = `${base}SQLite/`;
     await FileSystem.makeDirectoryAsync(dbDir, { intermediates: true });
@@ -261,6 +308,8 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
       const destination = `${base}${name}`;
       if (await exists(`${dir}avatars/${name}`)) await replaceFile(`${dir}avatars/${name}`, destination);
     }
+    if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
+    else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
     log.info('account_vault_restored', {
       accountId,
       dbFiles: manifest.dbFiles.length,
@@ -333,6 +382,13 @@ export async function restoreAccountVaultArchive(
   ) return false;
 
   try {
+    const profileState = vaultProfileState(archive.manifest, mnemonic);
+    if (profileState === null) {
+      log.warn('account_vault_profile_state_unreadable', { accountId });
+      return false;
+    }
+    if (!(await vaultKeyMatches(archive.manifest, accountId))) return false;
+
     await FileSystem.makeDirectoryAsync(`${base}SQLite/`, { intermediates: true });
     const manifestDbFiles = Array.isArray(archive.manifest.dbFiles) ? archive.manifest.dbFiles : [];
     const manifestAvatarFiles = Array.isArray(archive.manifest.avatarFiles) ? archive.manifest.avatarFiles : [];
@@ -353,12 +409,8 @@ export async function restoreAccountVaultArchive(
       await FileSystem.deleteAsync(destination, { idempotent: true });
       await FileSystem.moveAsync({ from: temporary, to: destination });
     }
-    if (archive.manifest?.profileStateB64) {
-      const profileState = decryptProfileState(archive.manifest.profileStateB64, normalizeMnemonic(mnemonic));
-      if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
-    } else {
-      await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
-    }
+    if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
+    else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
     log.info('account_vault_archive_restored', {
       accountId,
       files: archive.files.length,
