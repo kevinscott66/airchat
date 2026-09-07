@@ -7320,8 +7320,7 @@ async function recordStoryViewInTx(
 async function dropStoryMediaFiles(
   d: SQLite.SQLiteDatabase,
   dek: Uint8Array,
-  doomed: readonly StoryUriCell[],
-  ownerProfileId: number
+  doomed: readonly StoryUriCell[]
 ): Promise<void> {
   // v4.32.586: истёкшая строка, чей адрес не открылся, унесла его с собой —
   // стереть файл нечем, и он остаётся до суточного sweepMediaCache. Молчать
@@ -7336,8 +7335,15 @@ async function dropStoryMediaFiles(
     // Уцелевшие строки: один и тот же файл может быть у двух сторис (одна и
     // та же приходит от контакта и остаётся своей), и стереть его вместе с
     // первой значило бы опустошить вторую.
+    //
+    // v4.32.615: без условия по профилю — намеренно, как у
+    // ATTACHMENT_REF_SOURCES. Кэш расшифрованных снимков один на приложение, а
+    // имя файла определяется самим вложением: одна и та же сторис от общего
+    // контакта в двух профилях даёт один и тот же файл. Спрашивая только свой
+    // профиль, уборка второго профиля не видела и стирала снимок у него
+    // из-под ног — ровно тот случай, ради которого этот список и заведён.
     const alive = (await d.getAllAsync<{ media_uri: string | null }>(
-      'SELECT media_uri FROM stories WHERE owner_profile_id = ?', [ownerProfileId]
+      'SELECT media_uri FROM stories'
     )).map((r) => storyUriCell(r.media_uri, dek));
     const plan = planStoryMediaSweep(ours, alive);
     if (plan.blocked) {
@@ -7369,7 +7375,7 @@ export async function deleteExpiredStories(ownerProfileId?: number): Promise<voi
   await d.runAsync('DELETE FROM stories WHERE expires_at < ? AND owner_profile_id = ?', [now, pid]);
   if (doomed.length === 0) return;
   const dek = await getOrCreateDataEncryptionKey();
-  await dropStoryMediaFiles(d, dek, doomed.map((r) => storyUriCell(r.media_uri, dek)), pid);
+  await dropStoryMediaFiles(d, dek, doomed.map((r) => storyUriCell(r.media_uri, dek)));
 }
 
 export async function deleteStory(storyId: string, ownerProfileId?: number): Promise<void> {
@@ -7380,7 +7386,7 @@ export async function deleteStory(storyId: string, ownerProfileId?: number): Pro
   await d.runAsync('DELETE FROM stories WHERE id = ? AND owner_profile_id = ?', [storyId, pid]);
   if (!row) return;
   const dek = await getOrCreateDataEncryptionKey();
-  await dropStoryMediaFiles(d, dek, [storyUriCell(row.media_uri, dek)], pid);
+  await dropStoryMediaFiles(d, dek, [storyUriCell(row.media_uri, dek)]);
 }
 
 /* ─── Альбомы историй (v4.32.576) ─────────────────────────────────────────── */

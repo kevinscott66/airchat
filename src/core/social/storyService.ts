@@ -29,6 +29,7 @@ import { isNbCid, parseNbCid, resolveBlobToLocalFile } from '../media/mediaBlob'
 import { uploadMediaToCid } from '../media/mediaUpload';
 import { IPFS_VIDEO_MAX_BYTES } from '../media/uploadRoute';
 import type { StoryMediaFailure, StoryPublishOutcome } from './storyPublishOutcome';
+import { rateLimiter } from '../security/rateLimiter';
 import { log } from '../logger';
 
 const STORY_TOPIC_PREFIX = '/airchat/v1/stories/';
@@ -155,7 +156,15 @@ export async function publishStory(
 
   // Рассылка контактам. Основной путь — личное сообщение с управляющим
   // префиксом: он шифруется и доезжает через тот же транспорт, что переписка.
-  const contacts = await listContactsFor(pid);
+  //
+  // v4.32.615: заблокированные отсеиваются здесь, а не внутри sendMessage.
+  // Там отказ по блокировке поднимает баннер «Контакт заблокирован» — на
+  // публикации сторис автор получал по такому баннеру за каждого, кого сам же
+  // и заблокировал, ни одному человеку при этом ничего не написав. Ещё
+  // блокировка — не сбой связи: если все получатели заблокированы, список
+  // рассылки пуст, и говорить «сторис не ушла ни одному контакту» не о чем.
+  await rateLimiter.whenReady();
+  const contacts = (await listContactsFor(pid)).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
   const text2 = encodeStoryEnvelope(envelope);
   const payload = new TextEncoder().encode(JSON.stringify(envelope));
   const { getMessagingService } = await import('./messaging');
@@ -164,8 +173,10 @@ export async function publishStory(
   await Promise.allSettled(
     contacts.map(async (c) => {
       try {
-        if (svc) {
-          await svc.sendMessage(c.peerPublicKey, text2);
+        // v4.32.615: отказ у sendMessage — это null, а не исключение (часовой
+        // лимит, отсутствие ключа). Считая попытку доставкой, мы гасили
+        // единственное предупреждение автору: `delivered > 0`.
+        if (svc && (await svc.sendMessage(c.peerPublicKey, text2))) {
           delivered += 1;
         }
       } catch (e) {
