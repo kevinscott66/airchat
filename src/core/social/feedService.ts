@@ -273,7 +273,7 @@ function feedStorageBelongsTo(pair: KeyPairBytes): boolean {
   return storageIsOwn(pid, currentProfileId);
 }
 
-async function ensureStorage(): Promise<FeedStorage> {
+async function ensureStorage(ownerProfileId?: number): Promise<FeedStorage> {
   // v4.32.31: ждём inflight setFeedProfileContext, если он в процессе — это
   // устраняет race, когда receiveFeedEnvelope или UI-call (loadFeedPosts и т.п.)
   // срабатывал между `switchProfile` и `rebindFeedToProfile` и попадал на
@@ -281,31 +281,52 @@ async function ensureStorage(): Promise<FeedStorage> {
   if (ctxPromise) {
     try { await ctxPromise; } catch { /* ignored: followup attempt ниже */ }
   }
-  if (storage && currentProfileId != null) return storage;
+  if (storage && currentProfileId != null) {
+    // v4.32.615: у синхронизации аккаунта свой номер профиля, и он не обязан
+    // совпадать с привязкой ленты. Проход, начатый до переключения профиля,
+    // продолжает работать со СТАРЫМ номером, а лента к этому моменту уже
+    // перепривязана — записи чужого профиля ложились бы в открытую базу, а
+    // выгрузка уезжала бы наверх под чужой меткой. Отказ здесь не теряет
+    // данные: курсор не двигается, и следующий проход сделает то же самое
+    // уже при верной привязке.
+    if (!storageIsOwn(ownerProfileId ?? null, currentProfileId)) {
+      throw new Error('feed_storage_profile_mismatch');
+    }
+    return storage;
+  }
   // Last-ditch: профиль ещё не установлен (старт приложения до identity-effect).
   // НЕ пишем в произвольную БД — ждём явного setFeedProfileContext от caller'а.
   throw new Error('feed_storage_profile_unset');
 }
 
 /** Server-sync projection hooks for the active profile. */
-export async function exportFeedSyncSnapshot(): Promise<FeedSyncSnapshot> {
-  return (await ensureStorage()).exportSyncSnapshot();
+export async function exportFeedSyncSnapshot(ownerProfileId: number): Promise<FeedSyncSnapshot> {
+  return (await ensureStorage(ownerProfileId)).exportSyncSnapshot();
 }
 
-export async function applyFeedSyncPost(row: FeedPostRow): Promise<void> {
-  await (await ensureStorage()).upsertSyncPost(row);
+export async function applyFeedSyncPost(row: FeedPostRow, ownerProfileId: number): Promise<void> {
+  await (await ensureStorage(ownerProfileId)).upsertSyncPost(row);
 }
 
-export async function applyFeedSyncComment(row: FeedCommentRow): Promise<void> {
-  await (await ensureStorage()).upsertSyncComment(row);
+export async function applyFeedSyncComment(
+  row: FeedCommentRow,
+  ownerProfileId: number,
+): Promise<void> {
+  await (await ensureStorage(ownerProfileId)).upsertSyncComment(row);
 }
 
-export async function applyFeedSyncPostDelete(postId: string): Promise<void> {
-  await (await ensureStorage()).deleteSyncPost(postId);
+export async function applyFeedSyncPostDelete(
+  postId: string,
+  ownerProfileId: number,
+): Promise<void> {
+  await (await ensureStorage(ownerProfileId)).deleteSyncPost(postId);
 }
 
-export async function applyFeedSyncCommentDelete(tombstone: FeedSyncTombstone): Promise<void> {
-  await (await ensureStorage()).deleteSyncComment(
+export async function applyFeedSyncCommentDelete(
+  tombstone: FeedSyncTombstone,
+  ownerProfileId: number,
+): Promise<void> {
+  await (await ensureStorage(ownerProfileId)).deleteSyncComment(
     tombstone.commentId,
     tombstone.postId,
     tombstone.deletedAt,

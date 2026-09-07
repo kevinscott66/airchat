@@ -224,8 +224,11 @@ describe('приём: удаление без подписи отклоняет�
     mockCommentTombstones = [{ commentId: 'c-1', postId: 'p-1', deletedAt: 5 }];
     const [mutation] = await push();
     await pull([mutation]);
+    // v4.32.615: номер владельца идёт вторым доводом — лента больше не берёт
+    // базу «активного» профиля, а работает с той, которой принадлежит метка.
     expect(deleteComment).toHaveBeenCalledWith(
       expect.objectContaining({ commentId: 'c-1', postId: 'p-1' }),
+      1,
     );
   });
 

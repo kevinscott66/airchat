@@ -248,7 +248,7 @@ async function collectLocalEntities(ownerProfileId: number): Promise<LocalEntity
     exportDialogKvSnapshot(ownerProfileId),
     exportSyncProfileSettings(ownerProfileId),
     exportGroupBackupRows(ownerProfileId),
-    exportFeedSyncSnapshot(),
+    exportFeedSyncSnapshot(ownerProfileId),
     exportStoryAlbumSyncSnapshot(ownerProfileId),
   ]);
   const entities: LocalEntity[] = [];
@@ -466,7 +466,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       return;
     }
     if (mutation.entityKind === 'feed_post') {
-      await applyFeedSyncPostDelete(rawEntityId);
+      await applyFeedSyncPostDelete(rawEntityId, mutation.ownerProfileId);
     } else if (mutation.entityKind === 'feed_comment') {
       const separator = rawEntityId.indexOf('\u0000');
       if (separator <= 0) throw new Error('Некорректная tombstone ленты.');
@@ -474,7 +474,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
         commentId: rawEntityId.slice(0, separator),
         postId: rawEntityId.slice(separator + 1),
         deletedAt: mutation.updatedAt,
-      });
+      }, mutation.ownerProfileId);
     } else if (mutation.entityKind === 'story_album') {
       // Не deleteSyncEntity: вместе со строками альбома с диска уходят копии
       // снимков, а local.ts до файлов не дотягивается.
@@ -531,10 +531,10 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       await applySyncGroupMember(entity.value as GroupMemberBackupRow, mutation.ownerProfileId);
       break;
     case 'feed_post':
-      await applyFeedSyncPost(entity.value as FeedPostRow);
+      await applyFeedSyncPost(entity.value as FeedPostRow, mutation.ownerProfileId);
       break;
     case 'feed_comment':
-      await applyFeedSyncComment(entity.value as FeedCommentRow);
+      await applyFeedSyncComment(entity.value as FeedCommentRow, mutation.ownerProfileId);
       break;
     case 'story_album':
       await applySyncStoryAlbum(entity.value, mutation.ownerProfileId);
