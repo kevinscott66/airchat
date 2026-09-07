@@ -4966,12 +4966,18 @@ export async function setConversationArchived(
   }
 }
 
-/** Беззвучный режим / включить звук для диалога. */
+/**
+ * Беззвучный режим диалога. `false` — база отказала, флаг НЕ записан.
+ *
+ * v4.32.630: отказ здесь гасился и наружу не выходил, а экраны чата и списка
+ * переписок переключали строку меню сразу после вызова. Человек видел
+ * «Включить звук» там, где в базе всё ещё стоит muted=1, — и наоборот.
+ */
 export async function setConversationMuted(
   contactPubB64: string,
   ownerProfileId: number,
   muted: boolean
-): Promise<void> {
+): Promise<boolean> {
   try {
     const d = await db();
     const exists = await d.getFirstAsync<{ contact_pub_b64: string }>(
@@ -4990,13 +4996,15 @@ export async function setConversationMuted(
       );
     }
     emitChatWrites();
+    return true;
   } catch (e) {
     log.warn('conversation_mute_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 
 /**
- * Беззвучный режим с таймером.
+ * Беззвучный режим с таймером. `false` — база отказала, срок НЕ записан.
  * @param until null = навсегда, Date.now()+ms = до указанного времени
  * Передайте until=0 или вызовите setConversationMuted(…, false) для отключения.
  */
@@ -5004,7 +5012,7 @@ export async function setConversationMutedUntil(
   contactPubB64: string,
   ownerProfileId: number,
   until: number | null
-): Promise<void> {
+): Promise<boolean> {
   try {
     const d = await db();
     const exists = await d.getFirstAsync<{ contact_pub_b64: string }>(
@@ -5023,8 +5031,10 @@ export async function setConversationMutedUntil(
       );
     }
     emitChatWrites();
+    return true;
   } catch (e) {
     log.warn('conversation_mute_until_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 

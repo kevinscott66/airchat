@@ -862,16 +862,24 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         {
           text: item.muted ? 'Включить звук' : 'Беззвучно…',
           onPress: () => {
+            // v4.32.630: обе половины беззвучного режима — флаг диалога и
+            // запись глушения — гасили свой отказ, и строка меню обновлялась
+            // безусловно. Человек видел «Включить звук» там, где в базе всё
+            // ещё muted=1, и наоборот: тишину обещали, а уведомления шли.
             if (item.muted) {
-              void setConversationMuted(item.contactPubB64, pid, false)
-                .then(() => muteUnset('chat', item.contactPubB64))
-                .then(loadData);
+              void (async () => {
+                const okRow = await setConversationMuted(item.contactPubB64, pid, false);
+                const okMute = await muteUnset('chat', item.contactPubB64);
+                loadData();
+                if (!okRow || !okMute) showError('Не удалось включить звук');
+              })();
             } else {
               const snooze = (ms: number | null) => async () => {
                 const u = ms === null ? null : Date.now() + ms;
-                await setConversationMutedUntil(item.contactPubB64, pid, u);
-                await muteSet('chat', item.contactPubB64, u !== null ? { untilMs: u } : undefined);
+                const okRow = await setConversationMutedUntil(item.contactPubB64, pid, u);
+                const okMute = await muteSet('chat', item.contactPubB64, u !== null ? { untilMs: u } : undefined);
                 loadData();
+                if (!okRow || !okMute) showError('Не удалось отключить уведомления');
               };
               Alert.alert('Беззвучный режим', 'Выберите длительность:', [
                 { text: '1 час', onPress: () => void snooze(3_600_000)() },

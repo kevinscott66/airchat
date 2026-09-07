@@ -34,7 +34,6 @@ import {
   scopedKvDeleteChecked,
   scopedKvGet,
   scopedKvListKeysByPrefix,
-  scopedKvSet,
   scopedKvSetChecked,
   scopedKvTryGet,
 } from '../storage/profileScopedKv';
@@ -109,15 +108,27 @@ export async function getMuteState(kind: MuteKind, id: string): Promise<{ muted:
 }
 
 /**
- * Замьютить identifier.
+ * Замьютить identifier. `false` — база отказала, глушение НЕ поставлено.
+ *
  * @param opts.untilMs — epoch ms автопродления. Если не передан — бессрочно.
+ *
+ * v4.32.630: ответ появился по той же причине, по которой он появился у
+ * {@link unmute} в v4.32.626, — только зеркально. `scopedKvSet` гасит свою
+ * ошибку, функция не возвращала ничего, и все экраны безусловно рисовали
+ * «Без звука на 8 часов» и переключали строку. Записи при этом не было:
+ * уведомления продолжали приходить, а список «Заглушённые» оставался пустым —
+ * узнать о расхождении человеку было неоткуда, и повторить попытку он не
+ * догадывался, ведь ему уже сказали, что получилось.
+ *
+ * Порченый срок — тоже `false`: человек просил тишины до утра, а получил
+ * снятие глушения (см. v4.32.490 ниже), и называть это успехом нельзя.
  */
 export async function setMuted(
   kind: MuteKind,
   id: string,
   opts?: { untilMs?: number }
-): Promise<void> {
-  if (!id) return;
+): Promise<boolean> {
+  if (!id) return false;
   const until = opts?.untilMs;
   let value = '1';
   if (until !== undefined) {
@@ -130,12 +141,13 @@ export async function setMuted(
     if (!Number.isFinite(until) || until <= now) {
       log.warn('mute_set_bad_until', { kind, untilMs: until });
       await unmute(kind, id);
-      return;
+      return false;
     }
     value = `until:${Math.round(Math.min(until, now + MUTE_MAX_MS))}`;
   }
-  await scopedKvSet(keyFor(kind, id), value);
-  log.info('mute_set', { kind, id: id.slice(0, 24), untilMs: until ?? null });
+  const ok = await scopedKvSetChecked(keyFor(kind, id), value);
+  log.info('mute_set', { kind, id: id.slice(0, 24), untilMs: until ?? null, ok });
+  return ok;
 }
 
 /**

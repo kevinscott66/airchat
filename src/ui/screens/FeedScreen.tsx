@@ -1256,11 +1256,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const toggleMutePost = useCallback(async (postId: string) => {
     const { isMuted, setMuted, unmute } = await import('../../core/notifications/muteStore');
     const currently = await isMuted('post', postId);
+    // v4.32.630: оба вызова гасят отказ базы, а список отключённых постов
+    // переключался безусловно — значок «без звука» показывал не то, что
+    // записано, и уведомления о комментариях приходили дальше.
     if (currently) {
-      await unmute('post', postId);
+      if (!(await unmute('post', postId))) { showError('Не удалось включить уведомления'); return; }
       setMutedPosts((prev) => { const n = new Set(prev); n.delete(postId); return n; });
     } else {
-      await setMuted('post', postId);
+      if (!(await setMuted('post', postId))) { showError('Не удалось отключить уведомления'); return; }
       setMutedPosts((prev) => { const n = new Set(prev); n.add(postId); return n; });
     }
   }, []);

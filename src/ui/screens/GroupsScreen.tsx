@@ -3486,7 +3486,10 @@ function GroupChatScreen({
                         // не говорил об этом ни строчкой.
                         runGuardedOp(async () => {
                           await setGroupMuted(group.id, pid, false);
-                          await muteUnset(kind, group.id);
+                          // v4.32.630: muteUnset гасит отказ базы и отвечает
+                          // false — без проверки строка меню переключалась, а
+                          // запись глушения оставалась на месте.
+                          if (!(await muteUnset(kind, group.id))) throw new Error('mute_unset_failed');
                           setIsGrpMuted(false);
                           showSuccess('Уведомления включены');
                         }, 'Не удалось включить уведомления');
@@ -3494,7 +3497,10 @@ function GroupChatScreen({
                         const snooze = (ms: number | null, label: string) => () => runGuardedOp(async () => {
                           const u = ms === null ? null : Date.now() + ms;
                           await setGroupMutedUntil(group.id, pid, u);
-                          await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined);
+                          // v4.32.630: см. выше — ответ setMuted тоже надо спросить.
+                          if (!(await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined))) {
+                            throw new Error('mute_set_failed');
+                          }
                           setIsGrpMuted(true);
                           showSuccess(label);
                         }, 'Не удалось отключить уведомления');
@@ -3588,7 +3594,10 @@ function GroupChatScreen({
                         // не говорил об этом ни строчкой.
                         runGuardedOp(async () => {
                           await setGroupMuted(group.id, pid, false);
-                          await muteUnset(kind, group.id);
+                          // v4.32.630: muteUnset гасит отказ базы и отвечает
+                          // false — без проверки строка меню переключалась, а
+                          // запись глушения оставалась на месте.
+                          if (!(await muteUnset(kind, group.id))) throw new Error('mute_unset_failed');
                           setIsGrpMuted(false);
                           showSuccess('Уведомления включены');
                         }, 'Не удалось включить уведомления');
@@ -3596,7 +3605,10 @@ function GroupChatScreen({
                         const snooze = (ms: number | null, label: string) => () => runGuardedOp(async () => {
                           const u = ms === null ? null : Date.now() + ms;
                           await setGroupMutedUntil(group.id, pid, u);
-                          await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined);
+                          // v4.32.630: см. выше — ответ setMuted тоже надо спросить.
+                          if (!(await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined))) {
+                            throw new Error('mute_set_failed');
+                          }
                           setIsGrpMuted(true);
                           showSuccess(label);
                         }, 'Не удалось отключить уведомления');
@@ -5897,13 +5909,15 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
           if (g.muted) {
             runRowOp(async () => {
               await setGroupMuted(g.id, pid, false);
-              await muteUnset(kind, g.id);
+              if (!(await muteUnset(kind, g.id))) throw new Error('mute_unset_failed');
             }, 'Не удалось включить звук');
           } else {
             const snooze = (ms: number | null) => () => runRowOp(async () => {
               const u = ms === null ? null : Date.now() + ms;
               await setGroupMutedUntil(g.id, pid, u);
-              await muteSet(kind, g.id, u !== null ? { untilMs: u } : undefined);
+              if (!(await muteSet(kind, g.id, u !== null ? { untilMs: u } : undefined))) {
+                throw new Error('mute_set_failed');
+              }
             }, 'Не удалось отключить уведомления');
             Alert.alert('Беззвучный режим', 'Выберите длительность:', [
               { text: '1 час', onPress: snooze(3_600_000) },

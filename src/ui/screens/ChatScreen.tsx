@@ -3241,16 +3241,22 @@ function ChatThreadView({
                   {
                     text: muteLabel,
                     onPress: () => {
+                      // v4.32.630: обе записи гасили свой отказ, а шапка чата
+                      // переключалась безусловно — она показывала не то, что в
+                      // базе. Молчание обещано, уведомления идут.
                       if (isMuted) {
-                        void setConversationMuted(peerB64, activeProfileId, false).then(async () => {
-                          await muteUnset('chat', peerB64);
+                        void (async () => {
+                          const okRow = await setConversationMuted(peerB64, activeProfileId, false);
+                          const okMute = await muteUnset('chat', peerB64);
+                          if (!okRow || !okMute) { showError('Не удалось включить звук'); return; }
                           setIsMuted(false); setMutedUntil(null);
-                        });
+                        })();
                       } else {
                         const snooze = (ms: number | null) => async () => {
                           const untilMs = ms === null ? null : Date.now() + ms;
-                          await setConversationMutedUntil(peerB64, activeProfileId, untilMs);
-                          await muteSet('chat', peerB64, untilMs !== null ? { untilMs } : undefined);
+                          const okRow = await setConversationMutedUntil(peerB64, activeProfileId, untilMs);
+                          const okMute = await muteSet('chat', peerB64, untilMs !== null ? { untilMs } : undefined);
+                          if (!okRow || !okMute) { showError('Не удалось отключить уведомления'); return; }
                           setIsMuted(true); setMutedUntil(untilMs);
                         };
                         Alert.alert('Беззвучный режим', 'Выберите длительность:', [
