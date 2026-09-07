@@ -3384,10 +3384,22 @@ export async function rebuildConversationsFromMessages(ownerProfileId: number): 
   }
 }
 
+const CONVERSATION_META_COLUMNS = `contact_pub_b64, unread_count, draft_text, pinned, archived, muted,
+            muted_until, pinned_message_id, disappear_after_ms, disappear_set_at, color_tag`;
+
+/** «В строке что-то настроено» — единственное условие выгрузки в копию. */
+const CONVERSATION_HAS_SETTINGS_SQL = `(pinned = 1 OR archived = 1 OR muted = 1 OR unread_count > 0
+             OR draft_text IS NOT NULL OR pinned_message_id IS NOT NULL
+             OR disappear_after_ms IS NOT NULL OR color_tag IS NOT NULL)`;
+
 /**
  * Настройки переписок для копии (v4.32.295): метка, закрепление, архив,
  * тишина, черновик, таймер самоуничтожения. Забираются только строки, где
  * что-то настроено, — остальное восстанавливается по сообщениям.
+ *
+ * Для синхронизации есть отдельная выгрузка (exportConversationSyncRows):
+ * там «строки нет в выгрузке» означает «строку удалили», и этот отбор туда
+ * не годится.
  */
 export async function exportConversationMetaRows(
   ownerProfileId: number
@@ -3395,13 +3407,43 @@ export async function exportConversationMetaRows(
   // v4.32.616: без перехвата — см. exportRawChatMessageRows.
   const d = await db();
   return await d.getAllAsync<ConversationMetaRow>(
-    `SELECT contact_pub_b64, unread_count, draft_text, pinned, archived, muted, muted_until,
-            pinned_message_id, disappear_after_ms, disappear_set_at, color_tag
+    `SELECT ${CONVERSATION_META_COLUMNS}
        FROM conversations
       WHERE owner_profile_id = ?
-        AND (pinned = 1 OR archived = 1 OR muted = 1 OR unread_count > 0
-             OR draft_text IS NOT NULL OR pinned_message_id IS NOT NULL
-             OR disappear_after_ms IS NOT NULL OR color_tag IS NOT NULL)`,
+        AND ${CONVERSATION_HAS_SETTINGS_SQL}`,
+    [ownerProfileId]
+  );
+}
+
+/**
+ * Те же настройки, но для синхронизации.
+ *
+ * v4.32.617. Синхронизация читала выгрузку копии, а трактует её иначе: голова,
+ * которой нет в выгрузке, считается удалённой, и на остальные устройства
+ * уезжает надгробие — deleteSyncEntity('conversation') сносит строку целиком.
+ * Отбор «только там, где что-то настроено» этому противоречил: снятие
+ * последней настройки (открепили единственный закреплённый чат) выкидывало
+ * живую строку из выгрузки, и переписка пропадала из списка на других
+ * устройствах — вместе с last_message_at, last_message_preview и
+ * last_message_direction, которых в выгрузке нет и которые импорт не
+ * восстанавливает. Сообщения при этом оставались в chat_messages, а
+ * rebuildConversationsFromMessages в этом проходе не вызывается: его запускает
+ * только изменение сообщений.
+ *
+ * Поэтому здесь строка попадает в выгрузку и тогда, когда в ней есть след
+ * переписки. Пропадает она только вместе с этим следом — то есть после
+ * clearChatHistory, которая обнуляет и настройки, и last_message_at. Ровно там
+ * надгробие и уместно.
+ */
+export async function exportConversationSyncRows(
+  ownerProfileId: number
+): Promise<ConversationMetaRow[]> {
+  const d = await db();
+  return await d.getAllAsync<ConversationMetaRow>(
+    `SELECT ${CONVERSATION_META_COLUMNS}
+       FROM conversations
+      WHERE owner_profile_id = ?
+        AND (${CONVERSATION_HAS_SETTINGS_SQL} OR last_message_at > 0)`,
     [ownerProfileId]
   );
 }

@@ -44,7 +44,7 @@ jest.mock('../../storage/local', () => ({
   applySyncGroupMember: jest.fn(async () => undefined),
   applySyncGroupMessage: jest.fn(async () => undefined),
   deleteSyncEntity: jest.fn(async () => undefined),
-  exportConversationMetaRows: jest.fn(async () => []),
+  exportConversationSyncRows: jest.fn(async () => []),
   exportDialogKvSnapshot: jest.fn(async () => []),
   exportSyncProfileSettings: jest.fn(async () => []),
   exportGroupBackupRows: jest.fn(async () => ({ groups: [], messages: [], members: [] })),
@@ -138,6 +138,7 @@ describe('выгрузки не глотают ошибку чтения', () =>
   const EXPORTS = [
     'export async function exportRawChatMessageRows(',
     'export async function exportConversationMetaRows(',
+    'export async function exportConversationSyncRows(',
     'export async function exportDialogKvSnapshot(',
     'export async function exportGroupBackupRows(',
     'export async function exportSyncProfileSettings(',

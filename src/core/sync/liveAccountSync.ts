@@ -5,7 +5,7 @@ import {
   applySyncGroupMember,
   applySyncGroupMessage,
   deleteSyncEntity,
-  exportConversationMetaRows,
+  exportConversationSyncRows,
   exportDialogKvSnapshot,
   exportSyncProfileSettings,
   exportGroupBackupRows,
@@ -244,7 +244,7 @@ function decryptEntity(mnemonic: string, mutation: SyncMutation): EncodedEntity 
 async function collectLocalEntities(ownerProfileId: number): Promise<LocalEntity[]> {
   const [messages, conversations, kv, profileSettings, groups, feed, albums] = await Promise.all([
     exportRawChatMessageRows(ownerProfileId),
-    exportConversationMetaRows(ownerProfileId),
+    exportConversationSyncRows(ownerProfileId),
     exportDialogKvSnapshot(ownerProfileId),
     exportSyncProfileSettings(ownerProfileId),
     exportGroupBackupRows(ownerProfileId),
