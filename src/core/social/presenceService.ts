@@ -10,7 +10,7 @@
  */
 
 import { AppState, type AppStateStatus } from 'react-native';
-import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvGetFor, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { ownerPidForPublicKeyB64 } from '../identity/ownerPidLookup';
 import { ownFieldGetFor } from '../identity/ownProfile';
 import { pubsubPublish, pubsubSubscribe } from '../transport/ipfs/pubsub';
@@ -86,6 +86,26 @@ const lastSeenCache = new Map<string, number>();
  */
 const hiddenPeers = new Set<string>();
 
+/**
+ * Прочитан ли список хоть раз (v4.32.642).
+ *
+ * Пустая память — это не «никто не просил». Список лежит в той же базе, что и
+ * переписка, и заминка при старте приходила сюда неотличимо от «список пуст»:
+ * scopedKvGetFor отвечает одним null и на «ничего не записано», и на «не
+ * прочиталось». Время входа при этом собиралось и показывалось ровно про тех,
+ * кто попросил себя не отмечать, — то есть просьбу нарушал именно сбой, о
+ * котором человек не знает. То же правило, что у myVisibilityKnown выше.
+ */
+let hiddenPeersKnown = false;
+
+/**
+ * Просил ли собеседник не отмечать его. Непрочитанный список — «возможно, да»:
+ * не собрать время можно, отменить собранное — уже нет.
+ */
+function peerMayBeHidden(peerPubB64: string): boolean {
+  return !hiddenPeersKnown || hiddenPeers.has(peerPubB64);
+}
+
 /** Своя настройка «кто видит моё время входа»; нужна синхронно в getPresenceState. */
 let myVisibility: LastSeenVisibility = 'everybody';
 
@@ -143,6 +163,30 @@ export async function loadMyLastSeenVisibility(): Promise<boolean> {
 }
 
 /**
+ * Прочитать список «не отмечать меня». Возвращает false, если база не ответила
+ * (v4.32.642).
+ *
+ * Как и с loadMyLastSeenVisibility, неудача оставляет состояние в «не знаем» —
+ * в том числе после удачных чтений раньше: список пишет тот же файл базы,
+ * который сейчас не читается, а просьбу могли прислать между чтениями.
+ *
+ * Список только пополняется, а не заменяется: просьба, принятая в памяти
+ * (setPeerLastSeenAllowedFor), могла ещё не долететь до диска, и перечитывание
+ * не должно её снимать. Снятие запрета приходит тем же путём и на диск, и в
+ * память, поэтому оно переживает перечитывание само.
+ */
+export async function loadHiddenPeers(): Promise<boolean> {
+  const read = await scopedKvTryGetFor(presencePid, HIDDEN_PEERS_KEY).catch(() => null);
+  if (read === null) {
+    hiddenPeersKnown = false;
+    return false;
+  }
+  for (const p of parseHiddenPeers(read.value)) hiddenPeers.add(p);
+  hiddenPeersKnown = true;
+  return true;
+}
+
+/**
  * Запомнить просьбу собеседника у ЕГО адресата (v4.32.485). `allow === false`
  * дополнительно СТИРАЕТ уже накопленное время: человек попросил его не
  * отмечать — значит и хранить собранное раньше не нужно.
@@ -196,8 +240,16 @@ async function persistHiddenPeerFor(
     if (!allow) {
       await scopedKvSetFor(ownerProfileId, presenceLastSeenKey(peerPubB64), '0');
     }
-    const list = parseHiddenPeers(await scopedKvGetFor(ownerProfileId, HIDDEN_PEERS_KEY));
-    const next = withHiddenPeer(list, peerPubB64, !allow);
+    // v4.32.642: обещание в шапке не выполнялось. scopedKvGetFor отвечает
+    // одним null и на «запретов не было», и на «прочитать не удалось», поэтому
+    // список собирался заново из одного этого собеседника и ложился поверх
+    // накопленного — весь чужой список запретов стирал один сбой базы.
+    const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
+    if (read === null) {
+      log.warn('presence_hidden_peers_read_failed', { pid: ownerProfileId });
+      return;
+    }
+    const next = withHiddenPeer(parseHiddenPeers(read.value), peerPubB64, !allow);
     if (!next) return;
     await scopedKvSetFor(ownerProfileId, HIDDEN_PEERS_KEY, JSON.stringify(next));
   } catch (e) {
@@ -252,6 +304,8 @@ export function recordPeerActivityFor(
   // v4.32.238: собеседник попросил не отмечать его — не записываем вообще.
   // Именно здесь, а не при показе: «был(а) в сети» целиком считается на
   // стороне получателя, и просьбу можно исполнить только не собирая данные.
+  // v4.32.642: список ещё не прочитан — идём в базу, а не считаем его пустым.
+  if (!hiddenPeersKnown) { void recordOwnActivityUnknownHidden(peerPubB64, now); return; }
   if (hiddenPeers.has(peerPubB64)) return;
   if (lastSeenCache.size >= LAST_SEEN_CACHE_MAX && !lastSeenCache.has(peerPubB64)) {
     const oldestKey = lastSeenCache.keys().next().value;
@@ -260,6 +314,19 @@ export function recordPeerActivityFor(
   lastSeenCache.set(peerPubB64, now);
   void scopedKvSetFor(presencePid, presenceLastSeenKey(peerPubB64), String(now)).catch(() => { /* ignore */ });
   emitPresence(peerPubB64);
+}
+
+/**
+ * Та же запись, но список запретов ещё не прочитан (v4.32.642).
+ *
+ * Единственное место, где чтение повторяется: рассылка присутствия на телефоне
+ * не заводится вовсе (startPresenceBroadcast выходит без IPFS), а «был(а) в
+ * сети» держится как раз на входящих. Не прочиталось — не записываем; удачное
+ * чтение возвращает обычный путь вместе с памятью и слушателями.
+ */
+async function recordOwnActivityUnknownHidden(peerPubB64: string, now: number): Promise<void> {
+  if (!await loadHiddenPeers()) return;
+  recordPeerActivityFor(presencePid, peerPubB64, now);
 }
 
 /** Активность, дошедшая до работающего профиля. */
@@ -277,8 +344,11 @@ async function recordForeignActivity(
   now: number
 ): Promise<void> {
   try {
-    const list = parseHiddenPeers(await scopedKvGetFor(ownerProfileId, HIDDEN_PEERS_KEY));
-    if (list.includes(peerPubB64)) return;
+    // v4.32.642: не прочитали список — не записываем. Пустой список от сбоя
+    // неотличим, а разница между ними — ровно просьба «не отмечай меня».
+    const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
+    if (read === null) return;
+    if (parseHiddenPeers(read.value).includes(peerPubB64)) return;
     await scopedKvSetFor(ownerProfileId, presenceLastSeenKey(peerPubB64), String(now));
   } catch { /* ignore */ }
 }
@@ -295,11 +365,9 @@ export async function loadPersistedPresence(peerPubB64List: string[], ownerPid: 
   // Список «не показывать» восстанавливается ПЕРВЫМ: иначе между стартом и
   // его загрузкой входящие сообщения успели бы записать время того, кто
   // просил себя не отмечать.
-  try {
-    for (const p of parseHiddenPeers(await scopedKvGetFor(presencePid, HIDDEN_PEERS_KEY))) {
-      hiddenPeers.add(p);
-    }
-  } catch { /* ignore */ }
+  // v4.32.642: не прочитался — так и остаётся «не знаем», а не «пустой»;
+  // до первого удачного чтения действует осторожное peerMayBeHidden.
+  await loadHiddenPeers();
   await runWithConcurrency(peerPubB64List, 12, async (k) => {
     try {
       if (hiddenPeers.has(k)) return;
@@ -319,7 +387,7 @@ export function getPresenceState(peerPubB64: string): PresenceState {
   // нет» по смыслу, но наружу выглядит одинаково — «не в сети», без намёка
   // на то, скрыт человек или просто давно не заходил.
   if (!canSeePeerLastSeen({
-    peerAllows: hiddenPeers.has(peerPubB64) ? false : undefined,
+    peerAllows: peerMayBeHidden(peerPubB64) ? false : undefined,
     // v4.32.475: пока своё решение не прочитано, взаимность считается по
     // осторожному 'nobody' — иначе чужое время видно, а своё, возможно,
     // скрыто, и правило взаимности нарушено в свою пользу.
@@ -631,6 +699,7 @@ export async function stopPresenceBroadcast(): Promise<void> {
   lastSeenCache.clear();
   peerStatusCache.clear();
   hiddenPeers.clear();
+  hiddenPeersKnown = false;
 }
 
 log.info('presence_service_loaded');

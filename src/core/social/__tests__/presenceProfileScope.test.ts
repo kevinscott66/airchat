@@ -129,7 +129,12 @@ describe('форма исходников', () => {
     expect(s).not.toContain("import { kvGet, kvSet } from '../storage/local';");
     expect(s).toContain('let presencePid = 1;');
     expect(s).toContain('scopedKvSetFor(presencePid, presenceLastSeenKey(peerPubB64)');
-    expect(s).toContain('scopedKvGetFor(presencePid, HIDDEN_PEERS_KEY)');
+    // v4.32.642: чтение того же ключа стало отличимым от «ничего не записано»,
+    // и требование усилено: номер профиля назван по-прежнему, но теперь ещё и
+    // провал чтения виден вызывающему. Прежняя форма запрещена явно — иначе
+    // «список пуст» и «не прочитался» снова слились бы в один null.
+    expect(s).toContain('scopedKvTryGetFor(presencePid, HIDDEN_PEERS_KEY)');
+    expect(s).not.toContain('scopedKvGetFor(presencePid, HIDDEN_PEERS_KEY)');
     // Номер берётся у ключа, которым служба представляется сети, и разбор
     // ключа идёт через pubKeyFormat, а не своими руками.
     expect(s).not.toContain("Buffer.from(myPubB64, 'base64')");
