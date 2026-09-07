@@ -124,6 +124,45 @@ describe('все четыре стирания идут через транза�
   }
 });
 
+describe('внутри транзакции нет помощников, которые гасят свою ошибку', () => {
+  // v4.32.615: гарантия «всё или ничего» держится на исключении. kvDeleteScoped
+  // и kvDeleteByPrefix ловят свою ошибку и возвращаются нормально — сбой не
+  // доходил до ROLLBACK, COMMIT состоялся, и корзина «недавно удалённые» с
+  // копиями текстов переживала очистку, а действие отчитывалось об успехе.
+  // Литералы различимы: 'kvDeleteScoped(' не встречается внутри
+  // 'kvDeleteScopedChecked(' — там перед скобкой стоит Checked.
+  const SWALLOWING = ['kvDeleteScoped(', 'kvDeleteByPrefix('] as const;
+
+  for (const [head, label] of ERASERS) {
+    it(`${label}: снимает корзину только проверяемой версией`, () => {
+      const joined = codeLines(bodyOf(src, head)).join('\n');
+      for (const bad of SWALLOWING) expect(joined).not.toContain(bad);
+    });
+  }
+
+  it('проверяемые версии не гасят ошибку сами', () => {
+    for (const head of ['export async function kvDeleteChecked(', 'export async function kvDeleteByPrefixChecked(']) {
+      const body = codeLines(bodyOf(src, head)).join('\n');
+      expect(body.length).toBeGreaterThan(0);
+      expect(body).not.toContain('catch');
+    }
+  });
+
+  it('гасящие версии остались — они нужны уборке мусора вне транзакции', () => {
+    for (const head of ['export async function kvDelete(', 'export async function kvDeleteByPrefix(']) {
+      const body = codeLines(bodyOf(src, head)).join('\n');
+      expect(body).toContain('catch');
+    }
+    // Обёртки, а не копии: экранирование LIKE и текст DELETE — в одном месте.
+    expect(codeLines(bodyOf(src, 'export async function kvDelete(')).join('\n')).toContain(
+      'await kvDeleteChecked(key);'
+    );
+    expect(codeLines(bodyOf(src, 'export async function kvDeleteByPrefix(')).join('\n')).toContain(
+      'return await kvDeleteByPrefixChecked(prefix);'
+    );
+  });
+});
+
 describe('фикстура до-фиксного кода не проходит рэтчет', () => {
   const PRE_FIX = [
     'export async function deleteGroup(id: string, ownerProfileId: number): Promise<void> {',

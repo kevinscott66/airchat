@@ -2444,6 +2444,14 @@ export async function kvDeleteScoped(profileId: number, key: string): Promise<vo
 }
 
 /**
+ * v4.32.615: то же самое, но провал доходит до вызывающего. См. kvDeleteChecked.
+ */
+export async function kvDeleteScopedChecked(profileId: number, key: string): Promise<void> {
+  await kvDeleteChecked(profileScopedKey(profileId, key));
+  await kvDeleteChecked(key);
+}
+
+/**
  * v4.32.71: физическое удаление одной kv-записи по точному ключу. До этой версии
  * код удаления писал `kvSet(key, '')` — строка оставалась в БД с пустым значением,
  * и при следующем чтении `JSON.parse('')` выбрасывал исключение. Теперь есть
@@ -2452,11 +2460,27 @@ export async function kvDeleteScoped(profileId: number, key: string): Promise<vo
  */
 export async function kvDelete(key: string): Promise<void> {
   try {
-    const d = await db();
-    await d.runAsync('DELETE FROM kv WHERE k = ?', [key]);
+    await kvDeleteChecked(key);
   } catch (e) {
     log.warn('kv_delete_failed', { key, err: e instanceof Error ? e.message : String(e) });
   }
+}
+
+/**
+ * v4.32.615: тот же DELETE, но ошибка не гасится.
+ *
+ * kvDelete молчит намеренно: уборка мусора не должна валить вызывающего. Но
+ * внутри eraseAtomically это молчание отменяло всю гарантию. Там `rows()` идёт
+ * под BEGIN IMMEDIATE, и «либо стёрто всё, либо ROLLBACK» держится ровно на
+ * одном — на исключении. Провалившийся kvDelete возвращался нормально, за ним
+ * шёл COMMIT, и получалось худшее из двух: сообщения стёрты, а корзина
+ * «недавно удалённые» с их текстами пережила очистку и лежит ещё месяц, при
+ * этом действие отчиталось об успехе. Повторить его нельзя — стирать уже
+ * нечего. Внутри стирания зовётся только эта версия.
+ */
+export async function kvDeleteChecked(key: string): Promise<void> {
+  const d = await db();
+  await d.runAsync('DELETE FROM kv WHERE k = ?', [key]);
 }
 
 export async function profileKvDelete(profileId: number, key: string): Promise<void> {
@@ -2472,20 +2496,29 @@ export async function profileKvDelete(profileId: number, key: string): Promise<v
  */
 export async function kvDeleteByPrefix(prefix: string): Promise<number> {
   try {
-    const d = await db();
-    const escaped = prefix
-      .replace(/\\/g, '\\\\')
-      .replace(/%/g, '\\%')
-      .replace(/_/g, '\\_');
-    const res = await d.runAsync(
-      "DELETE FROM kv WHERE k LIKE ? ESCAPE '\\'",
-      [escaped + '%']
-    );
-    return res.changes ?? 0;
+    return await kvDeleteByPrefixChecked(prefix);
   } catch (e) {
     log.warn('kv_delete_by_prefix_failed', { prefix, err: e instanceof Error ? e.message : String(e) });
     return 0;
   }
+}
+
+/**
+ * v4.32.615: то же удаление по префиксу, но провал доходит до вызывающего —
+ * по той же причине, что и у kvDeleteChecked. Экранирование здесь одно на обе
+ * версии: разъехавшийся ESCAPE молча сузил бы удаление до неудалённого.
+ */
+export async function kvDeleteByPrefixChecked(prefix: string): Promise<number> {
+  const d = await db();
+  const escaped = prefix
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_');
+  const res = await d.runAsync(
+    "DELETE FROM kv WHERE k LIKE ? ESCAPE '\\'",
+    [escaped + '%']
+  );
+  return res.changes ?? 0;
 }
 
 /**
@@ -5086,6 +5119,15 @@ async function dropOrphanBlobCache(doomed: AttachmentRefs): Promise<void> {
  * аргументом и зовётся ТОЛЬКО после COMMIT: удаление файла не откатывается,
  * поэтому оно не имеет права опередить фиксацию строк. Пропустить его молча
  * тоже нельзя — параметр не опциональный.
+ *
+ * v4.32.615: отсюда следует требование к самому `rows`. Гарантия держится
+ * только на исключении, поэтому внутри нельзя звать помощник, который гасит
+ * свою ошибку и возвращается как ни в чём не бывало: сбой не дойдёт до
+ * ROLLBACK, COMMIT состоится, и стирание окажется наполовину — ровно то, от
+ * чего эта функция и заводилась. Так было с kvDeleteScoped и kvDeleteByPrefix:
+ * они снимают корзину «недавно удалённые», где месяц лежат копии текстов, и
+ * их молчание означало «сообщения стёрты, копии остались, действие успешно».
+ * Внутри `rows` теперь только kvDeleteScopedChecked / kvDeleteByPrefixChecked.
  */
 async function eraseAtomically(
   d: SQLite.SQLiteDatabase,
@@ -6239,7 +6281,7 @@ export async function deleteGroup(id: string, ownerProfileId: number): Promise<v
         ownerProfileId
       );
       await d.runAsync('DELETE FROM group_messages WHERE group_id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
-      await kvDeleteScoped(ownerProfileId, recentlyDeletedGroupKey(id));
+      await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(id));
     },
     () => dropOrphanBlobCache(doomed)
   );
@@ -6945,7 +6987,7 @@ export async function clearChatHistory(
       );
       // v4.32.276: корзина «недавно удалённые» переживала очистку истории и держала
       // тексты ещё месяц — то есть «очистить» очищало не всё.
-      await kvDeleteScoped(ownerProfileId, recentlyDeletedKey(contactPubB64));
+      await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedKey(contactPubB64));
       // v4.32.296: перечень следов — в purgeResidue, один на все три «очистить».
       // Здесь не хватало pinned_message_id: указатель на удалённое сообщение
       // оставался, и шапка переписки пыталась показать то, чего уже нет.
@@ -7167,7 +7209,7 @@ export async function clearGroupMessages(groupId: string, ownerProfileId: number
           'DELETE FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
           [groupId, ownerProfileId]
         );
-        await kvDeleteScoped(ownerProfileId, recentlyDeletedGroupKey(groupId));
+        await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(groupId));
         // v4.32.296: строку groups здесь не трогали вовсе. После «очистить
         // историю» в списке оставались превью последнего сообщения и имя того, кто
         // его написал, счётчик непрочитанных не обнулялся, а в шапке продолжал
@@ -8283,10 +8325,10 @@ export async function clearAllMessageHistory(ownerProfileId: number): Promise<bo
         // соседнего аккаунта, хотя сообщения удалялись строго по owner_profile_id.
         // Префикс берётся у самого построителя ключа, чтобы литерал не разъехался.
         const binPrefix = recentlyDeletedKey('');
-        await kvDeleteByPrefix(profileScopedKey(ownerProfileId, binPrefix));
+        await kvDeleteByPrefixChecked(profileScopedKey(ownerProfileId, binPrefix));
         // И глобальные записи, оставшиеся до v4.32.278: иначе kvGetSecretScoped
         // поднимет их как «свои» при первом же открытии переписки.
-        await kvDeleteByPrefix(binPrefix);
+        await kvDeleteByPrefixChecked(binPrefix);
         // v4.32.296: действие сильнее двух других очисток, а стирало меньше — ни
         // направления последнего сообщения, ни черновиков, ни закреплений, ни имён
         // отправителей в группах оно не трогало. Перечень следов теперь один
