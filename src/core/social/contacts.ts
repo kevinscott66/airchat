@@ -709,7 +709,19 @@ export async function renameContact(peerPublicKeyB64: string, newName: string): 
   emitContactsChanged();
 }
 
-/** Remove a contact. The sym key is gone; the peer can no longer send readable DMs. */
+/**
+ * Убрать человека из контактов.
+ *
+ * v4.32.615: прежнее описание обещало здесь больше, чем происходит на самом
+ * деле — «ключ шифрования исчез, читаемых сообщений от этого человека больше
+ * не будет». Ключа в строке контакта и не было: он считается из двух открытых
+ * ключей (`deriveSymmetricKeyForStranger` ниже), поэтому следующее сообщение
+ * удалённого расшифруется по-прежнему, а вместе с ним `ensureImplicitContact`
+ * заведёт строку заново. Это не оплошность, а то, ради чего неявные контакты
+ * и сделаны: удаление — это уборка списка, а не запрет. Запрет — блокировка,
+ * и она проверяется отдельно, в том числе перед созданием такой строки
+ * (`messaging.receiveDirectLanEnvelope`).
+ */
 export async function deleteContact(peerPublicKeyB64: string): Promise<void> {
   const pid = activeProfileId();
   await withContactLock(pid, async () => {

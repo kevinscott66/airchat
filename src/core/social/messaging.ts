@@ -126,6 +126,29 @@ import { survivesBlock } from './blockPolicy';
 import { type DmRetryPayload } from './dmRetryPayload';
 export { previewLabelForText };
 
+/**
+ * Подсмотреть поле `text` в расшифрованном теле, не разбирая его целиком.
+ *
+ * Нужно ровно одному месту — гейту блок-листа перед созданием строки контакта:
+ * там ещё нет разобранного payload (его разбирает persistIncomingFromEnvelope
+ * ниже), а решение зависит от префикса текста (см. blockPolicy). Тело здесь
+ * уже расшифровано, то есть автор его и правда владеет своим секретным
+ * ключом; повторный разбор стоит один JSON.parse и только на пути незнакомца.
+ *
+ * Всё, что не разобралось или разобралось не в объект, даёт `undefined` —
+ * `survivesBlock` на это отвечает «не переживает», и конверт от
+ * заблокированного будет отброшен. Кривое тело от него нам и не нужно.
+ */
+function peekPayloadText(pt: Uint8Array): unknown {
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(pt));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return (parsed as { text?: unknown }).text;
+  } catch {
+    return undefined;
+  }
+}
+
 // ─── In-app notification emitter ─────────────────────────────────────────────
 /**
  * Событие «пришло личное сообщение».
@@ -756,6 +779,31 @@ export class MessagingService {
         log.warn('dm_contacts_filter_unreadable', { err: e instanceof Error ? e.message : String(e) });
       }
     }
+    // v4.32.615: заблокированному незнакомцу нельзя заводить у меня строку
+    // контакта. Проверка блок-листа в приложении одна и стоит ниже, в
+    // persistIncomingFromEnvelope, — а туда мы приходим уже ПОСЛЕ
+    // ensureImplicitContact. Само сообщение та проверка отбрасывала верно, но
+    // строка контакта успевала появиться, и вместе с ней refreshSubscriptions
+    // подписывал меня на топик того, кого просили не пускать: удалить человека
+    // и заблокировать его не значило от него избавиться, он возвращался в
+    // список от одного своего сообщения. Ключ шифрования тут ни при чём —
+    // deriveSymmetricKeyForStranger считает его из двух открытых ключей и
+    // строки контакта не спрашивает.
+    //
+    // Место выбрано то же, что и у privacy_only_contacts_msg выше, и по той же
+    // причине: до создания строки. Групповые конверты исключены — см.
+    // blockPolicy: состав и права группы задаются ролями в ней, а не моим
+    // личным списком.
+    if (needsImplicitContact) {
+      // Блок-лист поднимается с диска асинхронно; пока чтение не закончилось,
+      // isBlocked отвечает «не заблокирован» на кого угодно (v4.32.317).
+      await rateLimiter.whenReady();
+      if (rateLimiter.isBlocked(peerPubKeyB64) && !survivesBlock(peekPayloadText(pt))) {
+        log.info('dm_blocked_no_implicit_contact', { from: peerPubKeyB64.slice(0, 12) });
+        return;
+      }
+    }
+
     // Decrypt succeeded → sender is the real holder of their secret key.
     // NOW it's safe to create the implicit contact row and persist.
     if (needsImplicitContact && senderPk) {

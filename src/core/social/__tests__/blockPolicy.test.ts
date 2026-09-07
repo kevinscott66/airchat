@@ -104,19 +104,36 @@ describe('форма исходников: проверка стоит до ди
     return i;
   };
 
-  it('блок-лист спрашивается ровно один раз на входящем пути', () => {
+  // v4.32.615: мест стало два, и это не размывание правила, а его вторая
+  // половина. Нижнее решает, применять ли содержимое конверта; верхнее — за-
+  // водить ли строку контакта, потому что она создаётся ещё до нижнего, и
+  // заблокированный возвращался в список от одного своего сообщения.
+  const PERSIST_GATE = (): number => text.lastIndexOf('rateLimiter.isBlocked(peerPubKeyB64)');
+  const CONTACT_GATE = (): number => text.indexOf('rateLimiter.isBlocked(peerPubKeyB64)');
+
+  it('блок-лист спрашивается ровно в двух местах, и оба известны', () => {
     const hits = text.split('rateLimiter.isBlocked(peerPubKeyB64)').length - 1;
-    expect(hits).toBe(1);
+    expect(hits).toBe(2);
+    expect(CONTACT_GATE()).toBeLessThan(PERSIST_GATE());
+    expect(text.slice(CONTACT_GATE(), PERSIST_GATE())).toContain('dm_blocked_no_implicit_contact');
+    expect(text.slice(PERSIST_GATE())).toContain('dm_blocked_drop');
   });
 
-  it('проверка идёт после готовности блок-листа', () => {
-    expect(at('rateLimiter.isBlocked(peerPubKeyB64)')).toBeGreaterThan(
-      at('await rateLimiter.whenReady()'),
-    );
+  it('строку контакта заблокированному не заводят', () => {
+    expect(CONTACT_GATE()).toBeLessThan(at('await ensureImplicitContact('));
+  });
+
+  it('обе проверки идут после готовности блок-листа', () => {
+    // Пока список поднимается с диска, isBlocked отвечает «не заблокирован»
+    // на кого угодно (v4.32.317), поэтому каждой проверке обязано
+    // предшествовать своё ожидание готовности.
+    for (const gate of [CONTACT_GATE(), PERSIST_GATE()]) {
+      expect(text.lastIndexOf('await rateLimiter.whenReady()', gate)).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it('и до применения служебных конвертов', () => {
-    const gate = at('rateLimiter.isBlocked(peerPubKeyB64)');
+    const gate = PERSIST_GATE();
     for (const marker of [
       "payload.kind === 'delete'",
       "payload.kind === 'edit'",
@@ -139,10 +156,13 @@ describe('форма исходников: проверка стоит до ди
 
   it('исключение для групп проходит через blockPolicy, а не через список на месте', () => {
     expect(text).toContain("import { survivesBlock } from './blockPolicy'");
-    const gateLine = text
+    const gateLines = text
       .split('\n')
-      .find((l) => l.includes('rateLimiter.isBlocked(peerPubKeyB64)')) as string;
-    expect(gateLine).toContain('survivesBlock');
-    expect(gateLine).toContain('inbound');
+      .filter((l) => l.includes('rateLimiter.isBlocked(peerPubKeyB64)'));
+    expect(gateLines).toHaveLength(2);
+    for (const l of gateLines) expect(l).toContain('survivesBlock');
+    // Нижняя проверка отделяет входящее от своего же исходящего; верхняя стоит
+    // на пути, где своих конвертов не бывает по определению, — там незнакомец.
+    expect(gateLines.some((l) => l.includes('inbound'))).toBe(true);
   });
 });
