@@ -31,10 +31,26 @@ import type { FeedEnvelopePayload } from './feedTransport';
 
 /** Тот же набор символов, что проверяет сервер: id поста уходит в путь URL. */
 const POST_ID_RE = /^[A-Za-z0-9_\-.:]{1,128}$/;
+/** Сегмент пути из одних точек — «.» и «..» разбираются самим адресом. */
+const POST_ID_ONLY_DOTS_RE = /^\.+$/;
 const PUBLIC_POST_TIMEOUT_MS = 20_000;
 
+/**
+ * Годен ли id поста для пути URL (v4.32.615).
+ *
+ * Набор символов допускает точку, а `encodeURIComponent('..')` возвращает те
+ * же две точки: экранирования здесь не происходит. Разбор адреса свернёт такой
+ * сегмент по правилам пути, и `${base}/v1/post/..` превратится в `${base}/v1/`,
+ * а `${base}/v1/post/../delete` — в `${base}/v1/delete`. То есть чужая ссылка
+ * вида `airchat://l/post/..` уводит запрос приложения с точки «публикация» на
+ * произвольную соседнюю — вместе с подписанным конвертом в теле.
+ *
+ * Поэтому id из одних точек отвергается целиком. Настоящие id выглядят как
+ * `f_<время>_<32 шестнадцатеричных>` и под это правило не попадают.
+ */
 export function isPublicPostId(postId: string): boolean {
-  return typeof postId === 'string' && POST_ID_RE.test(postId);
+  if (typeof postId !== 'string' || !POST_ID_RE.test(postId)) return false;
+  return !POST_ID_ONLY_DOTS_RE.test(postId);
 }
 
 /** Настроено ли облако вообще. Без него ссылка остаётся местной. */

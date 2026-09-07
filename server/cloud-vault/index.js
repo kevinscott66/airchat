@@ -94,6 +94,16 @@ const MEDIA_GC_BATCH = Number.isSafeInteger(configuredMediaGcBatch) && configure
 const PUBLIC_POST_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const PUBLIC_POST_BODY_BYTES = 4 * 1024 * 1024;
 const POST_ID_RE = /^[A-Za-z0-9_\-.:]{1,128}$/;
+const POST_ID_ONLY_DOTS_RE = /^\.+$/;
+/**
+ * Годен ли id поста (v4.32.615). Набор символов допускает точку, а сегмент
+ * пути из одних точек («.», «..») разбирается самим адресом: клиент, собирая
+ * `/v1/post/<id>`, получил бы вместо публикации соседнюю точку входа. Правило
+ * держим на обеих сторонах одинаковым, чтобы клиент и сервер не расходились.
+ */
+function isValidPostId(postId) {
+  return typeof postId === 'string' && POST_ID_RE.test(postId) && !POST_ID_ONLY_DOTS_RE.test(postId);
+}
 /** Намерение записи (см. verifyPostIntent) — короткий объект из шести полей. */
 const PUBLIC_POST_INTENT_MAX_BYTES = 1024;
 const configuredPublicPostQuota = Number(process.env.PUBLIC_POST_MAX_AUTHOR_BYTES);
@@ -1251,7 +1261,7 @@ function postNonceScope(authorDid) {
 app.post('/v1/post/:postId', (req, res) => {
   noStore(res);
   const postId = req.params.postId;
-  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  if (!isValidPostId(postId)) return res.status(400).json({ error: 'invalid_post_id' });
   // Репост — такая же запись ленты со своим id, и ссылку на него копируют так же.
   const envelope = verifyPostEnvelope(req.body, postId, ['feed_post', 'feed_repost']);
   if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
@@ -1284,7 +1294,7 @@ app.post('/v1/post/:postId', (req, res) => {
 app.get('/v1/post/:postId', (req, res) => {
   noStore(res);
   const postId = req.params.postId;
-  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  if (!isValidPostId(postId)) return res.status(400).json({ error: 'invalid_post_id' });
   try {
     const row = syncDb.getPublicPost(postId);
     if (!row) return res.status(404).json({ error: 'public_post_not_found' });
@@ -1307,7 +1317,7 @@ app.get('/v1/post/:postId', (req, res) => {
 app.post('/v1/post/:postId/delete', (req, res) => {
   noStore(res);
   const postId = req.params.postId;
-  if (!POST_ID_RE.test(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  if (!isValidPostId(postId)) return res.status(400).json({ error: 'invalid_post_id' });
   const envelope = verifyPostEnvelope(req.body, postId, ['feed_delete']);
   if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
   const intent = verifyPostIntent(req.body, postId, 'del', envelope.authorPublicKeyB64);

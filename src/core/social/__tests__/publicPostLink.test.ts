@@ -250,3 +250,66 @@ describe('причина отказа сервера', () => {
     expect(note?.data.status).toBe(503);
   });
 });
+
+/**
+ * v4.32.615: id поста из одних точек уводил запрос с адреса публикации.
+ *
+ * `encodeURIComponent` точку не экранирует, а разбор адреса сворачивает
+ * сегменты «.» и «..» по правилам пути. Значит `airchat://l/post/..` от чужого
+ * человека заставлял приложение обратиться не к `/v1/post/<id>`, а к соседней
+ * точке входа — причём POST'ы несли туда подписанный конверт целиком.
+ */
+describe('id поста из одних точек', () => {
+  it('адрес действительно сворачивается — вот почему это дыра', () => {
+    const base = 'https://vault.example';
+    expect(new URL(`${base}/v1/post/${encodeURIComponent('..')}`).pathname).toBe('/v1/');
+    expect(new URL(`${base}/v1/post/${encodeURIComponent('.')}`).pathname).toBe('/v1/post/');
+    expect(new URL(`${base}/v1/post/${encodeURIComponent('..')}/delete`).pathname).toBe('/v1/delete');
+  });
+
+  it('проверка id отвергает точки и оставляет годные id', () => {
+    expect(isPublicPostId('.')).toBe(false);
+    expect(isPublicPostId('..')).toBe(false);
+    expect(isPublicPostId('...')).toBe(false);
+    expect(isPublicPostId('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBe(true);
+    // Точка внутри id по-прежнему допустима: сворачивается только целый сегмент.
+    expect(isPublicPostId('f_1.2')).toBe(true);
+    expect(isPublicPostId('.a')).toBe(true);
+  });
+
+  it('ни один из четырёх запросов наружу не уходит', async () => {
+    const { pair, did } = identity();
+    const fetchSpy = jest.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    for (const bad of ['.', '..', '...']) {
+      const payload = { ...expiredPost(did), postId: bad };
+      expect(await putPublicPostCopy(pair, payload)).toBe(false);
+      expect(await deletePublicPostCopy(pair, payload)).toBe(false);
+      expect(await getPublicPostFrame(bad)).toBe(null);
+      expect(await publicPostCopyExists(bad)).toBe(false);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('источник: правило живёт в одном месте и на обеих сторонах', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const client = fs.readFileSync(path.join(__dirname, '../publicPost.ts'), 'utf8');
+    const server = fs.readFileSync(
+      path.join(__dirname, '../../../../server/cloud-vault/index.js'),
+      'utf8',
+    );
+    const code = (src: string) =>
+      src
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+    expect(code(client)).toContain('POST_ID_ONLY_DOTS_RE');
+    expect(code(client)).toContain('return !POST_ID_ONLY_DOTS_RE.test(postId);');
+    expect(code(server)).toContain('POST_ID_ONLY_DOTS_RE');
+    // Сервер обязан ходить через общую проверку, а не через голый набор символов.
+    expect(code(server)).not.toContain('POST_ID_RE.test(postId)) return res');
+    expect(code(server)).toContain('function isValidPostId(postId) {');
+    expect((code(server).match(/!isValidPostId\(postId\)\)/g) ?? []).length).toBe(3);
+  });
+});
