@@ -111,18 +111,27 @@ describe('хранилище отдаёт третье состояние чер
     expect(src).not.toContain('decryptAtRestString(r.draft_text');
   });
 
-  it('все три места читают ячейку и отдают признак рядом с текстом', () => {
+  it('оба места читают ячейку и отдают признак рядом с текстом', () => {
+    // Мест было три: открытые диалоги, архивные и группы. В v4.32.650 два
+    // первых тела слиты в один readConversationRows — разбор строки в них был
+    // один и тот же. Счёт затянут до двух намеренно: третьей копии больше не
+    // должно появляться.
     const src = LOCAL();
-    expect((src.match(/const draftCell = readAtRestCell\(/g) ?? []).length).toBe(3);
-    expect((src.match(/draftText: cellTextOrNull\(draftCell\),/g) ?? []).length).toBe(3);
-    expect((src.match(/draftUnreadable: unreadableFromCellState\(draftCell\.state\),/g) ?? []).length).toBe(3);
+    expect((src.match(/const draftCell = readAtRestCell\(/g) ?? []).length).toBe(2);
+    expect((src.match(/draftText: cellTextOrNull\(draftCell\),/g) ?? []).length).toBe(2);
+    expect((src.match(/draftUnreadable: unreadableFromCellState\(draftCell\.state\),/g) ?? []).length).toBe(2);
+    // Одно из двух — общий читатель обоих списков переписок.
+    expect(slice(src, 'async function readConversationRows(', '\n}\n'))
+      .toContain('const draftCell = readAtRestCell(');
   });
 });
 
 describe('переписка: запись черновика идёт через правило', () => {
   it('единственная точка записи спрашивает решение и снимает признак', () => {
     const body = slice(CHAT(), 'const writeDraft = useCallback(', '// Save draft with debounce');
-    expect(body).toContain('decideDraftWrite(next, draftUnreadableRef.current).write');
+    // v4.32.650: неведение о черновике бывает двух родов — нечитаемый столбец
+    // и непрочитанная строка диалога. Правило спрашивают про оба.
+    expect(body).toContain('decideDraftWrite(next, draftUnreadableRef.current, draftRowUnknownRef.current).write');
     expect(body).toContain('unreadableAfterWrite(next, draftUnreadableRef.current)');
     expect(body).toContain('setConversationDraft(peerB64, activeProfileId, next)');
   });

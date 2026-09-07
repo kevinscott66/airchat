@@ -35,14 +35,19 @@ import { profileManager } from '../../core/identity/profileManager';
 import { addContact, deleteContact, listContacts, parseContactId, subscribeContactsChanged, type Contact } from '../../core/social/contacts';
 import { getMessagingService } from '../../core/social/messaging';
 import { previewLabelForText } from '../../core/social/messagePreview';
-import { UNREADABLE_DRAFT_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
+import {
+  UNREADABLE_CONVERSATIONS_TEXT,
+  UNREADABLE_DRAFT_TEXT,
+  UNREADABLE_MESSAGE_TEXT,
+  UNREADABLE_REACTIONS_TEXT,
+} from '../../core/storage/unreadableText';
 import { draftIsUnreadable, hasReadableDraft } from '../../core/social/draftGuard';
 import { searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
 import { matchesSearch } from '../../core/social/searchableText';
 import { searchReactionChip, UNREADABLE_REACTION_MARK } from '../../core/social/searchReactionChip';
 import {
-  listConversations,
-  listArchivedConversations,
+  listConversationsRead,
+  listArchivedConversationsRead,
   setConversationPinned,
   setConversationArchived,
   setConversationMuted,
@@ -646,6 +651,16 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   // не оказалась навсегда под стеклом.
   const [topInset, setTopInset] = useState(0);
   const [archivedCount, setArchivedCount] = useState(0);
+  /**
+   * Переписки не прочитались (v4.32.650).
+   *
+   * Пустой список — законный ответ только у нового аккаунта. Сбой чтения
+   * отдавал такой же пустой, и экран отвечал «Нет переписок» с подсказкой
+   * «вставьте ID собеседника»: человеку с целой историей на диске это читается
+   * как «всё пропало». Заодно пропадала строка архива и все контакты снова
+   * вставали в список как «контакт без переписки».
+   */
+  const [convReadFailed, setConvReadFailed] = useState(false);
   const [addContactVisible, setAddContactVisible] = useState(false);
   const [broadcastVisible, setBroadcastVisible] = useState(false);
   const [broadcastSelected, setBroadcastSelected] = useState<Set<string>>(new Set());
@@ -678,11 +693,20 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
     // основном режиме архивные переписки не читались вовсе — и контакт, чей
     // диалог лежал в архиве, ниже опять попадал в список как «контакт без
     // переписки». Человек архивировал чат, а его копия оставалась на месте.
+    // v4.32.650: списки читаются тремя исходами. Прежний пустой список на сбое
+    // чтения ниже проходил весь путь до отрисовки как «переписок нет».
     const [openConvs, archivedConvs, ctactsRaw] = await Promise.all([
-      listConversations(pid),
-      listArchivedConversations(pid),
+      listConversationsRead(pid),
+      listArchivedConversationsRead(pid),
       listContacts(),
     ]);
+    if (openConvs === null || archivedConvs === null) {
+      // Показанное остаётся как было: прошлый список честнее пустого. Сбой уже
+      // записан в журнал слоем чтения (conversations_list_failed).
+      setConvReadFailed(true);
+      return;
+    }
+    setConvReadFailed(false);
     setArchivedCount(archivedConvs.length);
 
     // v4.32.31: self-chat «Сохранённые сообщения» показывается ТОЛЬКО в закреплённом
@@ -1498,6 +1522,20 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: colors.textMuted }]}>
                 Ничего не найдено
+              </Text>
+            </View>
+          ) : convReadFailed ? (
+            // v4.32.650: список не прочитался. Подсказка «вставьте ID
+            // собеседника» здесь была бы прямой ложью: переписки на диске
+            // целы, добавлять некого, а помогает возврат на вкладку — он
+            // перечитывает список.
+            <View style={s.empty}>
+              <Ionicons name="alert-circle-outline" size={52} color={colors.textMuted} />
+              <Text style={[s.emptyText, { color: colors.textMuted }]}>
+                {UNREADABLE_CONVERSATIONS_TEXT}
+              </Text>
+              <Text style={[s.emptyHint, { color: colors.textMuted }]}>
+                Переписки на месте — их не удалось прочитать сейчас. Откройте вкладку заново.
               </Text>
             </View>
           ) : (

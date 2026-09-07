@@ -4622,8 +4622,23 @@ export async function outboxIncrementAttempts(id: number): Promise<boolean> {
 
 // ─── Conversations ───────────────────────────────────────────────────────────
 
-/** Список диалогов для данного профиля, отсортированных по закреплённым + времени. */
-export async function listConversations(ownerProfileId: number): Promise<ConversationRow[]> {
+/**
+ * Строки диалогов одним чтением: открытые либо архивные (v4.32.650).
+ *
+ * Два списка отличались тремя вещами — условием `archived`, порядком строк и
+ * меткой в журнале, — а разбор строки в них был один и тот же, шестьдесят
+ * восемь строк под копирку. Правки полагалось вносить дважды, и дважды они
+ * вносились: v4.32.218, v4.32.580, v4.32.583 стоят в обоих телах. Теперь
+ * разбор здесь один, а различия — в трёх параметрах.
+ *
+ * Отдаёт три исхода общим правилом readResult.ts: строки, пусто, сбой чтения.
+ */
+async function readConversationRows(
+  ownerProfileId: number,
+  archived: 0 | 1,
+  order: string,
+  failTag: string
+): Promise<DbRead<ConversationRow>> {
   try {
     const d = await db();
     const rows = await d.getAllAsync<{
@@ -4643,9 +4658,9 @@ export async function listConversations(ownerProfileId: number): Promise<Convers
       color_tag: string | null;
     }>(
       `SELECT * FROM conversations
-       WHERE owner_profile_id = ? AND archived = 0
-       ORDER BY pinned DESC, last_message_at DESC`,
-      [ownerProfileId]
+       WHERE owner_profile_id = ? AND archived = ?
+       ORDER BY ${order}`,
+      [ownerProfileId, archived]
     );
     const now = Date.now();
     // v4.32.218 (CRIT-4 part 2): transparently decrypt preview/draft. Rows
@@ -4686,69 +4701,48 @@ export async function listConversations(ownerProfileId: number): Promise<Convers
       };
     });
   } catch (e) {
-    log.warn('conversations_list_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    log.warn(failTag, { err: e instanceof Error ? e.message : String(e) });
+    return null;
   }
 }
 
-/** Список архивированных диалогов. */
+const OPEN_CONV_ORDER = 'pinned DESC, last_message_at DESC';
+const ARCHIVED_CONV_ORDER = 'last_message_at DESC';
+
+/**
+ * Открытые диалоги профиля, отсортированные по закреплённым + времени.
+ *
+ * Пустой список означает и «переписок нет», и «прочитать не вышло». Кому
+ * разница важна — берёт `listConversationsRead`.
+ */
+export async function listConversations(ownerProfileId: number): Promise<ConversationRow[]> {
+  return (await listConversationsRead(ownerProfileId)) ?? [];
+}
+
+/**
+ * Те же открытые диалоги, но отличающие «переписок нет» от «прочитать не
+ * вышло» (v4.32.650).
+ *
+ * Пустой список — законный ответ: у нового аккаунта переписок правда нет. На
+ * нём же строились выводы, которых неудавшееся чтение делать не вправе:
+ * «Нет переписок» во весь экран при целой истории на диске, «архива нет» — и
+ * пустое поле ввода вместо начатого ответа, откуда одно нажатие затирало
+ * черновик (см. draftGuard).
+ */
+export async function listConversationsRead(ownerProfileId: number): Promise<ConversationRow[] | null> {
+  const read = await readConversationRows(ownerProfileId, 0, OPEN_CONV_ORDER, 'conversations_list_failed');
+  return read?.slice() ?? null;
+}
+
+/** Архивированные диалоги. Пустота и сбой чтения снова неразличимы. */
 export async function listArchivedConversations(ownerProfileId: number): Promise<ConversationRow[]> {
-  try {
-    const d = await db();
-    const rows = await d.getAllAsync<{
-      contact_pub_b64: string;
-      owner_profile_id: number;
-      unread_count: number;
-      draft_text: string | null;
-      pinned: number;
-      archived: number;
-      muted: number;
-      muted_until: number | null;
-      last_message_at: number;
-      last_message_preview: string | null;
-      last_message_direction: string | null;
-      pinned_message_id: string | null;
-      disappear_after_ms: number | null;
-      color_tag: string | null;
-    }>(
-      `SELECT * FROM conversations
-       WHERE owner_profile_id = ? AND archived = 1
-       ORDER BY last_message_at DESC`,
-      [ownerProfileId]
-    );
-    const now = Date.now();
-    // v4.32.218 (CRIT-4 part 2): decrypt preview/draft at rest.
-    const dek = await getOrCreateDataEncryptionKey();
-    return rows.map((r) => {
-      const mutedUntil = r.muted_until ?? null;
-      const effectiveMuted = isEffectivelyMuted(r.muted, mutedUntil, now);
-      // v4.32.580: тем же правилом, что в списке выше.
-      const prevCell = readAtRestCell(r.last_message_preview, dek);
-      // v4.32.583: черновик — тем же правилом (см. draftGuard).
-      const draftCell = readAtRestCell(r.draft_text, dek);
-      return {
-        contactPubB64: r.contact_pub_b64,
-        ownerProfileId: r.owner_profile_id,
-        unreadCount: r.unread_count,
-        draftText: cellTextOrNull(draftCell),
-        draftUnreadable: unreadableFromCellState(draftCell.state),
-        pinned: r.pinned === 1,
-        archived: r.archived === 1,
-        muted: effectiveMuted,
-        mutedUntil,
-        lastMessageAt: r.last_message_at,
-        lastMessagePreview: cellTextOrNull(prevCell),
-        lastMessagePreviewUnreadable: unreadableFromCellState(prevCell.state),
-        lastMessageDirection: (r.last_message_direction as 'in' | 'out' | null) ?? null,
-        pinnedMessageId: r.pinned_message_id ?? null,
-        disappearAfterMs: r.disappear_after_ms ?? null,
-        colorTag: r.color_tag ?? null,
-      };
-    });
-  } catch (e) {
-    log.warn('conversations_archived_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
-  }
+  return (await listArchivedConversationsRead(ownerProfileId)) ?? [];
+}
+
+/** Те же архивированные диалоги тремя исходами (v4.32.650). */
+export async function listArchivedConversationsRead(ownerProfileId: number): Promise<ConversationRow[] | null> {
+  const read = await readConversationRows(ownerProfileId, 1, ARCHIVED_CONV_ORDER, 'conversations_archived_failed');
+  return read?.slice() ?? null;
 }
 
 /** Обновить/создать запись диалога после отправки/получения сообщения. */

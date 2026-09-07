@@ -56,9 +56,14 @@ describe('состояния столбца с подписью', () => {
 });
 
 describe('форма исходников: чтение', () => {
-  it('оба списка диалогов читают подпись ячейкой', () => {
+  it('оба списка диалогов читают подпись ячейкой — одним общим телом', () => {
+    // Тел было два, открытый список и архивный, и разбор строки в них шёл под
+    // копирку. В v4.32.650 они слиты в readConversationRows: одно чтение на
+    // оба списка, поэтому и совпадение здесь одно.
     const src = LOCAL();
-    expect((src.match(/const prevCell = readAtRestCell\(r\.last_message_preview, dek\);/g) ?? []).length).toBe(2);
+    expect((src.match(/const prevCell = readAtRestCell\(r\.last_message_preview, dek\);/g) ?? []).length).toBe(1);
+    expect(slice(src, 'async function readConversationRows(', '\n}\n'))
+      .toContain('const prevCell = readAtRestCell(r.last_message_preview, dek);');
     expect(src).not.toContain('lastMessagePreview: decryptAtRestNullable(r.last_message_preview, dek),');
   });
 
@@ -68,10 +73,13 @@ describe('форма исходников: чтение', () => {
     expect(src).not.toContain('lastMessagePreview: decryptAtRestNullable((r.last_message_preview');
   });
 
-  it('признак едет рядом с подписью во всех трёх местах', () => {
+  it('признак едет рядом с подписью в обоих местах', () => {
+    // Мест два: общий читатель переписок (v4.32.650) и строка группы.
     const src = LOCAL();
-    expect((src.match(/lastMessagePreview: cellTextOrNull\(prevCell\),/g) ?? []).length).toBe(3);
-    expect((src.match(/lastMessagePreviewUnreadable: unreadableFromCellState\(prevCell\.state\),/g) ?? []).length).toBe(3);
+    expect((src.match(/lastMessagePreview: cellTextOrNull\(prevCell\),/g) ?? []).length).toBe(2);
+    expect((src.match(/lastMessagePreviewUnreadable: unreadableFromCellState\(prevCell\.state\),/g) ?? []).length).toBe(2);
+    expect(slice(src, 'async function readConversationRows(', '\n}\n'))
+      .toContain('lastMessagePreviewUnreadable: unreadableFromCellState(prevCell.state),');
   });
 
   it('оба типа строк объявляют признак', () => {

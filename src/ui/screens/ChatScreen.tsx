@@ -72,6 +72,7 @@ import {
   setConversationMuted,
   setConversationMutedUntil,
   listConversations,
+  listConversationsRead,
   clearChatHistory,
   listAllChatMessages,
   listAllScheduledMessages,
@@ -966,6 +967,14 @@ function ChatThreadView({
    * молча затирала бы целый шифротекст черновика. См. draftGuard.
    */
   const draftUnreadableRef = useRef(false);
+  /**
+   * v4.32.650: строку диалога прочитать не вышло вовсе.
+   *
+   * Черновик тогда не виден ровно так же, как при нечитаемом столбце, — поле
+   * ввода пустое. Разница в причине: сам черновик цел, просто база не отдала
+   * строку. Пока это так, пустая запись не имеет права его затирать.
+   */
+  const draftRowUnknownRef = useRef(false);
   // v4.32.182 (Round-12 #6): clear all compose/typing timers on unmount so they
   // do not fire setComposeLinkUrl / setTyping after the screen is gone.
   // v4.32.322: таймер черновика отсюда убран — его нельзя просто отменить, не
@@ -1151,7 +1160,15 @@ function ChatThreadView({
   // Load and restore draft + mute state when opening chat
   useEffect(() => {
     if (!peerB64) return;
-    void listConversations(activeProfileId).then((convs) => {
+    void listConversationsRead(activeProfileId).then((convs) => {
+      // v4.32.650: null — сбой чтения, а не «переписки нет». Разница важна для
+      // черновика: пустое поле ввода тогда ничего не говорит о том, что лежит
+      // в базе, и стирать её содержимое пустотой нельзя.
+      if (convs === null) {
+        draftRowUnknownRef.current = true;
+        return;
+      }
+      draftRowUnknownRef.current = false;
       const conv = convs.find((c) => c.contactPubB64 === peerB64);
       draftUnreadableRef.current = draftIsUnreadable(conv?.draftUnreadable);
       if (conv?.draftText && hasReadableDraft(conv.draftText, conv.draftUnreadable)) setMsg(conv.draftText);
@@ -1642,7 +1659,7 @@ function ChatThreadView({
 
   /** Единственная точка записи черновика переписки (v4.32.583). */
   const writeDraft = useCallback((next: string | null) => {
-    if (!decideDraftWrite(next, draftUnreadableRef.current).write) return;
+    if (!decideDraftWrite(next, draftUnreadableRef.current, draftRowUnknownRef.current).write) return;
     draftUnreadableRef.current = unreadableAfterWrite(next, draftUnreadableRef.current);
     void setConversationDraft(peerB64, activeProfileId, next);
   }, [peerB64, activeProfileId]);

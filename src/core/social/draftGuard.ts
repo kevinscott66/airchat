@@ -26,7 +26,7 @@
 /** Решение о записи черновика и причина отказа. */
 export type DraftWriteDecision = {
   write: boolean;
-  reason: 'ok' | 'clearOverUnreadable';
+  reason: 'ok' | 'clearOverUnreadable' | 'clearOverUnknownRow';
 };
 
 /** Пустой черновик — это null или строка из одних пробелов. */
@@ -37,11 +37,27 @@ export function draftIsEmpty(next: string | null | undefined): boolean {
 /**
  * Можно ли записать в столбец черновика то, что собрались.
  *
- * Отказ ровно один: стереть непрочитанный черновик пустотой. Именно так его и
- * теряли — молча, за одно нажатие на клавиатуре.
+ * Отказ один и тот же по сути — стереть пустотой то, содержимого чего мы не
+ * знаем, — но неведение бывает двух родов, и различать их стоит в журнале.
+ *
+ *  • `clearOverUnreadable` — строку диалога прочитали, а столбец черновика
+ *    ключом не открылся. Ради этого случая правило и заведено (v4.32.583).
+ *  • `clearOverUnknownRow` — самой строки диалога прочитать не вышло
+ *    (v4.32.650). Черновика тогда не видно ровно так же, как если бы его не
+ *    было: поле ввода пустое, и первая же отложенная запись стирала целый
+ *    черновик — с той разницей, что здесь он был совершенно исправен.
+ *
+ * Всё остальное пишется как раньше: новый непустой текст поверх неведомого —
+ * законная замена, а пустой черновик поверх прочитанной строки — законное «я
+ * передумал отвечать».
  */
-export function decideDraftWrite(next: string | null | undefined, unreadable?: boolean): DraftWriteDecision {
+export function decideDraftWrite(
+  next: string | null | undefined,
+  unreadable?: boolean,
+  rowUnknown?: boolean
+): DraftWriteDecision {
   if (unreadable === true && draftIsEmpty(next)) return { write: false, reason: 'clearOverUnreadable' };
+  if (rowUnknown === true && draftIsEmpty(next)) return { write: false, reason: 'clearOverUnknownRow' };
   return { write: true, reason: 'ok' };
 }
 
