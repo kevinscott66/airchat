@@ -2,7 +2,7 @@ import { checkOnlineWrite } from './cachePolicy';
 import { pullSyncMutations, pushSyncMutations } from './syncApi';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
-import { getSyncState, saveSyncState } from '../storage/local';
+import { getSyncState, saveSyncState, validSyncCursor } from '../storage/local';
 import type { SyncMutation, SyncPullResponse, SyncPushResponse } from './syncProtocol';
 
 export type SyncProjection = (mutation: SyncMutation) => Promise<void>;
@@ -143,6 +143,17 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
     options.ownerProfileId,
     Math.min(Math.max(options.limit ?? 100, 1), 100),
   );
+
+  // v4.32.619: форма курсора проверяется ДО проекции. Тем же правилом его
+  // отвергает saveSyncState — но уже после того, как весь пакет применён:
+  // курсор не двигался, следующая синхронизация приносила тот же пакет, и так
+  // без конца. Честный сервер шлёт десятичное число всегда; сломанный или
+  // враждебный — единственный, кто сюда попадёт, и ему отказывают до того, как
+  // хоть одна строка легла в базу.
+  if (!validSyncCursor(pulled.nextCursor)) {
+    log.warn('sync_pull_cursor_invalid', { cursor: String(pulled.nextCursor).slice(0, 64) });
+    throw new Error('Сервер вернул некорректный курсор синхронизации.');
+  }
 
   // Cursor advances only after every row has been projected locally. A crash
   // or decryption error therefore causes a safe replay instead of data loss.

@@ -41,6 +41,7 @@ jest.mock('../../config', () => ({
 }));
 
 jest.mock('../../storage/local', () => ({
+  applySyncGroup: jest.fn(async () => undefined),
   applySyncGroupMember: jest.fn(async () => undefined),
   applySyncGroupMessage: jest.fn(async () => undefined),
   deleteSyncEntity: jest.fn(async () => undefined),
@@ -50,10 +51,9 @@ jest.mock('../../storage/local', () => ({
   exportGroupBackupRows: jest.fn(async () => ({ groups: [], messages: [], members: [] })),
   exportRawChatMessageRows: jest.fn(async () => []),
   getSyncEntityHeads: jest.fn(async () => mockHeads),
-  importConversationMetaRows: jest.fn(async () => undefined),
-  importDialogKvSnapshot: jest.fn(async () => undefined),
+  importConversationMetaRows: jest.fn(async () => 1),
+  importDialogKvSnapshot: jest.fn(async () => 1),
   importSyncProfileSetting: jest.fn(async () => true),
-  importGroupBackupRows: jest.fn(async () => undefined),
   importRawChatMessageRows: jest.fn(async () => 1),
   rebuildConversationsFromMessages: jest.fn(async () => undefined),
   saveSyncEntityHeads: jest.fn(async () => undefined),

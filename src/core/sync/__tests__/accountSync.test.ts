@@ -8,6 +8,11 @@ jest.mock('../syncApi', () => ({
 jest.mock('../../storage/local', () => ({
   getSyncState: jest.fn(),
   saveSyncState: jest.fn(),
+  // Настоящая функция чистая, и мок повторяет её правило дословно: подменять
+  // проверку заглушкой «всегда да» значило бы проверять не то.
+  validSyncCursor: jest.fn(
+    (c: string | null) => c === null || (/^\d+$/.test(c) && Number.isSafeInteger(Number(c))),
+  ),
 }));
 
 import { checkOnlineWrite } from '../cachePolicy';
@@ -300,5 +305,54 @@ describe('строка, которую не удаётся спроециров�
     await expect(runOnce(applyMutation)).rejects.toThrow();
     // Третья неудача за сессию, но лишь вторая подряд: строку ещё не бросают.
     await expect(runOnce(applyMutation)).rejects.toThrow();
+  });
+});
+
+/**
+ * Курсор проверяется до проекции, а не после (v4.32.619).
+ *
+ * Дефект. Форму `nextCursor` сторожил только `saveSyncState` — то есть уже
+ * ПОСЛЕ того, как весь пришедший пакет применён к базе. Он честно бросал
+ * `Invalid sync cursor`, но курсор в состоянии оставался прежним: следующая
+ * синхронизация просила тот же отрезок, получала тот же пакет, применяла его
+ * заново и снова падала на записи. Сломанный или враждебный сервер держал
+ * устройство в вечном повторе одной и той же пачки — и ни один проход не
+ * доходил до конца.
+ */
+describe('курсор от сервера проверяется до применения строк', () => {
+  test('проверка не пустая: годный курсор пропускается и пакет применяется', async () => {
+    const applyMutation = jest.fn().mockResolvedValue(undefined);
+    pull.mockResolvedValue({ serverEpoch: 'e', nextCursor: '42', hasMore: false, mutations: [mutation] });
+    await syncAccountOnce({ mnemonic: 'seed', pair, ownerProfileId: 1, pendingMutations: [], applyMutation });
+    expect(applyMutation).toHaveBeenCalledTimes(1);
+    expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '42' }));
+  });
+
+  test('проверка не пустая: пустой курсор — законный конец выборки', async () => {
+    const applyMutation = jest.fn().mockResolvedValue(undefined);
+    pull.mockResolvedValue({ serverEpoch: 'e', nextCursor: null, hasMore: false, mutations: [mutation] });
+    await syncAccountOnce({ mnemonic: 'seed', pair, ownerProfileId: 1, pendingMutations: [], applyMutation });
+    expect(applyMutation).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['не число', 'abc'],
+    ['с пробелом', ' 1'],
+    ['отрицательный', '-1'],
+    ['за пределами точного целого', '9007199254740993'],
+  ])('негодный курсор (%s) отвергается ДО проекции', async (_label, cursor) => {
+    const applyMutation = jest.fn().mockResolvedValue(undefined);
+    pull.mockResolvedValue({
+      serverEpoch: 'e',
+      nextCursor: cursor as unknown as string,
+      hasMore: false,
+      mutations: [mutation],
+    });
+    await expect(
+      syncAccountOnce({ mnemonic: 'seed', pair, ownerProfileId: 1, pendingMutations: [], applyMutation }),
+    ).rejects.toThrow(/курсор/i);
+    // Главное: ни одна строка не легла в базу и состояние не тронуто.
+    expect(applyMutation).not.toHaveBeenCalled();
+    expect(writeState).not.toHaveBeenCalled();
   });
 });

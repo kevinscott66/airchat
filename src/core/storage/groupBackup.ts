@@ -335,7 +335,7 @@ export function sanitizeGroupMemberRows(
     if (groupId === undefined || !knownGroupIds.has(groupId)) { dropped++; continue; }
     if (!isPubKeyB64(r.peer_pub_b64)) { dropped++; continue; }
     if (typeof r.role !== 'string' || !MEMBER_ROLES.has(r.role)) { dropped++; continue; }
-    const key = `${groupId} ${r.peer_pub_b64}`;
+    const key = `${groupId}\u0000${r.peer_pub_b64}`;
     if (seen.has(key)) { dropped++; continue; }
     const displayName = optionalText(r.display_name, DISPLAY_NAME_MAX);
     const joinedAt = optionalTime(r.joined_at);

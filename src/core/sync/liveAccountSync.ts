@@ -2,6 +2,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { decryptSymmetric, encryptSymmetric } from '../crypto/encrypt';
 import { deriveLocalDekFromMnemonic } from '../storage/dekDerivation';
 import {
+  applySyncGroup,
   applySyncGroupMember,
   applySyncGroupMessage,
   deleteSyncEntity,
@@ -14,7 +15,6 @@ import {
   importConversationMetaRows,
   importDialogKvSnapshot,
   importSyncProfileSetting,
-  importGroupBackupRows,
   importRawChatMessageRows,
   rebuildConversationsFromMessages,
   saveSyncEntityHeads,
@@ -40,7 +40,7 @@ import {
 import type { FeedCommentRow, FeedPostRow } from '../storage/feedStorage';
 import type { RawChatMessageRow } from '../storage/chatMessageBackup';
 import type { ConversationMetaRow } from '../storage/conversationMeta';
-import type { GroupMemberBackupRow, GroupMessageBackupRow } from '../storage/groupBackup';
+import type { GroupBackupRow, GroupMemberBackupRow, GroupMessageBackupRow } from '../storage/groupBackup';
 import { getConfigSync } from '../config';
 import { log } from '../logger';
 import { feedCommentIsHeldFromSync, feedPostIsHeldFromSync } from '../social/feedPostGuard';
@@ -526,10 +526,19 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       }
       break;
     case 'conversation':
-      await importConversationMetaRows([entity.value as ConversationMetaRow], mutation.ownerProfileId);
+      // v4.32.619: отказ проверки больше не проходит молча. Импорт возвращает
+      // число принятых строк; ноль значил «строка отброшена», а голова сущности
+      // всё равно писалась ниже — устройство считало, что диалог у него есть.
+      if ((await importConversationMetaRows([entity.value as ConversationMetaRow], mutation.ownerProfileId)) !== 1) {
+        throw new Error('Диалог синхронизации не прошёл проверку.');
+      }
       break;
     case 'setting':
-      await importDialogKvSnapshot([entity.value], mutation.ownerProfileId);
+      // v4.32.619: см. выше про голову сущности — отброшенная настройка
+      // записывалась как применённая.
+      if ((await importDialogKvSnapshot([entity.value], mutation.ownerProfileId)) !== 1) {
+        throw new Error('Настройка синхронизации не прошла проверку.');
+      }
       // v4.32.617: блок-лист входит в этот снимок, а живёт он ещё и в памяти
       // rateLimiter. Без перечитывания пришедший запрет не действовал до
       // перезапуска, а первая же блокировка на этом устройстве раскладывала
@@ -542,7 +551,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       }
       break;
     case 'group':
-      await importGroupBackupRows({ groups: [entity.value] }, mutation.ownerProfileId);
+      await applySyncGroup(entity.value as GroupBackupRow, mutation.ownerProfileId);
       break;
     case 'group_message':
       await applySyncGroupMessage(entity.value as GroupMessageBackupRow, mutation.ownerProfileId);

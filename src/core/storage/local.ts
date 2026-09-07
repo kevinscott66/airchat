@@ -1876,7 +1876,13 @@ function validSyncProfileId(ownerProfileId: number): boolean {
   return Number.isSafeInteger(ownerProfileId) && ownerProfileId > 0;
 }
 
-function validSyncCursor(cursor: string | null): boolean {
+/**
+ * Форма курсора, который сервер вправе прислать: десятичное число или его
+ * отсутствие. Наружу — для accountSync: тот обязан отвергнуть курсор ДО того,
+ * как применит пришедший с ним пакет (см. saveSyncState ниже, который тем же
+ * правилом отвергает его после).
+ */
+export function validSyncCursor(cursor: string | null): boolean {
   return cursor === null || (/^\d+$/.test(cursor) && Number.isSafeInteger(Number(cursor)));
 }
 
@@ -3656,6 +3662,103 @@ export async function importGroupBackupRows(
 }
 
 /** Apply one remote group child row without requiring the whole group archive. */
+/**
+ * Положить группу, пришедшую живой синхронизацией.
+ *
+ * v4.32.619. Раньше эта ветка звала `importGroupBackupRows`, а тот кладёт
+ * группы через `INSERT OR IGNORE`: для восстановления из файла это верно —
+ * «то, что на устройстве, новее того, что в копии». На пути синхронизации то
+ * же правило означает ровно обратное: устройство B не применяло НИЧЕГО, а
+ * голову сущности всё равно записывало по присланному отпечатку. Дальше
+ * `collectPending` на B видел, что его собственная строка с головой не
+ * сходится, и отправлял свою — устаревшую — обратно с revision+1; A делал то
+ * же самое в другую сторону. Пара устройств гоняла одну группу по кругу
+ * вечно, по мутации на круг, в счёт квоты аккаунта, а название и настройки
+ * группы не сходились никогда. Срабатывало практически на каждой группе:
+ * в строке едут ещё и unread_count, mention_count, draft_text, last_message_at,
+ * которые у двух устройств расходятся сами собой.
+ *
+ * Отсюда `ON CONFLICT DO UPDATE`, как у `applySyncGroupMessage` и
+ * `applySyncGroupMember` — единственный вид записи, который сходится.
+ * `exportGroupBackupRows`/`importGroupBackupRows` не трогаем: у копии из файла
+ * своё правило, и оно верное.
+ *
+ * Столбцы из `AT_REST_COLUMNS` едут шифртекстом: DEK выводится из секретных
+ * слов (см. migrateDekRandomToDeterministic), то есть у всех устройств одного
+ * аккаунта он один и тот же, и `encryptAtRestIfPlain` оставляет пришедшее
+ * `enc2:` как есть.
+ */
+export async function applySyncGroup(
+  row: GroupBackupRow,
+  ownerProfileId: number,
+): Promise<void> {
+  if (!validSyncProfileId(ownerProfileId)) throw new Error('Invalid sync profile id');
+  const { rows } = sanitizeGroupRows([row]);
+  // Пусто — значит строка не прошла проверку. Молча записать голову сущности
+  // после этого значило бы «устройство считает, что группа у него есть».
+  if (rows.length !== 1) throw new Error('Группа синхронизации не прошла проверку.');
+  const g = rows[0];
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  await d.runAsync(
+    `INSERT INTO groups
+       (id, owner_profile_id, name, description, avatar_cid, type, invite_token, is_admin,
+        member_count, unread_count, mention_count, muted, muted_until, pinned, archived,
+        last_message_at, last_message_preview, last_message_sender_name,
+        last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
+        disappear_after_ms, disappear_set_at, slow_mode_seconds, admin_only_posting,
+        admin_only_pinning, anonymous_posting, require_approval, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id, owner_profile_id) DO UPDATE SET
+       name = excluded.name,
+       description = excluded.description,
+       avatar_cid = excluded.avatar_cid,
+       type = excluded.type,
+       invite_token = excluded.invite_token,
+       is_admin = excluded.is_admin,
+       member_count = excluded.member_count,
+       unread_count = excluded.unread_count,
+       mention_count = excluded.mention_count,
+       muted = excluded.muted,
+       muted_until = excluded.muted_until,
+       pinned = excluded.pinned,
+       archived = excluded.archived,
+       last_message_at = excluded.last_message_at,
+       last_message_preview = excluded.last_message_preview,
+       last_message_sender_name = excluded.last_message_sender_name,
+       last_message_sender_pub = excluded.last_message_sender_pub,
+       pinned_message_id = excluded.pinned_message_id,
+       pinned_message_text = excluded.pinned_message_text,
+       draft_text = excluded.draft_text,
+       disappear_after_ms = excluded.disappear_after_ms,
+       disappear_set_at = excluded.disappear_set_at,
+       slow_mode_seconds = excluded.slow_mode_seconds,
+       admin_only_posting = excluded.admin_only_posting,
+       admin_only_pinning = excluded.admin_only_pinning,
+       anonymous_posting = excluded.anonymous_posting,
+       require_approval = excluded.require_approval,
+       created_at = excluded.created_at`,
+    [
+      g.id, ownerProfileId,
+      encryptAtRestIfPlain(g.name, dek),
+      encryptAtRestIfPlain(g.description, dek),
+      encryptAtRestIfPlain(g.avatar_cid, dek),
+      g.type,
+      encryptAtRestIfPlain(g.invite_token, dek),
+      g.is_admin, g.member_count, g.unread_count, g.mention_count, g.muted, g.muted_until,
+      g.pinned, g.archived, g.last_message_at,
+      encryptAtRestIfPlain(g.last_message_preview, dek),
+      encryptAtRestIfPlain(g.last_message_sender_name, dek),
+      g.last_message_sender_pub, g.pinned_message_id,
+      encryptAtRestIfPlain(g.pinned_message_text, dek),
+      encryptAtRestIfPlain(g.draft_text, dek),
+      g.disappear_after_ms, g.disappear_set_at, g.slow_mode_seconds, g.admin_only_posting,
+      g.admin_only_pinning, g.anonymous_posting, g.require_approval, g.created_at,
+    ],
+  );
+  emitChatWrites();
+}
+
 export async function applySyncGroupMessage(
   row: GroupMessageBackupRow,
   ownerProfileId: number,

@@ -396,7 +396,15 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
   const { closeLocalDatabase } = await import('../storage/local');
   await closeFeedStorage();
   await closeLocalDatabase();
-  await restoreAccountVault(normalized);
+  // v4.32.619: ответ восстановления больше не выбрасывается. `false` тут — это
+  // не тот ключ, битый манифест или отказ файловой системы; прежде человек
+  // после этого попадал в приложение с новым DID и чужой базой на диске, и ни
+  // одного слова об этом ему не говорилось. Снимка может не быть вовсе — это
+  // законно (профиль заведётся чистым), поэтому спрашиваем отдельно, а не
+  // толкуем «нечего восстанавливать» как сбой.
+  if ((await hasAccountVaultSnapshot(normalized)) && !(await restoreAccountVault(normalized))) {
+    throw new Error('Копия этого кошелька на устройстве не восстановилась. Попробуйте ещё раз.');
+  }
   return pair;
 }
 

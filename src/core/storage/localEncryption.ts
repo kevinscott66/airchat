@@ -110,9 +110,21 @@ async function readCanary(): Promise<{ state: CanaryState; stored: string | null
   }
 }
 
-/** null — сравнивать было нечего: нет канарейки или нет ключа-кандидата. */
+/**
+ * null — сравнивать было нечего: нет канарейки или нет ключа-кандидата.
+ *
+ * v4.32.619: значение без префикса `enc2:` не открывается НИЧЕМ. Проверка
+ * опиралась на `tryDecryptAtRest`, а тот отдаёт строку без префикса как есть —
+ * то есть подложенная в хранилище открытая константа `airchat-dek-canary-v1`
+ * совпадала с `CANARY_PLAINTEXT` при любом ключе-кандидате. Канарейка — это
+ * доказательство владения ключом; доказательство, которое проходит без ключа,
+ * доказательством не является, и весь разбор в dekPolicy сводился к одной
+ * известной строке. Своя запись всегда идёт через `encryptAtRestString`,
+ * так что префикс у честной канарейки есть всегда.
+ */
 function canaryOpens(stored: string | null, dek: Uint8Array | null): boolean | null {
   if (stored === null || dek === null) return null;
+  if (!stored.startsWith(AT_REST_PREFIX)) return false;
   try {
     return tryDecryptAtRest(stored, dek) === CANARY_PLAINTEXT;
   } catch {
