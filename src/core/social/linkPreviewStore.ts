@@ -68,6 +68,119 @@ export function tooLargeToRead(contentLength: string | null | undefined): boolea
   return n > LINK_PREVIEW_MAX_BYTES;
 }
 
+/**
+ * Разбор страницы в карточку: заголовок, описание, картинка.
+ *
+ * v4.32.615. Раньше разбор жил прямо в компоненте и состоял из четырёх
+ * выражений вида
+ * `/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i`.
+ * Два жадных `[^>]+` подряд дают откат, который растёт быстрее квадрата: на
+ * странице из повторяющегося `<meta property="og:title" ` без единого `>`
+ * замер на V8 дал 5 КБ — 0,12 с, 10 КБ — 0,9 с, 21 КБ — 7,5 с, 42 КБ — 60 с.
+ * Страницу выбирает отправитель ссылки, поэтому это не «медленно», а способ
+ * повесить поток разбора намертво — и для своих исходящих ссылок он работает
+ * всегда, независимо от настройки предпросмотра входящих.
+ *
+ * Здесь теги вынимаются посимвольным поиском (`indexOf`), а внутри тега
+ * ищется только короткий атрибут. Ни одного выражения, у которого откат
+ * зависит от длины страницы.
+ *
+ * Чего этот разбор НЕ чинит: тело уже прочитано целиком. `tooLargeToRead`
+ * смотрит на заявленный `content-length`, а ответ без него (chunked) читается
+ * до конца или до шестисекундного обрыва — `fetch` в React Native не даёт
+ * читать тело по кускам. Поэтому здесь стоит второй предел: сколько бы ни
+ * пришло, разбирается только первый LINK_PREVIEW_MAX_BYTES знаков.
+ */
+
+/** Сколько тегов <meta> просматривать: у настоящих страниц их десятки. */
+const META_TAG_LIMIT = 500;
+
+/** Сколько знаков заголовка `<title>` брать до обрезки под карточку. */
+const TITLE_SCAN_MAX = 512;
+
+/**
+ * Атрибуты берутся по отдельности и по границе слова, иначе `itemprop="name"`
+ * сойдёт за `name=`, а `?name=og:title` внутри адреса картинки — за ключ.
+ */
+const KEY_ATTR = /(?:^|[\s"'/])(?:property|name)\s*=\s*["']([^"']*)["']/i;
+const CONTENT_ATTR = /(?:^|[\s"'/])content\s*=\s*["']([^"']*)["']/i;
+
+/** Начинается ли по индексу `i` тег с именем `name` (за именем — не буква). */
+function tagStartsAt(low: string, i: number, name: string): boolean {
+  const c = low.charCodeAt(i + name.length);
+  // '>' или '/' или пробельный; NaN (конец строки) — не тег.
+  return c === 62 || c === 47 || c <= 32;
+}
+
+/** Все теги <meta> целиком, посимвольным поиском и без отката. */
+function metaTags(html: string): string[] {
+  const out: string[] = [];
+  const low = html.toLowerCase();
+  let i = low.indexOf('<meta');
+  while (i !== -1 && out.length < META_TAG_LIMIT) {
+    const end = html.indexOf('>', i);
+    if (end === -1) break;
+    if (tagStartsAt(low, i, '<meta')) out.push(html.slice(i, end + 1));
+    i = low.indexOf('<meta', end + 1);
+  }
+  return out;
+}
+
+/** Текст первого непустого <title>. */
+function titleText(html: string): string | null {
+  const low = html.toLowerCase();
+  let i = low.indexOf('<title');
+  while (i !== -1) {
+    const gt = html.indexOf('>', i);
+    if (gt === -1) return null;
+    if (tagStartsAt(low, i, '<title')) {
+      const close = low.indexOf('</title', gt + 1);
+      const cap = gt + 1 + TITLE_SCAN_MAX;
+      const text = html.slice(gt + 1, close === -1 ? cap : Math.min(close, cap));
+      if (text.trim().length > 0) return text;
+    }
+    i = low.indexOf('<title', gt + 1);
+  }
+  return null;
+}
+
+/**
+ * Собрать карточку из тела страницы. `pageUrl` нужен для домена и для
+ * относительного адреса картинки. Возвращает null, если заголовка нет:
+ * карточка без заголовка — пустая полоса под сообщением.
+ */
+export function parseLinkPreviewHtml(html: string, pageUrl: string): LinkPreviewCard | null {
+  const doc = html.length > LINK_PREVIEW_MAX_BYTES ? html.slice(0, LINK_PREVIEW_MAX_BYTES) : html;
+  let ogTitle: string | null = null;
+  let ogDesc: string | null = null;
+  let metaDesc: string | null = null;
+  let ogImage: string | null = null;
+  for (const tag of metaTags(doc)) {
+    const key = KEY_ATTR.exec(tag)?.[1].trim().toLowerCase();
+    if (key !== 'og:title' && key !== 'og:description' && key !== 'og:image' && key !== 'description') continue;
+    const value = CONTENT_ATTR.exec(tag)?.[1];
+    if (value === undefined || value.length === 0) continue;
+    if (key === 'og:title') { if (ogTitle === null) ogTitle = value; }
+    else if (key === 'og:description') { if (ogDesc === null) ogDesc = value; }
+    else if (key === 'description') { if (metaDesc === null) metaDesc = value; }
+    else if (ogImage === null) ogImage = value;
+  }
+  const title = (ogTitle ?? titleText(doc) ?? '').trim().slice(0, 100);
+  if (title.length === 0) return null;
+  const description = (ogDesc ?? metaDesc ?? '').trim().slice(0, 160);
+  let domain = '';
+  try {
+    domain = new URL(pageUrl).hostname.replace(/^www\./, '');
+  } catch { /* адрес уже показан человеку как есть — строка домена просто пустая */ }
+  let image: string | null = null;
+  if (ogImage !== null) {
+    try {
+      image = ogImage.startsWith('http') ? ogImage : new URL(ogImage, pageUrl).href;
+    } catch { /* относительный адрес не разобрался — карточка будет без картинки */ }
+  }
+  return { title, description, domain, image };
+}
+
 interface Entry {
   settled: LinkPreviewCard | null | undefined;
   attempts: number;

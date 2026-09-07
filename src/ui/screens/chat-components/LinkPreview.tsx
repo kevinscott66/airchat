@@ -19,6 +19,7 @@ import { font, inkOn, nestedFill, radius } from '../../theme';
 import { useBubbleSurface } from '../../BubbleKindContext';
 import {
   createLinkPreviewStore,
+  parseLinkPreviewHtml,
   tooLargeToRead,
   type LinkPreviewCard,
 } from '../../../core/social/linkPreviewStore';
@@ -101,23 +102,10 @@ export function LinkPreview({ url, isOutgoing, fromPeer }: { url: string; isOutg
         }
         const html = await res.text();
         if (cancelled) return;
-        const ogTitle = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const titleTag = /<title[^>]*>([^<]+)<\/title>/i.exec(html)?.[1];
-        const ogDesc = /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1]
-          ?? /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const ogImage = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i.exec(html)?.[1];
-        const title = (ogTitle ?? titleTag ?? '').trim().slice(0, 100);
-        const description = (ogDesc ?? '').trim().slice(0, 160);
-        let domain = '';
-        try { domain = new URL(url).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
-        // Resolve relative image URL
-        let image: string | null = null;
-        if (ogImage) {
-          try {
-            image = ogImage.startsWith('http') ? ogImage : new URL(ogImage, url).href;
-          } catch { /* ignore */ }
-        }
-        const result = title ? { title, description, domain, image } : null;
+        // v4.32.615: разбор — в linkPreviewStore. Здесь он был набором
+        // выражений с двумя жадными `[^>]+` подряд, и страница, которую
+        // выбирает отправитель ссылки, вешала поток на десятки секунд.
+        const result = parseLinkPreviewHtml(html, url);
         previewStore.remember(url, result);
         if (!cancelled) setPreview(result);
       } catch {

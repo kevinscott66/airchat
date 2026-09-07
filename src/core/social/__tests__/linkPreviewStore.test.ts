@@ -12,6 +12,7 @@ import path from 'path';
 import {
   LINK_PREVIEW_MAX_BYTES,
   createLinkPreviewStore,
+  parseLinkPreviewHtml,
   tooLargeToRead,
   type LinkPreviewCard,
 } from '../linkPreviewStore';
@@ -190,5 +191,112 @@ describe('карточка ссылки: модуль LinkPreview', () => {
 
   it('состояние карточки поднимается из памяти при первом появлении', () => {
     expect(CHAT).toContain("known.kind === 'card' ? known.card : known.kind === 'none' ? null : undefined");
+  });
+});
+
+describe('разбор страницы в карточку', () => {
+  const PAGE = 'https://www.example.org/a/b';
+
+  it('обычная страница разбирается в те же поля, что и раньше', () => {
+    const html = `<html><head>
+      <title>Заголовок из title</title>
+      <meta property="og:title" content="Заголовок из og">
+      <meta property="og:description" content="Описание">
+      <meta property="og:image" content="/pic.png">
+    </head><body>текст</body></html>`;
+    expect(parseLinkPreviewHtml(html, PAGE)).toEqual({
+      title: 'Заголовок из og',
+      description: 'Описание',
+      domain: 'example.org',
+      image: 'https://www.example.org/pic.png',
+    });
+  });
+
+  it('без og берётся title и name="description"', () => {
+    const html = '<head><title> Просто заголовок </title><meta name="description" content="Оно"></head>';
+    expect(parseLinkPreviewHtml(html, PAGE)).toEqual({
+      title: 'Просто заголовок',
+      description: 'Оно',
+      domain: 'example.org',
+      image: null,
+    });
+  });
+
+  it('og:description старше name="description"', () => {
+    const html = '<meta name="description" content="второе">'
+      + '<meta property="og:description" content="первое"><title>t</title>';
+    expect(parseLinkPreviewHtml(html, PAGE)?.description).toBe('первое');
+  });
+
+  it('страница без заголовка карточки не даёт', () => {
+    expect(parseLinkPreviewHtml('<html><body>ничего</body></html>', PAGE)).toBeNull();
+    expect(parseLinkPreviewHtml('<title>   </title>', PAGE)).toBeNull();
+    expect(parseLinkPreviewHtml('<meta property="og:title" content="">', PAGE)).toBeNull();
+  });
+
+  it('порядок атрибутов внутри тега не важен', () => {
+    const html = '<meta content="Заголовок" property="og:title" />';
+    expect(parseLinkPreviewHtml(html, PAGE)?.title).toBe('Заголовок');
+  });
+
+  it('чужой атрибут не сходит за ключ', () => {
+    // itemprop="name" — не name=, а ?name= в адресе картинки — не ключ тега.
+    const html = '<meta itemprop="name" content="не заголовок">'
+      + '<meta property="og:image" content="https://cdn.example/p.png?name=og:title">'
+      + '<title>настоящий</title>';
+    const got = parseLinkPreviewHtml(html, PAGE);
+    expect(got?.title).toBe('настоящий');
+    expect(got?.image).toBe('https://cdn.example/p.png?name=og:title');
+  });
+
+  it('заголовок и описание обрезаются до размеров карточки', () => {
+    const html = `<meta property="og:title" content="${'т'.repeat(300)}">`
+      + `<meta property="og:description" content="${'о'.repeat(300)}">`;
+    const got = parseLinkPreviewHtml(html, PAGE);
+    expect(got?.title).toHaveLength(100);
+    expect(got?.description).toHaveLength(160);
+  });
+
+  it('негодный адрес страницы не роняет разбор', () => {
+    const got = parseLinkPreviewHtml('<title>t</title><meta property="og:image" content="/p.png">', 'не адрес');
+    expect(got).toEqual({ title: 't', description: '', domain: '', image: null });
+  });
+
+  it('разбирается только начало страницы, каким бы длинным ни был ответ', () => {
+    // tooLargeToRead верит заголовку content-length; ответ без него (chunked)
+    // приходит целиком. Второй предел стоит здесь.
+    const html = `${'<p>x</p>'.repeat(LINK_PREVIEW_MAX_BYTES)}<title>поздно</title>`;
+    expect(parseLinkPreviewHtml(html, PAGE)).toBeNull();
+  });
+
+  it('враждебная страница не вешает разбор', () => {
+    // Ровно та форма, на которой прежние выражения с двумя жадными `[^>]+`
+    // подряд давали 60 с на 42 КБ: `<meta property="og:title" ` без единого
+    // закрывающего '>'.
+    const html = '<meta property="og:title" '.repeat(1600);
+    const started = Date.now();
+    expect(parseLinkPreviewHtml(html, PAGE)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('враждебный тег без закрывающей кавычки тоже не вешает разбор', () => {
+    const html = `<meta property="og:title" content="${'a'.repeat(200_000)}`;
+    const started = Date.now();
+    parseLinkPreviewHtml(html, PAGE);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('карточка ссылки: разбор вынесен из компонента', () => {
+  it('в компоненте не осталось выражений с двумя жадными [^>]+', () => {
+    expect(CHAT).not.toContain('[^>]+property=');
+    expect(CHAT).not.toContain('[^>]+name=');
+    expect(CHAT).not.toContain('[^>]+content=');
+    expect(CHAT).not.toContain('<title[^>]*>');
+  });
+
+  it('компонент зовёт общий разбор', () => {
+    expect(CHAT).toContain('parseLinkPreviewHtml(html, url)');
+    expect(CHAT).toContain('previewStore.remember(url, result);');
   });
 });
