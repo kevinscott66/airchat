@@ -20,6 +20,9 @@ const mockFeed: Row[] = [];
 const mockTombstones: Row[] = [];
 const mockComments: Row[] = [];
 const mockViews: Row[] = [];
+const mockExec: string[] = [];
+/** `pk` у author_did в PRAGMA table_info: 0 — старый ключ, 2 — составной. */
+let mockTombstonePk = 2;
 
 /** Мини-движок: понимает ровно те запросы, которые шлёт FeedStorage. */
 function mockTableFor(sql: string): Row[] | null {
@@ -32,16 +35,32 @@ function mockTableFor(sql: string): Row[] | null {
 
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(async () => ({
-    execAsync: jest.fn(async () => undefined),
+    execAsync: jest.fn(async (sql: string) => {
+      mockExec.push(sql);
+    }),
     withTransactionAsync: jest.fn(async (fn: () => Promise<void>) => fn()),
     closeAsync: jest.fn(async () => undefined),
-    getAllAsync: jest.fn(async () => []),
+    getAllAsync: jest.fn(async (sql: string) => {
+      if (sql.includes('PRAGMA table_info(feed_post_tombstones)')) {
+        return [
+          { name: 'post_id', pk: 1 },
+          { name: 'author_did', pk: mockTombstonePk },
+          { name: 'deleted_at', pk: 0 },
+        ];
+      }
+      return [];
+    }),
     getFirstAsync: jest.fn(async (sql: string, params: unknown[] = []) => {
       const t = mockTableFor(sql);
       if (!t) return null;
       const id = params[0];
-      const col = sql.includes('feed_post_tombstones') ? 'post_id' : 'id';
-      return t.find((r) => r[col] === id) ?? null;
+      // Составной ключ надгробий: строк на один post_id может быть несколько.
+      if (sql.includes('feed_post_tombstones')) {
+        return sql.includes('author_did = ?')
+          ? (t.find((r) => r.post_id === id && r.author_did === params[1]) ?? null)
+          : (t.find((r) => r.post_id === id) ?? null);
+      }
+      return t.find((r) => r.id === id) ?? null;
     }),
     runAsync: jest.fn(async (sql: string, params: unknown[] = []) => {
       const t = mockTableFor(sql);
@@ -53,7 +72,7 @@ jest.mock('expo-sqlite', () => ({
       }
       if (sql.includes('INSERT') && sql.includes('feed_post_tombstones')) {
         const [post_id, author_did, deleted_at] = params as [string, string, number];
-        if (!mockTombstones.some((r) => r.post_id === post_id)) {
+        if (!mockTombstones.some((r) => r.post_id === post_id && r.author_did === author_did)) {
           mockTombstones.push({ post_id, author_did, deleted_at });
         }
         return { changes: 1, lastInsertRowId: 0 };
@@ -107,6 +126,8 @@ beforeEach(() => {
   mockTombstones.length = 0;
   mockComments.length = 0;
   mockViews.length = 0;
+  mockExec.length = 0;
+  mockTombstonePk = 2;
   s = new FeedStorage(1);
 });
 
@@ -208,5 +229,86 @@ describe('вместе с постом уходит его обвязка', () =
     await s.deletePost(PID);
     expect(mockComments.map((r) => r.id)).toEqual(['c2']);
     expect(mockViews.map((r) => r.post_id)).toEqual(['post-2']);
+  });
+});
+
+describe('надгробие не занять чужим', () => {
+  // v4.32.615: ключом был один post_id, а вставка идёт через INSERT OR IGNORE.
+  // Номер публикации придумывает отправитель, поэтому любой контакт мог
+  // прислать feed_delete со своим DID и чужим номером до того, как сама
+  // публикация к нам доехала. Его строка занимала ключ, настоящее «удалить
+  // у всех» от автора молча игнорировалось — и запоздавший feed_post
+  // воскрешал удалённую публикацию навсегда.
+  const THIRD = 'did:key:zThird';
+
+  it('чужая запись не глушит удаление автора', async () => {
+    await s.savePostTombstone(PID, OTHER, 400);
+    await s.savePostTombstone(PID, AUTHOR, 500);
+    expect(mockTombstones).toHaveLength(2);
+    await s.savePost(post(PID, AUTHOR));
+    expect(mockFeed).toHaveLength(0);
+  });
+
+  it('и не запрещает писать вложения тому, кто ничего не удалял', async () => {
+    await s.savePostTombstone(PID, OTHER, 400);
+    await s.savePostTombstone(PID, AUTHOR, 500);
+    expect(await s.postWriteGuard(PID, AUTHOR)).toBe('tombstoned');
+    expect(await s.postWriteGuard(PID, THIRD)).toBe('ok');
+  });
+
+  it('на облачном пути результат тот же', async () => {
+    await s.savePostTombstone(PID, OTHER, 400);
+    await s.savePostTombstone(PID, AUTHOR, 500);
+    await s.upsertSyncPost({ ...post(PID, AUTHOR), read: 0, reactions: null } as FeedPostRow);
+    expect(mockFeed).toHaveLength(0);
+  });
+
+  it('время удаления у каждого автора своё', async () => {
+    await s.savePostTombstone(PID, OTHER, 400);
+    await s.savePostTombstone(PID, AUTHOR, 500);
+    await s.savePostTombstone(PID, AUTHOR, 900);
+    expect(mockTombstones).toEqual([
+      { post_id: PID, author_did: OTHER, deleted_at: 400 },
+      { post_id: PID, author_did: AUTHOR, deleted_at: 500 },
+    ]);
+  });
+});
+
+describe('перенос старой таблицы надгробий', () => {
+  const rebuilt = () => mockExec.filter((q) => q.includes('feed_post_tombstones_v2'));
+
+  it('база со старым ключом перестраивается', async () => {
+    mockTombstonePk = 0;
+    await s.postWriteGuard(PID, AUTHOR);
+    const sql = rebuilt().join('\n');
+    expect(sql).toContain('PRIMARY KEY (post_id, author_did)');
+    expect(sql).toContain('INSERT OR IGNORE INTO feed_post_tombstones_v2');
+    expect(sql).toContain('DROP TABLE feed_post_tombstones;');
+    expect(sql).toContain('ALTER TABLE feed_post_tombstones_v2 RENAME TO feed_post_tombstones;');
+  });
+
+  it('база с новым ключом не трогается', async () => {
+    await s.postWriteGuard(PID, AUTHOR);
+    expect(rebuilt()).toEqual([]);
+  });
+});
+
+describe('источник: ключ надгробий составной', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'feedStorage.ts'), 'utf8');
+
+  it('в схеме объявлен ключ (post_id, author_did)', () => {
+    expect(SRC).toContain(`CREATE TABLE IF NOT EXISTS feed_post_tombstones (
+            post_id TEXT NOT NULL,
+            author_did TEXT NOT NULL,
+            deleted_at INTEGER NOT NULL,
+            PRIMARY KEY (post_id, author_did)
+          );`);
+  });
+
+  it('автор отбирается запросом, а не сравнением после выборки', () => {
+    expect(SRC).toContain(
+      "'SELECT post_id FROM feed_post_tombstones WHERE post_id = ? AND author_did = ?'"
+    );
+    expect(SRC).not.toContain("'SELECT author_did FROM feed_post_tombstones WHERE post_id = ?'");
   });
 });

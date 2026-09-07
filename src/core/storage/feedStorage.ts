@@ -257,9 +257,10 @@ export class FeedStorage {
           );
           CREATE INDEX IF NOT EXISTS idx_fct_post ON feed_comment_tombstones(post_id);
           CREATE TABLE IF NOT EXISTS feed_post_tombstones (
-            post_id TEXT PRIMARY KEY NOT NULL,
+            post_id TEXT NOT NULL,
             author_did TEXT NOT NULL,
-            deleted_at INTEGER NOT NULL
+            deleted_at INTEGER NOT NULL,
+            PRIMARY KEY (post_id, author_did)
           );
           -- v4.32.614: индекс по deleted_at заводили под будущую чистку надгробий.
           -- Чистки нет: надгробие весит десятки байт, а ошибка в чистке воскрешает
@@ -296,6 +297,7 @@ export class FeedStorage {
       } catch {
         // Column already exists — ignore
       }
+      await this.migratePostTombstoneKeyOnce(database);
       // v4.32.305: разовый перевод уже накопленной ленты в шифртекст. Строго
       // после ALTER TABLE — иначе колонок documents/reactions в старой базе
       // ещё нет и половина списка молча пропустилась бы.
@@ -325,6 +327,57 @@ export class FeedStorage {
       // The connection can still be closed when checkpoint is unavailable.
     }
     await database.closeAsync();
+  }
+
+  /**
+   * v4.32.615: перевод надгробий публикаций на ключ (post_id, author_did).
+   *
+   * Раньше первичным ключом был один `post_id`, а вставка шла через
+   * INSERT OR IGNORE. Номер публикации придумывает отправитель, и любой
+   * контакт, чей подписанный конверт мы принимаем, мог прислать `feed_delete`
+   * со своим DID и ЧУЖИМ номером — пока самой публикации у нас ещё нет,
+   * такое надгробие ложится в базу. Дальше строку занимал он: настоящее
+   * «удалить у всех» от автора молча игнорировалось (OR IGNORE), `postTombstoned`
+   * для автора возвращал false, и запоздавший `feed_post` спокойно воскрешал
+   * удалённую публикацию — навсегда.
+   *
+   * Составной ключ даёт каждому автору собственную строку, так что занять
+   * чужое место больше нечем. Перенос делается перестройкой таблицы: ALTER
+   * TABLE в SQLite не меняет первичный ключ, а `CREATE TABLE IF NOT EXISTS`
+   * старую таблицу не трогает.
+   *
+   * Отказ переноса не ломает открытие ленты: остаётся прежнее поведение,
+   * следующее открытие попробует снова.
+   */
+  private async migratePostTombstoneKeyOnce(database: SQLite.SQLiteDatabase): Promise<void> {
+    try {
+      const info = await database.getAllAsync<{ name: string; pk: number }>(
+        'PRAGMA table_info(feed_post_tombstones)'
+      );
+      // Пустой ответ — таблицы нет (её только что создал DDL выше в этом же
+      // открытии); `pk > 0` у author_did — ключ уже составной.
+      const author = info.find((c) => c.name === 'author_did');
+      if (!author || author.pk > 0) return;
+      await database.withTransactionAsync(async () => {
+        await database.execAsync(`
+          CREATE TABLE feed_post_tombstones_v2 (
+            post_id TEXT NOT NULL,
+            author_did TEXT NOT NULL,
+            deleted_at INTEGER NOT NULL,
+            PRIMARY KEY (post_id, author_did)
+          );
+          INSERT OR IGNORE INTO feed_post_tombstones_v2 (post_id, author_did, deleted_at)
+            SELECT post_id, author_did, deleted_at FROM feed_post_tombstones;
+          DROP TABLE feed_post_tombstones;
+          ALTER TABLE feed_post_tombstones_v2 RENAME TO feed_post_tombstones;
+        `);
+      });
+      log.info('feed_tombstone_key_migrated', { profileId: this.profileId });
+    } catch (e) {
+      log.warn('feed_tombstone_key_migration_failed', {
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   /**
@@ -791,6 +844,10 @@ export class FeedStorage {
    * `parseAndVerifyFeedEnvelope` уже сверил подпись и то, что
    * `payload.authorDid === senderDid`, так что подделать чужое надгробие нельзя.
    * INSERT OR IGNORE — первое удаление и есть настоящее время удаления.
+   *
+   * v4.32.615: ключ составной, (post_id, author_did). Одного лишь `post_id`
+   * было мало: чужое надгробие занимало строку и глушило настоящее удаление
+   * автора — см. `migratePostTombstoneKeyOnce`.
    */
   async savePostTombstone(postId: string, authorDid: string, deletedAt: number): Promise<void> {
     const d = await this.ensureDb();
@@ -827,17 +884,23 @@ export class FeedStorage {
     return 'ok';
   }
 
-  /** Есть ли надгробие этого автора на этот post_id. */
+  /**
+   * Есть ли надгробие этого автора на этот post_id.
+   *
+   * v4.32.615: автор отбирается запросом, а не сравнением после выборки.
+   * Строк на один `post_id` теперь может быть несколько (по одной на автора),
+   * и «первая попавшаяся» больше не отвечает на вопрос про конкретного автора.
+   */
   private async postTombstoned(
     d: SQLite.SQLiteDatabase,
     postId: string,
     authorDid: string
   ): Promise<boolean> {
-    const t = await d.getFirstAsync<{ author_did: string }>(
-      'SELECT author_did FROM feed_post_tombstones WHERE post_id = ?',
-      [postId]
+    const t = await d.getFirstAsync<{ post_id: string }>(
+      'SELECT post_id FROM feed_post_tombstones WHERE post_id = ? AND author_did = ?',
+      [postId, authorDid]
     );
-    return t != null && t.author_did === authorDid;
+    return t != null;
   }
 
   /** v4.32.65: editedAt опционален — receiver передаёт payload.ts envelope'а,
