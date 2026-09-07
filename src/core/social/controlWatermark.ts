@@ -175,6 +175,35 @@ export async function commitGroupControlTs(
   await commitTs(groupWatermarkKey(slot, groupId), groupKindLabel(slot), pid, ts);
 }
 
+/**
+ * Слот ОДНОГО сообщения группы — правка и удаление (v4.32.628).
+ *
+ * Стоит отдельно от {@link groupWatermarkKey}, и идентификатор сообщения здесь
+ * последний по той же причине, по которой там последним стоит идентификатор
+ * группы: кодек ограничивает и то и другое только длиной, двоеточие внутри
+ * допустимо. Две неограниченные части в одном имени подобрали бы друг другу
+ * чужую ячейку, поэтому имя группы сюда не входит вовсе — оно и не нужно:
+ * сообщение уже найдено в своей группе (`getGroupMessageTarget`), а
+ * идентификатор сообщения в базе уникален сам по себе.
+ *
+ * Знак именно на сообщение, а не на отправителя: правки разных сообщений
+ * приходят пачкой без гарантии порядка, и общий знак выбросил бы законную
+ * правку сообщения A, пришедшую следом за более поздней правкой B.
+ */
+export function groupMessageWatermarkKey(msgId: string): string {
+  return `${WATERMARK_PREFIX}grp:msg:${msgId}`;
+}
+
+/** Свежесть правки сообщения — без сдвига отметки (см. groupControlTsFresh). */
+export async function groupMessageTsFresh(msgId: string, pid: number, ts: number): Promise<boolean> {
+  return freshTs(groupMessageWatermarkKey(msgId), 'grp:msg', pid, ts);
+}
+
+/** Сдвинуть отметку сообщения — после того, как правка или удаление применены. */
+export async function commitGroupMessageTs(msgId: string, pid: number, ts: number): Promise<void> {
+  await commitTs(groupMessageWatermarkKey(msgId), 'grp:msg', pid, ts);
+}
+
 function groupKindLabel(slot: GroupControlSlot): string {
   return `grp:${slot.split(':')[0]}`;
 }

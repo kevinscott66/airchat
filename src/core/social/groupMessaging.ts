@@ -51,7 +51,13 @@ import { sanitizeReplyRef } from './replyRef';
 import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
 import { rateLimiter } from '../security/rateLimiter';
-import { acceptGroupControlTs, commitGroupControlTs, groupControlTsFresh } from './controlWatermark';
+import {
+  acceptGroupControlTs,
+  commitGroupControlTs,
+  commitGroupMessageTs,
+  groupControlTsFresh,
+  groupMessageTsFresh,
+} from './controlWatermark';
 import { GROUP_BANLIST_MAX, countBanned, countsAsMember, roleChangeSysText } from './groupRolePolicy';
 import { clearGroupRemoval, markGroupRemoval, wasRemovedFromGroup } from './groupRemovalMark';
 import { clearGroupLeft, inviteNewerThanLeave } from './groupLeaveMark';
@@ -1531,6 +1537,26 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       });
       return true;
     }
+    // v4.32.628: правка — единственный управляющий конверт группы, способный
+    // ЗАМЕНИТЬ уже показанный текст, и до этой версии она применялась без
+    // всякой проверки метки времени: UPDATE шёл безусловно. Кадр живёт на
+    // relay тридцать суток, темы выводятся из открытых DID и писать в них
+    // может любой — значит перехваченную правку можно послать заново хоть
+    // через месяц, и сообщение у всех получателей возвращалось к старому
+    // тексту. Молча: системной строки правка не пишет.
+    //
+    // Свежесть проверяется здесь, а сдвиг отметки — ниже, после применения:
+    // правка может не найти строки и кончиться ничем (см. v4.32.618 про ту же
+    // пару у состава группы), и сдвинутый вперёд знак отверг бы следующую
+    // законную правку как повтор.
+    if (!(await groupMessageTsFresh(env.msgId, pid, env.ts))) {
+      log.warn('group_ctl_msgop_stale_drop', {
+        op: env.op,
+        gid: env.groupId.slice(0, 8),
+        msgId: env.msgId.slice(0, 8),
+      });
+      return true;
+    }
     if (env.op === 'edit') {
       // v4.32.530: правка могла не примениться (нет строки, сбой базы). Тогда
       // это не «применено» — иначе в журнале успех, а у человека старый текст.
@@ -1543,6 +1569,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         return true;
       }
     } else await deleteGroupMessage(env.msgId, pid);
+    await commitGroupMessageTs(env.msgId, pid, env.ts);
     log.info('group_ctl_msgop_applied', { op: env.op, gid: env.groupId.slice(0, 8) });
     return true;
   }
