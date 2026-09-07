@@ -50,6 +50,7 @@ import { previewLabelForText, truncateReplyPreview } from './messagePreview';
 import { sanitizeReplyRef } from './replyRef';
 import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
+import { rateLimiter } from '../security/rateLimiter';
 import { acceptGroupControlTs } from './controlWatermark';
 import { roleChangeSysText } from './groupRolePolicy';
 import { sanitizeMediaCids } from '../media/mediaCidPolicy';
@@ -1028,7 +1029,11 @@ async function isInviteTrusted(groupId: string, senderPubB64: string, rcpt: Grou
   try {
     const { listContactsFor } = await import('./contacts');
     const contacts = await listContactsFor(rcpt.pid);
-    if (contacts.some((c) => c.peerPublicKey === senderPubB64)) return true;
+    // v4.32.617: неявная строка — это «незнакомец однажды написал», а не «мой
+    // контакт»: в разделе «Контакты» её и не видно. Настройка называется
+    // «Добавление в группы — только контакты», и считать такую строку доверием
+    // значит её же и отменять.
+    if (contacts.some((c) => c.peerPublicKey === senderPubB64 && c.implicit !== true)) return true;
   } catch { /* ignore */ }
   // v4.32.312: решение своё у каждого аккаунта, см. privacyPrefs. Чтение по
   // старому общему имени возвращало здесь пустоту — то есть «только контакты»
@@ -1152,6 +1157,16 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   // поэтому её разбор идёт до проверки «знаем ли мы такую группу».
   if (env.op === 'invite') {
     if (group) return true; // уже состоим — приглашение идемпотентно
+    // v4.32.617: приглашение — единственная операция, у которой нет прежнего
+    // общего состояния, которое стоило бы беречь. Ради него `\x0egctl:` и
+    // переживает блокировку (см. blockPolicy), но заводить заблокированному
+    // человеку новую группу на моём устройстве — ровно то, от чего запрет и
+    // ставят. Остальные операции идут как раньше.
+    await rateLimiter.whenReady();
+    if (rateLimiter.isBlocked(senderPubB64)) {
+      log.info('group_ctl_invite_blocked_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
+      return true;
+    }
     if (!(await isInviteTrusted(env.groupId, senderPubB64, rcpt))) {
       log.warn('group_ctl_invite_untrusted_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return true;

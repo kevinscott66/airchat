@@ -38,6 +38,7 @@ import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyToDidKey, parseDidKey } from '../identity/did';
 import { log } from '../logger';
 import { listContacts } from './contacts';
+import { rateLimiter } from '../security/rateLimiter';
 import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { multiTransportRouter } from '../transport/multiTransport';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
@@ -461,7 +462,13 @@ export async function broadcastFeedEnvelope(
   frame: Uint8Array,
   opts?: { skipDids?: Set<string>; onlyDids?: Set<string> },
 ): Promise<{ total: number; success: number; successDids: string[] }> {
-  const contacts = await listContacts();
+  // v4.32.617: заблокированный человек оставался в списке контактов (блок —
+  // это запрет, а не уборка списка), и каждая моя публикация, правка, реакция
+  // и комментарий по-прежнему адресовались ему поимённо. Запрет обязан быть
+  // двухсторонним: он молчит их трафик ко мне и мой к ним. Так же устроена
+  // рассылка сторис (storyService, v4.32.615).
+  await rateLimiter.whenReady();
+  const contacts = (await listContacts()).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
   if (contacts.length === 0) return { total: 0, success: 0, successDids: [] };
 
   const skipDids = opts?.skipDids;

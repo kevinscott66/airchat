@@ -21,6 +21,7 @@ import * as path from 'path';
 const mockSaved: Record<string, unknown>[] = [];
 const mockEnsure = jest.fn(async () => true);
 const mockRefresh = jest.fn();
+const mockGroup = jest.fn(async () => true);
 const mockBlocked = { current: false };
 const mockEnvelope: { current: unknown } = { current: null };
 
@@ -72,7 +73,7 @@ jest.mock('../../transport/multiTransport', () => ({
 }));
 jest.mock('../../transport/ipfs/heliaNode', () => ({ isIpfsEnabled: () => false }));
 jest.mock('../groupMessaging', () => ({
-  handleIncomingGroupEnvelope: async () => true,
+  handleIncomingGroupEnvelope: () => mockGroup(),
   handleIncomingGroupReadReceipt: async () => false,
   handleIncomingGroupJoinRequest: async () => false,
   handleIncomingGroupControl: async () => false,
@@ -142,6 +143,7 @@ beforeEach(() => {
   mockSaved.length = 0;
   mockEnsure.mockClear();
   mockRefresh.mockClear();
+  mockGroup.mockClear();
   mockBlocked.current = false;
 });
 
@@ -167,9 +169,25 @@ describe('строка контакта для незнакомца', () => {
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 
-  it('групповой конверт от заблокированного проходит: у группы своё правило', async () => {
+  it('групповой конверт от заблокированного разбирается: у группы своё правило', async () => {
     mockBlocked.current = true;
     await deliver('\x02grp:g1:привет всем');
+    expect(mockGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('но строку контакта групповой конверт от заблокированного не заводит', async () => {
+    // v4.32.617: исключение для групп касалось и создания строки — а не должно
+    // было. Заблокированному хватало одного `\x0egctl:`, чтобы вернуться в мой
+    // список; следом эта же строка сходила за доверие при разборе приглашения.
+    mockBlocked.current = true;
+    await deliver('\x02grp:g1:привет всем');
+    expect(mockEnsure).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('проверка не пустая: незаблокированный групповой конверт строку заводит', async () => {
+    await deliver('\x02grp:g1:привет всем');
+    expect(mockGroup).toHaveBeenCalledTimes(1);
     expect(mockEnsure).toHaveBeenCalledTimes(1);
   });
 

@@ -794,19 +794,31 @@ export class MessagingService {
     // причине: до создания строки. Групповые конверты исключены — см.
     // blockPolicy: состав и права группы задаются ролями в ней, а не моим
     // личным списком.
+    //
+    // v4.32.617: «исключены» касалось и создания строки — а не должно было.
+    // Групповой конверт от заблокированного идёт дальше по делу (роли в группе
+    // мой личный список не задаёт), но строку контакта он не заводит. Иначе
+    // заблокированному хватало одного `\x0egctl:`, чтобы вернуться в мой
+    // список; хуже того, эта же строка тут же сходила за доверие при разборе
+    // приглашения (isInviteTrusted спрашивает список контактов), и он заводил
+    // у меня новую группу с собой в администраторах.
+    let blockedGroupScoped = false;
     if (needsImplicitContact) {
       // Блок-лист поднимается с диска асинхронно; пока чтение не закончилось,
       // isBlocked отвечает «не заблокирован» на кого угодно (v4.32.317).
       await rateLimiter.whenReady();
-      if (rateLimiter.isBlocked(peerPubKeyB64) && !survivesBlock(peekPayloadText(pt))) {
-        log.info('dm_blocked_no_implicit_contact', { from: peerPubKeyB64.slice(0, 12) });
-        return;
+      if (rateLimiter.isBlocked(peerPubKeyB64)) {
+        if (!survivesBlock(peekPayloadText(pt))) {
+          log.info('dm_blocked_no_implicit_contact', { from: peerPubKeyB64.slice(0, 12) });
+          return;
+        }
+        blockedGroupScoped = true;
       }
     }
 
     // Decrypt succeeded → sender is the real holder of their secret key.
     // NOW it's safe to create the implicit contact row and persist.
-    if (needsImplicitContact && senderPk) {
+    if (needsImplicitContact && senderPk && !blockedGroupScoped) {
       try {
         const created = await ensureImplicitContact(await this.ownerProfileId(), this.pair, senderPk);
         // v4.32.120: only refresh pubsub subscriptions when a NEW row was

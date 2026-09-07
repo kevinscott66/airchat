@@ -156,13 +156,19 @@ describe('форма исходников: проверка стоит до ди
 
   it('исключение для групп проходит через blockPolicy, а не через список на месте', () => {
     expect(text).toContain("import { survivesBlock } from './blockPolicy'");
-    const gateLines = text
-      .split('\n')
-      .filter((l) => l.includes('rateLimiter.isBlocked(peerPubKeyB64)'));
-    expect(gateLines).toHaveLength(2);
-    for (const l of gateLines) expect(l).toContain('survivesBlock');
+    const lines = text.split('\n');
+    const gates = lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => l.includes('rateLimiter.isBlocked(peerPubKeyB64)'));
+    expect(gates).toHaveLength(2);
+    // v4.32.617: верхняя проверка перестала быть однострочной — заблокированный
+    // с групповым конвертом идёт дальше, но строку контакта не заводит. Поэтому
+    // `survivesBlock` ищется в теле проверки, а не строго в её первой строке.
+    for (const { i } of gates) {
+      expect(lines.slice(i, i + 4).join('\n')).toContain('survivesBlock');
+    }
     // Нижняя проверка отделяет входящее от своего же исходящего; верхняя стоит
     // на пути, где своих конвертов не бывает по определению, — там незнакомец.
-    expect(gateLines.some((l) => l.includes('inbound'))).toBe(true);
+    expect(gates.some(({ l }) => l.includes('inbound'))).toBe(true);
   });
 });

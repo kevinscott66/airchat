@@ -44,6 +44,7 @@ import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
 import { listContacts } from './contacts';
 import { isAuthorMuted } from './mutedAuthors';
+import { rateLimiter } from '../security/rateLimiter';
 import { reactionAddRefusal } from './reactionMapPolicy';
 import { reactionLimitError } from './reactionWrite';
 // v4.32.528: тип, в котором сбой чтения отличим от пустой ленты.
@@ -615,6 +616,26 @@ function fnv1a32Hex(s: string): string {
  * the original author. Bridges topologies (e.g. WAN sender ↔ LAN-only reader
  * via a mutual contact). Fire-and-forget; never blocks ingress.
  */
+/**
+ * Заблокирован ли автор конверта (v4.32.617).
+ *
+ * Блок-лист держит base64 открытого ключа, лента — did:key; это один и тот же
+ * человек. Не разобрали did — решать не о чем: конверт пойдёт обычным путём и
+ * его отбракует проверка подписи.
+ */
+async function isAuthorBlocked(authorDid: string): Promise<boolean> {
+  try {
+    const pk = parseDidKey(authorDid);
+    if (!pk) return false;
+    // Блок-лист поднимается с диска асинхронно; до конца чтения isBlocked
+    // отвечает «не заблокирован» на кого угодно.
+    await rateLimiter.whenReady();
+    return rateLimiter.isBlocked(Buffer.from(pk).toString('base64'));
+  } catch {
+    return false;
+  }
+}
+
 async function feedGossipRelay(
   innerFrame: Uint8Array,
   nextHops: number,
@@ -629,7 +650,10 @@ async function feedGossipRelay(
   try {
     const wrapped = wrapFeedRelay(innerFrame, nextHops);
     if (!wrapped) return;
-    const contacts = await listContacts();
+    // v4.32.617: заблокированным моя нода чужое не пересылает — блокировка
+    // двухсторонняя, и трафик в их сторону она тоже прекращает.
+    await rateLimiter.whenReady();
+    const contacts = (await listContacts()).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
     if (feedRebinding || feedProfileGen !== genAtEntry) {
       log.debug('feed_gossip_relay_dropped_profile_switched');
       return;
@@ -3023,6 +3047,19 @@ export async function receiveFeedEnvelope(
   // (эта проверка идёт на каждый входящий конверт).
   if (await isAuthorMuted(payload.authorDid)) {
     log.info('feed_envelope_muted_drop', {
+      type: payload.type,
+      authorDid: payload.authorDid.slice(0, 24),
+    });
+    return;
+  }
+
+  // v4.32.617: лента про блокировку не знала вовсе. Заглушка выше — отдельный
+  // список, который человек заводит из самой ленты; блокировка собеседника в
+  // переписке его публикаций не касалась. Они сохранялись, показывались и
+  // вдобавок расходились дальше через мою ноду. Проверка стоит там же, где
+  // заглушка, — выше пересылки, иначе я усиливаю того, кого запретил.
+  if (await isAuthorBlocked(payload.authorDid)) {
+    log.info('feed_envelope_blocked_drop', {
       type: payload.type,
       authorDid: payload.authorDid.slice(0, 24),
     });
