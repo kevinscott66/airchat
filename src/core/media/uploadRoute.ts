@@ -38,7 +38,7 @@ export type RouteInput = {
 };
 
 /** Размер, которому можно верить: конечное неотрицательное число. */
-function knownSize(v: number | null | undefined): number | null {
+export function knownSize(v: number | null | undefined): number | null {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
 

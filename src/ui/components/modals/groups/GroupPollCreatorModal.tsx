@@ -6,6 +6,7 @@ import { AppPressable } from '../../AppPressable';
 import { KeyboardHost } from '../../KeyboardHost';
 import { useTheme } from '../../../ThemeContext';
 import { font, primaryInk, radius, scrim } from '../../../theme';
+import { showError } from '../../userFeedback';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PollCreatorModal
@@ -18,7 +19,8 @@ export function PollCreatorModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  onCreate: (question: string, options: string[], correctAnswer?: number, anonymous?: boolean, allowMultiple?: boolean) => void;
+  /** Возвращает false, если опрос отвергнут: форма тогда не очищается и не закрывается. */
+  onCreate: (question: string, options: string[], correctAnswer?: number, anonymous?: boolean, allowMultiple?: boolean) => boolean;
 }): React.ReactElement {
   const { colors } = useTheme();
   const [question, setQuestion] = useState('');
@@ -34,9 +36,28 @@ export function PollCreatorModal({
 
   const submit = () => {
     const q = question.trim();
-    const opts = options.map((o) => o.trim()).filter(Boolean);
-    if (!q || opts.length < 2) return;
-    onCreate(q, opts, isQuiz ? correctAnswer : undefined, anonymous || undefined, (!isQuiz && allowMultiple) || undefined);
+    // v4.32.622: correctAnswer указывает на строку в `options`, а уходит
+    // отфильтрованный `opts`. Пустой (или удалённый) вариант выше сдвигал
+    // нумерацию, и викторина уезжала на чужой ответ; а если индекс выпадал
+    // за границы, pollEnvelope молча выбрасывал его, превращая викторину
+    // в обычный опрос. Считаем индекс по тому же списку, который отправляем.
+    const kept: number[] = [];
+    const opts: string[] = [];
+    options.forEach((o, i) => {
+      const v = o.trim();
+      if (v) { opts.push(v); kept.push(i); }
+    });
+    // v4.32.622: раньше здесь стоял молчаливый return — кнопка «Создать»
+    // выглядела сломанной.
+    if (!q) { showError('Введите вопрос'); return; }
+    if (opts.length < 2) { showError('Нужно хотя бы два непустых варианта ответа'); return; }
+    const answer = kept.indexOf(correctAnswer);
+    if (isQuiz && answer < 0) { showError('Отметьте верный вариант: он не может быть пустым'); return; }
+    // v4.32.622: форму чистим только после того, как её приняли. Раньше её
+    // стирали безусловно, и отказ (слишком длинный вариант, превышен лимит)
+    // уносил всё набранное вместе с собой.
+    const accepted = onCreate(q, opts, isQuiz ? answer : undefined, anonymous || undefined, (!isQuiz && allowMultiple) || undefined);
+    if (!accepted) return;
     setQuestion('');
     setOptions(['', '']);
     setIsQuiz(false);

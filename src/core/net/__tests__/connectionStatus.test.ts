@@ -97,7 +97,24 @@ describe('проводка', () => {
   it('отметка стоит вокруг самого прохода, а не вокруг ожидания очереди', () => {
     const src = read('core/sync/liveAccountSync.ts');
     expect(src).toContain('markAccountSyncStart();');
-    expect(src).toContain('runLiveSync(mnemonic, pair, ownerProfileId).finally(markAccountSyncEnd)');
+    expect(src).toContain('runLiveSync(mnemonic, pair, ownerProfileId, generation).finally(markAccountSyncEnd)');
+  });
+
+  it('поколение снимается при постановке в очередь, а не внутри прохода', () => {
+    // Проход стартует после предыдущего. Сними он поколение у себя на входе —
+    // отмена, случившаяся за время ожидания в очереди, была бы уже учтена
+    // в снимке, и отменённый проход спокойно дописал бы данные в базу,
+    // которую только что стёр выход из аккаунта.
+    const src = read('core/sync/liveAccountSync.ts');
+    const decl = src.indexOf('const generation = syncGeneration;');
+    expect(decl).toBeGreaterThan(0);
+    // Снимок ровно один: второй, внутри прохода, вернул бы прежнюю дыру.
+    expect(src.indexOf('const generation = syncGeneration;', decl + 1)).toBe(-1);
+    const pass = src.indexOf('async function runLiveSync(');
+    const queue = src.indexOf('export function syncActiveAccount(');
+    expect(pass).toBeGreaterThan(0);
+    expect(queue).toBeGreaterThan(pass);
+    expect(decl).toBeGreaterThan(queue);
   });
 
   it('полоска стоит над очередью отправки', () => {

@@ -30,6 +30,7 @@ import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope } from './controlFanout';
 import { log } from '../logger';
+import { acceptControlTs } from './controlWatermark';
 import type { DmPinOp, DmPinOutcome } from './dmPinOutcome';
 import {
   DM_PIN_PREFIX,
@@ -204,6 +205,15 @@ export async function handleIncomingDmPin(
   // Чат определяется ПОДПИСАННЫМ отправителем DM, а не полем конверта: иначе
   // любой контакт менял бы закрепления в чужой переписке.
   if (env.all === true) {
+    // v4.32.622: «открепить всё» — единственная скалярная операция в этом
+    // конверте, и до этой проверки её повтор был бесплатным: relay хранит
+    // накопленное 30 суток, тема выводится из DID, так что один и тот же
+    // подписанный конверт можно подать снова через месяц и заново стереть
+    // список закреплений. Водяной знак на пару отсекает и повтор, и откат.
+    if (!(await acceptControlTs('dmpin_clear', senderPubB64, pid, env.ts))) {
+      log.info('dm_pin_clear_stale_drop', { from: senderPubB64.slice(0, 12) });
+      return true;
+    }
     await clearDmPinned(senderPubB64, pid);
     // Строки сообщения закрепление не создаёт, поэтому открытый чат сам о нём
     // не узнает — будим подписчиков явно.

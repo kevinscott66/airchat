@@ -21,7 +21,7 @@ import { randomBytes } from '@noble/hashes/utils.js';
 import { encryptSymmetric, decryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
 import { getInternetTransportSingleton } from '../transport/internet/internetTransport';
 import { log } from '../logger';
-import { blobCacheName, BLOB_CACHE_PREFIX, cachedBlobIdOf, isBlobRef, MAX_BLOB_BYTES, type BlobRef } from './blobRef';
+import { blobCacheName, BLOB_CACHE_PREFIX, cachedBlobIdOf, isBlobRef, MAX_BLOB_BYTES, MAX_DOWNLOAD_B64_CHARS, type BlobRef } from './blobRef';
 import { cacheFileBlobId, classifyCacheFile, sweepVerdict } from './cacheSweepPolicy';
 import { fileSizeBytes } from './fileSize';
 import { isAllowedBlobUrl, isInsideCacheDir } from './mediaUrlPolicy';
@@ -29,9 +29,6 @@ import { getConfigSync } from '../config';
 import { getMnemonicGeneration, getStoredMnemonic, deriveKeyPairFromMnemonic } from '../backup/seedPhrase';
 import { downloadSyncMedia, uploadSyncMedia } from '../sync/syncApi';
 
-
-/** Download cap: reject an oversized/abusive attachment before buffering it. */
-const MAX_DOWNLOAD_B64_CHARS = 12_000_000;
 
 /** Релей по умолчанию — тот же адрес, что в DEFAULT_CONFIG.internet. */
 const DEFAULT_RELAY = 'https://ntfy.sh';

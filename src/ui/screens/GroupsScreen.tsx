@@ -1666,25 +1666,34 @@ function GroupChatScreen({
     // то есть от состояния экрана, а не от базы, и отставала от разжалования,
     // применённого минуту назад; сам toggleAndSyncReaction теперь возвращает
     // отказ с текстом, а не безмолвный null.
-    const res = await toggleAndSyncReaction({ msgId: msg.id, emoji, groupId: group.id });
-    if (!res.ok) {
-      showError(res.reason);
+    // v4.32.622: все пять вызовов стоят под `void`, обработчика отказа не было
+    // ни одного — бросок из базы или из рассылки уходил в неперехваченное
+    // отклонение обещания. Заодно закрытие панели быстрых реакций уехало
+    // в finally: при броске она оставалась висеть поверх переписки.
+    try {
+      const res = await toggleAndSyncReaction({ msgId: msg.id, emoji, groupId: group.id });
+      if (!res.ok) {
+        showError(res.reason);
+        return;
+      }
+      // Реакция записана у себя, но конверт мог никуда не уйти: без этой строки
+      // участники её не увидят, а автор будет уверен, что увидели.
+      if (res.warning) showError(res.warning);
+      if (res.on) {
+        const raw = await scopedKvGet(RECENT_REACTIONS_KEY);
+        let list: string[] = [];
+        try { list = raw ? (JSON.parse(raw) as string[]) : []; } catch { /* */ }
+        list = [emoji, ...list.filter((e) => e !== emoji)].slice(0, 8);
+        await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));
+        setGrpRecentReactions(list);
+      }
+      void loadMessages();
+    } catch (e) {
+      log.error('group_reaction_failed', { err: rawErrorText(e) });
+      showError(userErrorText(e, 'Не удалось поставить реакцию'));
+    } finally {
       setQuickReact(null);
-      return;
     }
-    // Реакция записана у себя, но конверт мог никуда не уйти: без этой строки
-    // участники её не увидят, а автор будет уверен, что увидели.
-    if (res.warning) showError(res.warning);
-    if (res.on) {
-      const raw = await scopedKvGet(RECENT_REACTIONS_KEY);
-      let list: string[] = [];
-      try { list = raw ? (JSON.parse(raw) as string[]) : []; } catch { /* */ }
-      list = [emoji, ...list.filter((e) => e !== emoji)].slice(0, 8);
-      await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));
-      setGrpRecentReactions(list);
-    }
-    setQuickReact(null);
-    void loadMessages();
   }, [group.id, loadMessages]);
 
   const startEdit = useCallback((msg: GroupMessageRow) => {
@@ -2100,7 +2109,10 @@ function GroupChatScreen({
       {
         text: 'Удалить', style: 'destructive',
         onPress: () => {
-          void (async () => {
+          // v4.32.622: было `void (async () => …)()` без .catch — отказ базы
+          // оставлял сообщение на месте молча, и «Удалить» выглядело кнопкой,
+          // которая просто иногда не срабатывает.
+          runGuardedOp(async () => {
             const { kvUpdateSecretScoped } = await import('../../core/storage/local');
             const now = Date.now();
             await kvUpdateSecretScoped(pid, recentlyDeletedGroupKey(group.id), (raw) => {
@@ -2116,7 +2128,7 @@ function GroupChatScreen({
             // сообщение оставалось на месте.
             announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: msg.id }, myDisplayName));
             await loadMessages();
-          })();
+          }, 'Не удалось удалить сообщение', 'group_msg_delete_failed');
         },
       },
     ]);
@@ -4702,8 +4714,10 @@ function GroupChatScreen({
           try {
             pollText = makePollText(question, options, correctAnswer, anonymous, allowMultiple);
           } catch (err) {
-            Alert.alert('Ошибка опроса', userErrorText(err, 'Проверьте вопрос и варианты ответа'));
-            return;
+            // v4.32.622: отказ возвращается в модалку — она сохраняет набранное
+            // и остаётся открытой, чтобы было что править.
+            showError(userErrorText(err, 'Проверьте вопрос и варианты ответа'));
+            return false;
           }
           const isQuizPoll = correctAnswer !== undefined;
           void (async () => {
@@ -4732,6 +4746,7 @@ function GroupChatScreen({
               setSending(false);
             }
           })();
+          return true;
         }}
       />
 
@@ -5752,7 +5767,10 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
           {
             text: 'Покинуть',
             style: 'destructive',
-            onPress: () => void (async () => {
+            // v4.32.622: выход трогает рассылку, отметку и базу — любой из трёх
+            // шагов мог броситься, и тогда группа оставалась на экране без
+            // единого слова о причине.
+            onPress: () => runGuardedOp(async () => {
               let problem: string | null = null;
               if (myPubB64) {
                 const myName = (await getOwnDisplayName()) ?? undefined;
@@ -5770,7 +5788,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
               await deleteGroup(g.id, pid);
               await loadGroups();
               if (problem) showError(problem);
-            })(),
+            }, 'Не удалось покинуть группу', 'group_leave_failed'),
           },
         ]
       );

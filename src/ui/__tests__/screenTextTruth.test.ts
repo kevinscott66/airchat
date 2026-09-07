@@ -183,9 +183,10 @@ describe('подсказка-маршрут цитирует существую�
   ];
 
   test.each(HINTS)('$file: $marker', ({ file, marker }) => {
-    const line = read(file)
-      .split('\n')
-      .find((l) => l.includes(marker));
+    // v4.32.622: искать по всему файлу нельзя — пояснение в комментарии,
+    // цитирующее ту же надпись, встаёт раньше самой подсказки и подменяет её.
+    // Обещание пользователю живёт только в коде.
+    const line = codeLines(read(file)).find((l) => l.includes(marker));
     expect(line).toBeDefined();
     const labels = quoted(line ?? '');
     expect(labels.length).toBeGreaterThan(0);

@@ -23,7 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   addContact,
   deleteContact,
-  listContacts,
+  listContactsRead,
   parseContactId,
   renameContact,
   subscribeContactsChanged,
@@ -37,6 +37,7 @@ import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { badgeTint, contrastingInk, font, mediaScrim, mono, radius, scrim } from '../theme';
 import { log } from '../../core/logger';
+import { shouldApplyRows } from '../../core/storage/readResult';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
@@ -112,6 +113,17 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const scanHandledRef = React.useRef(false);
+  // v4.32.622: на iOS launchScanner отдаёт обещание сразу после показа
+  // контроллера, а не после скана, — снять подписку по её завершении нельзя,
+  // иначе сканер перестанет отдавать результат. Держим её здесь: следующий
+  // запуск снимает предыдущую, размонтирование — последнюю. Иначе каждый
+  // закрытый вручную сканер оставлял за собой живого слушателя.
+  const scanSubRef = React.useRef<{ remove: () => void } | null>(null);
+  const dropScanSub = React.useCallback(() => {
+    try { scanSubRef.current?.remove(); } catch { /* noop */ }
+    scanSubRef.current = null;
+  }, []);
+  useEffect(() => dropScanSub, [dropScanSub]);
   const [camPermission, requestCamPermission] = useCameraPermissions();
 
   // Rename modal state
@@ -307,10 +319,18 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
   const [blockedSet, setBlockedSet] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
-    const list = await listContacts();
+    // v4.32.622: сорванное чтение раньше приходило сюда пустым списком и
+    // рисовалось как «Добавьте первый контакт» — то есть как пропавшая
+    // записная книжка. Различаем «пусто» и «не прочиталось»: во втором случае
+    // оставляем на экране то, что уже показано, и называем беду.
+    const read = await listContactsRead();
+    if (!shouldApplyRows(read)) {
+      showError('Не удалось прочитать контакты. Потяните список вниз, чтобы повторить.');
+      return;
+    }
     // v4.32.31: «Сохранённые сообщения» (self-contact) не должны появляться в списке контактов —
     // только как закреп в списке чатов. Отфильтровываем запись с peerPublicKey === myPubB64.
-    const filtered = myPubB64 ? list.filter((c) => c.peerPublicKey !== myPubB64) : list;
+    const filtered = myPubB64 ? read.filter((c) => c.peerPublicKey !== myPubB64) : read.slice();
     setContacts(filtered);
     // v4.32.44: подгружаем блок-лист, чтобы отображать «заблокирован» в строке
     // и менять пункт контекст-меню между «Заблокировать» / «Разблокировать».
@@ -337,6 +357,11 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     setRefreshing(true);
     try {
       await load();
+    } catch (e) {
+      // v4.32.622: try/finally без catch — бросок из load (блок-лист, база)
+      // уходил в неперехваченное отклонение, и «потянуть вниз» ничего не
+      // делало и ничего не говорило.
+      showError(userErrorText(e, 'Не удалось обновить контакты'));
     } finally {
       setRefreshing(false);
     }
@@ -430,6 +455,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
   const openScanner = useCallback(async () => {
     scanHandledRef.current = false;
     setScannerError(null);
+    dropScanSub();
     try {
       if (CameraView.isModernBarcodeScannerAvailable) {
         log.info('ui_contacts_scanner_gms_launch', {});
@@ -440,19 +466,27 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             if (!data) return;
             onScanResult(String(data));
           } finally {
-            try { sub.remove(); } catch { /* noop */ }
+            dropScanSub();
           }
         });
+        scanSubRef.current = sub;
         try {
           await CameraView.launchScanner({ barcodeTypes: ['qr'] });
           log.info('ui_contacts_scanner_gms_done', {});
           return;
         } catch (e) {
-          try { sub.remove(); } catch { /* noop */ }
+          dropScanSub();
           const msg = rawErrorText(e);
           log.warn('ui_contacts_scanner_gms_failed', { err: msg });
-          // Если GMS недоступен — fallthrough к inline; если cancelled — exit.
+          // GMS отвечает четырьмя способами (expo-camera, CameraExceptions.kt):
+          // «…is not available…» — сканера на устройстве нет, идём к своему;
+          // «…was cancelled» — человек закрыл сканер сам, говорить нечего;
+          // «Barcode scanning failed» и потерянный контекст — настоящий отказ.
+          // v4.32.622: последние две группы молчали вместе с отменой, и кнопка
+          // «Сканировать» выглядела просто мёртвой.
+          if (/cancel/i.test(msg)) return;
           if (!/unavailable|not available|play services/i.test(msg)) {
+            showError(userErrorText(e, 'Не удалось открыть сканер QR'));
             return;
           }
         }
@@ -471,7 +505,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     } catch (e) {
       showError(userErrorText(e, 'Не удалось открыть камеру'));
     }
-  }, [camPermission, requestCamPermission, onScanResult]);
+  }, [camPermission, requestCamPermission, onScanResult, dropScanSub]);
 
   const submitAdd = useCallback(async () => {
     if (!parsedKey) return;

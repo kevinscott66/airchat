@@ -7,6 +7,8 @@ import { accountIdFromPublicKey, accountVaultIdFromMnemonic } from '../storage/a
 import { ED25519_SECRET_KEY_BYTES } from '../crypto/keyManager';
 import { deriveKeyPairFromMnemonic } from '../backup/seedPhrase';
 import { getConfigSync } from '../config';
+import { log } from '../logger';
+import { MAX_DOWNLOAD_B64_CHARS } from '../media/blobRef';
 import { signBytes, signJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { bytesToBase64Url } from '../utils/base64url';
@@ -355,11 +357,29 @@ export async function downloadSyncMedia(
       'media/get',
     );
     if (response.mediaId !== mediaId || typeof response.ciphertextB64 !== 'string') return null;
+    // v4.32.622: до этой проверки строка любой длины разворачивалась в память
+    // сразу — Buffer.from синхронная, и телефон падал по нехватке памяти
+    // раньше, чем доходило до расшифровки. Потолок общий со скачиванием
+    // вложения с релея: он и описывает, что вообще может быть нашей копией.
+    if (response.ciphertextB64.length > MAX_DOWNLOAD_B64_CHARS) {
+      log.warn('sync_media_oversize', {
+        id: mediaId.slice(0, 8),
+        chars: response.ciphertextB64.length,
+      });
+      return null;
+    }
     const bytes = new Uint8Array(Buffer.from(response.ciphertextB64, 'base64'));
     return bytes.length > 0 ? bytes : null;
-  } catch {
+  } catch (e) {
     // A missing cloud copy is expected for legacy blobs; other errors remain
-    // best-effort because relay/LAN delivery may still succeed.
+    // best-effort because relay/LAN delivery may still succeed — поэтому null
+    // возвращается по-прежнему на любой отказ. Но до v4.32.622 «копии нет»,
+    // «устройство отозвано», «истёк таймаут» и «сервер ответил мусором» были
+    // неотличимы вообще ничем: у пропавшего вложения не оставалось следа.
+    log.warn('sync_media_get_failed', {
+      id: mediaId.slice(0, 8),
+      err: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }

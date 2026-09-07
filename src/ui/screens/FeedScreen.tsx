@@ -1924,6 +1924,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           showError(userErrorText(e, 'Не удалось опубликовать опрос'));
           publishLockRef.current = false;
         });
+      }).catch((e: unknown) => {
+        // v4.32.622: profileManager.init() бросает наружу (см. profileManager.ts),
+        // а весь сброс замка лежал ВНУТРИ then. Без этой ветки один отказ
+        // запирал «Опубликовать» до перезапуска приложения.
+        publishLockRef.current = false;
+        showError(userErrorText(e, 'Не удалось опубликовать опрос'));
       });
       return;
     }
@@ -2042,6 +2048,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           void getFeedPublishQueueLength(pair).then(setQueueLen);
         }
       })();
+    }).catch((e: unknown) => {
+      // v4.32.622: поля драфта очищены ВЫШЕ, до этого then, — поэтому отказ
+      // profileManager.init() уносил вместе с собой набранный текст и
+      // выбранные файлы, да ещё и оставлял замок взведённым. Возвращаем
+      // снимки: они для того и сняты.
+      setDraft(textSnap);
+      setUris(urisSnap);
+      setPickedDocs(docsSnap);
+      publishLockRef.current = false;
+      showError(userErrorText(e, t('feed.publishFailed')));
     });
   }, [pair, draft, uris, pickedDocs, did, loadFeed, editingPost, isPollMode, pollQuestion, pollOptions, pollAnonymous, pollMultiSelect, postLocationTag, t]);
 

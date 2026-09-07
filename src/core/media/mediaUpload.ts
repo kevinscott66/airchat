@@ -27,7 +27,7 @@ import { isIpfsEnabled } from '../transport/ipfs/heliaNode';
 import { log } from '../logger';
 import { MAX_BLOB_BYTES } from './blobRef';
 import { fileSizeBytes } from './fileSize';
-import { chooseUploadRoute } from './uploadRoute';
+import { chooseUploadRoute, knownSize } from './uploadRoute';
 
 export { fileSizeBytes };
 
@@ -68,24 +68,49 @@ export async function uploadMediaToCid(
     const ipfsEnabled = isIpfsEnabled();
     const sizeBytes = opts.sizeBytes ?? (await fileSizeBytes(uri));
     const route = chooseUploadRoute({ sizeBytes, ipfsEnabled, ipfsMaxBytes: opts.ipfsMaxBytes });
+    // Тот же отбор, что делает chooseUploadRoute внутри: «размер есть» и
+    // «размеру можно верить» — разные вещи, и решать это дважды по-разному
+    // означало бы читать без предела там, где маршрут уже посчитал размер
+    // неизвестным.
+    const known = knownSize(sizeBytes);
     if (route.kind === 'reject') {
       log.info('media_upload_oversize', { bytes: sizeBytes, limit: route.limitBytes });
       return { ok: false, reason: 'oversize', limitBytes: route.limitBytes };
     }
 
     if (route.kind === 'ipfs') {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // v4.32.622: chooseUploadRoute нарочно пропускает неизвестный размер —
+      // «читающая сторона проверит размер сама, до чтения байтов в память», —
+      // но здесь этой проверки не было ни до, ни после. Файл, о котором
+      // файловая система размера не сообщила (документ облачного провайдера,
+      // поток), читался целиком: base64-строка плюс два двоичных буфера, всё
+      // тот же ~3.4× от файла, ради которого и заводился этот модуль.
+      // position и length действуют только вместе и только для base64.
+      const b64 = known === null
+        ? await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position: 0,
+            length: route.limitBytes + 1,
+          })
+        : await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
       if (b64.length > YIELD_THRESHOLD_B64_CHARS) {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      const cid = await addToIpfs(new Uint8Array(Buffer.from(b64, 'base64')));
+      const plain = new Uint8Array(Buffer.from(b64, 'base64'));
+      // Лишний байт и ловится здесь: прочитали больше предела — файл больше.
+      if (plain.length > route.limitBytes) {
+        log.info('media_upload_oversize', { bytes: plain.length, limit: route.limitBytes });
+        return { ok: false, reason: 'oversize', limitBytes: route.limitBytes };
+      }
+      const cid = await addToIpfs(plain);
       if (cid) return { ok: true, cid, sizeBytes };
       // IPFS включён, но узел не отдал CID. Запасной путь есть, только он
       // строже по размеру — файл, разрешённый как «до 50 МБ в IPFS», во
       // вложение не влезет, и честнее сказать это, чем молча не отправить.
-      if (sizeBytes !== null && sizeBytes > MAX_BLOB_BYTES) {
+      // Размер здесь известен точно даже когда stat промолчал: файл прочитан.
+      if ((known ?? plain.length) > MAX_BLOB_BYTES) {
         return { ok: false, reason: 'oversize', limitBytes: MAX_BLOB_BYTES };
       }
     }

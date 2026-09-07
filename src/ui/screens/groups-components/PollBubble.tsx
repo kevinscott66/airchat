@@ -43,6 +43,19 @@ export function PollBubble({
   const [votes, setVotes] = useState<Array<{ voterPubB64: string; optionIndex: number }>>([]);
   const [isClosed, setIsClosed] = useState(false);
   const [voterListOpt, setVoterListOpt] = useState<number | null>(null);
+  // v4.32.622: FlashList переиспользует ячейку — тот же экземпляр компонента
+  // получает следующее сообщение просто новыми props. Состояние при этом
+  // остаётся от прежнего опроса, и до конца асинхронного reload открытый
+  // опрос рисуется чужими цифрами, а завершённый — «Опрос завершён» с
+  // заблокированными вариантами. Сбрасываем на смене messageId прямо в
+  // рендере: это дешевле key= (тот убивает саму переработку ячеек) и не даёт
+  // мигания на обычных перечитываниях по подписке.
+  const [shownId, setShownId] = useState(messageId);
+  if (shownId !== messageId) {
+    setShownId(messageId);
+    setVotes([]);
+    setIsClosed(false);
+  }
 
   const reload = useCallback(async () => {
     const [v, closed] = await Promise.all([
@@ -55,7 +68,9 @@ export function PollBubble({
       scopedKvGetFor(pid, pollClosedKey(messageId)),
     ]);
     setVotes(v);
-    if (closed === '1') setIsClosed(true);
+    // v4.32.622: присваиваем, а не «включаем». Одностороннее setIsClosed(true)
+    // невозможно было отменить — ни снятием завершения, ни переработкой ячейки.
+    setIsClosed(closed === '1');
   }, [messageId, pid]);
 
   useEffect(() => { void reload(); }, [reload]);

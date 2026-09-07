@@ -585,10 +585,18 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
   }]);
 }
 
-async function runLiveSync(mnemonic: string, pair: KeyPairBytes, ownerProfileId: number): Promise<void> {
+async function runLiveSync(
+  mnemonic: string,
+  pair: KeyPairBytes,
+  ownerProfileId: number,
+  generation: number,
+): Promise<void> {
   if (!getConfigSync().cloudBackup?.enabled) return;
-  const generation = syncGeneration;
   const shouldContinue = () => generation === syncGeneration;
+  // v4.32.622: отмена, случившаяся пока проход стоял в очереди, обязана его
+  // остановить до первого чтения. Поколение приходит снаружи (см.
+  // syncActiveAccount) именно поэтому.
+  if (!shouldContinue()) return;
   /** Набор, отвергнутый прошлым проходом. Подпись, а не список: нужен только факт совпадения. */
   let lastRejected: string | null = null;
   for (let pass = 0; pass < MAX_SYNC_PASSES; pass += 1) {
@@ -693,12 +701,19 @@ export function syncActiveAccount(
   ownerProfileId: number,
 ): Promise<void> {
   const previous = locks.get(ownerProfileId) ?? Promise.resolve();
+  // v4.32.622: поколение снимается ЗДЕСЬ, при постановке в очередь, а не внутри
+  // самого прохода. Проход стартует только после того, как отработает
+  // предыдущий; сними он поколение у себя на входе — отмена, случившаяся за
+  // время ожидания в очереди, уже была бы учтена в снимке, и проход её просто
+  // не заметил бы. А это ровно тот проход, который дописывает чаты, группы и
+  // ленту в базу, только что стёртую выходом из аккаунта.
+  const generation = syncGeneration;
   // v4.32.610: отметка ставится вокруг САМОГО прохода, а не вокруг ожидания
   // очереди. Иначе «Обновление…» висело бы всё время, пока заход стоит за
   // предыдущим, — то есть говорило бы о работе, которая ещё не началась.
   const current = previous.catch(() => {}).then(() => {
     markAccountSyncStart();
-    return runLiveSync(mnemonic, pair, ownerProfileId).finally(markAccountSyncEnd);
+    return runLiveSync(mnemonic, pair, ownerProfileId, generation).finally(markAccountSyncEnd);
   }).catch((error) => {
     log.warn('live_sync_failed', {
       ownerProfileId,

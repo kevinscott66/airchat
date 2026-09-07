@@ -426,6 +426,29 @@ export async function listContacts(): Promise<Contact[]> {
  * проходит фильтр «только контакты», а заявка своего контакта им отсекается.
  */
 export async function listContactsFor(ownerProfileId: number): Promise<Contact[]> {
+  return (await listContactsReadFor(ownerProfileId)) ?? [];
+}
+
+/** Контакты активного профиля, отличая «пусто» от «не прочиталось». */
+export async function listContactsRead(): Promise<Contact[] | null> {
+  return listContactsReadFor(activeProfileId());
+}
+
+/**
+ * То же чтение, что и `listContactsFor`, но отличающее «контактов нет» от
+ * «прочитать не вышло» (v4.32.622).
+ *
+ * `listContactsFor` возвращает пустой список в обоих случаях — и это верно для
+ * проверок «в контактах ли он», которым нужен ответ, а не диагноз. Экрану же
+ * пустой список означает «Добавьте первый контакт»: сорванное чтение он рисовал
+ * как пустую записную книжку, из которой человек делал вывод, что контакты
+ * пропали. Возвращает null ровно при отказе.
+ *
+ * Это правило `DbRead` из storage/readResult, только со своим (изменяемым)
+ * массивом: каждый вызов и без того отдаёт свежую копию, и просить экраны
+ * копировать её ещё раз незачем — `shouldApplyRows` принимает и такую.
+ */
+export async function listContactsReadFor(ownerProfileId: number): Promise<Contact[] | null> {
   try {
     const pid = ownerProfileId;
     // v4.32.227 (PERF): serve from the short-TTL cache to avoid the N+1 SQLite
@@ -563,7 +586,7 @@ export async function listContactsFor(ownerProfileId: number): Promise<Contact[]
     return out;
   } catch (e) {
     log.warn('contacts_list_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    return null;
   }
 }
 
