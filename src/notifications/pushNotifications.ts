@@ -21,7 +21,7 @@ import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenI
 import { CALL_PUSH_KIND } from './callPush';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
 import { peerIdFromDid, signPushPayload } from './pushEnvelope';
-import { SELF_PEER_MIRROR_KEY } from './pushSenderTag';
+import { SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror } from './pushSenderTag';
 import { didForSenderTag } from './senderTagLookup';
 import type { PushKind } from './pushKind';
 
@@ -572,11 +572,13 @@ export class PushNotificationService {
     // метку отправителя (см. pushSenderTag). Спросить его там не у кого:
     // личность лежит в SecureStore, а он при запертом телефоне не отвечает.
     // Зеркало необязательное — без него баннер будет безымянным, но будет.
-    try {
-      await kvSet(SELF_PEER_MIRROR_KEY, signedPeerId);
-    } catch {
-      /* зеркало необязательно */
-    }
+    //
+    // v4.32.615: дописываем, а не затираем. Токен на устройстве один, а
+    // регистраций у ретранслятора столько, сколько личностей им пользовались;
+    // уведомление приходит любой из них, и развернуть метку можно только тем
+    // ключом, которому её адресовали. kvSet сам ловит свои отказы и отвечает
+    // boolean — try тут был лишним и не мог сработать ни разу.
+    await kvSet(SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror(await kvGet(SELF_PEER_MIRROR_KEY), signedPeerId));
     // v4.32.179 (Round-9): bounded timeout — signaling may be unreachable; without this
     // fetch can hang indefinitely, blocking init promise chain on cold start.
     const ctrl = new AbortController();

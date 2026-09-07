@@ -111,6 +111,7 @@ import { CallOverlay } from './ui/components/CallOverlay';
 import { startJsThreadWatcher } from './core/utils/jsThreadWatcher';
 import { scheduleAfterFirstFrame } from './core/utils/firstFrameGate';
 import { setOpenIntentConsumer } from './notifications/openIntent';
+import { didForSenderTag } from './notifications/senderTagLookup';
 import { useBackHandler } from './core/hooks/useBackHandler';
 import { backSource } from './core/hooks/backStack';
 import { SwipeBackHost } from './ui/components/SwipeBackHost';
@@ -1274,20 +1275,36 @@ function MainTabs({
         log.info('notification_open_intent', { source, target: 'call' });
         return;
       }
-      log.info('notification_open_intent', { source, target: 'chat', hasDid: !!intent.contactDid });
-      // Собеседник известен — прыгаем прямо в его ветку; неизвестен (старое
-      // уведомление без DID) — открываем хотя бы список переписок, это
-      // заметно лучше, чем прежнее «ничего не произошло».
-      const pub = intent.contactDid ? parseDidKey(intent.contactDid) : null;
-      if (pub) setPeerJump({ peer: Buffer.from(pub).toString('base64'), token: Date.now() });
+      log.info('notification_open_intent', {
+        source,
+        target: 'chat',
+        hasDid: !!intent.contactDid,
+        hasTag: !!intent.senderTag,
+      });
+      // Вкладку переключаем сразу: нажатие обязано отзываться мгновенно, а имя
+      // собеседника ниже добывается чтением базы.
       mountTab('chat');
       setTab('chat');
-      // Сообщение могло ещё не доехать по сети: уведомление несёт только cid.
-      void Promise.resolve(getMessagingService()?.handlePushOpen(intent.cid, intent.contactDid)).catch(
-        (e: unknown) => {
-          log.warn('notification_open_fetch_failed', { err: e instanceof Error ? e.message : String(e) });
-        }
-      );
+      void (async () => {
+        // v4.32.615: на iOS баннер рисует система по apns.alert, и разбирать
+        // его до нажатия некому — фонового обработчика там нет. В намерении
+        // приезжает метка отправителя (v4.32.614), а DID не приезжает, и прыжок в
+        // нужную ветку не состоялся ни разу: handlePushOpen обрывался на
+        // push_missing_contact_did, открывался просто список переписок.
+        // На Android метку разворачивает фоновый обработчик и кладёт готовый
+        // contactDid — тогда второе чтение базы не нужно.
+        const did = intent.contactDid ?? (await didForSenderTag(intent.senderTag));
+        // Собеседник известен — прыгаем прямо в его ветку; неизвестен (старое
+        // уведомление без DID и без метки, либо отправитель не в контактах) —
+        // остаёмся в списке переписок, это заметно лучше, чем прежнее «ничего
+        // не произошло».
+        const pub = did ? parseDidKey(did) : null;
+        if (pub) setPeerJump({ peer: Buffer.from(pub).toString('base64'), token: Date.now() });
+        // Сообщение могло ещё не доехать по сети: уведомление несёт только cid.
+        await getMessagingService()?.handlePushOpen(intent.cid, did);
+      })().catch((e: unknown) => {
+        log.warn('notification_open_fetch_failed', { err: e instanceof Error ? e.message : String(e) });
+      });
     });
   }, [mountTab]);
 

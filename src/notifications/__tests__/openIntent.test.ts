@@ -187,7 +187,11 @@ describe('форма исходников', () => {
     const src = APP();
     expect(src).toContain('setOpenIntentConsumer((intent, source) => {');
     expect(src).toContain("mountTab('chat');");
-    expect(src).toContain('handlePushOpen(intent.cid, intent.contactDid)');
+    // v4.32.615: собеседник берётся из готового поля или разворачивается из
+    // метки (см. pushSenderTagPrivacy) — и дальше за сообщением идёт именно
+    // он, а не сырое поле, которого на iOS в намерении не бывает.
+    expect(src).toContain('const did = intent.contactDid ?? (await didForSenderTag(intent.senderTag));');
+    expect(src).toContain('handlePushOpen(intent.cid, did)');
     expect(src).toContain("log.info('notification_open_intent'");
   });
 });

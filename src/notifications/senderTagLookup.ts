@@ -1,6 +1,6 @@
 import { didFromPubB64 } from '../core/identity/did';
 import { SENDER_TAG_SHAPE } from './openIntent';
-import { SELF_PEER_MIRROR_KEY, pushSenderTag } from './pushSenderTag';
+import { SELF_PEER_MIRROR_KEY, parseSelfPeerMirror, pushSenderTag } from './pushSenderTag';
 
 /**
  * Кто отправитель, если в push приехала только метка (v4.32.614).
@@ -24,13 +24,30 @@ import { SELF_PEER_MIRROR_KEY, pushSenderTag } from './pushSenderTag';
  * Любая неясность решается в пользу `undefined`: без DID баннер всё равно
  * покажется, просто безымянным и без перехода в переписку. Молча съесть
  * сообщение было бы хуже.
+ *
+ * v4.32.615: перебор идёт по всем личностям и всем профилям сразу, а не по
+ * активной паре. Токен FCM на устройстве один на все профили, и ретранслятор
+ * помнит регистрацию каждой личности, которой этим токеном пользовались, —
+ * значит уведомление приходит и той, под которой сейчас не сидят. Соль в метке
+ * тогда от неё, а разворачивали метку ключом активной, и совпадения не бывало
+ * никогда. Промах здесь тихий и дорогой: без DID мимо проходят и «беззвучно»,
+ * и «не показывать при открытом чате», и блок-лист. Ложное совпадение при
+ * таком переборе означало бы коллизию 128-битного хеша: и своя личность, и
+ * чужой ключ берутся только из собственных строк базы.
+ *
+ * Стоило это четырёх множителей: не больше `SELF_PEER_MIRROR_MAX` личностей
+ * на десятки контактов, по одному sha256 на пару.
  */
 
 const LOCAL_DB_NAME = 'airchat_local.db';
-/** Совпадает с backgroundNotifyPrefs: зеркало номера активного профиля. */
-const ACTIVE_PROFILE_MIRROR_KEY = 'active_profile_id';
 /** Совпадает с contacts.ts: имя строки контакта внутри профиля. */
 const CONTACT_PREFIX = 'contact:';
+/**
+ * Имя строки контакта в любом профиле: `p<N>:contact:<ключ>` либо `contact:`
+ * без префикса (записи до v4.32.490 — они принадлежат первому профилю).
+ * Открытый ключ base64 двоеточий не содержит, так что разбор однозначен.
+ */
+const CONTACT_KEY_RE = /^(?:p\d+:)?contact:(.+)$/;
 
 export async function didForSenderTag(tag: string | undefined): Promise<string | undefined> {
   if (!tag || !SENDER_TAG_SHAPE.test(tag)) return undefined;
@@ -38,29 +55,27 @@ export async function didForSenderTag(tag: string | undefined): Promise<string |
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const SQLite = require('expo-sqlite') as typeof import('expo-sqlite');
     const db = await SQLite.openDatabaseAsync(LOCAL_DB_NAME);
-    const rows = await db.getAllAsync<{ k: string; v: string }>(
-      'SELECT k, v FROM kv WHERE k IN (?, ?)',
-      [SELF_PEER_MIRROR_KEY, ACTIVE_PROFILE_MIRROR_KEY]
-    );
-    const kv = new Map(rows.map((r) => [r.k, r.v]));
-    const self = kv.get(SELF_PEER_MIRROR_KEY);
-    // Зеркала нет — значит push ещё ни разу не регистрировали этой личностью,
-    // и метка не наша. Перебирать контакты не с чем.
-    if (!self) return undefined;
-    const parsed = parseInt(kv.get(ACTIVE_PROFILE_MIRROR_KEY) ?? '', 10);
-    const pid = Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
-    // Записи до v4.32.490 лежали без префикса и принадлежат первому профилю —
-    // то же правило, что у isBackgroundMuted.
-    const patterns = pid === 1
-      ? [`p1:${CONTACT_PREFIX}%`, `${CONTACT_PREFIX}%`]
-      : [`p${pid}:${CONTACT_PREFIX}%`];
+    const mirror = await db.getFirstAsync<{ v: string }>('SELECT v FROM kv WHERE k = ?', [
+      SELF_PEER_MIRROR_KEY,
+    ]);
+    // Зеркала нет — значит push ещё ни разу не регистрировали с этого
+    // устройства, и метка не наша. Перебирать контакты не с чем.
+    const selves = parseSelfPeerMirror(mirror?.v);
+    if (selves.length === 0) return undefined;
+    const patterns = [`${CONTACT_PREFIX}%`, `%:${CONTACT_PREFIX}%`];
     const contacts = await db.getAllAsync<{ k: string }>(
       `SELECT k FROM kv WHERE ${patterns.map(() => 'k LIKE ?').join(' OR ')}`,
       patterns
     );
+    const pubs = new Set<string>();
     for (const row of contacts) {
-      const pub = row.k.slice(row.k.indexOf(CONTACT_PREFIX) + CONTACT_PREFIX.length);
-      if (pub && pushSenderTag(self, pub) === tag) return didFromPubB64(pub) ?? undefined;
+      const pub = CONTACT_KEY_RE.exec(row.k)?.[1];
+      if (pub) pubs.add(pub);
+    }
+    for (const self of selves) {
+      for (const pub of pubs) {
+        if (pushSenderTag(self, pub) === tag) return didFromPubB64(pub) ?? undefined;
+      }
     }
     return undefined;
   } catch {

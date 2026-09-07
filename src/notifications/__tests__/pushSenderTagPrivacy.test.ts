@@ -23,7 +23,13 @@ import fs from 'fs';
 import path from 'path';
 
 import { SENDER_TAG_SHAPE, parseOpenIntent, parseCallOpenIntent } from '../openIntent';
-import { SELF_PEER_MIRROR_KEY, pushSenderTag } from '../pushSenderTag';
+import {
+  SELF_PEER_MIRROR_KEY,
+  SELF_PEER_MIRROR_MAX,
+  mergeSelfPeerMirror,
+  parseSelfPeerMirror,
+  pushSenderTag,
+} from '../pushSenderTag';
 import { didFromPubB64 } from '../../core/identity/did';
 
 // Таблица kv фонового контекста: имена строк контактов не шифруются намеренно
@@ -47,7 +53,10 @@ jest.mock('expo-sqlite', () => ({
         }
         return [];
       }),
-      getFirstAsync: jest.fn(async () => null),
+      getFirstAsync: jest.fn(async (sql: string, params: string[] = []) => {
+        if (/WHERE k = \?/.test(sql) && mockKv[params[0]] !== undefined) return { v: mockKv[params[0]] };
+        return null;
+      }),
       closeAsync: jest.fn(async () => undefined),
     };
   }),
@@ -59,6 +68,8 @@ const { didForSenderTag } = require('../senderTagLookup') as typeof import('../s
 const SELF_PUB = Buffer.alloc(32, 1).toString('base64');
 const PEER_PUB = Buffer.alloc(32, 2).toString('base64');
 const OTHER_PUB = Buffer.alloc(32, 3).toString('base64');
+/** Вторая своя личность: тот же телефон, тот же токен FCM, другой профиль. */
+const SELF2_PUB = Buffer.alloc(32, 4).toString('base64');
 const MIRROR = 'active_profile_id';
 const CID = 'a1b2c3d4e5f60718';
 
@@ -150,10 +161,47 @@ describe('обратный перебор по контактам', () => {
     await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBe(didFromPubB64(PEER_PUB));
   });
 
-  it('контакты чужого профиля не отвечают за активный', async () => {
+  it('контакт из другого профиля всё равно находится', async () => {
+    // v4.32.615: раньше перебирался только активный профиль. Токен FCM на
+    // устройстве один, метку солит личность, которой push адресован, и до
+    // этой версии уведомление личности из неактивного профиля не разбиралось
+    // никогда — а вместе с ним не работали ни «беззвучно», ни блок-лист.
     mockKv[SELF_PEER_MIRROR_KEY] = SELF_PUB;
     mockKv[MIRROR] = '2';
     mockKv[`p1:contact:${PEER_PUB}`] = 'enc';
+    await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBe(didFromPubB64(PEER_PUB));
+  });
+
+  it('метка неактивной личности разворачивается своим ключом', async () => {
+    // Регистрировались последней личностью SELF2, а push пришёл первой.
+    mockKv[SELF_PEER_MIRROR_KEY] = mergeSelfPeerMirror(SELF_PUB, SELF2_PUB);
+    mockKv[MIRROR] = '2';
+    mockKv[`p2:contact:${PEER_PUB}`] = 'enc';
+    await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBe(didFromPubB64(PEER_PUB));
+  });
+
+  it('чужая личность метку не разворачивает', async () => {
+    // Соль — ключ получателя. Другая своя личность подойти не должна, иначе
+    // перебор находил бы отправителя не тому, кому уведомление адресовано.
+    mockKv[SELF_PEER_MIRROR_KEY] = JSON.stringify([SELF2_PUB]);
+    mockKv[`p1:contact:${PEER_PUB}`] = 'enc';
+    await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBeUndefined();
+  });
+
+  it('старое зеркало из одной строки читается по-прежнему', async () => {
+    // Записи до v4.32.615 — голая строка, не JSON. Обновление приложения не
+    // должно оставлять баннеры безымянными до следующей регистрации токена.
+    mockKv[SELF_PEER_MIRROR_KEY] = SELF_PUB;
+    mockKv[`contact:${PEER_PUB}`] = 'enc';
+    await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBe(didFromPubB64(PEER_PUB));
+  });
+
+  it('строка не из контактов в перебор не попадает', async () => {
+    // Перебор по всем профилям берёт имена по образцу `%:contact:%`, и под
+    // него попадает не только строка контакта. Разбирать её как контакт
+    // нельзя: имя чужой строки задаёт не тот, кто ведёт список контактов.
+    mockKv[SELF_PEER_MIRROR_KEY] = SELF_PUB;
+    mockKv[`draft:contact:${PEER_PUB}`] = 'enc';
     await expect(didForSenderTag(pushSenderTag(SELF_PUB, PEER_PUB))).resolves.toBeUndefined();
   });
 
@@ -195,5 +243,65 @@ describe('ретранслятор не кладёт DID в чужой серв�
   it('клиент разворачивает метку в обоих обработчиках', () => {
     expect(read('pushNotifications.ts')).toMatch(/didForSenderTag\(intent\.senderTag\)/);
     expect(read('..', 'firebaseMessagingBackground.ts')).toMatch(/didForSenderTag\(intent\.senderTag\)/);
+  });
+
+  it('и при нажатии на баннер тоже', () => {
+    // v4.32.615: на iOS баннер рисует система, фонового разбора там нет, и в
+    // намерении приезжает только метка. Без разворота нажатие открывало
+    // список переписок вместо нужной ветки.
+    const app = read('..', 'App.tsx')
+      .split('\n')
+      .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+      .join('\n');
+    expect(app).toMatch(/intent\.contactDid \?\? \(await didForSenderTag\(intent\.senderTag\)\)/);
+    // И этот же DID, а не сырое поле, уходит за самим сообщением.
+    expect(app).toMatch(/handlePushOpen\(intent\.cid, did\)/);
+  });
+});
+
+describe('зеркало своих ключей', () => {
+  it('пустое зеркало — пустой список', () => {
+    expect(parseSelfPeerMirror(undefined)).toEqual([]);
+    expect(parseSelfPeerMirror(null)).toEqual([]);
+    expect(parseSelfPeerMirror('')).toEqual([]);
+  });
+
+  it('запись до v4.32.615 — одна голая строка', () => {
+    expect(parseSelfPeerMirror(SELF_PUB)).toEqual([SELF_PUB]);
+  });
+
+  it('старое значение дописывается, а не затирается', () => {
+    expect(parseSelfPeerMirror(mergeSelfPeerMirror(SELF_PUB, SELF2_PUB))).toEqual([SELF2_PUB, SELF_PUB]);
+  });
+
+  it('повторная регистрация не плодит записей', () => {
+    const once = mergeSelfPeerMirror(null, SELF_PUB);
+    expect(parseSelfPeerMirror(mergeSelfPeerMirror(once, SELF_PUB))).toEqual([SELF_PUB]);
+  });
+
+  it('свежая личность вытесняет самую давнюю', () => {
+    // Профилей не больше четырёх, пятый ключ означает пересозданную личность.
+    let raw: string | null = null;
+    const keys = Array.from({ length: SELF_PEER_MIRROR_MAX + 1 }, (_, i) =>
+      Buffer.alloc(32, 10 + i).toString('base64')
+    );
+    for (const k of keys) raw = mergeSelfPeerMirror(raw, k);
+    const stored = parseSelfPeerMirror(raw);
+    expect(stored).toHaveLength(SELF_PEER_MIRROR_MAX);
+    expect(stored[0]).toBe(keys[keys.length - 1]);
+    expect(stored).not.toContain(keys[0]);
+  });
+
+  it('испорченное зеркало не роняет разбор', () => {
+    expect(parseSelfPeerMirror('[не json')).toEqual([]);
+    expect(parseSelfPeerMirror('[1, null, "", "ok"]')).toEqual(['ok']);
+    expect(parseSelfPeerMirror('[]')).toEqual([]);
+  });
+
+  it('зеркало дописывают, а не перезаписывают', () => {
+    // Храповик: затирание вернуло бы промах метки у всех личностей, кроме
+    // зарегистрированной последней.
+    const src = read('pushNotifications.ts');
+    expect(src).toMatch(/kvSet\(SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror\(await kvGet\(SELF_PEER_MIRROR_KEY\)/);
   });
 });
