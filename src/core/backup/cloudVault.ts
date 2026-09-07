@@ -39,6 +39,17 @@ export const CLOUD_VAULT_KDF_ITERS = 180_000;
 export const CLOUD_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH;
 export const CLOUD_VAULT_MAX_BYTES = 80 * 1024 * 1024;
 export const CLOUD_VAULT_MAX_KDF_ITERS = 1_000_000;
+/**
+ * Надбавка шифртекста над открытым текстом (v4.32.625).
+ *
+ * XChaCha20-Poly1305 добавляет 24 байта одноразового числа и 16 байт метки.
+ * Округлено вверх до 64: точность тут не нужна, нужен потолок в БАЙТАХ.
+ * Раньше в decodeBase64 уезжало `CLOUD_VAULT_MAX_BYTES * 2` — множитель верен
+ * для СИМВОЛОВ base64, а второй параметр decodeBase64 сравнивается с
+ * `bytes.length`. Из-за путаницы единиц в память ложилось и прогонялось через
+ * AEAD до 120 МБ вместо заявленных 80.
+ */
+const CLOUD_VAULT_BLOB_OVERHEAD = 64;
 const CLOUD_REQUEST_TIMEOUT_MS = 30_000;
 const CLOUD_VAULT_MAX_FILES = 64;
 
@@ -160,7 +171,7 @@ export function decryptCloudVaultArchive(
       || envelope.iters > CLOUD_VAULT_MAX_KDF_ITERS) return null;
     const salt = decodeBase64(envelope.saltB64, 16);
     if (!salt || salt.length !== 16) return null;
-    const blob = decodeBase64(envelope.blobB64, CLOUD_VAULT_MAX_BYTES * 2);
+    const blob = decodeBase64(envelope.blobB64, CLOUD_VAULT_MAX_BYTES + CLOUD_VAULT_BLOB_OVERHEAD);
     if (!blob) return null;
     const key = deriveCloudKey(normalizeMnemonic(mnemonic), password, salt, envelope.iters);
     const plain = decryptSymmetric(key, blob, aad(envelope.accountId));
@@ -300,30 +311,51 @@ export async function uploadCloudVault(mnemonic: string, password: string): Prom
 
   // The snapshot is a point-in-time export. Closing SQLite first ensures WAL
   // pages are checkpointed before the archive is read.
-  const { closeFeedStorage } = await import('../social/feedService');
+  const { closeFeedStorage, feedProfileId, setFeedProfileContext } = await import('../social/feedService');
   const { closeLocalDatabase } = await import('../storage/local');
+  // v4.32.625: номер профиля ленты снимаем ДО закрытия — closeFeedStorage
+  // стирает и его. Восстановление в finally ниже: без него выгрузка копии
+  // оставляла ленту закрытой до перезапуска приложения. Ошибки при этом не
+  // было никакой — ensureStorage бросал `feed_storage_profile_unset`, а
+  // loadFeedPosts гасил бросок и возвращал null, то есть человек видел просто
+  // пустую ленту сразу после «Зашифрованная копия отправлена в облако».
+  // closeLocalDatabase симметричен сам: он лишь обнуляет dbPromise, и SQLite
+  // открывается заново на первом же запросе.
+  const feedPid = feedProfileId();
   await closeFeedStorage();
   await closeLocalDatabase();
-  const profileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);
-  if (!(await snapshotAccountVault(mnemonic, profileState))) {
-    throw new Error('Не удалось собрать локальную копию аккаунта.');
+  try {
+    const profileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);
+    if (!(await snapshotAccountVault(mnemonic, profileState))) {
+      throw new Error('Не удалось собрать локальную копию аккаунта.');
+    }
+    const archive = await readAccountVaultArchive(mnemonic);
+    if (!archive) throw new Error('Не удалось прочитать локальную копию аккаунта.');
+    const envelope = encryptCloudVaultArchive(mnemonic, password, archive);
+    const signed = await signedRequest(mnemonic, 'put', envelope);
+    await fetchCloud(
+      `${base}/v1/cloud-vault/${envelope.accountId}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(signed),
+      },
+      async (response) => {
+        if (!response.ok) throw requestError(response.status);
+      },
+    );
+    log.info('cloud_vault_uploaded', { accountId: envelope.accountId, savedAt: envelope.savedAt });
+  } finally {
+    // Открываем обратно и на отказе тоже: снимок уже снят, файлы никто не
+    // подменял, и держать ленту закрытой из-за неудачной отправки незачем.
+    if (feedPid != null) {
+      try {
+        await setFeedProfileContext(feedPid);
+      } catch (e) {
+        log.warn('cloud_vault_feed_rebind_failed', { err: e instanceof Error ? e.message : String(e) });
+      }
+    }
   }
-  const archive = await readAccountVaultArchive(mnemonic);
-  if (!archive) throw new Error('Не удалось прочитать локальную копию аккаунта.');
-  const envelope = encryptCloudVaultArchive(mnemonic, password, archive);
-  const signed = await signedRequest(mnemonic, 'put', envelope);
-  await fetchCloud(
-    `${base}/v1/cloud-vault/${envelope.accountId}`,
-    {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(signed),
-    },
-    async (response) => {
-      if (!response.ok) throw requestError(response.status);
-    },
-  );
-  log.info('cloud_vault_uploaded', { accountId: envelope.accountId, savedAt: envelope.savedAt });
 }
 
 /** Download, decrypt, validate and restore a cloud copy for the same seed. */

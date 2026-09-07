@@ -20,6 +20,7 @@ import { passwordPolicyError } from '../security/passwordPolicy';
 import { log } from '../logger';
 import { fetchWithDeadline } from '../net/timedFetch';
 import { cloudBaseUrl } from './cloudVault';
+import { acceptKdfIters } from '../crypto/kdfIters';
 
 export const SEED_BINDING_VERSION = 1;
 /**
@@ -29,6 +30,14 @@ export const SEED_BINDING_VERSION = 1;
  */
 export const SEED_BINDING_KDF_ITERS = 600_000;
 export const SEED_BINDING_SALT_BYTES = 16;
+/**
+ * Предел на длину шифртекста конверта (v4.32.625).
+ *
+ * Внутри двадцать четыре слова — от силы двести байт, и сервер режет конверт
+ * по 1024 байта. Здесь предела не было вовсе: `Buffer.from(dataB64, 'base64')`
+ * раскодировал что угодно, а враждебный сервер отдаёт что угодно.
+ */
+const SEED_BINDING_MAX_DATA_B64 = 4096;
 const SEED_BINDING_AAD = new TextEncoder().encode('airchat-seed-binding-v1');
 const SEED_BINDING_TIMEOUT_MS = 15_000;
 
@@ -82,11 +91,14 @@ export function decryptSeedBinding(
   password: string,
 ): string | null {
   if (!envelope || envelope.v !== SEED_BINDING_VERSION) return null;
-  if (!Number.isSafeInteger(envelope.iters) || envelope.iters < SEED_BINDING_KDF_ITERS) return null;
+  // v4.32.625: планка стала двусторонней — см. kdfIters.
+  const iters = acceptKdfIters(envelope.iters, SEED_BINDING_KDF_ITERS);
+  if (iters == null) return null;
   if (typeof envelope.saltB64 !== 'string' || typeof envelope.dataB64 !== 'string') return null;
+  if (envelope.dataB64.length > SEED_BINDING_MAX_DATA_B64) return null;
   const salt = Buffer.from(envelope.saltB64, 'base64');
   if (salt.length !== SEED_BINDING_SALT_BYTES) return null;
-  const key = deriveBindingKey(password, new Uint8Array(salt), envelope.iters);
+  const key = deriveBindingKey(password, new Uint8Array(salt), iters);
   const plain = decryptSymmetric(key, new Uint8Array(Buffer.from(envelope.dataB64, 'base64')), SEED_BINDING_AAD);
   if (!plain) return null;
   const mnemonic = normalizeMnemonic(new TextDecoder().decode(plain));

@@ -1548,6 +1548,30 @@ async function existingColumnsOf(
  * записать на его место пустую строку значило бы стереть сообщение, и уже
  * необратимо — после миграции старого ключа не останется.
  */
+/**
+ * Размер порции при смене DEK (v4.32.625).
+ *
+ * Перешифровка читала таблицу целиком: `SELECT ... FROM chat_messages` без
+ * предела, а следом — все строки kv с шифртекстом. Для текста это ещё
+ * терпимо, но по третьему запросу в память одним массивом ложились БАЙТЫ
+ * ВСЕХ вложений ленты сразу: одна запись — до 8 МБ вложения, то есть около
+ * 11 млн символов base64. Полсотни фотографий в ленте — и переход на
+ * выводимый из seed ключ падал по памяти, откатывался вместе с транзакцией и
+ * падал снова при каждом следующем запуске. Молча: наружу это выглядело как
+ * «восстановление по секретным словам просто не появляется».
+ *
+ * Отсюда две величины. Строки с текстом идут по 400 — они ограничены сверху
+ * MAX_MESSAGE_TEXT. Вложения идут по 64, и в порции читаются ТОЛЬКО ИМЕНА:
+ * само тело берётся по одному, так что в памяти одновременно живёт одно
+ * вложение, а не вся лента.
+ *
+ * Обход устойчив к собственной записи: UPDATE не меняет rowid и оставляет
+ * значение под тем же префиксом, поэтому строка не может ни выпасть из
+ * выборки, ни попасть в неё дважды.
+ */
+const REENCRYPT_ROW_BATCH = 400;
+const REENCRYPT_BLOB_BATCH = 64;
+
 async function reencryptAtRest(
   database: SQLite.SQLiteDatabase,
   from: Uint8Array,
@@ -1556,53 +1580,82 @@ async function reencryptAtRest(
   for (const spec of AT_REST_COLUMNS) {
     const cols = await existingColumnsOf(database, spec.table, spec.columns);
     if (cols.length === 0) continue;
-    const rows = await database.getAllAsync<Record<string, string | number | null>>(
-      `SELECT rowid AS at_rest_rowid, ${cols.join(', ')} FROM ${spec.table}`
-    );
-    for (const r of rows) {
-      const sets: string[] = [];
-      const vals: Array<string | number> = [];
-      for (const c of cols) {
-        const cur = r[c];
-        if (typeof cur !== 'string' || !cur.startsWith(AT_REST_PREFIX)) continue;
-        const plain = tryDecryptAtRest(cur, from);
-        if (plain == null) continue;
-        sets.push(`${c} = ?`);
-        vals.push(encryptAtRestString(plain, to));
-      }
-      if (sets.length === 0) continue;
-      vals.push(r.at_rest_rowid as number);
-      await database.runAsync(
-        `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE rowid = ?`,
-        vals
+    let afterRowid = 0;
+    for (;;) {
+      const rows = await database.getAllAsync<Record<string, string | number | null>>(
+        `SELECT rowid AS at_rest_rowid, ${cols.join(', ')} FROM ${spec.table}
+         WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        [afterRowid, REENCRYPT_ROW_BATCH]
       );
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        afterRowid = r.at_rest_rowid as number;
+        const sets: string[] = [];
+        const vals: Array<string | number> = [];
+        for (const c of cols) {
+          const cur = r[c];
+          if (typeof cur !== 'string' || !cur.startsWith(AT_REST_PREFIX)) continue;
+          const plain = tryDecryptAtRest(cur, from);
+          if (plain == null) continue;
+          sets.push(`${c} = ?`);
+          vals.push(encryptAtRestString(plain, to));
+        }
+        if (sets.length === 0) continue;
+        vals.push(r.at_rest_rowid as number);
+        await database.runAsync(
+          `UPDATE ${spec.table} SET ${sets.join(', ')} WHERE rowid = ?`,
+          vals
+        );
+      }
+      if (rows.length < REENCRYPT_ROW_BATCH) break;
     }
   }
   // kv: секретные ключи пишет kvSetSecret, и их состав меняется от версии к
   // версии (журнал звонков, заметки, корзины). Поэтому отбор по признаку
   // шифртекста, а не по списку имён — список успел бы устареть. Настройки
   // лежат открытым текстом и под условие не попадают.
-  const kvRows = await database.getAllAsync<{ k: string; v: string }>(
-    'SELECT k, v FROM kv WHERE v LIKE ?',
-    [`${AT_REST_PREFIX}%`]
-  );
-  for (const row of kvRows) {
-    const plain = tryDecryptAtRest(row.v, from);
-    if (plain == null) continue;
-    await database.runAsync('UPDATE kv SET v = ? WHERE k = ?', [encryptAtRestString(plain, to), row.k]);
+  let afterKvRowid = 0;
+  for (;;) {
+    const kvRows = await database.getAllAsync<{ kv_rowid: number; k: string; v: string }>(
+      'SELECT rowid AS kv_rowid, k, v FROM kv WHERE v LIKE ? AND rowid > ? ORDER BY rowid LIMIT ?',
+      [`${AT_REST_PREFIX}%`, afterKvRowid, REENCRYPT_ROW_BATCH]
+    );
+    if (kvRows.length === 0) break;
+    for (const row of kvRows) {
+      afterKvRowid = row.kv_rowid;
+      const plain = tryDecryptAtRest(row.v, from);
+      if (plain == null) continue;
+      await database.runAsync('UPDATE kv SET v = ? WHERE k = ?', [encryptAtRestString(plain, to), row.k]);
+    }
+    if (kvRows.length < REENCRYPT_ROW_BATCH) break;
   }
   // v4.32.341: у байтов вложений ленты свой кодек и свой префикс (см.
   // inlineBlobCrypto), и под условие enc2 выше они не попадают. Без этого
   // прохода смена ключа оставила бы их зашифрованными старым — то есть все
   // фотографии и документы в ленте стали бы нечитаемы разом и навсегда.
-  const inlineRows = await database.getAllAsync<{ k: string; v: string }>(
-    'SELECT k, v FROM kv WHERE v LIKE ?',
-    [`${INLINE_BLOB_PREFIX}%`]
-  );
-  for (const row of inlineRows) {
-    const moved = reencryptInlineBlob(row.v, from, to);
-    if (moved == null) continue;
-    await database.runAsync('UPDATE kv SET v = ? WHERE k = ?', [moved, row.k]);
+  //
+  // Порция здесь — только ИМЕНА: тело вложения берётся по одному запросу на
+  // запись. Иначе шестьдесят четыре документа по 10 МБ легли бы в память
+  // разом, а ради этого весь обход и переписан.
+  let afterBlobRowid = 0;
+  for (;;) {
+    const inlineKeys = await database.getAllAsync<{ kv_rowid: number; k: string }>(
+      'SELECT rowid AS kv_rowid, k FROM kv WHERE v LIKE ? AND rowid > ? ORDER BY rowid LIMIT ?',
+      [`${INLINE_BLOB_PREFIX}%`, afterBlobRowid, REENCRYPT_BLOB_BATCH]
+    );
+    if (inlineKeys.length === 0) break;
+    for (const key of inlineKeys) {
+      afterBlobRowid = key.kv_rowid;
+      const row = await database.getFirstAsync<{ v: string }>(
+        'SELECT v FROM kv WHERE k = ?',
+        [key.k]
+      );
+      if (!row) continue;
+      const moved = reencryptInlineBlob(row.v, from, to);
+      if (moved == null) continue;
+      await database.runAsync('UPDATE kv SET v = ? WHERE k = ?', [moved, key.k]);
+    }
+    if (inlineKeys.length < REENCRYPT_BLOB_BATCH) break;
   }
 }
 

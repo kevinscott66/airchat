@@ -296,12 +296,21 @@ export function ProfilePostsPane({
       options: [{
         label: 'Убрать из альбома',
         destructive: true,
+        // v4.32.625: плашка говорит то, что случилось. Отказ гасился в
+        // .catch, а следом безусловно вставало «убрана вместе с копией
+        // снимка» — то есть обещание про диск давалось и тогда, когда с
+        // диска ничего не убрали.
         onPress: () => void (async () => {
-          await removeStoryFromAlbum(it, ownerProfileId).catch((e) =>
-            log.warn('ui_story_album_remove_failed', { err: rawErrorText(e) }));
+          let removed = true;
+          await removeStoryFromAlbum(it, ownerProfileId).catch((e) => {
+            removed = false;
+            log.warn('ui_story_album_remove_failed', { err: rawErrorText(e) });
+          });
           await reloadAlbums();
           await refreshOpenAlbum(it.albumId);
-          setNote('История убрана из альбома вместе с копией снимка.');
+          setNote(removed
+            ? 'История убрана из альбома вместе с копией снимка.'
+            : 'Не удалось убрать историю из альбома.');
         })(),
       }],
     });
@@ -318,11 +327,18 @@ export function ProfilePostsPane({
           // Копии снимков уходят вместе с альбомом: другого места, где на них
           // есть ссылка, нет, и оставшись, они лежали бы мёртвым грузом.
           onPress: () => void (async () => {
-            await removeStoryAlbum(a.id, ownerProfileId).catch((e) =>
-              log.warn('ui_story_album_delete_failed', { err: rawErrorText(e) }));
-            setAlbumId(null);
+            let deleted = true;
+            await removeStoryAlbum(a.id, ownerProfileId).catch((e) => {
+              deleted = false;
+              log.warn('ui_story_album_delete_failed', { err: rawErrorText(e) });
+            });
+            // Уцелевший альбом не закрываем: человек остаётся там же, где был,
+            // и видит, что плитки на месте.
+            if (deleted) setAlbumId(null);
             await reloadAlbums();
-            setNote('Альбом удалён вместе с копиями снимков.');
+            setNote(deleted
+              ? 'Альбом удалён вместе с копиями снимков.'
+              : 'Не удалось удалить альбом.');
           })(),
         },
       ],

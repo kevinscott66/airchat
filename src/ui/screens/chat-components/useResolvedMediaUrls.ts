@@ -5,6 +5,8 @@ import { gatewayUrl } from '../../../core/media/gatewayUrl';
 // в core/media/mediaResolveLimit: он общий с разбором по требованию, иначе два
 // предела по четыре дают восемь одновременных загрузок на один канал.
 import { mediaResolveLimiter } from '../../../core/media/mediaResolveLimit';
+import { log } from '../../../core/logger';
+import { rawErrorText } from '../../components/userErrorText';
 
 /**
  * v4.32.226: map mediaCids entries to displayable URIs. Plain IPFS cids map to
@@ -26,7 +28,26 @@ export function useResolvedMediaUrls(entries: string[], gateway: string): (strin
     entries.forEach((e, i) => {
       const ref = parseNbCid(e);
       if (!ref) return;
-      void mediaResolveLimiter.run(() => resolveBlobToLocalFile(ref, 'img').catch(() => null)).then((local) => {
+      // v4.32.625: отмена проверяется ВНУТРИ очереди, а не только на выходе.
+      // Очередь общая на приложение и глубиной в сотни плиток («Общие медиа»),
+      // слот отдаётся спустя минуты после постановки — и закрытая галерея
+      // продолжала докачивать все свои вложения по 8 МБ до последнего.
+      //
+      // Отказ загрузки раньше глотался целиком (`.catch(() => null)`): плитка
+      // остаётся серой и так, но отличить «сеть не отдала» от «ключ не подошёл»
+      // было нельзя ничем, даже по журналу.
+      const resolveOne = async (): Promise<string | null> => {
+        if (cancelled) return null;
+        try {
+          return await resolveBlobToLocalFile(ref, 'img');
+        } catch (err) {
+          log.warn('media_resolve_failed', {
+            err: rawErrorText(err),
+          });
+          return null;
+        }
+      };
+      void mediaResolveLimiter.run(resolveOne).then((local) => {
         if (cancelled || !local) return;
         setResolved((prev) => {
           if (prev[i] === local) return prev;

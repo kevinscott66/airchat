@@ -15,6 +15,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import { persistKeyPair } from '../crypto/keyManager';
 import { encryptSymmetric, decryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
 import { mnemonicSeedCached, clearMnemonicSeedCache } from '../crypto/mnemonicSeed';
+import { acceptKdfIters } from '../crypto/kdfIters';
 import { kvGet, kvSet } from '../storage/local';
 import { log } from '../logger';
 import { hasAccountVaultSnapshot, restoreAccountVault } from '../storage/accountVault';
@@ -232,7 +233,13 @@ async function tryDecryptLocalPayload(raw: string): Promise<string | null> {
     // v4.32.177: floor на iters — атакующий мог модифицировать JSON payload
     // чтобы задать iters=1 и тривиально брутфорсить пароль при последующем
     // захвате. Принимаем только iters >= LOCAL_WRAP_ITERS.
-    const iters = Math.max(p.iters ?? LOCAL_WRAP_ITERS, LOCAL_WRAP_ITERS);
+    // v4.32.625: и потолок — прежний Math.max поднимал значение, но никогда не
+    // опускал, так что подменённый iters вешал поток JS насмерть.
+    const iters = acceptKdfIters(p.iters ?? LOCAL_WRAP_ITERS, LOCAL_WRAP_ITERS);
+    if (iters == null) {
+      log.warn('seed_local_iters_rejected');
+      return null;
+    }
     const salt = new Uint8Array(Buffer.from(p.saltB64, 'base64'));
     let key: Uint8Array;
     if (p.v === 3) {
@@ -520,7 +527,11 @@ export async function importEncryptedBackup(encrypted: string, password: string)
   }
   const salt = new Uint8Array(Buffer.from(payload.saltB64, 'base64'));
   // v4.32.177: floor — не даём downgrade iters атакующим modified payload.
-  const iters = Math.max(payload.iters ?? BACKUP_KDF_ITERS, BACKUP_KDF_ITERS);
+  // v4.32.625: и потолок. Текст приходит из буфера обмена, а вся проверка
+  // размера была на длине строки: `{"v":1,...,"iters":1e15}` — сотня байт,
+  // проходит BACKUP_TEXT_MAX и вешает восстановление навсегда.
+  const iters = acceptKdfIters(payload.iters ?? BACKUP_KDF_ITERS, BACKUP_KDF_ITERS);
+  if (iters == null) throw new Error(BAD_BACKUP_MESSAGE);
   // v4.32.134: match exportEncryptedBackup normalization. See comment there.
   const normPwd = password.normalize('NFC');
   const key = pbkdf2(sha256, new TextEncoder().encode(normPwd), salt, {

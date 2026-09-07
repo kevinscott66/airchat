@@ -224,6 +224,17 @@ export async function closeFeedStorage(): Promise<void> {
   currentProfileId = null;
   if (active) await active.close();
 }
+
+/**
+ * Номер профиля открытой сейчас ленты — или `null`, если она закрыта.
+ *
+ * Нужен ровно одному месту: выгрузке облачной копии (v4.32.625). Она закрывает
+ * базу, чтобы забрать её файлы целиком, и обязана открыть обратно — сама лента
+ * восстановить свою привязку не может, `closeFeedStorage` стирает и номер.
+ */
+export function feedProfileId(): number | null {
+  return currentProfileId;
+}
 /**
  * v4.32.22: inflight-promise гвард. При `switchProfile` 4 useEffect'а в App.tsx
  * перезапускаются одновременно + `ensureStorage()` из FeedScreen — все дёргают
@@ -1810,11 +1821,22 @@ export async function publishRepost(
     const b64 = await kvGetInlineAttachment(`feed_inline_media:${origPostId}:${origIdx}`);
     if (!b64) continue;
     const newI = mediaBase64s.length;
+    // v4.32.625: сначала запись, потом ссылка — и запись проверяется.
+    // Здесь ответ kvSetInlineAttachment не смотрели вовсе, а ссылка на снимок
+    // добавлялась ещё до него: репост оставался с пустой плиткой, за которой
+    // на диске ничего нет и никогда не появится. Ровно эту ошибку чинили в
+    // v4.32.341 при публикации и на приёме чужого репоста — этот третий вход
+    // тогда пропустили.
+    if (!(await kvSetInlineAttachment(`feed_inline_media:${newPostId}:${newI}`, b64))) {
+      log.warn('feed_repost_inline_media_save_failed', {
+        postId: newPostId.slice(0, 24),
+        idx: newI,
+      });
+      continue;
+    }
     mediaBase64s.push(b64);
     mediaMimes.push(mime);
-    const newCid = `inline:${mime};${newI}:${newPostId}`;
-    newMediaCids.push(newCid);
-    await kvSetInlineAttachment(`feed_inline_media:${newPostId}:${newI}`, b64);
+    newMediaCids.push(`inline:${mime};${newI}:${newPostId}`);
   }
 
   // Локально сохранить запись-репост.
@@ -2323,11 +2345,27 @@ export async function getUnreadFeedCount(): Promise<number> {
   }
 }
 
+/**
+ * v4.32.625: отказ больше не глотается.
+ *
+ * Все три записи ниже возвращали `Promise<void>` и накрывали тело
+ * тело пустым молчаливым catch. Экран честно оборачивал вызов в runFeedOp
+ * или в `.catch` и
+ * показывал бы «Не удалось…» — но до этой ветки управление не доходило
+ * никогда: отвергнутого обещания просто не существовало. Человек видел
+ * «Готово» ровно так же, как при успехе.
+ *
+ * Хуже всех было локальное удаление: если уборка вложений падала, `deletePost`
+ * не звался вовсе, а плашка сообщала «Удалено локально». Запись оставалась
+ * лежать вместе с байтами.
+ *
+ * Чтения (listBookmarked, listArchived) остаются с catch — там `null` значит
+ * «прочитать не удалось» и отличается от пустого списка. Запись такого
+ * различия не имеет: не записалось — значит не записалось.
+ */
 export async function setFeedPostBookmarked(postId: string, bookmarked: boolean): Promise<void> {
-  try {
-    const s = await ensureStorage();
-    await s.setBookmarked(postId, bookmarked);
-  } catch { /* noop */ }
+  const s = await ensureStorage();
+  await s.setBookmarked(postId, bookmarked);
 }
 
 /** v4.32.528: `null` — прочитать не удалось; пустой список означал бы «закладок нет». */
@@ -2346,10 +2384,8 @@ export async function listBookmarkedFeedPosts(): Promise<DbRead<FeedPostRow>> {
  * В отличие от deleteFeedPost, в сеть ничего не шлёт — просто UPDATE archived=1.
  */
 export async function setFeedPostArchived(postId: string, archived: boolean): Promise<void> {
-  try {
-    const s = await ensureStorage();
-    await s.setArchived(postId, archived);
-  } catch { /* noop */ }
+  const s = await ensureStorage();
+  await s.setArchived(postId, archived);
 }
 
 export async function listArchivedFeedPosts(
@@ -2375,17 +2411,10 @@ export async function listArchivedFeedPosts(
  * получателям. Для чужих — только локально прячем из БД, чтобы не остался в Архиве.
  */
 export async function deleteFeedPostLocal(postId: string): Promise<void> {
-  try {
-    const s = await ensureStorage();
-    // v4.32.623: байты вложений уносим вместе с публикацией. Их тут не сносили,
-    // и «спрятать из Архива» оставляло на диске сами фотографии и документы —
-    // ровно то, что v4.32.305 закрыла для двух соседних мест удаления
-    // (см. вызовы cleanupInlinePayloads ниже). Подбирал их только
-    // reconcileOrphanInlineMedia при следующем запуске приложения.
-    await cleanupInlinePayloads(postId);
-    await s.deletePost(postId);
-    emitFeedUpdate();
-  } catch { /* noop */ }
+  const s = await ensureStorage();
+  await cleanupInlinePayloads(postId);
+  await s.deletePost(postId);
+  emitFeedUpdate();
 }
 
 /**

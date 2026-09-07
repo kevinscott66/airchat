@@ -2428,8 +2428,22 @@ function ChatThreadView({
     }
     setMsg('');
     clearDraft();
+    // v4.32.625: список отложенных перечитывается здесь. Он загружался ровно
+    // один раз — эффектом по [peerB64, activeProfileId], — поэтому только что
+    // запланированное сообщение не появлялось нигде: ни плашки над полем ввода
+    // (она рисуется по scheduledMsgs.length > 0), ни строки в списке, ни
+    // способа отменить отправку. Оставался один тост, и до перезахода в
+    // переписку человеку приходилось верить ему на слово. Соседний
+    // deleteScheduledFromModal перечитывает список ровно так же.
+    try {
+      await reloadScheduled();
+    } catch (e) {
+      // Список не перечитался — сообщение всё равно запланировано, и говорить
+      // об отказе тут значило бы соврать в обратную сторону.
+      log.warn('schedule_dm_reload_failed', { err: rawErrorText(e) });
+    }
     showSuccess(`Запланировано на ${fullDateTime(sendAt)}`);
-  }, [msg, peerB64, clearDraft]);
+  }, [msg, peerB64, clearDraft, reloadScheduled]);
 
   const retryFailedMessage = useCallback((row: ChatMessageRow) => {
     if (!peerB64 || row.status !== 'failed') return;

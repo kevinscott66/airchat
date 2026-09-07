@@ -71,7 +71,7 @@ import { log } from '../../core/logger';
 import { UserProfilePeek } from './UserProfilePeek';
 import { nameInitial } from '../../core/social/contactLabel';
 import { shortIdentity } from '../identity/shortId';
-import { userErrorText } from './userErrorText';
+import { rawErrorText, userErrorText } from './userErrorText';
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -320,7 +320,17 @@ function StoryViewer({
                       text: '🗑 Удалить сторис',
                       style: 'destructive',
                       onPress: () => {
-                        void deleteStory(story.id, ownerProfileId).then(onClose);
+                        // v4.32.625: у обещания не было .catch. deleteStory
+                        // ходит в базу и сносит файл снимка — отказ там
+                        // возможен, и тогда onClose не звался: просмотрщик
+                        // оставался открытым с той же сторис, без единого
+                        // слова о том, что удаление не прошло.
+                        void deleteStory(story.id, ownerProfileId)
+                          .then(onClose)
+                          .catch((e) => {
+                            log.warn('ui_story_delete_failed', { err: rawErrorText(e) });
+                            showError('Не удалось удалить сторис.');
+                          });
                       },
                     },
                     !mayCountViewers(viewerList) ? {
