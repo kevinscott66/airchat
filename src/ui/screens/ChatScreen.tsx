@@ -1228,8 +1228,12 @@ function ChatThreadView({
         // которого он не добавлял.
         const { notifyOnlineGet, notifyOnlineSet } = await import('../../core/settings/privacyPrefs');
         if (await notifyOnlineGet(peerB64)) {
-          // Просьба одноразовая: снимаем её сразу.
-          await notifyOnlineSet(peerB64, false);
+          // Просьба одноразовая: снимаем её сразу. v4.32.654: если снять не
+          // удалось, уведомление всё равно показываем — о нём просили; но в
+          // журнале видно, почему оно придёт ещё раз при следующем появлении.
+          if (!(await notifyOnlineSet(peerB64, false))) {
+            log.warn('ui_notify_online_clear_failed', { peer: peerB64.slice(0, 12) });
+          }
           try {
             const channelId = await notifee.createChannel({ id: 'online_alerts', name: 'Онлайн уведомления', importance: 4 });
             await notifee.displayNotification({ title: 'AirChat — онлайн', body: `${displayName} сейчас в сети`, android: { channelId, smallIcon: NOTIFICATION_SMALL_ICON } });

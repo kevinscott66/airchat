@@ -137,15 +137,26 @@ export function ProfileChatBlock({
   const toggleNotifyOnline = useCallback(() => {
     const next = !notifyOnline;
     setNotifyOnline(next);
-    void import('../../../../core/settings/privacyPrefs')
-      .then((m) => m.notifyOnlineSet(peerB64, next))
-      .catch(() => {
-        // Настройка не записалась — вернуть переключатель обратно честнее,
-        // чем оставить включённым то, чего не будет.
-        setNotifyOnline(!next);
-        showError('Не удалось изменить уведомление');
-      });
-    if (next) showSuccess(`Уведомим, когда ${displayName} появится онлайн`);
+    void (async () => {
+      // v4.32.654: раньше здесь был один `.catch`, а запись возвращала
+      // `void` и никогда не бросала: ветка отказа выглядела рабочей, но не
+      // срабатывала ни разу. Тост об успехе при этом стоял снаружи и показывался
+      // всегда — даже когда на диске не оставалось ничего.
+      let ok = false;
+      try {
+        const m = await import('../../../../core/settings/privacyPrefs');
+        ok = await m.notifyOnlineSet(peerB64, next);
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        if (next) showSuccess(`Уведомим, когда ${displayName} появится онлайн`);
+        return;
+      }
+      // Вернуть переключатель обратно честнее, чем оставить включённым то, чего не будет.
+      setNotifyOnline(!next);
+      showError('Не удалось изменить уведомление');
+    })();
   }, [notifyOnline, peerB64, displayName]);
 
   const exportChat = useCallback(() => {

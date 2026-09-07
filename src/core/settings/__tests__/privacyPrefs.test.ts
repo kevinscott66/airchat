@@ -108,14 +108,14 @@ describe('«сообщить, когда появится»', () => {
   it('просьба одного аккаунта не всплывает у другого', async () => {
     // Контакты у профилей разные: уведомление про человека, которого второй
     // аккаунт не добавлял, показало бы связь между аккаунтами на экране блокировки.
-    await notifyOnlineSet(PEER, true);
+    expect(await notifyOnlineSet(PEER, true)).toBe(true);
     mockActiveProfileId = 2;
     expect(await notifyOnlineGet(PEER)).toBe(false);
   });
 
   it('снятая просьба больше не срабатывает', async () => {
-    await notifyOnlineSet(PEER, true);
-    await notifyOnlineSet(PEER, false);
+    expect(await notifyOnlineSet(PEER, true)).toBe(true);
+    expect(await notifyOnlineSet(PEER, false)).toBe(true);
     expect(await notifyOnlineGet(PEER)).toBe(false);
   });
 
@@ -132,7 +132,9 @@ describe('«сообщить, когда появится»', () => {
     // человек не узнавал: уведомления просто не приходило.
     kv[`notify_online_${PEER}`] = '1';
     mockWriteFails = true;
-    await notifyOnlineSet(PEER, true);
+    // v4.32.654: отказ виден вызывающему — до этой версии функция возвращала
+    // void, и экран показывал «Уведомим, когда появится» над пустым диском.
+    expect(await notifyOnlineSet(PEER, true)).toBe(false);
     expect(kv[`notify_online_${PEER}`]).toBe('1');
     expect(await notifyOnlineGet(PEER)).toBe(true);
   });

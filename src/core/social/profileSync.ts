@@ -21,7 +21,7 @@ import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
 import { getMessagingService } from './messaging';
 import { canReachPeer } from './sendGate';
-import { avatarVisibilityFor, type AvatarVisibility } from '../settings/avatarVisibility';
+import { avatarVisibilityTryFor, type AvatarVisibility } from '../settings/avatarVisibility';
 import {
   PROFILE_PREFIX,
   encodeProfileEnvelope,
@@ -177,8 +177,15 @@ async function isMyContact(pid: number, peerPubB64: string): Promise<boolean> {
   }
 }
 
-function avatarAllowed(visibility: AvatarVisibility, audience: Audience): boolean {
-  if (visibility === 'nobody') return false;
+/**
+ * Отдаётся ли фотография этой аудитории.
+ *
+ * v4.32.654: `null` — настройку прочитать не удалось, и ответ тогда тот же, что
+ * у непрочитанного списка контактов выше: не отправляем. Неотправленную
+ * фотографию дошлёт следующая рассылка, отправленную не вернуть.
+ */
+function avatarAllowed(visibility: AvatarVisibility | null, audience: Audience): boolean {
+  if (visibility === null || visibility === 'nobody') return false;
   if (visibility === 'contacts') return audience === 'contacts';
   return true;
 }
@@ -214,7 +221,7 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
     stamp = now;
     await scopedKvSetFor(pid, CHANGED_AT_KEY, String(stamp));
   }
-  const shareAvatar = avatarAllowed(await avatarVisibilityFor(pid), audience);
+  const shareAvatar = avatarAllowed(await avatarVisibilityTryFor(pid), audience);
   const avatarCid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
   // v4.32.547: бумага на галочку едет тем же конвертом, что и имя, — иначе ей
   // понадобился бы свой транспорт, а она нужна ровно там же и ровно тогда же.
@@ -353,7 +360,7 @@ export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
   // тех, для кого её включали. Поэтому список читается — но только когда от
   // ответа что-то зависит.
   const audience: Audience =
-    (await avatarVisibilityFor(pid)) === 'contacts' && !(await isMyContact(pid, peerPubB64))
+    (await avatarVisibilityTryFor(pid)) === 'contacts' && !(await isMyContact(pid, peerPubB64))
       ? 'direct'
       : 'contacts';
   const built = await buildEnvelope(pid, audience);

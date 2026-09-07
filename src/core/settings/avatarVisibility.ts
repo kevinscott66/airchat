@@ -21,7 +21,7 @@
  * в namespace профиля: второй аккаунт заводят как раз затем, чтобы его не
  * связали с первым, и общая настройка это отменяла бы (см. privacyPrefs).
  */
-import { privacyPrefGetFor, privacyPrefSet } from './privacyPrefs';
+import { privacyPrefSet, privacyPrefTryGetFor } from './privacyPrefs';
 
 export type AvatarVisibility = 'everybody' | 'contacts' | 'nobody';
 
@@ -32,9 +32,21 @@ export function parseAvatarVisibility(value: unknown): AvatarVisibility {
   return value === 'contacts' || value === 'nobody' ? value : 'everybody';
 }
 
-/** Решение названного профиля. */
-export async function avatarVisibilityFor(pid: number): Promise<AvatarVisibility> {
-  return parseAvatarVisibility(await privacyPrefGetFor(pid, KEY));
+/**
+ * Решение названного профиля; `null` — прочитать не удалось (v4.32.654).
+ *
+ * Раньше здесь стояло простое чтение, и сбой базы приходил тем же `null`,
+ * что и нетронутая настройка, — а `parseAvatarVisibility` отвечал на него самым
+ * разрешающим из трёх положений. Человек, выбравший `nobody`, отдавал
+ * фотографию всем, с кем шла переписка, если база не ответила в момент сборки
+ * конверта, — и отозвать её уже нельзя.
+ *
+ * Решение принимает вызывающий: осторожная сторона у каждого переключателя
+ * своя (см. privacyPrefTryBoolFor).
+ */
+export async function avatarVisibilityTryFor(pid: number): Promise<AvatarVisibility | null> {
+  const read = await privacyPrefTryGetFor(pid, KEY);
+  return read === null ? null : parseAvatarVisibility(read.value);
 }
 
 /** Записать решение активного профиля. */

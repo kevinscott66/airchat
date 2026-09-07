@@ -165,14 +165,26 @@ export async function notifyOnlineGet(peerPubB64: string): Promise<boolean> {
   return (await kvGet(key)) === '1';
 }
 
-export async function notifyOnlineSet(peerPubB64: string, on: boolean): Promise<void> {
+/**
+ * Записать просьбу; `false` — запись не легла (v4.32.654).
+ *
+ * Возвращалось `void`, и отказ `kvSetChecked` терялся прямо здесь: промис
+ * резолвился успешно, ветка `.catch` у вызывающего не срабатывала никогда, и
+ * человеку показывали «Уведомим, когда появится» над переключателем, за
+ * которым на диске ничего нет. Никакого уведомления потом не приходило.
+ */
+export async function notifyOnlineSet(peerPubB64: string, on: boolean): Promise<boolean> {
   const pid = activeProfileId();
   const key = notifyOnlineKey(peerPubB64);
   // v4.32.615: общее имя снимается только после того, как своё действительно
   // легло. kvSet гасит свою ошибку и возвращает void, поэтому «диск полон»
   // означало «просьбу забыли, а старую запись стёрли» — то же место, что и в
   // profileScopedKv.
-  if (await kvSetChecked(profileScopedKey(pid, key), on ? '1' : '0') && pid === 1) {
-    await kvDelete(key);
+  const ok = await kvSetChecked(profileScopedKey(pid, key), on ? '1' : '0');
+  if (!ok) {
+    log.warn('notify_online_write_failed', { pid, on });
+    return false;
   }
+  if (pid === 1) await kvDelete(key);
+  return true;
 }
