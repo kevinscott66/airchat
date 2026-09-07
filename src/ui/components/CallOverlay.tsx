@@ -59,6 +59,7 @@ import { listContacts } from '../../core/social/contacts';
 import { log } from '../../core/logger';
 import { formatClockDuration } from '../time/durationLabel';
 import { nameInitials } from '../../core/social/contactLabel';
+import { callerDisplay, type CallerDisplay } from './callerDisplay';
 import { rawErrorText } from './userErrorText';
 import { showError } from './userFeedback';
 
@@ -273,19 +274,24 @@ function CallControl({ icon, label, tone, overMedia, active = false, onPress }: 
   );
 }
 
-function VideoFallback({ call, tone, stateLabel, incoming, wide }: { call: CallInfo; tone: CallTone; stateLabel: string; incoming: boolean; wide: boolean }): React.ReactElement {
+function VideoFallback({ who, tone, stateLabel, incoming, wide }: { who: CallerDisplay; tone: CallTone; stateLabel: string; incoming: boolean; wide: boolean }): React.ReactElement {
   return (
     <View style={s.videoFallback}>
       <CallBackdrop tone={tone} wide={wide} />
       {incoming && <RingingRings tone={tone} />}
-      <CallerAvatar name={call.peerName} tone={tone} />
-      <Text style={[s.videoFallbackName, { color: mediaScrim.ink }]}>{call.peerName}</Text>
+      <CallerAvatar name={who.avatarName} tone={tone} />
+      <Text style={[s.videoFallbackName, { color: mediaScrim.ink }]}>{who.name}</Text>
       <Text style={[s.videoFallbackLabel, { color: mediaScrim.inkMuted }]}>{stateLabel}</Text>
     </View>
   );
 }
 
-export function CallOverlay(): React.ReactElement | null {
+/**
+ * `locked` — заперт ли замок приложения. Оверлей рисуется РЯДОМ с экраном
+ * пароля (App.tsx), а не внутри разблокированной ветки, поэтому знать об этом
+ * он может только снаружи. Что именно скрывается под замком — в callerDisplay.
+ */
+export function CallOverlay({ locked }: { locked: boolean }): React.ReactElement | null {
   const [call, setCall] = useState<CallInfo | null>(null);
   const [media, setMedia] = useState<CallMediaState>(() => ({
     ...getCallMediaStreams(),
@@ -339,7 +345,11 @@ export function CallOverlay(): React.ReactElement | null {
       nameResolvedForRef.current = null;
       return;
     }
-    if (call?.state !== 'incoming' || nameResolvedForRef.current === peer) return;
+    // v4.32.627. Под замком книгу контактов не трогаем вовсе: имя звонящего
+    // всё равно не показывается (callerDisplay), а чтение зашифрованной книги
+    // — само по себе то, от чего замок стоит. Пометку о разобранном имени
+    // здесь не ставим: иначе после разблокировки имя бы уже не подтянулось.
+    if (locked || call?.state !== 'incoming' || nameResolvedForRef.current === peer) return;
     nameResolvedForRef.current = peer;
     let cancelled = false;
     void (async () => {
@@ -353,7 +363,7 @@ export function CallOverlay(): React.ReactElement | null {
       }
     })();
     return () => { cancelled = true; };
-  }, [call?.peerPubB64, call?.state]);
+  }, [call?.peerPubB64, call?.state, locked]);
 
   const onAccept = useCallback(() => {
     Vibration.cancel();
@@ -398,6 +408,7 @@ export function CallOverlay(): React.ReactElement | null {
 
   if (!call || call.state === 'idle') return null;
 
+  const who = callerDisplay(locked, call.peerName);
   const isIncoming = call.state === 'incoming';
   const isOutgoing = call.state === 'outgoing';
   const isConnected = call.state === 'connected';
@@ -429,10 +440,10 @@ export function CallOverlay(): React.ReactElement | null {
               {hasRemoteVideo && RtcView ? (
                 <RtcView style={s.remoteVideo} streamURL={remoteUrl ?? undefined} objectFit="cover" zOrder={0} accessibilityLabel="Видео собеседника" />
               ) : (
-                <VideoFallback call={call} tone={tone} stateLabel={stateLabel} incoming={isIncoming} wide={wide} />
+                <VideoFallback who={who} tone={tone} stateLabel={stateLabel} incoming={isIncoming} wide={wide} />
               )}
               <CallGlass tone={tone} fill={mediaScrim.bar} overMedia={hasRemoteVideo} style={s.videoHeader} pointerEvents="none">
-                <Text style={[s.videoPeerName, { color: mediaScrim.ink }]} numberOfLines={1}>{call.peerName}</Text>
+                <Text style={[s.videoPeerName, { color: mediaScrim.ink }]} numberOfLines={1}>{who.name}</Text>
                 <Text style={[s.videoState, { color: mediaScrim.inkMuted }]}>{stateLabel}</Text>
               </CallGlass>
               {hasLocalVideo && media.localVideoEnabled && RtcView ? (
@@ -449,8 +460,8 @@ export function CallOverlay(): React.ReactElement | null {
           ) : (
             <View style={[s.audioStage, wide && s.stageWide]}>
               {isIncoming && <RingingRings tone={tone} />}
-              <CallerAvatar name={call.peerName} tone={tone} />
-              <Text style={[s.callerName, { color: tone.ink }]}>{call.peerName}</Text>
+              <CallerAvatar name={who.avatarName} tone={tone} />
+              <Text style={[s.callerName, { color: tone.ink }]}>{who.name}</Text>
               <Text style={[s.stateLabel, { color: tone.inkMuted }]}>{stateLabel}</Text>
             </View>
           )}

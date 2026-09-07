@@ -1992,6 +1992,12 @@ export default function App(): React.ReactElement {
   const [vpnStatus, setVpnStatus] = useState<AirChatVpnUiStatus>('off');
   /** Пароль приложения: проверка после загрузки сессии и до навигации. */
   const [passwordGateResolved, setPasswordGateResolved] = useState(false);
+  /**
+   * Был ли пароль виден при последнем УДАЧНОМ чтении хранилища ключей.
+   * Нужен автоблокировке: отказ чтения там решается в пользу замка, но только
+   * когда пароль хоть раз существовал.
+   */
+  const hadPasswordRef = useRef(false);
   const [appUnlocked, setAppUnlocked] = useState(false);
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
 
@@ -2384,6 +2390,7 @@ export default function App(): React.ReactElement {
     void (async () => {
       const hasPwd = await authGuard.hasPassword();
       if (cancelled) return;
+      hadPasswordRef.current = hasPwd;
       if (!hasPwd) {
         authGuard.unlockSession();
         setAppUnlocked(true);
@@ -2428,7 +2435,25 @@ export default function App(): React.ReactElement {
         void (async () => {
           const lockEnabled = (await kvGet('auto_lock_on_exit')) === 'true';
           if (!lockEnabled) return;
-          const hasPwd = await authGuard.hasPassword();
+          // v4.32.627. Чтение хранилища ключей может отказать — например,
+          // приложение подняли из переключателя до первой разблокировки
+          // устройства, когда AFTER_FIRST_UNLOCK ещё не наступил. Раньше отказ
+          // становился необработанным промисом, и запирание — единственное
+          // действие этой ветки — просто не выполнялось: замок включён, а
+          // приложение открыто. Загрузочная проверка в такой же ситуации
+          // остаётся на экране загрузки, то есть закрывается; здесь же
+          // закрываться нечему, и отказ проходил насквозь.
+          //
+          // Непрочитанное состояние решается в пользу замка, но только если
+          // пароль хоть раз был виден: иначе человека без пароля заперло бы на
+          // экране, от которого у него нет ключа.
+          let hasPwd: boolean;
+          try {
+            hasPwd = await authGuard.hasPassword();
+            hadPasswordRef.current = hasPwd;
+          } catch {
+            hasPwd = hadPasswordRef.current;
+          }
           if (!hasPwd) return;
           const delayMs = parseInt((await kvGet('auto_lock_delay_ms')) ?? '0', 10) || 0;
           const elapsed = Date.now() - wentBackgroundAt;
@@ -2660,7 +2685,7 @@ export default function App(): React.ReactElement {
       <ThemeProvider>
         <AppShell vpnStatus={vpnStatus} onVpnRetry={handleVpnRetry}>
           {body}
-          <CallOverlay />
+          <CallOverlay locked={!appUnlocked} />
           {/* Анимированная заставка — поверх всего, скрывается когда app готов */}
           {showSplash ? (
             <SplashOverlay
