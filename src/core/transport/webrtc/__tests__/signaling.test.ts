@@ -56,6 +56,9 @@ jest.mock('../../../logger', () => ({
 }));
 
 import { WebRTCSignaling } from '../signaling';
+import { log } from '../../../logger';
+
+const warn = log.warn as jest.Mock;
 
 async function connectedSignaling(): Promise<WebRTCSignaling> {
   const s = new WebRTCSignaling('ws://localhost:3001');
@@ -94,12 +97,18 @@ describe('WebRTCSignaling — listener deduplication', () => {
 
   test('second onAnswer call replaces first', async () => {
     const s = await connectedSignaling();
+    const stale: unknown[] = [];
     const fresh: unknown[] = [];
 
-    s.onAnswer(() => { throw new Error('stale handler must not fire'); });
+    // v4.32.623: устаревший обработчик отмечается в списке, а не бросает.
+    // С этой версии обработчики обёрнуты (guardHandler), и брошенное внутри
+    // ловится и уходит в журнал — проверка «не сработал» через исключение
+    // стала бы проверкой ни о чём.
+    s.onAnswer(() => { stale.push(1); });
     s.onAnswer(() => fresh.push(1));
 
     mockSocket.emit('answer', { sdp: 'v=0', fromPeerId: 'p' });
+    expect(stale).toHaveLength(0);
     expect(fresh).toHaveLength(1);
   });
 
@@ -193,3 +202,50 @@ describe('WebRTCSignaling — расписка о получении журна�
   });
 });
 
+/**
+ * v4.32.623: сбой обработчика больше не пропадает бесследно.
+ *
+ * Обработчики звонков асинхронные (`sig.onOffer(async (msg) => …)`), а emitter
+ * socket.io возвращённый промис не берёт: брошенное внутри исчезало целиком —
+ * ни записи в журнале, ни отказа, ни звонка.
+ */
+describe('WebRTCSignaling — сбой обработчика', () => {
+  beforeEach(() => {
+    warn.mockClear();
+  });
+
+  test('исключение обработчика не выходит наружу и попадает в журнал', async () => {
+    const s = await connectedSignaling();
+    s.onOffer(() => { throw new Error('boom'); });
+
+    expect(() => mockSocket.emit('offer', { sdp: 'v=0', fromPeerId: 'p' })).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      'signaling_handler_failed',
+      expect.objectContaining({ event: 'offer', err: 'boom' }),
+    );
+  });
+
+  test('отказ асинхронного обработчика тоже доходит до журнала', async () => {
+    const s = await connectedSignaling();
+    s.onAnswer(async () => { throw new Error('async boom'); });
+
+    mockSocket.emit('answer', { sdp: 'v=0', fromPeerId: 'p' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warn).toHaveBeenCalledWith(
+      'signaling_handler_failed',
+      expect.objectContaining({ event: 'answer', err: 'async boom' }),
+    );
+  });
+
+  test('ПРОВЕРКА НЕ ПУСТАЯ: обработчик без сбоя зовётся сразу и журнал молчит', async () => {
+    const s = await connectedSignaling();
+    const seen: unknown[] = [];
+    s.onIceCandidate(() => { seen.push(1); });
+
+    mockSocket.emit('ice-candidate', { fromPeerId: 'p', candidate: {} });
+    // Синхронно: перенос обработчика в микрозадачу сдвинул бы порядок
+    // относительно кода, стоящего сразу за emit.
+    expect(seen).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

@@ -2372,6 +2372,12 @@ export async function listArchivedFeedPosts(
 export async function deleteFeedPostLocal(postId: string): Promise<void> {
   try {
     const s = await ensureStorage();
+    // v4.32.623: байты вложений уносим вместе с публикацией. Их тут не сносили,
+    // и «спрятать из Архива» оставляло на диске сами фотографии и документы —
+    // ровно то, что v4.32.305 закрыла для двух соседних мест удаления
+    // (см. вызовы cleanupInlinePayloads ниже). Подбирал их только
+    // reconcileOrphanInlineMedia при следующем запуске приложения.
+    await cleanupInlinePayloads(postId);
     await s.deletePost(postId);
     emitFeedUpdate();
   } catch { /* noop */ }

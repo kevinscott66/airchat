@@ -40,17 +40,37 @@ const ENABLE = between(PUSH, 'async enableWebPush()', 'async disableWebPush()');
 const DISABLE = between(PUSH, 'async disableWebPush()', 'async webPushGranted()');
 const REGISTER = between(PUSH, 'async registerTokenWithSignaling', 'async enableWebPush()');
 
+/** Ветка веба внутри init — от проверки платформы до `} else {`. */
+const WEB_BRANCH = between(INIT, "if (Platform.OS === 'web') {", '} else {');
+
 describe('запуск не спрашивает разрешение у браузера', () => {
   it('на вебе init только смотрит уже выданное разрешение', () => {
-    expect(INIT).toMatch(/if \(Platform\.OS === 'web'\) \{\s*\n\s*granted = \(await messaging\(\)\.hasPermission\(\)\) === authorized;/);
+    // v4.32.623: форма изменилась — вместо флага `granted` тут ранний выход.
+    // Смысл прежний и проверяется строже: в ветке веба нет requestPermission
+    // вообще, ни в каком виде.
+    expect(WEB_BRANCH).toContain('if ((await messaging().hasPermission()) !== authorized) {');
+    expect(WEB_BRANCH).toContain("log.info('push_permission_pending', { platform: Platform.OS });");
+    expect(WEB_BRANCH).toContain('return;');
+    expect(WEB_BRANCH).not.toContain('requestPermission');
   });
 
-  it('на телефоне init по-прежнему просит разрешение сам', () => {
-    expect(INIT).toMatch(/\} else \{\s*\n\s*await messaging\(\)\.requestPermission\(\);/);
+  it('на телефоне init по-прежнему просит разрешение сам, и ответ виден в журнале', () => {
+    // v4.32.623: ответ системы записывается. Раньше он выбрасывался, и почему
+    // уведомления не приходят, приходилось выяснять вслепую.
+    expect(INIT).toMatch(
+      /\} else \{[\s\S]*?const status = await messaging\(\)\.requestPermission\(\);\n\s*log\.info\('push_permission_status'/
+    );
   });
 
-  it('токен берут только с разрешением', () => {
-    expect(INIT).toMatch(/if \(granted\) \{\s*\n\s*const token = await messaging\(\)\.getToken\(\);/);
+  it('на вебе без разрешения до токена не доходят', () => {
+    const pending = INIT.indexOf("log.info('push_permission_pending'");
+    const token = INIT.indexOf('const token = await messaging().getToken();');
+    expect(pending).toBeGreaterThan(-1);
+    expect(token).toBeGreaterThan(pending);
+    // Флага `granted` больше нет: на телефоне он был захардкожен в true, и
+    // ветка «не разрешили» была недостижима. Вернуть его — значит вернуть и её.
+    expect(INIT).not.toContain('let granted = true;');
+    expect(INIT).not.toContain('if (granted) {');
   });
 
   it('отсутствие токена не обрывает остальную подготовку', () => {

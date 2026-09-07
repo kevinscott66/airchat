@@ -177,8 +177,13 @@ describe('pollVoteSync — куда положили и когда сняли', 
   it('снятый с полки голос обратно не ложится', () => {
     const flush = slice(SYNC(), 'export async function flushPendingPollVotes(', '\n}\n');
     expect(flush).toContain('pendingVotes.take(msgId, pid, now)');
-    // Последний аргумент applyIncomingPollVote — canPark.
-    expect(flush).toContain('false\n    );');
+    // Последний аргумент applyIncomingPollVote — canPark: снятый с полки голос
+    // обратно на неё не ложится. Отступ больше не фиксируем — в v4.32.623 вызов
+    // уехал внутрь try, и проверка на пробелы поймала бы перенос вместо смысла.
+    expect(flush).toMatch(/\n\s+false\n\s+\);/);
+    expect(flush).not.toMatch(/\n\s+true\n\s+\);/);
+    // И ни одной ветки, кладущей голос обратно, здесь быть не должно.
+    expect(flush).not.toContain('pendingVotes.park');
   });
 
   it('пришедший из сети голос идёт тем же телом, что и снятый с полки', () => {

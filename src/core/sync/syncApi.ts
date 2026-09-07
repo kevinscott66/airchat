@@ -8,6 +8,7 @@ import { ED25519_SECRET_KEY_BYTES } from '../crypto/keyManager';
 import { deriveKeyPairFromMnemonic } from '../backup/seedPhrase';
 import { getConfigSync } from '../config';
 import { log } from '../logger';
+import { fetchWithDeadline } from '../net/timedFetch';
 import { MAX_DOWNLOAD_B64_CHARS } from '../media/blobRef';
 import { signBytes, signJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
@@ -565,10 +566,21 @@ export async function lookupSyncUsername(username: string): Promise<UsernameDire
   const base = syncBaseUrl();
   if (!base) return { status: 'unknown' };
   try {
-    const response = await fetch(`${base}/v1/username/${encodeURIComponent(username)}`);
-    if (!response.ok) return { status: 'unknown' };
-    const body = await response.json() as { taken?: unknown; pub?: unknown };
-    if (typeof body.taken !== 'boolean') return { status: 'unknown' };
+    // v4.32.623: срок на весь обмен. Это единственный запрос модуля мимо
+    // fetchSigned, и срока у него не было вовсе: сервер, принявший соединение
+    // и молчащий в ответ, оставлял промис невыполненным навсегда. А зовут
+    // отсюда нажатие на @юзернейм в переписке — нажатие не делало НИЧЕГО: ни
+    // перехода, ни ошибки. Отдельный текст ошибки здесь не нужен: для
+    // вызывающего отказ и молчание сервера значат одно и то же.
+    const body = await fetchWithDeadline(
+      `${base}/v1/username/${encodeURIComponent(username)}`,
+      {},
+      { timeoutMs: SYNC_REQUEST_TIMEOUT_MS },
+      async (response) => (response.ok
+        ? (await response.json()) as { taken?: unknown; pub?: unknown }
+        : null),
+    );
+    if (!body || typeof body.taken !== 'boolean') return { status: 'unknown' };
     if (!body.taken) return { status: 'free' };
     // Ключ проверяется на форму здесь: дальше он уходит адресом собеседника.
     return { status: 'taken', peerPubB64: isPubKeyB64(body.pub) ? body.pub : null };

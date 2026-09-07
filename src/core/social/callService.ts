@@ -465,6 +465,17 @@ function rememberOffer(callId: string): boolean {
   }
   return true;
 }
+
+/**
+ * Вернуть номер звонка в оборот (v4.32.623).
+ *
+ * Нужен там, где номер уже сгорел в списке выше, а обработать предложение не
+ * вышло. Без возврата все повторы звонящего (каждые три секунды, до сорока
+ * пяти) молча считались бы повторами — и телефон не зазвонил бы ни разу.
+ */
+function forgetOffer(callId: string): void {
+  seenOfferCallIds.delete(callId);
+}
 /**
  * Свернуть свой исходящий звонок, уступая встречному (v4.32.615).
  *
@@ -804,9 +815,18 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
 
     if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
       // Busy — decline automatically
-      sig.sendAnswer(fromPubB64, await sealCallEnvelope(pair, myPub, {
-        kind: 'answer', to: fromPubB64, callId: offerEnvelope.callId, control: 'busy',
-      }));
+      try {
+        sig.sendAnswer(fromPubB64, await sealCallEnvelope(pair, myPub, {
+          kind: 'answer', to: fromPubB64, callId: offerEnvelope.callId, control: 'busy',
+        }));
+      } catch (e) {
+        // v4.32.623: единственный await после того, как номер звонка сгорел в
+        // списке повторов. Сорвалось запечатывание — вернём номер, иначе
+        // следующий повтор мы отбросим как «уже видели» и «занято» не уйдёт
+        // вообще ни разу: звонящий будет слушать гудки до самого срока.
+        forgetOffer(offerEnvelope.callId);
+        throw e;
+      }
       return;
     }
 
@@ -1690,9 +1710,17 @@ export async function acceptCall(): Promise<boolean> {
     if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'incoming') return false;
 
     if (!mySigningPair) throw new Error('call_no_signing_key');
-    sig.sendAnswer(fromPubB64, await sealCallEnvelope(mySigningPair, myPub, {
+    // v4.32.623: запечатывание конверта — тоже await, и проверки после него не
+    // было. За эти миллисекунды человек успевал нажать «сбросить»: ответ уходил
+    // уже отменённому звонку, а строка ниже воскрешала звонок из currentCall,
+    // ставшего к тому моменту null — `{...null}` даёт объект без собеседника и
+    // без направления, то есть «разговор» на экране с пустым именем и без
+    // возможности его завершить.
+    const sealedAnswer = await sealCallEnvelope(mySigningPair, myPub, {
       kind: 'answer', to: fromPubB64, callId: acceptedCallId, sdp: answer.sdp ?? '',
-    }));
+    });
+    if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'incoming') return false;
+    sig.sendAnswer(fromPubB64, sealedAnswer);
 
     // Направление и время начала переносятся из строки входящего звонка
     // (проверка выше гарантирует, что это она же), а не проставляются заново.

@@ -3840,7 +3840,13 @@ export async function deleteSyncEntity(
       await d.runAsync('DELETE FROM conversations WHERE contact_pub_b64 = ? AND owner_profile_id = ?', [entityId, ownerProfileId]);
       break;
     case 'group':
-      await d.runAsync('DELETE FROM groups WHERE id = ? AND owner_profile_id = ?', [entityId, ownerProfileId]);
+      // v4.32.623: не одна строка `groups`. Удаление группы, приехавшее
+      // синхронизацией с другого устройства, оставляло здесь её сообщения,
+      // состав, артефакты опросов и расшифрованные вложения в кэше — всё то,
+      // что снимает deleteGroup при выходе руками. Место — полбеды: при
+      // повторном приглашении в ту же группу (id у неё постоянный) оживал
+      // СТАРЫЙ состав вместе с ролями тех, кого из неё убрали.
+      await deleteGroup(entityId, ownerProfileId);
       break;
     case 'group_message':
       await d.runAsync('DELETE FROM group_messages WHERE id = ? AND owner_profile_id = ?', [entityId, ownerProfileId]);
@@ -4288,20 +4294,35 @@ export async function deleteChatMessage(id: string, ownerProfileId: number): Pro
       [id, ownerProfileId],
       doomed,
     );
-    const res = await d.runAsync('DELETE FROM chat_messages WHERE id = ? AND owner_profile_id = ?', [
-      id,
-      ownerProfileId,
-    ]);
-    // v4.32.615: то же, что в updateChatMessageText. Ответ «удалено» при нуле
-    // удалённых строк доходит до sendDeleteTombstone, а оттуда — до обещания
-    // «удалено у вас». Подчищать после несуществующей строки нечего: doomed
-    // пуст, а следы опроса без самого сообщения и так сироты.
-    if (!anyChanged(res)) {
+    // v4.32.623: строка и следы опроса уходят одной транзакцией, а файлы —
+    // после неё. Порознь удаление рвалось посередине: сообщения нет, а его
+    // варианты ответа и голоса остаются в базе навсегда. Соседний
+    // clearGroupMessages написан так с самого начала.
+    let removed = false;
+    await eraseAtomically(
+      d,
+      'delete_chat_message',
+      async () => {
+        const res = await d.runAsync(
+          'DELETE FROM chat_messages WHERE id = ? AND owner_profile_id = ?',
+          [id, ownerProfileId]
+        );
+        // v4.32.615: то же, что в updateChatMessageText. Ответ «удалено» при нуле
+        // удалённых строк доходит до sendDeleteTombstone, а оттуда — до обещания
+        // «удалено у вас». Подчищать после несуществующей строки нечего: doomed
+        // пуст, а следы опроса без самого сообщения и так сироты.
+        if (!anyChanged(res)) return;
+        removed = true;
+        await deletePollArtifacts(d, [id], ownerProfileId);
+      },
+      async () => {
+        if (removed) await dropOrphanBlobCache(doomed);
+      }
+    );
+    if (!removed) {
       log.warn('chat_message_delete_no_row', { id: id.slice(0, 8), pid: ownerProfileId });
       return false;
     }
-    await deletePollArtifacts(d, [id], ownerProfileId);
-    await dropOrphanBlobCache(doomed);
     emitChatWrites();
     return true;
   } catch (e) {
@@ -6443,6 +6464,17 @@ export async function deleteGroup(id: string, ownerProfileId: number): Promise<v
         ownerProfileId
       );
       await d.runAsync('DELETE FROM group_messages WHERE group_id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+      // v4.32.623: заявки на вступление. Они пережидали удаление группы: снять
+      // их было нечем — updateGroupJoinRequestStatus только переставляет флаг, а
+      // чистит таблицу один лишь снос профиля целиком. В заявке лежат имя
+      // просившегося и его сообщение (шифруются на месте, см. atRestColumns), и
+      // хранились они у бывшего администратора вечно, у группы, которой больше
+      // нет. Заодно повторное приглашение в ту же группу (id у неё постоянный)
+      // не поднимало бы старые заявки как новые.
+      await d.runAsync(
+        'DELETE FROM group_join_requests WHERE group_id = ? AND owner_profile_id = ?',
+        [id, ownerProfileId]
+      );
       await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(id));
     },
     () => dropOrphanBlobCache(doomed)
@@ -7332,12 +7364,23 @@ export async function deleteGroupMessage(
       [messageId, ownerProfileId],
       doomed
     );
-    await d.runAsync(
-      'DELETE FROM group_messages WHERE id = ? AND owner_profile_id = ?',
-      [messageId, ownerProfileId]
+    // v4.32.623: строка и следы опроса уходят одной транзакцией, а файлы —
+    // после неё. Порознь удаление рвалось посередине: сообщения нет, а его
+    // варианты ответа и голоса остаются в базе навсегда, привязанные к id,
+    // которого больше не существует. Ровно так — и по той же причине — уже
+    // написан clearGroupMessages ниже.
+    await eraseAtomically(
+      d,
+      'delete_group_message',
+      async () => {
+        await deletePollArtifacts(d, [messageId], ownerProfileId);
+        await d.runAsync(
+          'DELETE FROM group_messages WHERE id = ? AND owner_profile_id = ?',
+          [messageId, ownerProfileId]
+        );
+      },
+      () => dropOrphanBlobCache(doomed)
     );
-    await deletePollArtifacts(d, [messageId], ownerProfileId);
-    await dropOrphanBlobCache(doomed);
     emitChatWrites();
   } catch (e) {
     log.warn('delete_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -7921,12 +7964,26 @@ export async function deleteStoryAlbumItem(id: string, ownerProfileId: number): 
     'DELETE FROM story_album_items WHERE id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
 }
 
+/**
+ * v4.32.623: обе строки уходят одной транзакцией. Порознь удаление рвалось
+ * посередине — снимки альбома уже стёрты, сам альбом остался, и в профиле
+ * висела пустая полка, которую нечем было объяснить. Файлы здесь не трогаем
+ * намеренно: их подбирает общая сверка по storyAlbumFileNames +
+ * sweepStoryAlbumFiles, поэтому второй обработчик eraseAtomically пуст.
+ */
 export async function deleteStoryAlbum(id: string, ownerProfileId: number): Promise<void> {
   const d = await db();
-  await d.runAsync(
-    'DELETE FROM story_album_items WHERE album_id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
-  await d.runAsync(
-    'DELETE FROM story_albums WHERE id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+  await eraseAtomically(
+    d,
+    'delete_story_album',
+    async () => {
+      await d.runAsync(
+        'DELETE FROM story_album_items WHERE album_id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+      await d.runAsync(
+        'DELETE FROM story_albums WHERE id = ? AND owner_profile_id = ?', [id, ownerProfileId]);
+    },
+    async () => {}
+  );
 }
 
 /**

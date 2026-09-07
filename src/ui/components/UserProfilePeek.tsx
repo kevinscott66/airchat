@@ -634,15 +634,19 @@ export function UserProfilePeek({
     const what = video ? 'видеозвонок' : 'звонок';
     void (async () => {
       try {
-        const myName = (await getOwnDisplayName()) || 'AirChat';
-        const ok = await initiateCall(resolved.pubB64, myName, video);
+        // v4.32.623: второй параметр initiateCall — имя СОБЕСЕДНИКА, оно ложится
+        // в строку звонка на экране и в журнал звонков. Сюда подставлялось своё
+        // («const myName = await getOwnDisplayName()»), и в журнале исходящих
+        // все звонки подряд оказывались от самого себя. Правильное имя —
+        // displayName, ровно то же, с которым отсюда открывают переписку.
+        const ok = await initiateCall(resolved.pubB64, displayName, video);
         if (!ok) showError(`Не удалось начать ${what}`);
         else onClose();
       } catch {
         showError(`Не удалось начать ${what}`);
       }
     })();
-  }, [resolved, onClose]);
+  }, [resolved, displayName, onClose]);
 
   const toggleMute = useCallback(() => {
     if (!resolved) return;

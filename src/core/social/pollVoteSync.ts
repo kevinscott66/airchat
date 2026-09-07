@@ -288,26 +288,42 @@ export async function flushPendingPollVotes(
 ): Promise<number> {
   const votes = pendingVotes.take(msgId, pid, now);
   if (votes.length === 0) return 0;
+  let applied = 0;
+  let failed = 0;
   for (const v of votes) {
-    await applyIncomingPollVote(
-      {
-        msgId: v.msgId,
-        idx: v.idx,
-        on: v.on,
-        // multi из конверта не хранится и не используется: право решать,
-        // вытеснять ли прошлый голос, даёт текст опроса (см. pollVoteGuard).
-        multi: false,
-        ts: v.ts,
-        ...(v.groupId ? { groupId: v.groupId } : {}),
-      },
-      v.senderPubB64,
-      pid,
-      now,
-      false
-    );
+    // v4.32.623: отказ на одном голосе больше не уносит остальные. Голоса уже
+    // сняты с полки строкой выше (take), и обратно они не лягут — значит
+    // исключение на середине списка теряло безвозвратно весь его хвост, и
+    // теряло молча: вызывающие пишут в журнал один общий poll_vote_flush_failed.
+    try {
+      await applyIncomingPollVote(
+        {
+          msgId: v.msgId,
+          idx: v.idx,
+          on: v.on,
+          // multi из конверта не хранится и не используется: право решать,
+          // вытеснять ли прошлый голос, даёт текст опроса (см. pollVoteGuard).
+          multi: false,
+          ts: v.ts,
+          ...(v.groupId ? { groupId: v.groupId } : {}),
+        },
+        v.senderPubB64,
+        pid,
+        now,
+        false
+      );
+      applied += 1;
+    } catch (e) {
+      failed += 1;
+      log.warn('poll_vote_apply_failed', {
+        msgId: v.msgId.slice(0, 8),
+        from: v.senderPubB64.slice(0, 12),
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
-  log.info('poll_votes_flushed', { count: votes.length, msgId: msgId.slice(0, 8) });
-  return votes.length;
+  log.info('poll_votes_flushed', { count: applied, failed, msgId: msgId.slice(0, 8) });
+  return applied;
 }
 
 async function groupFacts(msgId: string, pid: number): Promise<PollMessageFacts> {

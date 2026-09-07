@@ -4992,13 +4992,18 @@ function GroupMembersScreen({
     setJoinRequests(reqs);
   }, [amAdmin, group.id, pid]);
 
-  const loadAdminLog = useCallback(async () => {
-    if (!amAdmin) return;
+  // v4.32.623: возвращает, удалось ли прочитать. Проверка ниже стояла с
+  // v4.32.532, но вызывающий открывал окно в .then независимо от неё — и
+  // человек видел ту самую «пустой журнал у группы с историей» ложь, только
+  // теперь ещё и вместе с сообщением об ошибке.
+  const loadAdminLog = useCallback(async (): Promise<boolean> => {
+    if (!amAdmin) return false;
     const all = await listGroupMessages({ groupId: group.id, limit: 500, offset: 0, ownerProfileId: pid });
     // v4.32.532: пустой журнал у группы с историей — заметная ложь: по нему
     // судят, кого исключили и кто менял настройки.
-    if (!shouldApplyRows(all)) { showError('Не удалось прочитать журнал группы'); return; }
+    if (!shouldApplyRows(all)) { showError('Не удалось прочитать журнал группы'); return false; }
     setAdminLogEntries(all.filter((m) => isGroupSysMessage(m.text)).reverse());
+    return true;
   }, [amAdmin, group.id, pid]);
 
   useEffect(() => {
@@ -5316,7 +5321,7 @@ function GroupMembersScreen({
           </AppPressable>
         ) : null}
         {amAdmin ? (
-          <AppPressable style={gcStyles.iconBtn} onPress={() => { void loadAdminLog().then(() => setAdminLogVisible(true)); }} accessibilityRole="button" accessibilityLabel="Журнал действий администраторов">
+          <AppPressable style={gcStyles.iconBtn} onPress={() => { void loadAdminLog().then((ok) => { if (ok) setAdminLogVisible(true); }); }} accessibilityRole="button" accessibilityLabel="Журнал действий администраторов">
             <Ionicons name="shield-checkmark-outline" size={22} color={colors.accent} />
           </AppPressable>
         ) : null}

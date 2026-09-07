@@ -321,20 +321,31 @@ export class PushNotificationService {
         // только по жесту, а прочие браузеры иначе показали бы запрос на
         // пустом месте, при первом открытии страницы. Уже выданное — берём.
         const authorized = messaging.AuthorizationStatus?.AUTHORIZED ?? 1;
-        let granted = true;
         if (Platform.OS === 'web') {
-          granted = (await messaging().hasPermission()) === authorized;
+          // На вебе токен без разрешения не выдадут вовсе — спрашивать getToken
+          // бессмысленно, а Safari на отказе ещё и бросит.
+          if ((await messaging().hasPermission()) !== authorized) {
+            log.info('push_permission_pending', { platform: Platform.OS });
+            return;
+          }
         } else {
-          await messaging().requestPermission();
+          // v4.32.623: на телефоне ответ requestPermission записывается в
+          // журнал, а не выбрасывается. Раньше здесь стояло `let granted = true`
+          // и ветка «не разрешили» на телефоне была недостижима: разбираться,
+          // почему уведомления не приходят, приходилось вслепую.
+          //
+          // Но регистрацию токена мы на этом ответе НЕ останавливаем. Человек
+          // вправе разрешить уведомления позже, из настроек системы, и тогда
+          // выданный сейчас токен окажется уже зарегистрирован — иначе push не
+          // придёт до следующего запуска приложения. getToken ниже сам бросит,
+          // если токена действительно нет, и это поймает catch.
+          const status = await messaging().requestPermission();
+          log.info('push_permission_status', { platform: Platform.OS, status: String(status) });
         }
-        if (granted) {
-          const token = await messaging().getToken();
-          await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
-          log.info('push_fcm_token', { len: token?.length ?? 0 });
-          await this.registerTokenWithSignaling(options.peerId, token);
-        } else {
-          log.info('push_permission_pending', { platform: Platform.OS });
-        }
+        const token = await messaging().getToken();
+        await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
+        log.info('push_fcm_token', { len: token?.length ?? 0 });
+        await this.registerTokenWithSignaling(options.peerId, token);
       } catch (e) {
         log.warn('push_token_unavailable', { err: e instanceof Error ? e.message : String(e) });
       }
@@ -745,7 +756,11 @@ export class PushNotificationService {
         log.warn('push_send_unsigned');
         return;
       }
-      await fetch(`${base}/send-push`, {
+      // v4.32.623: ответ сервера читается. Раньше он выбрасывался целиком, и
+      // отказ — переполненная очередь, протухший токен, отключённый релей —
+      // выглядел ровно как успешная отправка: catch ниже ловит только обрыв
+      // сети. Соседний register-token проверяется так же (см. выше).
+      const res = await fetch(`${base}/send-push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // v4.32.572: `kind` — один бит, личное это сообщение или групповое.
@@ -754,6 +769,9 @@ export class PushNotificationService {
         body: JSON.stringify(envelope),
         signal: ctrl.signal,
       });
+      if (!res.ok) {
+        log.warn('push_send_rejected', { status: res.status });
+      }
     } catch (e) {
       log.warn('push_send_failed', { err: e instanceof Error ? e.message : String(e) });
     } finally {

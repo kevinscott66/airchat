@@ -35,6 +35,36 @@ export async function getIceServers(): Promise<IceServer[]> {
 
 export type SignalMessage = { type: 'offer' | 'answer' | 'candidate'; payload: string };
 
+/**
+ * Обёртка над обработчиком события сокета (v4.32.623).
+ *
+ * Обработчики звонков асинхронные (`sig.onOffer(async (msg) => …)`), а emitter
+ * socket.io возвращённый промис не берёт: брошенное внутри исключение пропадало
+ * целиком — ни записи в журнале, ни отказа, ни звонка. Тот же приём уже стоит у
+ * onMissedCalls ниже, только там к нему добавлена расписка серверу.
+ *
+ * Обработчик по-прежнему вызывается СИНХРОННО: перенос его в микрозадачу сдвинул
+ * бы порядок относительно кода, стоящего сразу за emit.
+ */
+function guardHandler<T>(event: string, handler: (msg: T) => unknown): (msg: T) => void {
+  const report = (e: unknown): void => {
+    log.warn('signaling_handler_failed', {
+      event,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  };
+  return (msg: T): void => {
+    let out: unknown;
+    try {
+      out = handler(msg);
+    } catch (e) {
+      report(e);
+      return;
+    }
+    if (out instanceof Promise) void out.catch(report);
+  };
+}
+
 export type OfferPayload = { fromPeerId?: string; sdp: string };
 export type AnswerPayload = { fromPeerId?: string; sdp: string };
 export type IcePayload = { fromPeerId?: string; candidate: Record<string, unknown> };
@@ -272,27 +302,27 @@ export class WebRTCSignaling {
 
   onOffer(handler: (msg: OfferPayload) => void): void {
     this.socket?.off('offer');
-    this.socket?.on('offer', handler);
+    this.socket?.on('offer', guardHandler('offer', handler));
   }
 
   onAnswer(handler: (msg: AnswerPayload) => void): void {
     this.socket?.off('answer');
-    this.socket?.on('answer', handler);
+    this.socket?.on('answer', guardHandler('answer', handler));
   }
 
   onIceCandidate(handler: (msg: IcePayload) => void): void {
     this.socket?.off('ice-candidate');
-    this.socket?.on('ice-candidate', handler);
+    this.socket?.on('ice-candidate', guardHandler('ice-candidate', handler));
   }
 
   onHangup(handler: (msg: HangupPayload) => void): void {
     this.socket?.off('hangup');
-    this.socket?.on('hangup', handler);
+    this.socket?.on('hangup', guardHandler('hangup', handler));
   }
 
   onPeerUnavailable(handler: (msg: { targetPeerId: string; roomId: string }) => void): void {
     this.socket?.off('peer_unavailable');
-    this.socket?.on('peer_unavailable', handler);
+    this.socket?.on('peer_unavailable', guardHandler('peer_unavailable', handler));
   }
 
   /**

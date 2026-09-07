@@ -132,11 +132,22 @@ export async function listSeedBindingProviders(): Promise<SeedBindingProvider[]>
   const base = cloudBaseUrl();
   if (!base) return [];
   try {
-    const response = await fetch(`${base}/v1/seed-binding/providers`);
-    if (!response.ok) return [];
-    const body = (await response.json()) as { providers?: unknown };
-    if (!Array.isArray(body.providers)) return [];
-    return body.providers.filter(
+    // v4.32.623: тот же срок, что у fetchBinding выше. Здесь его не
+    // было: соседние три запроса привязки переехали на общий срок в v4.32.614,
+    // а этот остался на голом fetch. Список читается при открытии «Привязать
+    // к Apple ID» — молчащий сервер оставлял экран без кнопок навсегда.
+    const providers = await fetchWithDeadline(
+      `${base}/v1/seed-binding/providers`,
+      {},
+      { timeoutMs: SEED_BINDING_TIMEOUT_MS },
+      async (response) => {
+        if (!response.ok) return null;
+        const body = (await response.json()) as { providers?: unknown };
+        return Array.isArray(body.providers) ? body.providers : null;
+      },
+    );
+    if (!providers) return [];
+    return providers.filter(
       (value): value is SeedBindingProvider => value === 'apple' || value === 'google',
     );
   } catch {

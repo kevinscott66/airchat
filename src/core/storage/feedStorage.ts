@@ -832,10 +832,18 @@ export class FeedStorage {
       'SELECT author_did FROM feed WHERE id = ?',
       [postId]
     );
-    if (row) await this.savePostTombstone(postId, row.author_did, deletedAt);
-    await d.runAsync('DELETE FROM feed WHERE id = ?', [postId]);
-    await d.runAsync('DELETE FROM feed_comments WHERE post_id = ?', [postId]);
-    await d.runAsync('DELETE FROM feed_post_views WHERE post_id = ?', [postId]);
+    // v4.32.623: все четыре записи — одной транзакцией. Порознь они рвались:
+    // надгробие уже поставлено (публикация больше никогда не вернётся), а
+    // приложение закрыли между DELETE'ами — и комментарии с просмотрами
+    // остались в базе навсегда, привязанные к посту, которого нет и не будет.
+    // Соседние места этого файла (создание таблиц, миграции) давно так и
+    // пишут — см. withTransactionAsync выше.
+    await d.withTransactionAsync(async () => {
+      if (row) await this.savePostTombstone(postId, row.author_did, deletedAt);
+      await d.runAsync('DELETE FROM feed WHERE id = ?', [postId]);
+      await d.runAsync('DELETE FROM feed_comments WHERE post_id = ?', [postId]);
+      await d.runAsync('DELETE FROM feed_post_views WHERE post_id = ?', [postId]);
+    });
   }
 
   /**
