@@ -12,6 +12,8 @@ const mockStore = new Map<string, string>();
 const mockReads: string[] = [];
 const mockWrites: string[] = [];
 let mockThrowOnDekRead = false;
+let mockThrowOnDekWrite = false;
+let mockThrowOnCanaryRead = false;
 
 /** Каждое обращение к хранилищу уступает поток — иначе гонки не случается. */
 const mockYield = () => new Promise((r) => setImmediate(r));
@@ -21,10 +23,12 @@ jest.mock('../secureStoreQueued', () => ({
     await mockYield();
     mockReads.push(k);
     if (mockThrowOnDekRead && k === 'airchat_local_dek_v1') throw new Error('keychain busy');
+    if (mockThrowOnCanaryRead && k === 'airchat_local_dek_canary_v1') throw new Error('keychain busy');
     return mockStore.get(k) ?? null;
   },
   setItemAsync: async (k: string, v: string) => {
     await mockYield();
+    if (mockThrowOnDekWrite && k === 'airchat_local_dek_v1') throw new Error('keychain locked');
     mockWrites.push(k);
     mockStore.set(k, v);
   },
@@ -44,6 +48,7 @@ import {
   canaryOpensWith,
   clearDekMemory,
   setDekMemory,
+  persistDek,
   getOrCreateDataEncryptionKey,
 } from '../localEncryption';
 
@@ -55,6 +60,8 @@ beforeEach(() => {
   mockReads.length = 0;
   mockWrites.length = 0;
   mockThrowOnDekRead = false;
+  mockThrowOnDekWrite = false;
+  mockThrowOnCanaryRead = false;
   clearDekMemory();
 });
 
@@ -236,5 +243,71 @@ describe('храповик: работа вынесена из склеиваю�
       expect(body).toContain('dekGeneration += 1');
       expect(body).toContain('dekInflight = null');
     }
+  });
+});
+
+/**
+ * v4.32.617. `persistDek` зовут после того, как данные уже перешифрованы новым
+ * ключом. Между записью канарейки и записью ключа стоит await, и вторая может
+ * не состояться: запертое устройство отвечает «User interaction is not
+ * allowed». Если бы первым лёг ключ, канарейка осталась бы от прошлого — её не
+ * открывает ни старый ключ, ни новый, и это `stored_does_not_match_data`
+ * навсегда, при целых данных. Канарейка первой оставляет состояние поправимым.
+ */
+describe('обрыв между двумя записями ключа', () => {
+  const OLD = new Uint8Array(32).fill(7);
+  const NEW = new Uint8Array(32).fill(9);
+
+  it('запись ключа сорвалась — канарейка уже от нового ключа', async () => {
+    await persistDek(OLD);
+    clearDekMemory();
+    expect(await canaryOpensWith(OLD)).toBe(true);
+
+    mockThrowOnDekWrite = true;
+    await expect(persistDek(NEW)).rejects.toThrow('keychain locked');
+
+    // В хранилище остался прежний ключ...
+    expect(mockStore.get(DEK_KEY)).toBe(Buffer.from(OLD).toString('base64'));
+    // ...а канарейка уже переехала: её открывает только новый ключ, и запуск
+    // выберет его по совпадению с выведенным из секретных слов.
+    expect(await canaryOpensWith(NEW)).toBe(true);
+    expect(await canaryOpensWith(OLD)).toBe(false);
+  });
+
+  it('проверка не пустая: без обрыва обе записи ложатся', async () => {
+    await persistDek(OLD);
+    clearDekMemory();
+    await persistDek(NEW);
+
+    expect(mockStore.get(DEK_KEY)).toBe(Buffer.from(NEW).toString('base64'));
+    expect(await canaryOpensWith(NEW)).toBe(true);
+    expect(mockStore.get(DEK_CANARY_KEY)).toBeTruthy();
+  });
+});
+
+/**
+ * v4.32.617. «Канарейки нет» и «канарейку не прочитать» — разные вещи. Первое
+ * говорит, что свидетельства о ключе данных не было никогда; второе — что оно
+ * есть, но Keychain сейчас заперт. Миграция ключа толковала оба случая как
+ * разрешение действовать и переписывала непрочитанную канарейку своим ключом.
+ */
+describe('канарейку не прочитать — это не «её нет»', () => {
+  const K = new Uint8Array(32).fill(3);
+
+  it('отказ чтения отличим от отсутствия', async () => {
+    expect(await canaryOpensWith(K)).toBe('absent');
+
+    await persistDek(K);
+    clearDekMemory();
+    expect(await canaryOpensWith(K)).toBe(true);
+
+    mockThrowOnCanaryRead = true;
+    expect(await canaryOpensWith(K)).toBe('unreadable');
+  });
+
+  it('проверка не пустая: чужой ключ — это false, а не «не прочитать»', async () => {
+    await persistDek(K);
+    clearDekMemory();
+    expect(await canaryOpensWith(new Uint8Array(32).fill(4))).toBe(false);
   });
 });

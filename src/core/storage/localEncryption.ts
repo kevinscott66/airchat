@@ -159,28 +159,53 @@ async function writeCanary(dek: Uint8Array): Promise<string | null> {
 }
 
 /**
- * Открывается ли канарейка этим ключом; null — канарейки нет или её не прочитать.
+ * Открывается ли канарейка этим ключом.
  *
  * Наружу — для миграции ключа в local.ts: та меняет DEK сама, до всякого
  * getOrCreateDataEncryptionKey, и без этой проверки перешифровала бы базу
  * ключом, которым база не зашифрована.
+ *
+ * v4.32.617: «канарейки нет» и «канарейку не прочитать» разведены. Раньше оба
+ * случая возвращали null, и миграция толковала null как разрешение: на
+ * запертом устройстве Keychain отвечает отказом на чтение — и та же миграция
+ * тут же писала канарейку своим ключом поверх непрочитанной. Свидетельство о
+ * настоящем ключе данных пропадало, а отказ открыть базу превращался в
+ * молчаливое чтение мусора. Отличать обязан вызывающий.
  */
-export async function canaryOpensWith(dek: Uint8Array): Promise<boolean | null> {
+export type CanaryVerdict = boolean | 'absent' | 'unreadable';
+
+export async function canaryOpensWith(dek: Uint8Array): Promise<CanaryVerdict> {
   const c = await readCanary();
-  if (c.state !== 'present') return null;
-  return canaryOpens(c.stored, dek);
+  if (c.state === 'absent') return 'absent';
+  if (c.state !== 'present') return 'unreadable';
+  return canaryOpens(c.stored, dek) === true;
 }
 
 /**
- * Записать ключ как действующий: в хранилище, в канарейку и в память.
+ * Записать ключ как действующий: в канарейку, в хранилище и в память.
  *
  * Одной функцией, потому что порознь эти три записи расходятся: ключ в
  * SecureStore от канарейки прошлого ключа, и следующий запуск честно доложит,
  * что данные зашифрованы не тем, что лежит рядом.
+ *
+ * v4.32.617: канарейка пишется ПЕРВОЙ. Между двумя записями в Keychain стоит
+ * await, и вторая может не состояться — устройство заперто, «User interaction
+ * is not allowed». Нас зовут после того, как данные уже лежат под `dek`, и от
+ * порядка зависит, чем обернётся этот обрыв:
+ *
+ *  - ключ первым: в хранилище новый ключ, канарейка ещё от старого. Ни один из
+ *    них канарейку не открывает — `stored_does_not_match_data`, и приложение
+ *    больше не открывается никогда, хотя данные целы;
+ *  - канарейка первой: канарейка от нового ключа, в хранилище ещё старый.
+ *    Старый её не открывает, а выведенный из секретных слов — открывает, и
+ *    следующий запуск сам выбирает верный ключ (`stored_stale_seed_matches`).
+ *
+ * Второй обрыв — сбой самой канарейки — от порядка не зависит: тогда не
+ * записано ничего, и это ровно то состояние, в котором мы были до вызова.
  */
 export async function persistDek(dek: Uint8Array): Promise<void> {
-  await SecureStore.setItemAsync(DEK_KEY, Buffer.from(dek).toString('base64'));
   await writeCanary(dek);
+  await SecureStore.setItemAsync(DEK_KEY, Buffer.from(dek).toString('base64'));
   setDekMemory(dek);
 }
 

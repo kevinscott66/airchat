@@ -1658,8 +1658,13 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
       // значит на диске лежит переписка под другим, уже потерянным ключом.
       // Записать сюда derived значило бы закрепить потерю: читаться всё станет
       // пустыми строками, а первая же реакция перетрёт шифртекст этой пустотой.
-      if ((await canaryOpensWith(derived)) === false) {
-        throw new Error('dek canary rejects seed-derived key');
+      // v4.32.617: «не прочиталась» — тоже отказ. Канарейка помнит настоящий
+      // ключ данных, а persistDek ниже перепишет её своим: сделать это, не
+      // прочитав прежнюю, значит стереть единственное свидетельство. Отложим
+      // до запуска, на котором Keychain отвечает.
+      const seedVerdict = await canaryOpensWith(derived);
+      if (seedVerdict !== true && seedVerdict !== 'absent') {
+        throw new Error(`dek canary rejects seed-derived key: ${seedVerdict}`);
       }
       await persistDek(derived);
       await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
@@ -1687,6 +1692,12 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
     // будет пропущена, — после чего мы объявим действующим derived, и вся база
     // останется под третьим, уже никому не известным ключом.
     const opensStored = await canaryOpensWith(stored);
+    // v4.32.617: перешифровка опирается на то, что данные лежат под `stored`.
+    // Непрочитанная канарейка этого не подтверждает, а reencryptAtRest не
+    // расшифрует ни строки и оставит базу под третьим ключом.
+    if (opensStored === 'unreadable') {
+      throw new Error('dek canary unreadable: migration postponed');
+    }
     if (opensStored === false) {
       if ((await canaryOpensWith(derived)) !== true) {
         throw new Error('dek canary matches neither stored nor derived key');

@@ -257,6 +257,21 @@ describe('источник: чтение хранилища различает �
     expect(P).toContain('writeCanary(dek)');
   });
 
+  /**
+   * v4.32.617. Записи разделены await'ом, и вторая может не состояться. Если
+   * первым лёг ключ — канарейка осталась от прошлого, её не открывает ни один
+   * ключ, и это `stored_does_not_match_data` навсегда. Если первой легла
+   * канарейка — её открывает ключ из секретных слов, и запуск сам выберет его.
+   */
+  it('канарейка ложится раньше ключа: обрыв между ними должен быть поправим', () => {
+    const P = bodyOf(ENC, 'export async function persistDek(');
+    const canary = P.indexOf('writeCanary(dek)');
+    const key = P.indexOf('SecureStore.setItemAsync(DEK_KEY');
+    expect(canary).toBeGreaterThan(-1);
+    expect(key).toBeGreaterThan(-1);
+    expect(key).toBeGreaterThan(canary);
+  });
+
   it('сбой записи канарейки не роняет запуск', () => {
     expect(bodyOf(ENC, 'async function writeCanary(')).toContain('} catch {');
   });
@@ -274,6 +289,21 @@ describe('источник: миграция ключа спрашивает к�
     const rekey = MIG.indexOf('await reencryptAtRest(database, stored, derived)');
     expect(check).toBeGreaterThan(-1);
     expect(rekey).toBeGreaterThan(check);
+  });
+
+  /**
+   * v4.32.617. Непрочитанная канарейка — не разрешение. На запертом устройстве
+   * Keychain отвечает отказом на чтение, а миграция тут же писала канарейку
+   * своим ключом поверх непрочитанной: свидетельство о настоящем ключе данных
+   * пропадало, и отказ открыть базу превращался в молчаливое чтение мусора.
+   */
+  it('непрочитанная канарейка прекращает миграцию, а не пропускает её', () => {
+    expect(MIG).toContain("seedVerdict !== true && seedVerdict !== 'absent'");
+    expect(MIG).toContain("opensStored === 'unreadable'");
+    const guard = MIG.indexOf("opensStored === 'unreadable'");
+    const rekey = MIG.indexOf('await reencryptAtRest(database, stored, derived)');
+    expect(guard).toBeGreaterThan(-1);
+    expect(rekey).toBeGreaterThan(guard);
   });
 
   it('ключ закрепляется одной функцией — вместе с канарейкой', () => {
