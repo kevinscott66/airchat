@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AirChat — сборки</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100dvh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background: radial-gradient(120% 90% at 50% 0%, #1a1630 0%, #0B0B12 62%);
+    color: #ECECF5;
+    font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 520px; padding: 32px 24px 28px;
+    background: rgba(31,31,46,.66); border: 1px solid #2E2E42; border-radius: 30px;
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  }
+  img.icon { width: 88px; height: 88px; border-radius: 22px; display: block; margin: 0 auto 18px; }
+  h1 { margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; text-align: center; }
+  .ver { margin: 0 0 26px; color: #A6A6BD; font-size: 15px; text-align: center; }
+  .row {
+    display: block; padding: 18px 20px; margin-bottom: 12px; text-decoration: none; color: inherit;
+    background: rgba(255,255,255,.045); border: 1px solid #2E2E42; border-radius: 20px;
+  }
+  a.row:active { opacity: .8; }
+  .row .name { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .row .meta { margin-top: 3px; color: #A6A6BD; font-size: 13px; }
+  .row .go { float: right; color: #9B8CFF; font-size: 15px; font-weight: 600; margin-left: 12px; }
+  .row.muted .name { color: #A6A6BD; }
+  ol { margin: 24px 0 0; padding-left: 20px; color: #A6A6BD; font-size: 14px; }
+  li { margin-bottom: 7px; }
+  h2 { margin: 26px 0 8px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #7C7C96; }
+  .foot { margin: 22px 0 0; color: #7C7C96; font-size: 12px; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <img class="icon" src="icon512.png" alt="AirChat">
+    <h1>AirChat</h1>
+    <p class="ver">Версия 4.32.626</p>
+
+    <h2>Скачать</h2>
+
+    <a class="row" href="airchat-4.32.626-arm64-v8a.apk" download>
+      <span class="go">Скачать</span>
+      <div class="name">Android</div>
+      <div class="meta">APK · 57,5 МБ · arm64-v8a · Android 7.0 и новее</div>
+    </a>
+
+    <a class="row" href="airchat-4.32.626-armeabi-v7a.apk" download>
+      <span class="go">Скачать</span>
+      <div class="name">Android, старые устройства</div>
+      <div class="meta">APK · 43,4 МБ · armeabi-v7a · для 32-битных процессоров</div>
+    </a>
+
+    <a class="row" href="https://air.dobropalm.tech/">
+      <span class="go">Открыть</span>
+      <div class="name">Веб-версия</div>
+      <div class="meta">Браузер на любом устройстве · без установки</div>
+    </a>
+
+    <div class="row muted">
+      <div class="name">iPhone и iPad</div>
+      <div class="meta">Сборка подписывается отдельно под каждое устройство: нужен UDID телефона. Общей ссылки для скачивания нет — напишите, и я соберу персональную.</div>
+    </div>
+
+    <h2>Установка на Android</h2>
+    <ol>
+      <li>Скачайте верхний APK. Он подходит почти всем телефонам; нижний нужен только старым 32-битным.</li>
+      <li>Откройте файл из папки «Загрузки».</li>
+      <li>Разрешите установку из этого источника, если система спросит.</li>
+      <li>Play Protect может предупредить, что источник неизвестен — это нормально для сборки вне Google Play.</li>
+    </ol>
+
+    <p class="foot">Сборка подписана отладочным ключом проекта. Обновление ставится поверх предыдущей — данные сохраняются.</p>
+  </main>
+</body>
+</html>
