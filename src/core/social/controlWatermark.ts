@@ -1,5 +1,5 @@
 /**
- * Монотонная отметка времени для служебных конвертов личной переписки.
+ * Монотонная отметка времени для служебных конвертов переписки и групп.
  *
  * v4.32.615. Задача: не дать повтору старого кадра откатить настройку.
  *
@@ -19,6 +19,8 @@
  * Лечение то же, что уже применено к профилю контакта (contacts.ts:650) —
  * сравнение с предыдущим `ts`. Здесь оно вынесено в общий модуль, потому что
  * состояний четыре и у каждого свой обработчик.
+ *
+ * Тем же приёмом закрыты управляющие конверты группы — см. `acceptGroupControlTs`.
  *
  * Отметка хранится через profileScopedKv, а не через голые kvGet/kvSet: те не
  * разделены по профилям (обычный `SELECT v FROM kv WHERE k = ?`), и аккаунты
@@ -80,6 +82,59 @@ export async function acceptControlTs(
   pid: number,
   ts: number
 ): Promise<boolean> {
+  return acceptTs(watermarkKey(kind, peerPubB64), kind, pid, ts);
+}
+
+/**
+ * Слоты водяного знака внутри группы (v4.32.615).
+ *
+ * `m:<ключ участника>` — состав и роль ЭТОГО человека: один скаляр, который
+ * меняют ban, unban, kick, add, role и «вышел сам». Все они спорят за одно
+ * значение, поэтому и знак у них общий: пришедшее старее применённого — откат.
+ *
+ * `meta:<поле>` — по знаку НА КАЖДОЕ поле настроек, а не один на группу.
+ * Настройки группы — не скаляр, их десяток и меняют их независимо; relay
+ * отдаёт накопленное пачкой без гарантии порядка, и общий знак выбросил бы
+ * законное переименование, пришедшее следом за более поздней сменой аватара.
+ */
+export type GroupControlSlot = `m:${string}` | `meta:${string}`;
+
+/**
+ * Идентификатор группы идёт ПОСЛЕДНИМ, и это не косметика: кодек ограничивает
+ * его только длиной (128 символов), двоеточие в нём допустимо. Стой он в
+ * середине — группа с именем вида «A:m:<ключ>» подобрала бы себе ключ чужого
+ * слота. Слот же формы не выбирает: это либо `m:` с ключом в base64 (двоеточий
+ * не бывает), либо `meta:` с полем из закрытого списка.
+ */
+export function groupWatermarkKey(slot: GroupControlSlot, groupId: string): string {
+  return `${WATERMARK_PREFIX}grp:${slot}:${groupId}`;
+}
+
+/**
+ * То же решение, что и `acceptControlTs`, но для управляющих конвертов группы.
+ *
+ * Повтор здесь стоит дороже, чем в личной переписке: конверт применяется от
+ * имени того, кто подписал ОРИГИНАЛ, а его права проверяются по текущему
+ * составу. Разжалованный администратор, чей конверт «назначить админом» кто-то
+ * перехватил, возвращает себе права у каждого участника — отправитель-то
+ * остался администратором. Тем же приёмом снимается бан, возвращается
+ * исключённый, отменяется отзыв пригласительной ссылки и включается обратно
+ * автоудаление переписки.
+ *
+ * Хуже того, повтор проходил молча: идентификатор системной строки собирается
+ * из `ts` операции, при повторе он тот же, INSERT OR IGNORE ничего не пишет —
+ * роль менялась, а строки «X назначен(а) администратором» на экране не было.
+ */
+export async function acceptGroupControlTs(
+  slot: GroupControlSlot,
+  groupId: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  return acceptTs(groupWatermarkKey(slot, groupId), `grp:${slot.split(':')[0]}`, pid, ts);
+}
+
+async function acceptTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
   if (!Number.isFinite(ts) || ts <= 0) {
     log.warn('control_ts_malformed', { kind, ts });
     return false;
@@ -88,7 +143,6 @@ export async function acceptControlTs(
     log.warn('control_ts_future', { kind, ts });
     return false;
   }
-  const key = watermarkKey(kind, peerPubB64);
   let prev = 0;
   try {
     const got = await scopedKvTryGetFor(pid, key);
@@ -103,7 +157,7 @@ export async function acceptControlTs(
     return true;
   }
   if (ts <= prev) {
-    log.warn('control_ts_replay_rejected', { kind, from: peerPubB64.slice(0, 12), ts, prev });
+    log.warn('control_ts_replay_rejected', { kind, ts, prev });
     return false;
   }
   try {

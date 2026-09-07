@@ -70,7 +70,7 @@ jest.mock('../../logger', () => ({
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { acceptControlTs, watermarkKey, WATERMARK_PREFIX } from '../controlWatermark';
+import { acceptControlTs, acceptGroupControlTs, groupWatermarkKey, watermarkKey, WATERMARK_PREFIX } from '../controlWatermark';
 import { handleIncomingDisappear, encodeDisappearEnvelope } from '../disappearSync';
 import { handleIncomingCopyGuard, encodeCopyGuardEnvelope } from '../copyGuardSync';
 import { handleIncomingLastSeenPref } from '../presencePrefSync';
@@ -210,5 +210,100 @@ describe('проверка стоит во всех трёх обработчи�
     );
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(applyAt);
+  });
+});
+
+/**
+ * Управляющие конверты группы — тот же повтор, но дороже (v4.32.615).
+ *
+ * Права проверяются по роли ТОГО, КТО ПОДПИСАЛ ОРИГИНАЛ, а не по тому, кто
+ * прислал кадр во второй раз. Значит, перехваченное «назначить админом»
+ * возвращает разжалованному администратору права у каждого участника, старое
+ * «разбанить» снимает бан, старое «добавить» возвращает исключённого, а старое
+ * meta отменяет отзыв пригласительной ссылки и включает обратно автоудаление.
+ * И всё это молча: идентификатор системной строки собирается из ts операции,
+ * при повторе он совпадает, и INSERT OR IGNORE ничего не пишет.
+ */
+describe('водяной знак управляющих конвертов группы', () => {
+  const GID = 'g-1';
+  const MEMBER = 'участник-ключ==';
+
+  it('повтор и откат по одному участнику отвергаются', async () => {
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 2000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 2000)).toBe(false);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 1999)).toBe(false);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 2001)).toBe(true);
+  });
+
+  it('состав одного человека — один скаляр: ban, role и kick делят знак', async () => {
+    // Иначе старое «назначить админом» проходило бы после свежего бана.
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 3000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 2500)).toBe(false);
+  });
+
+  it('участники, группы и профили не делят знак', async () => {
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 5000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${OTHER}`, GID, PID, 1000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, 'g-2', PID, 1000)).toBe(true);
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, 2, 1000)).toBe(true);
+  });
+
+  it('у каждого поля настроек свой знак', async () => {
+    // Настройки группы — не одно значение: relay отдаёт накопленное пачкой без
+    // гарантии порядка, и общий знак выбросил бы законное переименование,
+    // пришедшее следом за более поздней сменой аватара.
+    expect(await acceptGroupControlTs('meta:avatarCid', GID, PID, 9000)).toBe(true);
+    expect(await acceptGroupControlTs('meta:name', GID, PID, 8000)).toBe(true);
+    expect(await acceptGroupControlTs('meta:name', GID, PID, 8000)).toBe(false);
+  });
+
+  it('идентификатор группы стоит последним — иначе он подбирал бы чужой ключ', () => {
+    // Кодек ограничивает groupId только длиной, двоеточие в нём допустимо.
+    const spoof = groupWatermarkKey('meta:name', `x:m:${MEMBER}`);
+    const real = groupWatermarkKey(`m:${MEMBER}`, 'x');
+    expect(spoof).not.toBe(real);
+    expect(groupWatermarkKey(`m:${MEMBER}`, GID).startsWith(WATERMARK_PREFIX)).toBe(true);
+  });
+
+  it('нечитаемая база не выключает управление группой', async () => {
+    mockKvReadFails = true;
+    expect(await acceptGroupControlTs(`m:${MEMBER}`, GID, PID, 1000)).toBe(true);
+  });
+});
+
+describe('проверка стоит в обработчике группы до применения', () => {
+  const SRC = readFileSync(join(__dirname, '..', 'groupMessaging.ts'), 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+
+  it('ban/unban/kick/add/role гасятся раньше switch', () => {
+    const at = SRC.indexOf('acceptGroupControlTs(`m:${env.target}`');
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(SRC.indexOf('switch (env.op) {'));
+  });
+
+  it('«вышел сам» делит знак с составом, а не заводит свой', () => {
+    const at = SRC.indexOf('acceptGroupControlTs(`m:${senderPubB64}`');
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(SRC.indexOf('removeGroupMember(env.groupId, senderPubB64, pid)'));
+  });
+
+  it('каждое поле настроек спрашивает свой знак', () => {
+    expect(SRC).toContain("acceptGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts)");
+    for (const field of [
+      'name',
+      'description',
+      'avatarCid',
+      'adminOnlyPosting',
+      'adminOnlyPinning',
+      'requireApproval',
+      'anonymousPosting',
+      'inviteToken',
+      'slowModeSeconds',
+      'disappearMs',
+    ]) {
+      expect(SRC).toContain(`(await fresh('${field}'))`);
+    }
   });
 });

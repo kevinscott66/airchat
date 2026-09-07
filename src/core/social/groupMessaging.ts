@@ -49,6 +49,7 @@ import { previewLabelForText, truncateReplyPreview } from './messagePreview';
 import { sanitizeReplyRef } from './replyRef';
 import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
+import { acceptGroupControlTs } from './controlWatermark';
 import { roleChangeSysText } from './groupRolePolicy';
 import { sanitizeMediaCids } from '../media/mediaCidPolicy';
 import { withinMessageTextLimit } from './messageTextLimit';
@@ -1355,6 +1356,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     }
     const leaver = members.find((m) => m.peerPubB64 === senderPubB64);
     if (!leaver || leaver.role === 'banned') return true;
+    // v4.32.615: тот же водяной знак, что у ban/kick/role — состав и роль
+    // одного человека это один скаляр. Без него перехваченный старый «вышел»
+    // выбрасывал из группы того, кто давно вернулся, и повторять это можно
+    // было все тридцать суток, пока кадр не протухнет.
+    if (!(await acceptGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts))) return true;
     await removeGroupMember(env.groupId, senderPubB64, pid);
     await recountGroupMembers(env.groupId, pid);
     // v4.32.372: через `??` пустое имя из конверта вытесняло и подпись из
@@ -1497,13 +1503,31 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (env.op === 'meta') {
     const patch: Parameters<typeof updateGroupMeta>[2] = {};
     const events: string[] = [];
+    /**
+     * v4.32.615: водяной знак на КАЖДОЕ поле, а не один на группу.
+     *
+     * Настройки группы — не одно значение, их десяток и меняют их независимо;
+     * relay отдаёт накопленное пачкой без гарантии порядка, и общий знак
+     * выбросил бы законное переименование, пришедшее следом за более поздней
+     * сменой аватара. Спрашивается он последним в цепочке условий — значит
+     * только там, где поле и правда собирались применить, и повтор не двигает
+     * знак у полей, которых в конверте не было.
+     *
+     * Без него повтор старого конверта возвращал отозванную пригласительную
+     * ссылку, заново включал автоудаление переписки и «только для
+     * администраторов» — причём молча: идентификатор системной строки
+     * собирается из ts операции, при повторе он тот же, и INSERT OR IGNORE
+     * ничего не писал.
+     */
+    const fresh = (field: string): Promise<boolean> =>
+      acceptGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts);
     // v4.32.577: своё название могло не открыться ключом данных — тогда оно
     // приходит сюда пустой строкой, и ЛЮБОЕ присланное название выглядит как
     // переименование. Строку в истории пишем только там, где было с чем
     // сравнивать; само название применяем в обоих случаях — оно приехало от
     // участника группы и лечит нечитаемый столбец. См. groupMetaEvents.
     const nameDecision = decideMetaField(env.name, group.name, group.nameUnreadable);
-    if (nameDecision.apply && env.name != null) {
+    if (nameDecision.apply && env.name != null && (await fresh('name'))) {
       patch.name = env.name;
       if (nameDecision.announce) events.push(`Группа переименована в «${env.name}»`);
       else log.warn('group_meta_name_unreadable', { gid: env.groupId.slice(0, 8) });
@@ -1512,23 +1536,23 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // непрочитанный столбец приходил пустой строкой, присланное пустое
     // описание считалось совпадающим и столбец не лечился никогда.
     const descDecision = decideMetaField(env.description, group.description ?? '', group.descriptionUnreadable);
-    if (descDecision.apply && env.description != null) {
+    if (descDecision.apply && env.description != null && (await fresh('description'))) {
       patch.description = env.description;
       if (!descDecision.announce) log.warn('group_meta_desc_unreadable', { gid: env.groupId.slice(0, 8) });
     }
     // v4.32.246: до этой версии аватар группы вообще не рассылался — его видел
     // только тот администратор, который его поставил. Форму CID проверил кодек.
     const avatarDecision = decideMetaField(env.avatarCid, group.avatarCid ?? '', group.avatarCidUnreadable);
-    if (avatarDecision.apply && env.avatarCid != null) {
+    if (avatarDecision.apply && env.avatarCid != null && (await fresh('avatarCid'))) {
       patch.avatarCid = env.avatarCid;
       if (avatarDecision.announce) events.push('Аватар группы обновлён');
       else log.warn('group_meta_avatar_unreadable', { gid: env.groupId.slice(0, 8) });
     }
-    if (env.adminOnlyPosting != null && env.adminOnlyPosting !== group.adminOnlyPosting) {
+    if (env.adminOnlyPosting != null && env.adminOnlyPosting !== group.adminOnlyPosting && (await fresh('adminOnlyPosting'))) {
       patch.adminOnlyPosting = env.adminOnlyPosting;
       events.push(env.adminOnlyPosting ? 'Режим «только для администраторов» включён' : 'Режим «только для администраторов» выключен');
     }
-    if (env.adminOnlyPinning != null && env.adminOnlyPinning !== group.adminOnlyPinning) {
+    if (env.adminOnlyPinning != null && env.adminOnlyPinning !== group.adminOnlyPinning && (await fresh('adminOnlyPinning'))) {
       patch.adminOnlyPinning = env.adminOnlyPinning;
       events.push(env.adminOnlyPinning ? 'Закреплять сообщения могут только администраторы' : 'Закреплять сообщения могут все участники');
     }
@@ -1537,11 +1561,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // второй администратор выдавал ссылку с выключенным одобрением;
     // anonymousPosting скрывает имена отправителей в списке сообщений, и без
     // синхронизации «анонимными» посты были ровно у включившего.
-    if (env.requireApproval != null && env.requireApproval !== group.requireApproval) {
+    if (env.requireApproval != null && env.requireApproval !== group.requireApproval && (await fresh('requireApproval'))) {
       patch.requireApproval = env.requireApproval;
       events.push(env.requireApproval ? 'Вход по ссылке теперь требует одобрения' : 'Вход по ссылке без одобрения');
     }
-    if (env.anonymousPosting != null && env.anonymousPosting !== group.anonymousPosting) {
+    if (env.anonymousPosting != null && env.anonymousPosting !== group.anonymousPosting && (await fresh('anonymousPosting'))) {
       patch.anonymousPosting = env.anonymousPosting;
       events.push(env.anonymousPosting ? 'Имена отправителей скрыты' : 'Имена отправителей видны');
     }
@@ -1560,18 +1584,18 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      * том токене, чей конверт пришёл позже, а ссылки, выданные в промежутке,
      * получат честный отказ «ссылка больше не действует».
      */
-    if (env.inviteToken != null && iAmAdmin && env.inviteToken !== group.inviteToken) {
+    if (env.inviteToken != null && iAmAdmin && env.inviteToken !== group.inviteToken && (await fresh('inviteToken'))) {
       patch.inviteToken = env.inviteToken;
       events.push('Пригласительная ссылка сброшена: прежние больше не действуют');
     }
     if (Object.keys(patch).length) await updateGroupMeta(env.groupId, pid, patch);
-    if (env.slowModeSeconds != null && env.slowModeSeconds !== group.slowModeSeconds) {
+    if (env.slowModeSeconds != null && env.slowModeSeconds !== group.slowModeSeconds && (await fresh('slowModeSeconds'))) {
       await setGroupSlowMode(env.groupId, pid, env.slowModeSeconds);
       // v4.32.265: строку собирает slowModeSysLine — та же, что пишет себе
       // включивший. Раньше он видел «5 мин», а все остальные «300 сек».
       events.push(slowModeSysLine(env.slowModeSeconds));
     }
-    if (env.disappearMs != null && env.disappearMs !== (group.disappearAfterMs ?? 0)) {
+    if (env.disappearMs != null && env.disappearMs !== (group.disappearAfterMs ?? 0) && (await fresh('disappearMs'))) {
       const { formatDisappearLabel } = await import('./disappearEnvelope');
       // Своя переписка до этого момента не трогается: setGroupDisappearTimer
       // записывает disappear_set_at, и удаление ограничено им.
@@ -1596,6 +1620,28 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   const verdict = canModerate(actor.role, target?.role);
   if (!verdict.allowed) {
     log.warn('group_ctl_moderation_denied', { gid: env.groupId.slice(0, 8), actor: actor.role, target: target?.role ?? 'none' });
+    return true;
+  }
+
+  /**
+   * v4.32.615: защита от повтора. Ниже применяются ban/unban/kick/add/role —
+   * все они спорят за одно значение, состав и роль ЭТОГО человека, поэтому и
+   * водяной знак у них общий.
+   *
+   * Права считаются по РОЛИ ПОДПИСАВШЕГО ОРИГИНАЛ, а окно приёма конверта —
+   * тридцать суток (срок хранения на relay), темы которого выводятся из
+   * открытых DID и писать в них может любой. Значит, перехваченный кадр
+   * «назначить админом» возвращал разжалованному администратору права у
+   * каждого участника: отправитель-то администратором остался. Тем же приёмом
+   * снимался бан и возвращался исключённый — и всё это молча, потому что
+   * идентификатор системной строки собирается из ts и при повторе совпадает.
+   *
+   * Проверки «уже забанен — выйти» в ветках ниже от повтора не спасали: они
+   * идемпотентные, а не монотонные, и конверт с ДРУГИМ прежним состоянием
+   * применялся целиком.
+   */
+  if (!(await acceptGroupControlTs(`m:${env.target}`, env.groupId, pid, env.ts))) {
+    log.warn('group_ctl_replay_rejected', { gid: env.groupId.slice(0, 8), op: env.op, target: env.target.slice(0, 12) });
     return true;
   }
 
