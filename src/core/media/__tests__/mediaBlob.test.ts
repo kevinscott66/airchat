@@ -97,7 +97,7 @@ jest.mock('../../crypto/encrypt', () => ({
 }));
 
 import { Buffer } from 'buffer';
-import { blobCacheId } from '../blobRef';
+import { blobCacheId, blobCacheName } from '../blobRef';
 import { cachedFileUrisPresent, deleteCachedFileUris, resolveBlobToLocalFile, sweepMediaCache, type LiveBlobIdsLoader } from '../mediaBlob';
 
 const DIR = 'file:///cache/';
@@ -191,10 +191,31 @@ describe('resolveBlobToLocalFile: куда позволено идти за вл
 
   it('уже расшифрованный файл отдаётся без сети', async () => {
     const ref = { u: 'https://ntfy.sh/file/aBc1.bin', k: KEY_B64 };
-    const dest = `${DIR}airchat_media_${blobCacheId(ref)}.jpg`;
+    // v4.32.615: имя файла считает blobCacheName — к идентификатору в нём
+    // приписан отпечаток ключа. Повторять эту арифметику руками тут нельзя:
+    // тест обязан ломаться, если правило именования разойдётся с исходником.
+    const dest = `${DIR}${blobCacheName(ref, 'jpg')}`;
+    expect(dest).toContain(String(blobCacheId(ref)));
     mockFiles.set(dest, 'уже лежит');
     await expect(resolveBlobToLocalFile(ref, 'jpg')).resolves.toBe(dest);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('подложенный под чужим ключом файл не отдаётся за свой', async () => {
+    // Отравление кэша: `i` выбирает отправитель, а попадание в кэш возвращает
+    // файл ДО расшифровки, то есть AEAD в этой ветке не проверяется вовсе. В
+    // общей группе дескриптор соседа виден всем, и знающий его `i` мог занять
+    // это имя своим содержимым — тогда вложение автора рисовалось бы чужой
+    // картинкой. Отпечаток ключа в имени разводит эти два файла.
+    const mine = { u: 'https://ntfy.sh/file/aBc1.bin', k: KEY_B64 };
+    const theirs = { u: 'https://ntfy.sh/file/aBc1.bin', k: Buffer.alloc(32, 8).toString('base64') };
+    expect(blobCacheId(theirs)).toBe(blobCacheId(mine));
+    const poisoned = `${DIR}${blobCacheName(theirs, 'jpg')}`;
+    expect(poisoned).not.toBe(`${DIR}${blobCacheName(mine, 'jpg')}`);
+    mockFiles.set(poisoned, 'подложено');
+    await expect(resolveBlobToLocalFile(mine, 'jpg')).resolves.toBe(`${DIR}${blobCacheName(mine, 'jpg')}`);
+    // И за настоящим вложением всё-таки сходили, а не отдали чужое молча.
+    expect(mockFetch).toHaveBeenCalled();
   });
 });
 

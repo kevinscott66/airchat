@@ -103,10 +103,24 @@ describe('имя файла разбирается одним правилом',
     expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}${LAN_ID}`, PREFIXES)).toBe(LAN_ID);
   });
 
+  it('отпечаток ключа в имени не мешает узнать id (v4.32.615)', () => {
+    // Имя расшифрованной копии — `<id>~<отпечаток ключа>.<ext>`. Уборщик и
+    // стирание исчезающих сообщений сверяют id со списком живых ссылок, а в
+    // тексте сообщения лежит именно id: не срежь хвост — и файл считался бы
+    // ничьим, то есть пережил бы сообщение.
+    expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}${LAN_ID}~0123456789abcdef.jpg`, PREFIXES)).toBe(LAN_ID);
+    expect(cacheFileBlobId(`${CIPHER_PREFIX}${LAN_ID}~0123456789abcdef.bin`, PREFIXES)).toBe(LAN_ID);
+  });
+
+  it('имена без отпечатка, записанные до v4.32.615, разбираются по-прежнему', () => {
+    expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}${LAN_ID}.jpg`, PREFIXES)).toBe(LAN_ID);
+  });
+
   it('пустой id — не наш файл', () => {
     expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}.jpg`, PREFIXES)).toBeNull();
     expect(cacheFileBlobId('', PREFIXES)).toBeNull();
     expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}${LAN_ID}.jpg`, [''])).toBeNull();
+    expect(cacheFileBlobId(`${BLOB_CACHE_PREFIX}~0123456789abcdef.jpg`, PREFIXES)).toBeNull();
   });
 
   it('cachedBlobIdOf — тот же разбор, а не своя копия', () => {

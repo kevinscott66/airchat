@@ -46,13 +46,21 @@ export type SweepVerdict = 'keep' | 'delete';
  * Расширение произвольное (`.bin`, `.jpg`, `.m4a`), поэтому режем по последней
  * точке. Имя без точки — целиком id. Пустой id (`airchat_media_.jpg`) — не наш
  * файл: иначе расширение сошло бы за id.
+ *
+ * v4.32.615: у расшифрованного вложения к id приписан отпечаток ключа —
+ * `<id>~<отпечаток>` (см. blobRef.blobCacheName). Здесь он отбрасывается, и это
+ * не упрощение: сверять кэш с живыми ссылками можно только по id, потому что в
+ * тексте сообщения встречается именно он. Имена, написанные до этой версии,
+ * знака `~` не содержат и разбираются как раньше.
  */
 export function cacheFileBlobId(name: string, prefixes: readonly string[]): string | null {
   const prefix = prefixes.find((p) => p.length > 0 && name.startsWith(p));
   if (prefix === undefined) return null;
   const rest = name.slice(prefix.length);
   const dot = rest.lastIndexOf('.');
-  const id = dot >= 0 ? rest.slice(0, dot) : rest;
+  const named = dot >= 0 ? rest.slice(0, dot) : rest;
+  const sep = named.indexOf('~');
+  const id = sep >= 0 ? named.slice(0, sep) : named;
   return id.length > 0 ? id : null;
 }
 

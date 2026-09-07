@@ -21,7 +21,7 @@ import { randomBytes } from '@noble/hashes/utils.js';
 import { encryptSymmetric, decryptSymmetric, SYMMETRIC_KEY_BYTES } from '../crypto/encrypt';
 import { getInternetTransportSingleton } from '../transport/internet/internetTransport';
 import { log } from '../logger';
-import { blobCacheId, BLOB_CACHE_PREFIX, cachedBlobIdOf, isBlobRef, MAX_BLOB_BYTES, type BlobRef } from './blobRef';
+import { blobCacheName, BLOB_CACHE_PREFIX, cachedBlobIdOf, isBlobRef, MAX_BLOB_BYTES, type BlobRef } from './blobRef';
 import { cacheFileBlobId, classifyCacheFile, sweepVerdict } from './cacheSweepPolicy';
 import { fileSizeBytes } from './fileSize';
 import { isAllowedBlobUrl, isInsideCacheDir } from './mediaUrlPolicy';
@@ -381,9 +381,9 @@ const blobResolveFlights = new Map<string, Promise<string | null>>();
 
 export function resolveBlobToLocalFile(ref: BlobRef, ext = 'bin'): Promise<string | null> {
   const cacheDir = FileSystem.cacheDirectory ?? '';
-  const id = isBlobRef(ref) ? blobCacheId(ref) : null;
-  if (!cacheDir || !id) return Promise.resolve(null);
-  const key = `${cacheDir}${BLOB_CACHE_PREFIX}${id}.${ext}`;
+  const name = isBlobRef(ref) ? blobCacheName(ref, ext) : null;
+  if (!cacheDir || !name) return Promise.resolve(null);
+  const key = `${cacheDir}${name}`;
   const existing = blobResolveFlights.get(key);
   if (existing) return existing;
   const flight = resolveBlobToLocalFileOnce(ref, ext).finally(() => {
@@ -398,12 +398,17 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
     if (!isBlobRef(ref)) return null;
     const cacheDir = FileSystem.cacheDirectory ?? '';
     if (!cacheDir) return null;
-    // Stable filename: blob id when present, else derived from the URL.
+    // Stable filename: blob id when present, else derived from the URL, плюс
+    // отпечаток ключа.
     // v4.32.272: правило вывода id переехало в blobRef — по нему же ищется
     // файл, который нужно стереть вместе с исчезнувшим сообщением.
-    const id = blobCacheId(ref);
-    if (!id) return null;
-    const dest = `${cacheDir}${BLOB_CACHE_PREFIX}${id}.${ext}`;
+    // v4.32.615: к имени добавлен отпечаток ключа. Попадание в кэш возвращает
+    // файл ДО расшифровки, то есть AEAD в этой ветке не проверяется вовсе, а
+    // `i` выбирает отправитель — без отпечатка знающий чужой `i` занимал это
+    // имя своим содержимым, и вложение соседа рисовалось его картинкой
+    // (см. blobRef.blobKeyFingerprint).
+    const dest = `${cacheDir}${blobCacheName(ref, ext) ?? ''}`;
+    if (dest === cacheDir) return null;
     const existing = await FileSystem.getInfoAsync(dest);
     if (existing.exists && (existing.size ?? 0) > 0) return dest;
 

@@ -1,4 +1,4 @@
-import { blobCacheId, blobCacheIdsIn, cachedBlobIdOf, fileExt, guessImageMime, isBlobRef, isDecryptedBlobUri, isNbCid, makeNbCid, parseNbCid, voiceFileUrisIn } from '../blobRef';
+import { BLOB_CACHE_KEY_SEP, blobCacheId, blobCacheIdsIn, blobCacheName, blobKeyFingerprint, cachedBlobIdOf, fileExt, guessImageMime, isBlobRef, isDecryptedBlobUri, isNbCid, makeNbCid, parseNbCid, voiceFileUrisIn } from '../blobRef';
 
 const KEY = 'a'.repeat(44);
 const ID = '0123456789abcdef0123456789abcdef';
@@ -236,5 +236,44 @@ describe('cachedBlobIdOf / isDecryptedBlobUri', () => {
 
   it('хвост запроса в адресе не мешает', () => {
     expect(isDecryptedBlobUri(`${CACHE}airchat_media_abc.jpg?v=2`)).toBe(true);
+  });
+});
+
+describe('blobCacheName: имя файла привязано к ключу', () => {
+  const KEY2 = 'b'.repeat(44);
+
+  it('один и тот же дескриптор даёт одно и то же имя', () => {
+    const ref = { i: ID, k: KEY };
+    expect(blobCacheName(ref, 'jpg')).toBe(blobCacheName({ i: ID, k: KEY }, 'jpg'));
+  });
+
+  it('тот же id под другим ключом — другой файл', () => {
+    // Ради этого отпечаток и появился: `i` выбирает отправитель, а попадание в
+    // кэш отдаёт файл до расшифровки, так что AEAD в той ветке не проверяется.
+    expect(blobCacheId({ i: ID, k: KEY })).toBe(blobCacheId({ i: ID, k: KEY2 }));
+    expect(blobCacheName({ i: ID, k: KEY }, 'jpg')).not.toBe(blobCacheName({ i: ID, k: KEY2 }, 'jpg'));
+  });
+
+  it('сам ключ в имя не попадает', () => {
+    // Имена файлов защищены слабее содержимого, а этим же ключом открывается и
+    // копия шифротекста на релее.
+    const name = blobCacheName({ i: ID, k: KEY }, 'jpg') ?? '';
+    expect(name).not.toContain(KEY);
+    expect(blobKeyFingerprint(KEY)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('id остаётся в начале имени и читается обратно', () => {
+    // Всё стирание кэша (исчезающие сообщения, уборщик) ищет файлы по id,
+    // выхваченному регуляркой из текста сообщения. Отпечаток дописан после
+    // разделителя именно поэтому: сдвинь id — и расшифрованная копия
+    // переживёт сообщение, к которому она приложена.
+    const name = blobCacheName({ i: ID, k: KEY }, 'jpg') ?? '';
+    expect(name.startsWith(`airchat_media_${ID}${BLOB_CACHE_KEY_SEP}`)).toBe(true);
+    expect(cachedBlobIdOf(name)).toBe(ID);
+    expect(blobCacheIdsIn(`вот вложение {"i":"${ID}"}`)).toContain(cachedBlobIdOf(name));
+  });
+
+  it('негодный дескриптор имени не даёт', () => {
+    expect(blobCacheName({ k: KEY } as never, 'jpg')).toBeNull();
   });
 });
