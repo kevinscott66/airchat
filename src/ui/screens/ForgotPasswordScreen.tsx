@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
 import { authGuard } from '../../core/security/authGuard';
-import { passwordPolicyError } from '../../core/security/passwordPolicy';
+import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/passwordPolicy';
+import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
@@ -97,9 +98,17 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
   }));
 
   const submit = async (): Promise<void> => {
-    const m = mnemonic.trim();
-    if (!m) {
-      showError('Введите секретные слова');
+    // v4.32.651: экран восстановления пароля разбирал ввод сам — одним
+    // `trim()`. Свои же 24 слова приложение показывает нумерованными, и
+    // вставленная оттуда фраза не проходила: `verifyMnemonicMatchesWallet`
+    // только схлопывает пробелы, не убирая ни номеров, ни запятых, ни верхнего
+    // регистра. Человеку при этом отвечали «Слова не совпадают с аккаунтом на
+    // этом устройстве» — то есть обвиняли его в чужой фразе при полностью
+    // правильной. Разбор тот же, что на экране восстановления аккаунта.
+    const m = normalizeSeedInput(mnemonic);
+    const countCheck = checkSeedWordCount(m);
+    if (!countCheck.ok) {
+      showError(countCheck.message);
       return;
     }
     const policyError = passwordPolicyError(newPassword);
@@ -179,7 +188,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
           <Text style={styles.label}>Новый пароль</Text>
           <TextInput
             style={styles.input}
-            placeholder="Минимум 4 символа"
+            placeholder={`Минимум ${PASSWORD_MIN_LENGTH} символов`}
             placeholderTextColor={colors.textMuted}
             secureTextEntry
             value={newPassword}

@@ -39,6 +39,8 @@ import { AirChatLockup } from '../components/AirChatLockup';
 import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
 import { authGuard } from '../../core/security/authGuard';
+import { describeRestoreLock } from '../../core/security/restoreLockOutcome';
+import { decideStoredPhraseState } from '../../core/backup/storedPhraseState';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
 import {
   decryptSeedBinding,
@@ -195,6 +197,11 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   const [appleBinding, setAppleBinding] = useState<SeedBindingEnvelope | null>(null);
   const [appleReady, setAppleReady] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
+  /**
+   * v4.32.651: на устройстве есть запись фразы, но открыть её не удалось.
+   * Отличается от «фразы нет» — см. {@link decideStoredPhraseState}.
+   */
+  const [phraseUnreadable, setPhraseUnreadable] = useState(false);
 
   /**
    * v4.32.376: в это же поле вставляют зашифрованную резервную копию — ту, что
@@ -211,10 +218,24 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     if (step !== 'welcome') return;
     void (async () => {
       try {
-        if (!(await hasStoredMnemonic())) return;
+        const present = await hasStoredMnemonic();
+        // v4.32.651: чтение фразы поднято выше вопроса «показывали ли сидку».
+        // Нечитаемая запись опасна и после подтверждения слов: кнопка
+        // «Создать новый аккаунт» затирает её в обоих случаях.
+        let stored: string | null = null;
+        if (present) {
+          try {
+            stored = await getStoredMnemonic();
+          } catch {
+            // Отказ чтения — это тоже «не открылась», а не «нет фразы».
+          }
+        }
+        const phraseState = decideStoredPhraseState(present, stored);
+        if (cancelled) return;
+        setPhraseUnreadable(phraseState === 'unreadable');
+        if (phraseState !== 'ready') return;
         if (await hasSeedShown()) return;
-        const mnemonic = await getStoredMnemonic();
-        if (!mnemonic?.trim()) return;
+        const mnemonic = stored as string;
         const words = mnemonic.trim().split(/\s+/);
         let pair = await loadKeyPair();
         if (!pair) {
@@ -234,7 +255,26 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     };
   }, [step]);
 
+  /**
+   * v4.32.651: создание поверх нечитаемой фразы — необратимая запись поверх
+   * отказа чтения. Запрещать её нельзя (у кого запись правда испорчена, тому
+   * это единственный выход), но и делать молча — тоже.
+   */
+  const confirmOverwriteUnreadable = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      Alert.alert(
+        'На устройстве уже есть аккаунт',
+        'Его секретные слова не удалось прочитать — это бывает временным сбоем хранилища. Новый аккаунт сотрёт их навсегда. Если слова у вас записаны, выберите «Восстановить аккаунт».',
+        [
+          { text: 'Отмена', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Всё равно создать', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+
   const handleCreateNew = async (): Promise<void> => {
+    if (phraseUnreadable && !(await confirmOverwriteUnreadable())) return;
     setBusy(true);
     try {
       const { mnemonic, pair } = await generateMnemonicAndStore();
@@ -335,7 +375,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
           Alert.alert('AirChat', 'Аккаунт восстановлен. Облачной копии для него пока нет.');
         }
       }
-      await authGuard.setPassword(cloudPwd);
+      const lock = describeRestoreLock(await authGuard.setPassword(cloudPwd), cloudPwd);
+      if (!lock.locked) Alert.alert('AirChat', lock.message);
       await setFirstLaunchDone();
       await setSeedShown();
       await onComplete(pair);
@@ -402,7 +443,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
           // устройства (v4.32.595: он один на всё). Ставим его сразу, иначе
           // приложение осталось бы без замка, а человек — с уверенностью, что
           // пароль у него есть.
-          await authGuard.setPassword(cloudPwd);
+          const lock = describeRestoreLock(await authGuard.setPassword(cloudPwd), cloudPwd);
+          if (!lock.locked) Alert.alert('AirChat', lock.message);
         }
       }
       await setFirstLaunchDone();
@@ -513,6 +555,12 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             Чат с защитой сообщений. Переписка синхронизируется через сервер в зашифрованном виде и открывается
             на любом вашем устройстве. Ключ к ней — 24 секретных слова: без них доступ не восстановить.
           </Text>
+          {phraseUnreadable ? (
+            <Text style={styles.warn} testID="onboarding_phrase_unreadable">
+              На этом устройстве уже есть аккаунт, но его секретные слова сейчас не читаются.
+              Не создавайте новый — он сотрёт их навсегда. Выберите «Восстановить аккаунт».
+            </Text>
+          ) : null}
           <AppPressable
             style={styles.btn}
             onPress={createNewBtn.onPress}
