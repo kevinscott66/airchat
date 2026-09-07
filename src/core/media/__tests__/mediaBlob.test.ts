@@ -27,6 +27,12 @@ let mockCloudEnabled = false;
 let mockCloudCalls = 0;
 /** Что сервер отдаёт: null — копии нет. */
 let mockCloudBody: Uint8Array | null = null;
+/** Что лежит в ciphertext-кэше LAN: idHex → путь файла. */
+const mockLanPaths = new Map<string, string>();
+/** Шифротексты, которые ключ не открывает; ключ множества — байты через запятую. */
+const mockUndecryptable = new Set<string>();
+/** Тот же ключ множества из массива байт — Buffer в фабрику мока не пускают. */
+const mockBytesKey = (bytes: Uint8Array | readonly number[]): string => Array.from(bytes).join(',');
 
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
@@ -85,7 +91,14 @@ jest.mock('../../sync/syncApi', () => ({
   }),
 }));
 jest.mock('../../transport/lan/lanBlob', () => ({
-  lanBlobCachedPath: jest.fn(async () => null),
+  lanBlobCachedPath: jest.fn(async (idHex: string) => mockLanPaths.get(idHex) ?? null),
+  lanBlobCacheDelete: jest.fn(async (idHex: string) => {
+    const path = mockLanPaths.get(idHex);
+    if (!path) return;
+    mockLanPaths.delete(idHex);
+    mockFiles.delete(path);
+    mockDeleted.push(path);
+  }),
 }));
 // v4.32.427: заглушены только две функции. Константы берутся настоящие —
 // иначе SYMMETRIC_KEY_BYTES приезжает undefined, проверка длины ключа
@@ -93,7 +106,10 @@ jest.mock('../../transport/lan/lanBlob', () => ({
 jest.mock('../../crypto/encrypt', () => ({
   ...jest.requireActual('../../crypto/encrypt'),
   encryptSymmetric: jest.fn(() => new Uint8Array([9, 9, 9])),
-  decryptSymmetric: jest.fn(() => new Uint8Array([1, 2, 3])),
+  // v4.32.615: расшифровка перестала быть безусловно успешной — иначе не
+  // проверить, что источник, который ключ не открывает, уступает следующему.
+  decryptSymmetric: jest.fn((_key: Uint8Array, cipher: Uint8Array) =>
+    (mockUndecryptable.has(mockBytesKey(cipher)) ? null : new Uint8Array([1, 2, 3]))),
 }));
 
 import { Buffer } from 'buffer';
@@ -129,6 +145,8 @@ beforeEach(() => {
   mockCloudEnabled = false;
   mockCloudCalls = 0;
   mockCloudBody = null;
+  mockLanPaths.clear();
+  mockUndecryptable.clear();
   mockFetch = jest.fn(async () => okResponse(CIPHER_B64));
   (global as unknown as { fetch: unknown }).fetch = mockFetch;
 });
@@ -461,5 +479,108 @@ describe('sweepMediaCache: возраст — ещё не повод удаля�
     // Полная расшифровка переписки на каждом запуске — не та цена, которую
     // стоит платить, когда просроченного нет ни одного файла.
     expect(mockLiveCalls).toBe(0);
+  });
+});
+
+/**
+ * Источник, который ключ не открывает, уступает следующему (v4.32.615).
+ *
+ * Шифротекст берётся из трёх мест: кэш LAN, релей, постоянная копия на
+ * сервере. Первый отдавший байты становился единственным — расшифровка шла
+ * уже после выбора, и её неудача возвращала null, не заглядывая дальше. А
+ * первым стоит кэш LAN, куда файл кладёт пир: кадр не подписан, имя файла
+ * берётся из `idHex`, а `idHex` виден в дескрипторе вложения. Сосед по сети,
+ * подложив под чужим `i` произвольные байты, закрывал вложение навсегда —
+ * файл оставался на диске и спотыкал каждую следующую попытку.
+ */
+describe('resolveBlobToLocalFile: отравленный источник не закрывает вложение', () => {
+  const ID = 'aa'.repeat(16);
+  const LAN_PATH = `${DIR}airchat_blobcache_${ID}.bin`;
+  const POISON_BYTES = [7, 7, 7, 7];
+  const POISON_B64 = Buffer.from(POISON_BYTES).toString('base64');
+
+  function poisonLanCache(): void {
+    mockLanPaths.set(ID, LAN_PATH);
+    mockFiles.set(LAN_PATH, POISON_B64);
+    mockUndecryptable.add(mockBytesKey(POISON_BYTES));
+  }
+
+  it('подложенный в LAN-кэш файл уступает релею', async () => {
+    poisonLanCache();
+    await expect(
+      resolveBlobToLocalFile({ i: ID, u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg'),
+    ).resolves.toMatch(/^file:\/\/\/cache\/airchat_media_.+\.jpg$/);
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('подложенный файл стирается, иначе он спотыкал бы и следующую попытку', async () => {
+    poisonLanCache();
+    await resolveBlobToLocalFile({ i: ID, u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg');
+    expect(mockDeleted).toContain(LAN_PATH);
+    expect(mockLanPaths.has(ID)).toBe(false);
+  });
+
+  it('без релея очередь доходит до копии на сервере', async () => {
+    poisonLanCache();
+    mockCloudEnabled = true;
+    mockCloudBody = new Uint8Array([1, 2, 3, 4]);
+    await expect(resolveBlobToLocalFile({ i: ID, k: KEY_B64 }, 'jpg')).resolves.not.toBeNull();
+    expect(mockCloudCalls).toBe(1);
+  });
+
+  it('нечитаемый релей уступает копии на сервере', async () => {
+    // Второй источник ошибается так же, как первый, и это ничего не меняет.
+    mockFetch = jest.fn(async () => okResponse(POISON_B64));
+    (global as unknown as { fetch: unknown }).fetch = mockFetch;
+    mockUndecryptable.add(mockBytesKey(POISON_BYTES));
+    mockCloudEnabled = true;
+    mockCloudBody = new Uint8Array([1, 2, 3, 4]);
+    await expect(
+      resolveBlobToLocalFile({ i: ID, u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg'),
+    ).resolves.not.toBeNull();
+    expect(mockCloudCalls).toBe(1);
+  });
+
+  it('когда ни один источник не открывается — по-прежнему null', async () => {
+    poisonLanCache();
+    mockFetch = jest.fn(async () => okResponse(POISON_B64));
+    (global as unknown as { fetch: unknown }).fetch = mockFetch;
+    mockCloudEnabled = true;
+    mockCloudBody = null;
+    await expect(
+      resolveBlobToLocalFile({ i: ID, u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg'),
+    ).resolves.toBeNull();
+    expect(mockCloudCalls).toBe(1);
+  });
+
+  it('целый LAN-кэш по-прежнему отвечает первым, без сети', async () => {
+    // Ради оффлайна полка и заведена: перебор источников не должен её обходить.
+    mockLanPaths.set(ID, LAN_PATH);
+    mockFiles.set(LAN_PATH, CIPHER_B64);
+    await expect(
+      resolveBlobToLocalFile({ i: ID, u: 'https://ntfy.sh/file/x', k: KEY_B64 }, 'jpg'),
+    ).resolves.not.toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockDeleted).not.toContain(LAN_PATH);
+  });
+});
+
+describe('проверка не пустая: старое правило', () => {
+  /** Как выбирался источник до v4.32.615: первый отдавший байты — и всё. */
+  function firstNonEmpty(sources: ReadonlyArray<Uint8Array | null>): Uint8Array | null {
+    for (const s of sources) if (s) return s;
+    return null;
+  }
+  const POISON = new Uint8Array([7, 7, 7, 7]);
+  const GOOD = new Uint8Array([1, 2, 3, 4]);
+  const opens = (c: Uint8Array | null): boolean => !!c && c[0] !== 7;
+
+  it('старое правило останавливалось на отравленном кэше', () => {
+    expect(opens(firstNonEmpty([POISON, GOOD, GOOD]))).toBe(false);
+  });
+
+  it('перебор с расшифровкой доходит до целого источника', () => {
+    const picked = [POISON, GOOD, GOOD].find((c) => opens(c)) ?? null;
+    expect(opens(picked)).toBe(true);
   });
 });

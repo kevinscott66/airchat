@@ -59,6 +59,24 @@ export async function lanBlobCachedPath(idHex: string): Promise<string | null> {
   }
 }
 
+/**
+ * Стереть ciphertext из blob-кэша (v4.32.615).
+ *
+ * Класть в кэш может кто угодно: кадр прилетает по LAN, отправитель в нём не
+ * заверен, а имя файла выбирается по `idHex` из самого кадра. Расшифровка
+ * такой подмены не переживёт, но без удаления подложенный файл остался бы на
+ * диске навсегда и перекрывал бы вложение при каждой попытке открыть его.
+ */
+export async function lanBlobCacheDelete(idHex: string): Promise<void> {
+  const p = blobCachePath(idHex);
+  if (!p) return;
+  try {
+    await FileSystem.deleteAsync(p, { idempotent: true });
+  } catch (e) {
+    log.warn('lan_blob_cache_delete_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 /** Сохранить ciphertext в blob-кэш (sender: для последующего LAN-push и идемпотентности). */
 export async function lanBlobCacheWrite(idHex: string, cipher: Uint8Array): Promise<void> {
   const p = blobCachePath(idHex);

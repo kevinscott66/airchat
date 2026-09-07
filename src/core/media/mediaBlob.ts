@@ -412,61 +412,74 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
     const existing = await FileSystem.getInfoAsync(dest);
     if (existing.exists && (existing.size ?? 0) > 0) return dest;
 
+    const key = new Uint8Array(Buffer.from(ref.k, 'base64'));
+    if (key.length !== SYMMETRIC_KEY_BYTES) {
+      log.warn('blob_download_bad_key');
+      return null;
+    }
+
+    const blobId = ref.i;
+    const relayUrl = ref.u;
+
     // 1) LAN-доставленный (или свой отправленный) ciphertext в локальном кэше —
     //    работает полностью оффлайн, без relay.
-    let cipher: Uint8Array | null = null;
-    if (ref.i) {
+    const loadLanCache = async (): Promise<Uint8Array | null> => {
+      if (!blobId) return null;
       const { lanBlobCachedPath } = await import('../transport/lan/lanBlob');
-      const cached = await lanBlobCachedPath(ref.i);
-      if (cached) {
-        const cb64 = await FileSystem.readAsStringAsync(cached, { encoding: FileSystem.EncodingType.Base64 });
-        // v4.32.354: потолок стоял только на HTTP-ветке, хотя ciphertext в
-        // локальном кэше кладёт туда пир по LAN — то есть ровно тот же чужой
-        // ввод, и ограничен он был только свободным местом на диске.
-        if (cb64.length === 0 || cb64.length > MAX_DOWNLOAD_B64_CHARS) {
-          log.warn('blob_lan_cache_bad_size', { chars: cb64.length });
-          return null;
-        }
-        cipher = new Uint8Array(Buffer.from(cb64, 'base64'));
-        log.info('blob_resolve_lan_cache', { id: ref.i.slice(0, 8), bytes: cipher.length });
+      const cached = await lanBlobCachedPath(blobId);
+      if (!cached) return null;
+      const cb64 = await FileSystem.readAsStringAsync(cached, { encoding: FileSystem.EncodingType.Base64 });
+      // v4.32.354: потолок стоял только на HTTP-ветке, хотя ciphertext в
+      // локальном кэше кладёт туда пир по LAN — то есть ровно тот же чужой
+      // ввод, и ограничен он был только свободным местом на диске.
+      if (cb64.length === 0 || cb64.length > MAX_DOWNLOAD_B64_CHARS) {
+        log.warn('blob_lan_cache_bad_size', { chars: cb64.length });
+        return null;
       }
-    }
+      const bytes = new Uint8Array(Buffer.from(cb64, 'base64'));
+      log.info('blob_resolve_lan_cache', { id: blobId.slice(0, 8), bytes: bytes.length });
+      return bytes;
+    };
+
     // 2) HTTP с relay (если url есть).
-    if (!cipher && ref.u) {
+    const loadRelay = async (): Promise<Uint8Array | null> => {
+      if (!relayUrl) return null;
       // v4.32.354: адрес выбирает отправитель, а открывает его наше устройство
       // само, при отрисовке чата. Без ограничения по хосту это маячок:
       // отправитель узнаёт IP получателя и минуту открытия переписки.
-      if (!isAllowedBlobUrl(ref.u, allowedRelayBases())) {
-        log.warn('blob_download_foreign_host', { url: ref.u.slice(0, 64) });
-      } else {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30_000);
-        try {
-          const res = await fetch(ref.u, { signal: controller.signal });
-          if (!res.ok) {
-            log.warn('blob_download_http_err', { status: res.status });
-          } else {
-            // v4.32.354: потолок стоял только после чтения тела. Проверяем
-            // content-length до res.text(), затем оставляем проверку строки.
-            const declared = parseInt(res.headers?.get?.('content-length') ?? '', 10);
-            if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_B64_CHARS) {
-              log.warn('blob_download_too_large', { declared });
-            } else {
-              const b64 = await res.text();
-              if (b64.length === 0 || b64.length > MAX_DOWNLOAD_B64_CHARS) {
-                log.warn('blob_download_bad_size', { chars: b64.length });
-              } else {
-                cipher = new Uint8Array(Buffer.from(b64, 'base64'));
-              }
-            }
-          }
-        } catch (e) {
-          log.warn('blob_download_relay_unreachable', { err: e instanceof Error ? e.message : String(e) });
-        } finally {
-          clearTimeout(timeout);
-        }
+      if (!isAllowedBlobUrl(relayUrl, allowedRelayBases())) {
+        log.warn('blob_download_foreign_host', { url: relayUrl.slice(0, 64) });
+        return null;
       }
-    }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      try {
+        const res = await fetch(relayUrl, { signal: controller.signal });
+        if (!res.ok) {
+          log.warn('blob_download_http_err', { status: res.status });
+          return null;
+        }
+        // v4.32.354: потолок стоял только после чтения тела. Проверяем
+        // content-length до res.text(), затем оставляем проверку строки.
+        const declared = parseInt(res.headers?.get?.('content-length') ?? '', 10);
+        if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_B64_CHARS) {
+          log.warn('blob_download_too_large', { declared });
+          return null;
+        }
+        const b64 = await res.text();
+        if (b64.length === 0 || b64.length > MAX_DOWNLOAD_B64_CHARS) {
+          log.warn('blob_download_bad_size', { chars: b64.length });
+          return null;
+        }
+        return new Uint8Array(Buffer.from(b64, 'base64'));
+      } catch (e) {
+        log.warn('blob_download_relay_unreachable', { err: e instanceof Error ? e.message : String(e) });
+        return null;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
     // 3) Постоянная копия на сервере: тот же непрозрачный шифротекст, что и на
     // релее, — ключ по-прежнему живёт только внутри E2E-конверта сообщения.
     //
@@ -480,17 +493,53 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
     // ровно то же самое, что делает эта ветка, потому что при отсутствии адреса
     // ветка релея не выполняется вовсе. Разницы в поведении не было ни одной,
     // кроме той, что при промахе запрос к серверу уходил дважды подряд.
-    if (!cipher && ref.i) {
-      cipher = await downloadCloudMediaCopy(ref.i);
-      if (cipher) log.info('blob_resolve_cloud', { id: ref.i.slice(0, 8), bytes: cipher.length });
+    const loadCloud = async (): Promise<Uint8Array | null> => {
+      if (!blobId) return null;
+      const bytes = await downloadCloudMediaCopy(blobId);
+      if (bytes) log.info('blob_resolve_cloud', { id: blobId.slice(0, 8), bytes: bytes.length });
+      return bytes;
+    };
+
+    /**
+     * Каждый источник расшифровывается отдельно (v4.32.615).
+     *
+     * Раньше первый отдавший байты источник становился единственным: если
+     * расшифровка их не принимала, ответом было `null`, и до релея с сервером
+     * очередь уже не доходила. А первым стоит кэш LAN, куда кадр кладёт пир —
+     * без подписи, под именем из `idHex`, который виден в самом конверте.
+     * Подложив туда произвольные байты под чужим `i`, сосед по сети закрывал
+     * вложение навсегда: файл на диске оставался, и каждая следующая попытка
+     * его открыть спотыкалась о него же.
+     *
+     * Теперь непринятый источник только записывается в лог, а подложенный файл
+     * LAN-кэша стирается — место занимал он, и держать его незачем.
+     */
+    const sources: ReadonlyArray<{ name: 'lan' | 'relay' | 'cloud'; load: () => Promise<Uint8Array | null> }> = [
+      { name: 'lan', load: loadLanCache },
+      { name: 'relay', load: loadRelay },
+      { name: 'cloud', load: loadCloud },
+    ];
+
+    let plain: Uint8Array | null = null;
+    for (const source of sources) {
+      let cipher: Uint8Array | null = null;
+      try {
+        cipher = await source.load();
+      } catch (e) {
+        log.warn('blob_source_failed', { src: source.name, err: e instanceof Error ? e.message : String(e) });
+      }
+      if (!cipher) continue;
+      const attempt = decryptSymmetric(key, cipher);
+      if (attempt) {
+        plain = attempt;
+        break;
+      }
+      log.warn('blob_source_decrypt_failed', { src: source.name, bytes: cipher.length });
+      if (source.name === 'lan' && blobId) {
+        const { lanBlobCacheDelete } = await import('../transport/lan/lanBlob');
+        await lanBlobCacheDelete(blobId);
+      }
     }
-    if (!cipher) return null;
-    const key = new Uint8Array(Buffer.from(ref.k, 'base64'));
-    if (key.length !== SYMMETRIC_KEY_BYTES) {
-      log.warn('blob_download_bad_key');
-      return null;
-    }
-    const plain = decryptSymmetric(key, cipher);
     if (!plain) {
       log.warn('blob_download_decrypt_failed');
       return null;
