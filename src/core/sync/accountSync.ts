@@ -31,6 +31,39 @@ export type AccountSyncResult = {
 const locks = new Map<number, Promise<AccountSyncResult>>();
 
 /**
+ * Сколько раз одна строка может уронить проход, прежде чем её пропустят
+ * (v4.32.617).
+ *
+ * Курсор двигается только после того, как ВСЯ пачка спроецирована, — и это
+ * правильно: иначе сбой посреди пачки терял бы данные. Но у правила была
+ * обратная сторона. Проекция бросает исключение не только на временной беде
+ * (база занята, места нет): она бросает и на неисправимом — конверт,
+ * зашифрованный другим ключом, строка сообщения, которая не проходит
+ * проверку, tombstone комментария без разделителя. Такую строку сервер отдаёт
+ * снова и снова, проход падает на ней снова и снова, курсор не двигается
+ * НИКОГДА — и вместе с ней встаёт весь аккаунт: ни сообщений, ни групп, ни
+ * ленты. Наружу при этом уходит одна строка `live_sync_failed` в журнал,
+ * пользователю не видно ничего.
+ *
+ * Поэтому: первые попытки ведут себя как раньше (курсор стоит, строка будет
+ * повторена), а после третьей строка пропускается, курсор идёт дальше, и в
+ * журнал уходит отдельное событие. Сущность при этом остаётся неприменённой,
+ * но её «голова» не обновляется — следующая ревизия той же сущности приедет
+ * и встанет на место как обычно.
+ */
+const POISON_MAX_ATTEMPTS = 3;
+
+/** Потолок на счётчики: карта живёт в памяти и растёт от чужих данных. */
+const POISON_MAX_TRACKED = 256;
+
+/** Сколько раз подряд конкретная строка роняла проекцию. Живёт до перезапуска. */
+const poisonAttempts = new Map<string, number>();
+
+function poisonKey(ownerProfileId: number, mutationId: string): string {
+  return `${ownerProfileId}\u0000${mutationId}`;
+}
+
+/**
  * Годится ли пришедшая строка к проекции (v4.32.523).
  *
  * Запрашивали мы один профиль, но что вернёт сервер — его дело, и до этой
@@ -126,7 +159,28 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
       });
       continue;
     }
-    await options.applyMutation(mutation);
+    const attemptKey = poisonKey(options.ownerProfileId, mutation.mutationId);
+    try {
+      await options.applyMutation(mutation);
+      poisonAttempts.delete(attemptKey);
+    } catch (e) {
+      const attempts = (poisonAttempts.get(attemptKey) ?? 0) + 1;
+      if (attempts < POISON_MAX_ATTEMPTS) {
+        // Счётчики — эвристика, а не состояние: при переполнении сбрасываем
+        // всю карту, и худшее следствие — несколько лишних попыток.
+        if (poisonAttempts.size >= POISON_MAX_TRACKED) poisonAttempts.clear();
+        poisonAttempts.set(attemptKey, attempts);
+        throw e;
+      }
+      poisonAttempts.delete(attemptKey);
+      log.warn('sync_pull_row_poisoned', {
+        entityKind: mutation.entityKind,
+        ownerProfileId: mutation.ownerProfileId,
+        revision: mutation.revision,
+        attempts,
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
   if (options.shouldContinue && !options.shouldContinue()) {
     return { status: 'offline', pushed, pulled: null };

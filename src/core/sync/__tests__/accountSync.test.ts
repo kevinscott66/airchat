@@ -236,3 +236,69 @@ test('a first sync without a known epoch is not a reset', async () => {
   expect(result.status).toBe('synced');
   expect(onServerReset).not.toHaveBeenCalled();
 });
+
+describe('строка, которую не удаётся спроецировать, не морозит курсор навсегда', () => {
+  /**
+   * v4.32.617. Проекция бросает и на неисправимом — конверт под чужим ключом,
+   * строка сообщения, не прошедшая проверку. Такую строку сервер отдаёт снова,
+   * проход падает снова, и без предела попыток курсор не двигался бы никогда:
+   * вместе с одной строкой вставал бы весь аккаунт.
+   */
+  const runOnce = (applyMutation: jest.Mock) => syncAccountOnce({
+    mnemonic: 'seed',
+    pair,
+    ownerProfileId: 1,
+    applyMutation,
+  });
+
+  /**
+   * Счётчик попыток живёт в модуле и переживает тест: у каждой проверки свой
+   * идентификатор строки, иначе они считали бы попытки друг друга.
+   */
+  const arm = (mutationId: string) => {
+    pull.mockResolvedValue({
+      serverEpoch: 'epoch-1',
+      nextCursor: '2',
+      hasMore: false,
+      mutations: [{ ...mutation, mutationId, entityId: `message-${mutationId}` }],
+    });
+  };
+
+  it('первые попытки курсор не двигают: сбой мог быть временным', async () => {
+    arm('poison-hold');
+    const applyMutation = jest.fn().mockRejectedValue(new Error('не расшифровать'));
+    await expect(runOnce(applyMutation)).rejects.toThrow('не расшифровать');
+    expect(writeState).not.toHaveBeenCalled();
+
+    await expect(runOnce(applyMutation)).rejects.toThrow('не расшифровать');
+    expect(writeState).not.toHaveBeenCalled();
+  });
+
+  it('после предела попыток строка пропускается и курсор идёт дальше', async () => {
+    arm('poison-skip');
+    const applyMutation = jest.fn().mockRejectedValue(new Error('не расшифровать'));
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+
+    const result = await runOnce(applyMutation);
+    expect(result.status).toBe('synced');
+    expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '2' }));
+  });
+
+  it('проверка не пустая: удачная проекция счётчик обнуляет', async () => {
+    // Предел считает неудачи ПОДРЯД. Иначе три разрозненных временных сбоя за
+    // сессию (база занята) выбросили бы исправную строку.
+    arm('flaky');
+    const applyMutation = jest.fn()
+      .mockRejectedValueOnce(new Error('база занята'))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('база занята'))
+      .mockRejectedValueOnce(new Error('база занята'));
+
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+    await expect(runOnce(applyMutation)).resolves.toMatchObject({ status: 'synced' });
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+    // Третья неудача за сессию, но лишь вторая подряд: строку ещё не бросают.
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+  });
+});
