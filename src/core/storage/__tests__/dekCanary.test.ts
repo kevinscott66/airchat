@@ -281,3 +281,71 @@ describe('источник: миграция ключа спрашивает к�
     expect(count(MIG, 'await persistDek(derived)')).toBe(4);
   });
 });
+
+/**
+ * v4.32.615. Пока кошелька нет, миграция ставила вечную отметку «выполнено» —
+ * а первый запуск случается ДО онбординга. Дальше человек заводил кошелёк,
+ * миграция не выполнялась уже никогда, и DEK навсегда оставался случайным:
+ * ни из seed не выводимым, ни чем-либо подстрахованным. Потеря записи в
+ * Keychain означала key_lost_data_present без всякой возможности вернуть
+ * переписку по секретным словам — при том что слова у человека на руках.
+ */
+describe('источник: миграция ключа не запирает сама себя', () => {
+  const MIG = bodyOf(LOCAL, 'async function migrateDekRandomToDeterministic(');
+
+  it('отметка «выполнено» ставится только там, где решение о ключе принято', () => {
+    // Четыре ветки решают о ключе (три persistDek(derived) + перешифровка),
+    // и ровно столько раз ставится отметка. Ветки «кошелька нет» и «фраза не
+    // прочиталась» отметку не ставят: они выходят молча.
+    expect(count(MIG, 'DEK_MIGRATED_KV,')).toBe(4);
+    expect(count(MIG, 'await persistDek(derived)')).toBe(4);
+  });
+
+  it('выход без кошелька — просто return, без записи в kv', () => {
+    expect(MIG).toContain('if (!hasMnemonicPayload) return;');
+    expect(MIG).toContain("if (!mnemonic?.trim()) return;");
+  });
+
+  it('прежняя отметка не действует: ключ отметки поднят до v2', () => {
+    expect(LOCAL).toContain("const DEK_MIGRATED_KV = 'dek_migrated_to_deterministic_v2';");
+    expect(LOCAL).not.toContain("'dek_migrated_to_deterministic_v1'");
+  });
+
+  it('три чтения SecureStore на запуск снимает дешёвый признак в kv', () => {
+    const cheap = MIG.indexOf('HAS_MNEMONIC_KV');
+    const slow = MIG.indexOf("SecureStore.getItemAsync('airchat_seed_mnemonic_enc_v2')");
+    expect(cheap).toBeGreaterThan(-1);
+    expect(slow).toBeGreaterThan(cheap);
+  });
+
+  it('перешифровка базы не начинается, пока не перешифрован секретный ключ', () => {
+    const rewrap = MIG.indexOf('await rewrapSecretKeyWithDek(stored, derived)');
+    const rekey = MIG.indexOf('await reencryptAtRest(database, stored, derived)');
+    expect(rewrap).toBeGreaterThan(-1);
+    expect(rekey).toBeGreaterThan(rewrap);
+    // И её отказ прекращает миграцию, а не проглатывается.
+    expect(MIG).toContain('if (!(await rewrapSecretKeyWithDek(stored, derived))) {');
+  });
+});
+
+/**
+ * Ключевая пара пишется ПОСЛЕ секретных слов, а не до. persistKeyPair
+ * заворачивает секрет в DEK, то есть заводит его; пока фразы нет, политика
+ * видит «ни ключа, ни канарейки, ни мнемоники» и уходит в create-random —
+ * значит ветка first_run_from_seed была недостижима ни на одной установке.
+ */
+describe('источник: DEK на онбординге выводится из seed', () => {
+  const SEED = fs.readFileSync(path.join(__dirname, '..', '..', 'backup', 'seedPhrase.ts'), 'utf8');
+
+  it.each([
+    ['новый кошелёк', 'export async function generateMnemonicAndStore('],
+    ['восстановление по словам', 'export async function restoreFromMnemonic('],
+  ])('%s: слова сохраняются раньше ключевой пары', (_name, head) => {
+    const body = bodyOf(SEED, head);
+    const phrase = body.indexOf('await persistEncryptedMnemonic(');
+    const pair = body.indexOf('await persistKeyPair(');
+    expect(phrase).toBeGreaterThan(-1);
+    expect(pair).toBeGreaterThan(-1);
+    expect(pair).toBeGreaterThan(phrase);
+  });
+});

@@ -363,8 +363,14 @@ export async function generateMnemonicAndStore(): Promise<{ mnemonic: string; pa
   const mnemonic = generateMnemonic(256);
   const pair = deriveKeyPairFromMnemonic(mnemonic);
   await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
-  await persistKeyPair(pair);
+  // v4.32.615: фраза сохраняется ДО ключевой пары. persistKeyPair заворачивает
+  // секрет в DEK, то есть заводит его; пока фразы нет, политика видит
+  // «ни ключа, ни канарейки, ни мнемоники» и выбирает случайный ключ — а
+  // выводимым из seed он после этого не станет уже никогда. При этом порядке
+  // выбирается ветка first_run_from_seed, и потеря записи в Keychain
+  // перестаёт быть безвозвратной: ключ выводится из тех же секретных слов.
   await persistEncryptedMnemonic(mnemonic);
+  await persistKeyPair(pair);
   return { mnemonic, pair };
 }
 
@@ -381,8 +387,9 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
     // Do not let the previous wallet's profile registry be reused by a new seed.
     await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
   }
-  await persistKeyPair(pair);
+  // Порядок тот же и по той же причине, что в generateMnemonicAndStore.
   await persistEncryptedMnemonic(normalized);
+  await persistKeyPair(pair);
   // The vault is local to this app installation and is keyed by the same seed.
   // A missing vault is fine: profileManager will create a fresh default profile.
   const { closeFeedStorage } = await import('../social/feedService');

@@ -206,7 +206,9 @@ async function beginImmediate(d: SQLite.SQLiteDatabase): Promise<OpenTx> {
 const LOCAL_DB_NAME = 'airchat_local.db';
 
 const MIGRATED_KV = 'local_crypto_migrated_v2';
-const DEK_MIGRATED_KV = 'dek_migrated_to_deterministic_v1';
+const DEK_MIGRATED_KV = 'dek_migrated_to_deterministic_v2';
+/** Дешёвый признак «кошелёк на устройстве заводили» (пишет seedPhrase). */
+const HAS_MNEMONIC_KV = 'kv_has_mnemonic_v1';
 const GROUP_MEMBER_NAMES_ENC_KV = 'group_member_names_enc_v1';
 const MESSAGE_SOCIAL_ENC_KV = 'message_social_enc_v1';
 const SCHEDULED_SENDER_ENC_KV = 'scheduled_sender_name_enc_v1';
@@ -1616,6 +1618,23 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
     );
     if (done?.v === 'true') return;
 
+    // v4.32.615: пока кошелька нет — просто выходим, НЕ ставя отметку.
+    // Первый запуск случается до онбординга: мнемоники ещё нет, а отметка
+    // запрещала бы миграцию навсегда. Именно из-за неё DEK, заведённый
+    // случайным на онбординге, не становился выводимым из seed уже никогда —
+    // и потеря записи в Keychain означала key_lost_data_present без всякой
+    // возможности восстановиться по секретным словам.
+    //
+    // Цена отказа от отметки — три чтения SecureStore на каждый запуск; их
+    // снимает дешёвый признак в kv, который seedPhrase держит в актуальном
+    // состоянии. Читаем его напрямую, а не через kvGet: мы внутри открытия
+    // базы, и kvGet позвал бы db() рекурсивно.
+    const walletSeen = await database.getFirstAsync<{ v: string }>(
+      'SELECT v FROM kv WHERE k = ?',
+      [HAS_MNEMONIC_KV]
+    );
+    if (walletSeen?.v === '0') return;
+
     // Avoid loading the seed module when this installation has never stored a
     // wallet. Besides keeping boot cheap, this lets the migration remain a
     // no-op in runtimes where dynamic imports are unavailable during tests.
@@ -1625,23 +1644,11 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
       || (await SecureStore.getItemAsync('airchat_seed_mnemonic_v1'))
       || (await SecureStore.getItemAsync('airchat_seed'))
     );
-    if (!hasMnemonicPayload) {
-      await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
-        DEK_MIGRATED_KV,
-        'true',
-      ]);
-      return;
-    }
+    if (!hasMnemonicPayload) return;
 
     const { getStoredMnemonic } = await import('../backup/seedPhrase');
     const mnemonic = await getStoredMnemonic();
-    if (!mnemonic?.trim()) {
-      await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
-        DEK_MIGRATED_KV,
-        'true',
-      ]);
-      return;
-    }
+    if (!mnemonic?.trim()) return;
 
     const derived = deriveLocalDekFromMnemonic(mnemonic);
     const b64 = await SecureStore.getItemAsync(DEK_KEY);
@@ -1695,6 +1702,16 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
 
     const { rewrapSecretKeyWithDek } = await import('../crypto/keyManager');
 
+    // v4.32.615: секретный ключ перешифровывается ПЕРВЫМ и его отказ
+    // прекращает миграцию. Раньше отказ был не отличим от успеха, а стоял
+    // после перешифровки базы — то есть на этом месте база уже была под
+    // derived, и прервать миграцию значило оставить установку в разобранном
+    // виде. Теперь до записей дело не доходит вовсе: ничего не изменено,
+    // следующий запуск попробует заново.
+    if (!(await rewrapSecretKeyWithDek(stored, derived))) {
+      throw new Error('dek migration: secret key does not open with stored dek');
+    }
+
     const txn = await beginImmediate(database);
     try {
       await reencryptAtRest(database, stored, derived);
@@ -1708,7 +1725,6 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
       throw e;
     }
 
-    await rewrapSecretKeyWithDek(stored, derived);
     await persistDek(derived);
 
     await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [

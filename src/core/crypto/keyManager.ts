@@ -86,15 +86,36 @@ export async function persistKeyPair(pair: KeyPairBytes): Promise<void> {
   await SecureStore.setItemAsync(PK_KEY, encPk);
 }
 
-/** Перешифровать секретный ключ при смене DEK (миграция random → deterministic). */
-export async function rewrapSecretKeyWithDek(oldDek: Uint8Array, newDek: Uint8Array): Promise<void> {
+/**
+ * Перешифровать секретный ключ при смене DEK (миграция random → deterministic).
+ *
+ * v4.32.615: возвращает исход, а не void. Прежде «перешифровал» и «не смог
+ * расшифровать» выглядели снаружи одинаково, и миграция на обоих исходах шла
+ * дальше — объявляла новый DEK действующим. Секрет при этом оставался под
+ * старым, уже перезаписанным ключом: readKeyRecord отдавал
+ * key_load_bad_wrapped_secret, ensureKeyPair вечно бросал
+ * KeyStoreUnreadableError, а откатиться было нечем. Личность устройства
+ * терялась необратимо — при том что до миграции она была цела.
+ *
+ * true отдаётся и там, где перешифровывать нечего: записи нет вовсе, секрет
+ * лежит незашифрованным (его DEK не касается) или он УЖЕ под новым ключом.
+ * Последнее — обрыв на прошлом запуске: повторный проход должен его признать,
+ * иначе миграция встанет насмерть на полпути.
+ */
+export async function rewrapSecretKeyWithDek(oldDek: Uint8Array, newDek: Uint8Array): Promise<boolean> {
   const encSk = await SecureStore.getItemAsync(SK_KEY);
-  if (!encSk?.startsWith(SK_ENC_PREFIX)) return;
+  if (!encSk?.startsWith(SK_ENC_PREFIX)) return true;
   const blob = new Uint8Array(Buffer.from(encSk.slice(SK_ENC_PREFIX.length), 'base64'));
   const rawSk = decryptSymmetric(oldDek, blob);
-  if (!rawSk || rawSk.length !== ED25519_SECRET_KEY_BYTES) return;
+  if (!rawSk || rawSk.length !== ED25519_SECRET_KEY_BYTES) {
+    const already = decryptSymmetric(newDek, blob);
+    if (already && already.length === ED25519_SECRET_KEY_BYTES) return true;
+    log.warn('key_rewrap_old_dek_rejected', { bytes: rawSk ? rawSk.length : -1 });
+    return false;
+  }
   const ct = encryptSymmetric(newDek, rawSk);
   await SecureStore.setItemAsync(SK_KEY, SK_ENC_PREFIX + Buffer.from(ct).toString('base64'));
+  return true;
 }
 
 /** Удалить ключи из SecureStore (выход из аккаунта / сброс кошелька). */
