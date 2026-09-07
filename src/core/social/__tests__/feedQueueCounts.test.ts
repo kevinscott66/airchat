@@ -93,7 +93,11 @@ describe('в ленте счётчик спрашивают за конкрет�
   test('таймер повтора будят только свои записи', () => {
     expect(SRC).toContain('async function myQueueItems(pair: KeyPairBytes)');
     expect(bodyOf(SRC, 'function scheduleFeedPublishRetry(')).toContain('await myQueueItems(p)');
-    expect(bodyOf(SRC, 'export function flushFeedQueueNow(')).toContain('(await myQueueItems(pair)).length > 0');
+    const flush = bodyOf(SRC, 'export function flushFeedQueueNow(');
+    expect(flush).toContain('const mine = await myQueueItems(pair);');
+    // v4.32.645: чужие записи таймер по-прежнему не будят, а непрочитанная
+    // очередь — будит: лишний проход дешевле брошенной без попыток очереди.
+    expect(flush).toContain('if (mine === null || mine.length > 0) {');
   });
 
   test('счётчик сохраняется по авторам', () => {

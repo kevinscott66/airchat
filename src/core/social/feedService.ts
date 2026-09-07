@@ -37,7 +37,7 @@ import {
   takeDeferred,
   type DeferredStore,
 } from './feedDeferred';
-import { kvGet, kvSet, kvDelete, kvGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
+import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
 import {
   INLINE_MEDIA_PREFIX,
   INLINE_DOC_PREFIX,
@@ -714,8 +714,29 @@ function emitFeedNotify(ev: FeedNotifyEvent): void {
   try { feedNotifyCb?.(ev); } catch { /* noop */ }
 }
 
-async function loadPublishQueue(): Promise<QueuedFeedItem[]> {
-  const raw = await kvGet(FEED_QUEUE_KEY);
+/**
+ * Очередь публикации — или `null`, если её не удалось прочитать (v4.32.645).
+ *
+ * Разница между «очереди нет» и «прочитать не вышло» здесь не теоретическая.
+ * Очередь читают и записывают одной операцией (`updateQueue`), а записывают
+ * целиком. Пока сбой чтения выдавался за пустую очередь, одна не прочитавшаяся
+ * строка kv означала «в очереди ничего нет» — и следующая же запись клала
+ * поверх файла результат, собранный из пустоты. Постановка в очередь стирала
+ * все чужие ожидающие записи, а `commitFlushOutcomes` записывала пустой
+ * результат `mergeQueue([], …)`, то есть выносила очередь целиком: ровно та
+ * необратимая потеря, ради которой и заводился mergeQueue в v4.32.456, только
+ * зайдя с другой стороны.
+ *
+ * Разобранное не до конца — другое дело: если в строке лежит не массив или не
+ * JSON вовсе, отправлять оттуда нечего и держаться за неё незачем.
+ */
+async function loadPublishQueue(): Promise<QueuedFeedItem[] | null> {
+  const read = await kvTryGet(FEED_QUEUE_KEY);
+  if (read === null) {
+    log.warn('feed_queue_read_failed', {});
+    return null;
+  }
+  const raw = read.value;
   if (!raw) return [];
   try {
     const p = JSON.parse(raw) as unknown;
@@ -754,12 +775,22 @@ async function loadPublishQueue(): Promise<QueuedFeedItem[]> {
  * нельзя случайно вписать сетевой вызов, а значит нельзя и заново завести
  * «прочитал старое, записал поверх нового». Тому, кому нужна сеть (рассылке),
  * остаётся принести готовые решения и слить их через `mergeQueue`.
+ *
+ * v4.32.645: изменение либо ложится целиком, либо не происходит вовсе. Отказ
+ * чтения и отказ записи выходят наружу одной ошибкой — очередь при этом та же,
+ * что была до вызова.
  */
+const QUEUE_UNAVAILABLE = 'feed_queue_unavailable';
+
 let queueTx: Promise<unknown> = Promise.resolve();
 async function updateQueue<T>(apply: (q: QueuedFeedItem[]) => { next: QueuedFeedItem[]; value: T }): Promise<T> {
   const run = async (): Promise<T> => {
-    const { next, value } = apply(await loadPublishQueue());
-    await savePublishQueue(next);
+    // v4.32.645: не прочитали — не пишем. Очередь на диске цела, потеряно
+    // только это изменение, и вызывающий о нём узнаёт.
+    const current = await loadPublishQueue();
+    if (current === null) throw new Error(QUEUE_UNAVAILABLE);
+    const { next, value } = apply(current);
+    if (!(await savePublishQueue(next))) throw new Error(QUEUE_UNAVAILABLE);
     return value;
   };
   const started = queueTx.then(run, run);
@@ -767,11 +798,19 @@ async function updateQueue<T>(apply: (q: QueuedFeedItem[]) => { next: QueuedFeed
   return started;
 }
 
-async function savePublishQueue(q: QueuedFeedItem[]): Promise<void> {
-  await kvSet(FEED_QUEUE_KEY, JSON.stringify(q));
+/** Записать очередь целиком. `false` — не легла, на диске осталось прежнее. */
+async function savePublishQueue(q: QueuedFeedItem[]): Promise<boolean> {
+  // v4.32.645: kvSet гасит свой отказ и возвращает void, а вызывающий на этом
+  // строил «поставлено в очередь». Пост не ложился никуда, человек видел его в
+  // своей ленте и ждал доставки, которой не будет.
+  if (!(await kvSetChecked(FEED_QUEUE_KEY, JSON.stringify(q)))) {
+    log.warn('feed_queue_write_failed', { count: q.length });
+    return false;
+  }
   // v4.32.xx: синхронизируем cached length — getFeedPublishQueueLength()
   // читает этот маленький ключ вместо MB-сайз JSON.
   try { await kvSet(FEED_QUEUE_LEN_KEY, JSON.stringify(countByAuthor(q))); } catch { /* noop */ }
+  return true;
 }
 
 /**
@@ -791,14 +830,21 @@ export async function getFeedPublishQueueLength(pair: KeyPairBytes): Promise<num
   const cached = parseQueueCounts(await kvGet(FEED_QUEUE_LEN_KEY));
   if (cached) return sendableCount(cached, myDid);
   // Cold path: один раз прочитать полную очередь, закешировать счёт по авторам.
-  const counts = countByAuthor(await loadPublishQueue());
+  const list = await loadPublishQueue();
+  // v4.32.645: очередь не прочиталась — считать её пустой можно, записать этот
+  // ноль в кэш нельзя. Записанный, он держался бы до следующей записи очереди:
+  // человек видел бы «в очереди 0» при живых записях, а «Отправить сейчас»
+  // молчал бы. Без записи промах лечится сам на следующем вызове.
+  if (list === null) return 0;
+  const counts = countByAuthor(list);
   try { await kvSet(FEED_QUEUE_LEN_KEY, JSON.stringify(counts)); } catch { /* noop */ }
   return sendableCount(counts, myDid);
 }
 
-/** Записи очереди, которые может отправить этот ключ. */
-async function myQueueItems(pair: KeyPairBytes): Promise<QueuedFeedItem[]> {
-  return ownedByKey(await loadPublishQueue(), publicKeyToDidKey(pair.publicKey));
+/** Записи очереди, которые может отправить этот ключ. `null` — не прочиталась. */
+async function myQueueItems(pair: KeyPairBytes): Promise<QueuedFeedItem[] | null> {
+  const list = await loadPublishQueue();
+  return list === null ? null : ownedByKey(list, publicKeyToDidKey(pair.publicKey));
 }
 
 /** Немедленная попытка отправить очередь (кнопка «Отправить сейчас»). */
@@ -809,7 +855,11 @@ export function flushFeedQueueNow(pair: KeyPairBytes): void {
     await flushFeedPublishQueue(pair);
     // v4.32.459: чужие записи не будят наш таймер повтора — отправить их мы всё
     // равно не можем, а таймер крутился бы до их TTL.
-    if ((await myQueueItems(pair)).length > 0) {
+    // v4.32.645: не прочитали очередь — заводим таймер. Ошибиться в эту
+    // сторону значит сделать лишний проход; ошибиться в другую — оставить
+    // записи на диске без единой попытки отправки.
+    const mine = await myQueueItems(pair);
+    if (mine === null || mine.length > 0) {
       scheduleFeedPublishRetry(pair, RETRY_DELAY_MS);
     }
   })();
@@ -889,8 +939,10 @@ function scheduleFeedPublishRetry(pair: KeyPairBytes, delayMs: number): void {
       // Пустая очередь постов ещё не значит, что повторять нечего: неудавшееся
       // удаление копии по ссылке живёт своей записью и тоже держит таймер.
       const pendingLinkDeletes = (await loadLinkDeleteOutbox()).length;
-      if (q.length > 0 || pendingLinkDeletes > 0) {
-        const r = q[0]?.retries ?? 0;
+      // v4.32.645: `null` — очередь не прочиталась. Гасить таймер по такому
+      // ответу значит бросить её до следующего запуска приложения.
+      if (q === null || q.length > 0 || pendingLinkDeletes > 0) {
+        const r = q?.[0]?.retries ?? 0;
         const nextDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.min(r, 6)), 180_000);
         scheduleFeedPublishRetry(p, nextDelay);
       }
@@ -1144,7 +1196,18 @@ async function commitFlushOutcomes(
 ): Promise<void> {
   const decisions = new Map<string, QueueDecision<QueuedFeedItem>>();
   snapshot.forEach((item, i) => decisions.set(item.id, outcomes[i] ?? null));
-  await updateQueue((q) => ({ next: mergeQueue(q, decisions), value: undefined }));
+  try {
+    await updateQueue((q) => ({ next: mergeQueue(q, decisions), value: undefined }));
+  } catch (e) {
+    // v4.32.645: итоги не записаны — записи остаются в очереди в том виде, в
+    // каком были. Следующий проход разошлёт их заново: адресат получит дубль
+    // (его отсечёт `INSERT OR IGNORE` в savePost), зато ни одна запись не
+    // пропадёт. Прежде отсюда уходила запись пустой очереди — потеря навсегда.
+    log.warn('feed_queue_commit_skipped', {
+      items: snapshot.length,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 /**
@@ -1226,7 +1289,7 @@ async function _flushFeedPublishQueueImpl(pair: KeyPairBytes): Promise<void> {
   // отдельно от постов, и пустая очередь публикации её не отменяет.
   await flushLinkDeleteOutbox(pair);
   const list = await loadPublishQueue();
-  if (list.length === 0) return;
+  if (!list?.length) return;
 
   const now = Date.now();
   const outcomes = await runWithConcurrency(
@@ -1334,7 +1397,7 @@ export async function flushFeedQueueForPeer(pair: KeyPairBytes, peerDid: string)
 
 async function _flushFeedQueueForPeerImpl(pair: KeyPairBytes, peerDid: string): Promise<void> {
   const list = await loadPublishQueue();
-  if (list.length === 0) return;
+  if (!list?.length) return;
 
   const onlyDids = new Set<string>([peerDid]);
   const now = Date.now();
@@ -1908,7 +1971,11 @@ export async function publishRepost(
       });
       scheduleFeedPublishRetry(pair, RETRY_DELAY_MS);
     } catch (e) {
+      // v4.32.645: до этой версии сюда было не попасть — очередь молчала о своих
+      // отказах. Теперь попасть можно, и говорить «в очереди» нельзя: записи в
+      // очереди нет, повтора не будет, а репост уже виден у себя в ленте.
       log.warn('feed_repost_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
+      return { ok: true, cid: newPostId };
     }
     return { ok: true, cid: newPostId, queued: true };
   }

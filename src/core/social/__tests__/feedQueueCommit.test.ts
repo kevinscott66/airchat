@@ -93,7 +93,13 @@ describe('у файла очереди один владелец', () => {
   test('записывает только транзакция', () => {
     // Объявление + единственный вызов внутри updateQueue.
     expect(count(SRC, 'await savePublishQueue(')).toBe(1);
-    expect(bodyOf(SRC, 'async function updateQueue<T>')).toContain('await savePublishQueue(next);');
+    const tx = bodyOf(SRC, 'async function updateQueue<T>');
+    // v4.32.645: и чтение, и запись обязаны быть проверенными. Непроверенное
+    // чтение кладёт изменение поверх выдуманной пустой очереди, непроверенная
+    // запись выдаёт за успех то, что на диск не легло.
+    expect(tx).toContain('const current = await loadPublishQueue();');
+    expect(tx).toContain('if (current === null) throw new Error(QUEUE_UNAVAILABLE);');
+    expect(tx).toContain('if (!(await savePublishQueue(next))) throw new Error(QUEUE_UNAVAILABLE);');
   });
 
   test('транзакция не позволяет ждать сеть, держа очередь', () => {
