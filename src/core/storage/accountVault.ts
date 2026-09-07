@@ -13,7 +13,7 @@ import { deriveLocalDekFromMnemonic } from './dekDerivation';
 import { mnemonicSeedCached } from '../crypto/mnemonicSeed';
 import { ED25519_PUBLIC_KEY_BYTES } from '../crypto/pubKeyFormat';
 import { encryptSymmetric, decryptSymmetric } from '../crypto/encrypt';
-import { readDekFromSecureStoreRaw } from './localEncryption';
+import { observeStoredDek } from './localEncryption';
 import * as SecureStore from './secureStoreQueued';
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import { log } from '../logger';
@@ -125,9 +125,18 @@ function dekFingerprint(dek: Uint8Array): string {
 async function vaultKeyMatches(manifest: VaultManifestV1, accountId: string): Promise<boolean> {
   const fingerprint = manifest.dekFp;
   if (typeof fingerprint !== 'string' || !fingerprint) return true;
-  const current = await readDekFromSecureStoreRaw();
-  if (!current) return true;
-  if (dekFingerprint(current) === fingerprint) return true;
+  const stored = await observeStoredDek();
+  // Чистая установка: ключа нет и данных под ним тоже — сверять не с чем.
+  if (stored.state === 'absent') return true;
+  // v4.32.617: «Keychain не ответил» — это НЕ «ключа нет». Раньше оба случая
+  // читались как разрешение, и восстановление, которое затирает базу, шло
+  // вслепую на запертом устройстве. Отказ здесь ничего не портит: человек
+  // повторит восстановление, когда телефон разблокирован.
+  if (stored.state !== 'valid' || !stored.dek) {
+    log.warn('account_vault_dek_unverifiable', { accountId, state: stored.state });
+    return false;
+  }
+  if (dekFingerprint(stored.dek) === fingerprint) return true;
   log.warn('account_vault_dek_mismatch', { accountId });
   return false;
 }
@@ -175,14 +184,45 @@ async function replaceFile(source: string, destination: string): Promise<void> {
   await FileSystem.copyAsync({ from: source, to: destination });
 }
 
-async function removeUnlistedFiles(directory: string, allowed: readonly string[], pattern: RegExp): Promise<void> {
-  if (!(await exists(directory))) return;
-  const keep = new Set(allowed);
-  for (const name of await FileSystem.readDirectoryAsync(directory)) {
-    if (pattern.test(name) && !keep.has(name)) {
-      await FileSystem.deleteAsync(`${directory}${name}`, { idempotent: true });
+/**
+ * Отложить текущие файлы устройства в сторону — так, чтобы их можно было
+ * вернуть.
+ *
+ * v4.32.617: восстановление СНАЧАЛА стирало рабочие файлы, а потом копировало
+ * файлы копии, и между этими шагами нет ничего, что вернуло бы стёртое:
+ * кончилось место, отказала файловая система, приложение убили — на устройстве
+ * не остаётся ни рабочей базы, ни восстановленной. Снимок копии эту защиту уже
+ * имеет (`replaceVaultDirectory` уводит прежнюю копию в `.previous-` и
+ * возвращает при отказе), а восстановление — самое разрушительное действие
+ * приложения — не имело.
+ */
+type StashedFiles = { dir: string; names: { from: string; name: string }[] };
+
+async function stashFiles(
+  stashDir: string,
+  sources: readonly { dir: string; pattern: RegExp }[],
+): Promise<StashedFiles> {
+  const stash: StashedFiles = { dir: stashDir, names: [] };
+  await FileSystem.makeDirectoryAsync(stashDir, { intermediates: true });
+  for (const source of sources) {
+    if (!(await exists(source.dir))) continue;
+    for (const name of await FileSystem.readDirectoryAsync(source.dir)) {
+      if (!source.pattern.test(name)) continue;
+      await FileSystem.moveAsync({ from: `${source.dir}${name}`, to: `${stashDir}${name}` });
+      stash.names.push({ from: source.dir, name });
     }
   }
+  return stash;
+}
+
+/** Вернуть отложенное на место, затирая то, что успело лечь поверх. */
+async function unstashFiles(stash: StashedFiles): Promise<void> {
+  for (const entry of stash.names) {
+    const destination = `${entry.from}${entry.name}`;
+    await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
+    await FileSystem.moveAsync({ from: `${stash.dir}${entry.name}`, to: destination }).catch(() => {});
+  }
+  await FileSystem.deleteAsync(stash.dir, { idempotent: true }).catch(() => {});
 }
 
 async function replaceVaultDirectory(stageDir: string, finalDir: string, root: string, accountId: string): Promise<void> {
@@ -217,7 +257,15 @@ export async function snapshotAccountVault(
   await FileSystem.makeDirectoryAsync(`${stageDir}avatars/`, { intermediates: true });
 
   try {
-    const snapshotDek = await readDekFromSecureStoreRaw();
+    // v4.32.617: отпечаток либо честный, либо копии не будет. Раньше отказ
+    // Keychain'а давал `dekFp: null`, а `null` в манифесте снимает сверку при
+    // восстановлении вовсе — копия молча теряла свою единственную защиту от
+    // затирания чужих данных.
+    const storedDek = await observeStoredDek();
+    if (storedDek.state !== 'absent' && storedDek.state !== 'valid') {
+      throw new Error(`account vault snapshot: dek ${storedDek.state}`);
+    }
+    const snapshotDek = storedDek.dek;
     const dbDir = `${base}SQLite/`;
     const dbNames = (await exists(dbDir) ? await FileSystem.readDirectoryAsync(dbDir) : [])
       .filter((name) => DB_FILE_RE.test(name));
@@ -298,18 +346,35 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
 
     const dbDir = `${base}SQLite/`;
     await FileSystem.makeDirectoryAsync(dbDir, { intermediates: true });
-    await removeUnlistedFiles(dbDir, manifest.dbFiles, DB_FILE_RE);
-    await removeUnlistedFiles(base, manifest.avatarFiles, AVATAR_FILE_RE);
-    for (const name of manifest.dbFiles.filter((value) => typeof value === 'string' && DB_FILE_RE.test(value))) {
-      const destination = `${dbDir}${name}`;
-      if (await exists(`${dir}SQLite/${name}`)) await replaceFile(`${dir}SQLite/${name}`, destination);
+
+    // Прежний список профилей тоже надо уметь вернуть: без него база
+    // восстановлена, а видно только первый профиль.
+    const previousProfileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);
+    const stash = await stashFiles(`${base}.restore-stash-${accountId}-${Date.now()}/`, [
+      { dir: dbDir, pattern: DB_FILE_RE },
+      { dir: base, pattern: AVATAR_FILE_RE },
+    ]);
+    try {
+      for (const name of manifest.dbFiles.filter((value) => typeof value === 'string' && DB_FILE_RE.test(value))) {
+        const destination = `${dbDir}${name}`;
+        if (await exists(`${dir}SQLite/${name}`)) await replaceFile(`${dir}SQLite/${name}`, destination);
+      }
+      for (const name of manifest.avatarFiles.filter((value) => typeof value === 'string' && AVATAR_FILE_RE.test(value))) {
+        const destination = `${base}${name}`;
+        if (await exists(`${dir}avatars/${name}`)) await replaceFile(`${dir}avatars/${name}`, destination);
+      }
+      if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
+      else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    } catch (error) {
+      await unstashFiles(stash);
+      if (previousProfileState) {
+        await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
+      } else {
+        await SecureStore.deleteItemAsync(PROFILE_STATE_KEY).catch(() => {});
+      }
+      throw error;
     }
-    for (const name of manifest.avatarFiles.filter((value) => typeof value === 'string' && AVATAR_FILE_RE.test(value))) {
-      const destination = `${base}${name}`;
-      if (await exists(`${dir}avatars/${name}`)) await replaceFile(`${dir}avatars/${name}`, destination);
-    }
-    if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
-    else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    await FileSystem.deleteAsync(stash.dir, { idempotent: true }).catch(() => {});
     log.info('account_vault_restored', {
       accountId,
       dbFiles: manifest.dbFiles.length,
@@ -393,24 +458,40 @@ export async function restoreAccountVaultArchive(
     const manifestDbFiles = Array.isArray(archive.manifest.dbFiles) ? archive.manifest.dbFiles : [];
     const manifestAvatarFiles = Array.isArray(archive.manifest.avatarFiles) ? archive.manifest.avatarFiles : [];
     const manifestFiles = new Set([...manifestDbFiles, ...manifestAvatarFiles]);
-    await removeUnlistedFiles(`${base}SQLite/`, manifestDbFiles, DB_FILE_RE);
-    await removeUnlistedFiles(base, manifestAvatarFiles, AVATAR_FILE_RE);
-    for (const file of archive.files) {
-      if (!file || typeof file.name !== 'string' || !manifestFiles.has(file.name)
-        || !isSafeVaultFile(file.name) || typeof file.dataB64 !== 'string') continue;
-      const destination = DB_FILE_RE.test(file.name)
-        ? `${base}SQLite/${file.name}`
-        : `${base}${file.name}`;
-      const temporary = `${destination}.restore-${Date.now()}`;
-      await FileSystem.deleteAsync(temporary, { idempotent: true });
-      await FileSystem.writeAsStringAsync(temporary, file.dataB64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      await FileSystem.deleteAsync(destination, { idempotent: true });
-      await FileSystem.moveAsync({ from: temporary, to: destination });
+    // v4.32.617: как и восстановление из копии на устройстве, разбор архива
+    // сначала уводит текущие файлы в сторону. Оборвётся на середине — вернём.
+    const previousProfileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);
+    const stash = await stashFiles(`${base}.archive-stash-${accountId}-${Date.now()}/`, [
+      { dir: `${base}SQLite/`, pattern: DB_FILE_RE },
+      { dir: base, pattern: AVATAR_FILE_RE },
+    ]);
+    try {
+      for (const file of archive.files) {
+        if (!file || typeof file.name !== 'string' || !manifestFiles.has(file.name)
+          || !isSafeVaultFile(file.name) || typeof file.dataB64 !== 'string') continue;
+        const destination = DB_FILE_RE.test(file.name)
+          ? `${base}SQLite/${file.name}`
+          : `${base}${file.name}`;
+        const temporary = `${destination}.restore-${Date.now()}`;
+        await FileSystem.deleteAsync(temporary, { idempotent: true });
+        await FileSystem.writeAsStringAsync(temporary, file.dataB64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.deleteAsync(destination, { idempotent: true });
+        await FileSystem.moveAsync({ from: temporary, to: destination });
+      }
+      if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
+      else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    } catch (error) {
+      await unstashFiles(stash);
+      if (previousProfileState) {
+        await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
+      } else {
+        await SecureStore.deleteItemAsync(PROFILE_STATE_KEY).catch(() => {});
+      }
+      throw error;
     }
-    if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
-    else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    await FileSystem.deleteAsync(stash.dir, { idempotent: true }).catch(() => {});
     log.info('account_vault_archive_restored', {
       accountId,
       files: archive.files.length,

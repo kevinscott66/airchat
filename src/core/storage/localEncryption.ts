@@ -79,8 +79,15 @@ export async function readDekFromSecureStoreRaw(): Promise<Uint8Array | null> {
   return dek;
 }
 
-/** Ключ из SecureStore с различением «нет», «испорчен» и «не прочитался». */
-async function observeStoredDek(): Promise<{ state: StoredKeyState; dek: Uint8Array | null }> {
+/**
+ * Ключ из SecureStore с различением «нет», «испорчен» и «не прочитался».
+ *
+ * Наружу — для копии аккаунта: та сверяет отпечаток ключа перед тем, как
+ * затереть базу, и обязана отличать «ключа на устройстве нет» (чистая
+ * установка, сверять не с чем) от «Keychain не ответил» (сверять НАДО, но
+ * сейчас нечем). `readDekFromSecureStoreRaw` их не различает.
+ */
+export async function observeStoredDek(): Promise<{ state: StoredKeyState; dek: Uint8Array | null }> {
   let b64: string | null;
   try {
     b64 = await SecureStore.getItemAsync(DEK_KEY);

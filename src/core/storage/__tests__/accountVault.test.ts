@@ -1,6 +1,9 @@
 const mockFiles = new Map<string, string>();
 const mockDirs = new Set<string>();
 const mockSecure = new Map<string, string>();
+const mockLockedKeys = new Set<string>();
+const mockFailCopyTo = new Set<string>();
+const mockFailWriteContaining = new Set<string>();
 
 function mockChildren(uri: string): string[] {
   const prefix = uri.endsWith('/') ? uri : `${uri}/`;
@@ -21,15 +24,24 @@ jest.mock('expo-file-system/legacy', () => ({
   makeDirectoryAsync: jest.fn(async (uri: string) => { mockDirs.add(uri); }),
   readDirectoryAsync: jest.fn(async (uri: string) => mockChildren(uri)),
   copyAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
+    if (mockFailCopyTo.has(to)) throw new Error(`copy failed ${to}`);
     const value = mockFiles.get(from);
     if (value === undefined) throw new Error(`missing ${from}`);
     mockFiles.set(to, value);
   }),
-  writeAsStringAsync: jest.fn(async (uri: string, value: string) => { mockFiles.set(uri, value); }),
+  writeAsStringAsync: jest.fn(async (uri: string, value: string) => {
+    for (const needle of mockFailWriteContaining) if (uri.includes(needle)) throw new Error(`write failed ${uri}`);
+    mockFiles.set(uri, value);
+  }),
   readAsStringAsync: jest.fn(async (uri: string) => mockFiles.get(uri) ?? ''),
   deleteAsync: jest.fn(async (uri: string) => {
-    for (const key of [...mockFiles.keys()]) if (key === uri || key.startsWith(uri)) mockFiles.delete(key);
-    for (const key of [...mockDirs]) if (key === uri || key.startsWith(uri)) mockDirs.delete(key);
+    // Настоящая файловая система удаляет ИМЕННО этот путь: `foo.db` не уносит
+    // с собой `foo.db.restore-17…`. Каталог (путь с косой чертой на конце) —
+    // вместе с содержимым.
+    const prefix = uri.endsWith('/') ? uri : `${uri}/`;
+    const hit = (key: string) => key === uri || key.startsWith(prefix);
+    for (const key of [...mockFiles.keys()]) if (hit(key)) mockFiles.delete(key);
+    for (const key of [...mockDirs]) if (hit(key)) mockDirs.delete(key);
   }),
   moveAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
     for (const key of [...mockFiles.keys()]) {
@@ -42,7 +54,10 @@ jest.mock('expo-file-system/legacy', () => ({
 }));
 
 jest.mock('../secureStoreQueued', () => ({
-  getItemAsync: jest.fn(async (key: string) => mockSecure.get(key) ?? null),
+  getItemAsync: jest.fn(async (key: string) => {
+    if (mockLockedKeys.has(key)) throw new Error('User interaction is not allowed.');
+    return mockSecure.get(key) ?? null;
+  }),
   setItemAsync: jest.fn(async (key: string, value: string) => { mockSecure.set(key, value); }),
   deleteItemAsync: jest.fn(async (key: string) => { mockSecure.delete(key); }),
 }));
@@ -60,6 +75,9 @@ import {
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 beforeEach(() => {
+  mockLockedKeys.clear();
+  mockFailCopyTo.clear();
+  mockFailWriteContaining.clear();
   mockFiles.clear();
   mockDirs.clear();
   mockSecure.clear();
@@ -197,3 +215,137 @@ describe('испорченный список профилей', () => {
     expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('рабочая база этого устройства');
   });
 });
+
+/**
+ * v4.32.617. Отпечаток ключа — единственное, что не даёт копии лечь поверх
+ * данных другого ключа. Читался он `readDekFromSecureStoreRaw`, который
+ * возвращает null и когда ключа нет, и когда Keychain отказал: «User
+ * interaction is not allowed» на запертом телефоне. Оба случая читались как
+ * разрешение — и восстановление, которое СНАЧАЛА стирает базу, шло вслепую.
+ */
+describe('запертый Keychain: сверять нечем — значит нельзя', () => {
+  const KEY_A = Buffer.from(new Uint8Array(32).fill(1)).toString('base64');
+  const manifestUri = () =>
+    `/doc/airchat_account_vault_v1/${accountVaultIdFromMnemonic(MNEMONIC)}/manifest.json`;
+
+  const snapshotUnderKeyA = async () => {
+    mockSecure.set(DEK_KEY, KEY_A);
+    expect(await snapshotAccountVault(MNEMONIC, null)).toBe(true);
+    mockFiles.set('/doc/SQLite/airchat_local.db', 'рабочая база этого устройства');
+  };
+
+  it('восстановление не идёт, пока ключ не прочитать', async () => {
+    await snapshotUnderKeyA();
+    mockLockedKeys.add(DEK_KEY);
+    expect(await restoreAccountVault(MNEMONIC)).toBe(false);
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('рабочая база этого устройства');
+  });
+
+  it('проверка не пустая: тот же ключ, но читаемый — восстановление идёт', async () => {
+    await snapshotUnderKeyA();
+    expect(await restoreAccountVault(MNEMONIC)).toBe(true);
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('local ciphertext');
+  });
+
+  it('копия без отпечатка не создаётся: лучше её отсутствие, чем без сверки', async () => {
+    mockSecure.set(DEK_KEY, KEY_A);
+    mockLockedKeys.add(DEK_KEY);
+    expect(await snapshotAccountVault(MNEMONIC, null)).toBe(false);
+    expect(mockFiles.has(manifestUri())).toBe(false);
+  });
+
+  it('проверка не пустая: с читаемым ключом отпечаток на месте', async () => {
+    mockSecure.set(DEK_KEY, KEY_A);
+    expect(await snapshotAccountVault(MNEMONIC, null)).toBe(true);
+    expect(JSON.parse(mockFiles.get(manifestUri()) as string).dekFp).toHaveLength(16);
+  });
+});
+
+/**
+ * Восстановление — самое разрушительное действие приложения (v4.32.617).
+ *
+ * Дефект. Рабочие файлы стирались ПЕРВЫМИ, а копия ложилась на их место
+ * потом. Между этими шагами нет ничего, что вернуло бы стёртое: кончилось
+ * место, отказала файловая система, приложение убили — и на устройстве не
+ * остаётся ни рабочей базы, ни восстановленной. Теперь текущие файлы уходят в
+ * сторону и возвращаются, если восстановление сорвалось.
+ */
+describe('сорвавшееся восстановление возвращает устройство как было (v4.32.617)', () => {
+  async function snapshotThenDiverge(): Promise<void> {
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Из копии' }] }));
+    expect(await snapshotAccountVault(MNEMONIC, mockSecure.get(PROFILE_STATE_KEY) ?? null)).toBe(true);
+    // С момента снятия копии устройство ушло вперёд: другие данные, другой
+    // список профилей.
+    mockFiles.set('/doc/SQLite/airchat_local.db', 'рабочая база');
+    mockFiles.set('/doc/SQLite/airchat_feed_p1.db', 'рабочая лента');
+    mockFiles.set('/doc/avatar_123.jpg', 'рабочий аватар');
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Рабочий' }] }));
+  }
+
+  it('обрыв на середине не оставляет устройство без данных', async () => {
+    await snapshotThenDiverge();
+    // Базы к этому моменту уже перезаписаны — падает копирование аватара.
+    mockFailCopyTo.add('/doc/avatar_123.jpg');
+
+    expect(await restoreAccountVault(MNEMONIC)).toBe(false);
+
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('рабочая база');
+    expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('рабочая лента');
+    expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('рабочий аватар');
+    expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Рабочий');
+  });
+
+  it('отложенное не остаётся мусором в документах', async () => {
+    await snapshotThenDiverge();
+    mockFailCopyTo.add('/doc/avatar_123.jpg');
+    expect(await restoreAccountVault(MNEMONIC)).toBe(false);
+    expect([...mockFiles.keys()].filter((key) => key.includes('.restore-stash-'))).toEqual([]);
+    expect([...mockDirs].filter((key) => key.includes('.restore-stash-'))).toEqual([]);
+  });
+
+  it('разбор облачного архива обрывается — файлы устройства тоже возвращаются', async () => {
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Из копии' }] }));
+    expect(await snapshotAccountVault(MNEMONIC, mockSecure.get(PROFILE_STATE_KEY) ?? null)).toBe(true);
+    const archive = await readAccountVaultArchive(MNEMONIC);
+    expect(archive).not.toBeNull();
+    mockFiles.set('/doc/SQLite/airchat_local.db', 'рабочая база');
+    mockFiles.set('/doc/avatar_123.jpg', 'рабочий аватар');
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Рабочий' }] }));
+    mockFailWriteContaining.add('avatar_123.jpg');
+
+    expect(await restoreAccountVaultArchive(MNEMONIC, archive!)).toBe(false);
+
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('рабочая база');
+    expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('рабочий аватар');
+    expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Рабочий');
+    expect([...mockFiles.keys()].filter((key) => key.includes('.archive-stash-'))).toEqual([]);
+  });
+
+  it('проверка не пустая: облачный архив без обрыва раскладывается целиком', async () => {
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Из копии' }] }));
+    expect(await snapshotAccountVault(MNEMONIC, mockSecure.get(PROFILE_STATE_KEY) ?? null)).toBe(true);
+    const archive = await readAccountVaultArchive(MNEMONIC);
+    mockFiles.set('/doc/SQLite/airchat_local.db', 'рабочая база');
+    mockFiles.set('/doc/avatar_123.jpg', 'рабочий аватар');
+    mockSecure.set(PROFILE_STATE_KEY, JSON.stringify({ v: 1, profiles: [{ id: 1, name: 'Рабочий' }] }));
+
+    expect(await restoreAccountVaultArchive(MNEMONIC, archive!)).toBe(true);
+
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('local ciphertext');
+    expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('avatar bytes');
+    expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Из копии');
+  });
+
+  it('проверка не пустая: без обрыва восстановление доводится до конца', async () => {
+    await snapshotThenDiverge();
+
+    expect(await restoreAccountVault(MNEMONIC)).toBe(true);
+
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('local ciphertext');
+    expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('feed ciphertext');
+    expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('avatar bytes');
+    expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Из копии');
+    expect([...mockFiles.keys()].filter((key) => key.includes('.restore-stash-'))).toEqual([]);
+  });
+});
+
