@@ -6,7 +6,7 @@ import { log } from '../core/logger';
 import { vibrationFor } from './vibrationPattern';
 import { getMessagingService, subscribeInAppNotifications } from '../core/social/messaging';
 import { setGroupMessageNotifyCallback } from '../core/social/groupMessaging';
-import { kvGet, kvSet } from '../core/storage/local';
+import { kvGet, kvSetChecked, kvTryGet } from '../core/storage/local';
 import { isMuted } from '../core/notifications/muteStore';
 import { sanitizeDisplayName } from '../core/social/sysLineGuard';
 import { listContacts } from '../core/social/contacts';
@@ -587,9 +587,26 @@ export class PushNotificationService {
     // v4.32.615: дописываем, а не затираем. Токен на устройстве один, а
     // регистраций у ретранслятора столько, сколько личностей им пользовались;
     // уведомление приходит любой из них, и развернуть метку можно только тем
-    // ключом, которому её адресовали. kvSet сам ловит свои отказы и отвечает
-    // boolean — try тут был лишним и не мог сработать ни разу.
-    await kvSet(SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror(await kvGet(SELF_PEER_MIRROR_KEY), signedPeerId));
+    // ключом, которому её адресовали.
+    //
+    // v4.32.649: зеркало, которое не прочиталось, — не пустое зеркало. kvGet
+    // сводил «записи нет» и «прочитать не вышло» в один null, а на нём
+    // mergeSelfPeerMirror даёт список из ОДНОГО ключа и кладёт его поверх:
+    // ключи остальных личностей этого устройства пропадали безвозвратно, их
+    // метки отправителя переставали разворачиваться, а мимо неразвёрнутой
+    // метки проходят и блок-лист, и «беззвучно», и «не показывать при открытом
+    // чате» — вплоть до звонка во весь экран от заблокированного. Хватало
+    // одного заблокированного мига базы на холодном старте, где регистрация
+    // как раз и происходит. Не прочитали — не пишем: старое зеркало целее.
+    //
+    // Здесь же исправлено утверждение прежнего комментария: boolean отдаёт
+    // kvSetChecked, а kvSet — void, то есть отказ записи не видел никто.
+    const mirror = await kvTryGet(SELF_PEER_MIRROR_KEY);
+    if (mirror === null) {
+      log.warn('push_self_peer_mirror_read_failed', {});
+    } else if (!(await kvSetChecked(SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror(mirror.value, signedPeerId)))) {
+      log.warn('push_self_peer_mirror_write_failed', {});
+    }
     // v4.32.179 (Round-9): bounded timeout — signaling may be unreachable; without this
     // fetch can hang indefinitely, blocking init promise chain on cold start.
     const ctrl = new AbortController();

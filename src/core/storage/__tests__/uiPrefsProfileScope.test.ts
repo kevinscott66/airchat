@@ -151,10 +151,21 @@ function walk(dir: string, out: string[] = []): string[] {
 const SRC = path.resolve(__dirname, '../../..');
 const HOME = path.join(SRC, 'core/storage/kvKeys.ts');
 
+/**
+ * Файлы, где имя записи набрано строкой, а не взято из kvKeys.
+ *
+ * v4.32.649: искали голую подстроку, и в улов попадала метка журнала
+ * `recent_reactions_read_failed` — именем записи она не является. Ищем
+ * строковый литерал: набрать ключ мимо kvKeys иначе, чем в кавычках, нельзя.
+ */
 function mentions(needle: string): string[] {
+  const quoted = [`'${needle}'`, `"${needle}"`, '`' + needle + '`'];
   return walk(SRC)
     .filter((f) => f !== HOME && !f.includes('__tests__'))
-    .filter((f) => fs.readFileSync(f, 'utf8').includes(needle))
+    .filter((f) => {
+      const s = fs.readFileSync(f, 'utf8');
+      return quoted.some((q) => s.includes(q));
+    })
     .map((f) => path.relative(SRC, f));
 }
 
@@ -163,6 +174,12 @@ describe('форма исходников', () => {
     expect(mentions(RECENT_REACTIONS_KEY)).toEqual([]);
     expect(mentions(RECENT_EMOJIS_PANEL_KEY)).toEqual([]);
     expect(mentions(TRANSLATION_TARGET_LANG_KEY)).toEqual([]);
+  });
+
+  it('проверка не пустая: набранный строкой ключ находится', () => {
+    // Запись автозагрузки медиа в kvKeys не переехала и живёт литералом —
+    // если бы mentions ничего не находил, три проверки выше были бы пустыми.
+    expect(mentions('auto_download_media')).toContain('ui/screens/SettingsScreen.tsx');
   });
 
   it('все четыре экрана читают их через profileScopedKv', () => {
@@ -196,7 +213,10 @@ describe('форма исходников', () => {
       expect(src).not.toContain("m.kvGet('");
       expect(src).not.toContain("m.kvSet('");
     }
-    expect(panel).toContain('void scopedKvGet(RECENT_EMOJIS_PANEL_KEY).then(');
+    // v4.32.649: и не просто через namespace, а различая три исхода — иначе
+    // сбой чтения выглядел как «недавних нет», и запись стирала накопленное.
+    expect(panel).toContain('void scopedKvTryGet(RECENT_EMOJIS_PANEL_KEY).then(');
+    expect(panel).not.toContain('scopedKvGet(');
     expect(chat).toContain('await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));');
   });
 });

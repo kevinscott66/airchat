@@ -15,7 +15,8 @@ import { AppPressable } from '../../components/AppPressable';
 import { useTheme } from '../../ThemeContext';
 import { radius, scrim } from '../../theme';
 import { RECENT_EMOJIS_PANEL_KEY } from '../../../core/storage/kvKeys';
-import { scopedKvGet, scopedKvSet } from '../../../core/storage/profileScopedKv';
+import { scopedKvSet, scopedKvTryGet } from '../../../core/storage/profileScopedKv';
+import { log } from '../../../core/logger';
 import {
   EMOJI_CATEGORIES,
   EMOJI_SEARCH_HINTS,
@@ -43,15 +44,34 @@ export function EmojiPanel({
   const [skinTarget, setSkinTarget] = useState<string | null>(null);
   const [emojiSearchQ, setEmojiSearchQ] = useState('');
   const [recentEmojis, setRecentEmojis] = useState<string[]>([]);
+  /**
+   * Список недавних прочитан с диска (v4.32.649).
+   *
+   * Пустой список — законный ответ: до первого выбранного эмодзи там правда
+   * ничего нет. Но точно такой же пустой список отдавал и сбой чтения, а
+   * следующее нажатие писало поверх — двадцать четыре сохранённых эмодзи
+   * заменялись одним, и взять их было уже неоткуда. Пишет только тот, кто
+   * прочитал; до тех пор панель работает, просто ничего не запоминает.
+   *
+   * Тот же флаг закрывает и окно до конца чтения: оно асинхронное, ввод им не
+   * блокируется, и нажатие в первые миги оставляло на диске список из одного.
+   */
+  const [recentsLoaded, setRecentsLoaded] = useState(false);
   const cat = EMOJI_CATEGORIES[catIdx];
 
   useEffect(() => {
     // v4.32.190 (Round-20 #5): alive guard + Array.isArray shape check.
     let alive = true;
-    void scopedKvGet(RECENT_EMOJIS_PANEL_KEY).then((raw) => {
-      if (!alive || !raw) return;
+    void scopedKvTryGet(RECENT_EMOJIS_PANEL_KEY).then((got) => {
+      if (!alive) return;
+      if (got === null) {
+        log.warn('recent_emojis_read_failed', {});
+        return;
+      }
+      setRecentsLoaded(true);
+      if (!got.value) return;
       try {
-        const p = JSON.parse(raw);
+        const p = JSON.parse(got.value);
         if (Array.isArray(p)) setRecentEmojis(p.filter((x): x is string => typeof x === 'string').slice(0, 24));
       } catch { /* ignore */ }
     });
@@ -60,11 +80,9 @@ export function EmojiPanel({
 
   const handleEmoji = (emoji: string) => {
     onEmoji(emoji);
-    setRecentEmojis((prev) => {
-      const next = [emoji, ...prev.filter((e) => e !== emoji)].slice(0, 24);
-      void scopedKvSet(RECENT_EMOJIS_PANEL_KEY, JSON.stringify(next));
-      return next;
-    });
+    const next = [emoji, ...recentEmojis.filter((e) => e !== emoji)].slice(0, 24);
+    setRecentEmojis(next);
+    if (recentsLoaded) void scopedKvSet(RECENT_EMOJIS_PANEL_KEY, JSON.stringify(next));
   };
 
   const allEmojis = EMOJI_CATEGORIES.flatMap((c) => c.emojis);

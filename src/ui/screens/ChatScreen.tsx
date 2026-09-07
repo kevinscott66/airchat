@@ -136,7 +136,7 @@ import {
 } from '../../core/social/cloudTranslate';
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
 import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
-import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
+import { scopedKvGet, scopedKvSet, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { mergeChatWindow } from '../../core/utils/mergeChatWindow';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
 import { MAX_MESSAGE_TEXT } from '../../core/social/messageTextLimit';
@@ -2539,10 +2539,18 @@ function ChatThreadView({
   );
 
   const addRecentReaction = useCallback(async (emoji: string) => {
-    const raw = await scopedKvGet(RECENT_REACTIONS_KEY);
+    // v4.32.649: список, который не прочитался, — не пустой список. Прежде
+    // сбой чтения давал ровно те же `[]`, и строка записи ниже клала поверх
+    // сохранённого список из одной реакции: восемь накопленных исчезали
+    // навсегда. Не прочитали — не пишем; следующее нажатие попробует снова.
+    const got = await scopedKvTryGet(RECENT_REACTIONS_KEY);
+    if (got === null) {
+      log.warn('recent_reactions_read_failed', {});
+      return;
+    }
     let list: string[] = [];
     // v4.32.184 (Round-14 #5): Array.isArray guard.
-    try { const p = raw ? JSON.parse(raw) : null; if (Array.isArray(p)) list = p as string[]; } catch { /* */ }
+    try { const p = got.value ? JSON.parse(got.value) : null; if (Array.isArray(p)) list = p as string[]; } catch { /* */ }
     list = [emoji, ...list.filter((e) => e !== emoji)].slice(0, 8);
     await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));
     setRecentReactions(list);

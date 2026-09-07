@@ -301,7 +301,18 @@ describe('зеркало своих ключей', () => {
   it('зеркало дописывают, а не перезаписывают', () => {
     // Храповик: затирание вернуло бы промах метки у всех личностей, кроме
     // зарегистрированной последней.
+    //
+    // v4.32.649: и дописывают только поверх ПРОЧИТАННОГО. kvGet отдавал на
+    // сбое тот же null, что и на пустой записи, а слияние с null — это список
+    // из одного ключа, то есть то же затирание, только незаметное.
     const src = read('pushNotifications.ts');
-    expect(src).toMatch(/kvSet\(SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror\(await kvGet\(SELF_PEER_MIRROR_KEY\)/);
+    expect(src).toContain('const mirror = await kvTryGet(SELF_PEER_MIRROR_KEY);');
+    expect(src).toContain('mergeSelfPeerMirror(mirror.value, signedPeerId)');
+    expect(src).not.toContain('kvGet(SELF_PEER_MIRROR_KEY)');
+    const body = src.slice(src.indexOf('const mirror = await kvTryGet(SELF_PEER_MIRROR_KEY);'));
+    const guard = body.indexOf('if (mirror === null) {');
+    const write = body.indexOf('kvSetChecked(SELF_PEER_MIRROR_KEY');
+    expect(guard).toBeGreaterThan(0);
+    expect(write).toBeGreaterThan(guard);
   });
 });

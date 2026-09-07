@@ -142,7 +142,7 @@ import {
 } from '../../core/social/cloudTranslate';
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
 import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, groupConvId, groupLastSentKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
-import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
+import { scopedKvGet, scopedKvSet, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { AnimatedDots } from '../components/AnimatedDots';
 // v4.32.227 (BUG-09): тёмный прокручиваемый action-sheet — замена Alert-меню,
 // которые на Android обрезаются до 3 кнопок и становятся неотменяемыми.
@@ -1682,12 +1682,21 @@ function GroupChatScreen({
       // участники её не увидят, а автор будет уверен, что увидели.
       if (res.warning) showError(res.warning);
       if (res.on) {
-        const raw = await scopedKvGet(RECENT_REACTIONS_KEY);
-        let list: string[] = [];
-        try { list = raw ? (JSON.parse(raw) as string[]) : []; } catch { /* */ }
-        list = [emoji, ...list.filter((e) => e !== emoji)].slice(0, 8);
-        await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));
-        setGrpRecentReactions(list);
+        // v4.32.649: список, который не прочитался, — не пустой список. То же
+        // правило и по той же причине, что в ChatScreen.addRecentReaction.
+        // Заодно форма проверяется как там: JSON.parse отдаёт что угодно, а
+        // .filter по числу бросает — и падало это в общий catch реакции,
+        // объявляя человеку неудачу уже поставленной реакции.
+        const got = await scopedKvTryGet(RECENT_REACTIONS_KEY);
+        if (got === null) {
+          log.warn('recent_reactions_read_failed', {});
+        } else {
+          let list: string[] = [];
+          try { const p = got.value ? JSON.parse(got.value) : null; if (Array.isArray(p)) list = p as string[]; } catch { /* */ }
+          list = [emoji, ...list.filter((e) => e !== emoji)].slice(0, 8);
+          await scopedKvSet(RECENT_REACTIONS_KEY, JSON.stringify(list));
+          setGrpRecentReactions(list);
+        }
       }
       void loadMessages();
     } catch (e) {
