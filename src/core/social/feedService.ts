@@ -938,10 +938,12 @@ function scheduleFeedPublishRetry(pair: KeyPairBytes, delayMs: number): void {
       const q = await myQueueItems(p);
       // Пустая очередь постов ещё не значит, что повторять нечего: неудавшееся
       // удаление копии по ссылке живёт своей записью и тоже держит таймер.
-      const pendingLinkDeletes = (await loadLinkDeleteOutbox()).length;
+      // v4.32.646: непрочитанная очередь удалений тоже держит таймер — иначе
+      // один сбой чтения оставляет копию на сервере до следующего запуска.
+      const links = await loadLinkDeleteOutbox();
       // v4.32.645: `null` — очередь не прочиталась. Гасить таймер по такому
       // ответу значит бросить её до следующего запуска приложения.
-      if (q === null || q.length > 0 || pendingLinkDeletes > 0) {
+      if (q === null || q.length > 0 || links === null || links.length > 0) {
         const r = q?.[0]?.retries ?? 0;
         const nextDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.min(r, 6)), 180_000);
         scheduleFeedPublishRetry(p, nextDelay);
@@ -2284,7 +2286,9 @@ async function buildOwnPostEnvelope(
  * прошла раньше их `deletePost`, их запрос уйдёт позже нашего PUT и уберёт
  * копию; а если позже — публикации мы уже не увидим и уберём копию сами.
  *
- * `true` — публикации нет, копию убрали или поставили в очередь повторов.
+ * `true` — публикации нет. Копию при этом либо убрали, либо поставили в
+ * очередь повторов; если не удалось ни то ни другое, об этом остаётся запись в
+ * журнале, а ссылка в любом случае отвечает «не выложено».
  */
 async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<boolean> {
   const s = await ensureStorage();
@@ -4004,8 +4008,23 @@ type LinkDeleteItem = {
   createdAt: number;
 };
 
-async function loadLinkDeleteOutbox(): Promise<LinkDeleteItem[]> {
-  const raw = await kvGet(LINK_DELETE_OUTBOX_KEY);
+/**
+ * Очередь отложенных удалений копий. `null` — строку не удалось прочитать.
+ *
+ * v4.32.646: прежде читали через `kvGet`, который отвечает `null` и когда
+ * строки нет, и когда её не прочитали. Сбой чтения означал «удалять нечего», и
+ * следующая же запись клала поверх файла очередь, собранную из ничего:
+ * `queueLinkCopyDelete` оставлял в ней одну свою запись, а остальные копии
+ * оставались лежать на сервере навсегда — открытые по ссылке кому угодно, а не
+ * только контактам, при том что сама публикация у человека уже стёрта.
+ */
+async function loadLinkDeleteOutbox(): Promise<LinkDeleteItem[] | null> {
+  const read = await kvTryGet(LINK_DELETE_OUTBOX_KEY);
+  if (read === null) {
+    log.warn('feed_link_delete_read_failed', {});
+    return null;
+  }
+  const raw = read.value;
   if (!raw) return [];
   try {
     const p = JSON.parse(raw) as unknown;
@@ -4024,11 +4043,52 @@ async function loadLinkDeleteOutbox(): Promise<LinkDeleteItem[]> {
   } catch { return []; }
 }
 
-async function saveLinkDeleteOutbox(q: LinkDeleteItem[]): Promise<void> {
-  try { await kvSet(LINK_DELETE_OUTBOX_KEY, JSON.stringify(q.slice(0, LINK_DELETE_MAX_ITEMS))); }
-  catch (e) {
+/** Записать очередь целиком. `false` — не легла, на диске осталась прежняя. */
+async function saveLinkDeleteOutbox(q: LinkDeleteItem[]): Promise<boolean> {
+  // v4.32.646: kvSet гасит свой отказ и возвращает void. Запись повтора,
+  // которой не случилось, выглядела ровно так же, как удавшаяся.
+  try {
+    if (await kvSetChecked(LINK_DELETE_OUTBOX_KEY, JSON.stringify(q.slice(0, LINK_DELETE_MAX_ITEMS)))) return true;
+    log.warn('feed_link_delete_outbox_save_failed', { count: q.length });
+    return false;
+  } catch (e) {
     log.warn('feed_link_delete_outbox_save_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
+}
+
+/**
+ * Единственный владелец файла очереди удалений (v4.32.646).
+ *
+ * Тот же порядок, что у очереди публикации и очереди комментариев: чтение и
+ * запись идут одной неделимой операцией, `apply` синхронна. Прежде
+ * `queueLinkCopyDelete` и `flushLinkDeleteOutbox` читали и писали файл
+ * вперемежку: удаление, поставленное в очередь между чтением прохода и его
+ * записью, затиралось хвостом прохода — и копия оставалась на сервере навсегда.
+ *
+ * Не прочитали или не записали — изменения не происходит вовсе, очередь на
+ * диске остаётся прежней, а вызывающий узнаёт об этом ошибкой.
+ */
+const LINK_DELETE_UNAVAILABLE = 'feed_link_delete_unavailable';
+let linkDeleteTx: Promise<unknown> = Promise.resolve();
+async function updateLinkDeleteOutbox<T>(
+  apply: (q: LinkDeleteItem[]) => { next: LinkDeleteItem[]; value: T }
+): Promise<T> {
+  const run = async (): Promise<T> => {
+    const current = await loadLinkDeleteOutbox();
+    if (current === null) throw new Error(LINK_DELETE_UNAVAILABLE);
+    const { next, value } = apply(current);
+    if (!(await saveLinkDeleteOutbox(next))) throw new Error(LINK_DELETE_UNAVAILABLE);
+    return value;
+  };
+  const started = linkDeleteTx.then(run, run);
+  linkDeleteTx = started.catch(() => { /* очередь транзакций не рвётся об одну неудачу */ });
+  return started;
+}
+
+/** Ключ записи очереди: одна копия на пару «публикация + чей ключ её удаляет». */
+function linkDeleteKey(it: LinkDeleteItem): string {
+  return `${it.authorDid}\u0000${it.postId}`;
 }
 
 /** Конверт удаления — тот же, что уходит контактам, но нужен отдельно при повторе. */
@@ -4050,36 +4110,69 @@ async function dropPublicPostCopy(pair: KeyPairBytes, payload: FeedEnvelopePaylo
   } catch { return false; }
 }
 
-async function queueLinkCopyDelete(pair: KeyPairBytes, postId: string): Promise<void> {
+/** Поставить удаление копии в очередь повторов. `false` — запись не легла. */
+async function queueLinkCopyDelete(pair: KeyPairBytes, postId: string): Promise<boolean> {
   const authorDid = publicKeyToDidKey(pair.publicKey);
-  const q = await loadLinkDeleteOutbox();
-  if (q.some((it) => it.postId === postId && it.authorDid === authorDid)) return;
-  q.push({ postId, authorDid, createdAt: Date.now() });
-  await saveLinkDeleteOutbox(q);
-  log.warn('feed_link_delete_queued', { postId: postId.slice(0, 24), size: q.length });
+  const createdAt = Date.now();
+  try {
+    const size = await updateLinkDeleteOutbox((q) => (
+      q.some((it) => it.postId === postId && it.authorDid === authorDid)
+        ? { next: q, value: q.length }
+        : { next: [...q, { postId, authorDid, createdAt }], value: q.length + 1 }
+    ));
+    log.warn('feed_link_delete_queued', { postId: postId.slice(0, 24), size });
+  } catch (e) {
+    // v4.32.646: повтора не будет — копия останется на сервере до тех пор, пока
+    // человек не удалит публикацию ещё раз. Молчать об этом нельзя.
+    log.warn('feed_link_delete_queue_failed', {
+      postId: postId.slice(0, 24),
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
   scheduleFeedPublishRetry(pair, RETRY_DELAY_MS);
+  return true;
 }
 
 /** Повтор отложенных удалений копий. Берёт только записи своего ключа. */
 async function flushLinkDeleteOutbox(pair: KeyPairBytes): Promise<void> {
   const q = await loadLinkDeleteOutbox();
-  if (q.length === 0) return;
+  if (q === null || q.length === 0) return;
   const myDid = publicKeyToDidKey(pair.publicKey);
   const now = Date.now();
-  const left: LinkDeleteItem[] = [];
+  /** Что этот проход разобрал и можно убирать из очереди. */
+  const settled = new Set<string>();
   for (const it of q) {
     if (now - it.createdAt > LINK_DELETE_TTL_MS) {
       log.warn('feed_link_delete_ttl_dropped', { postId: it.postId.slice(0, 24) });
+      settled.add(linkDeleteKey(it));
       continue;
     }
-    if (it.authorDid !== myDid) { left.push(it); continue; }
+    if (it.authorDid !== myDid) continue;
     if (await dropPublicPostCopy(pair, linkDeletePayload(myDid, it.postId))) {
       log.info('feed_link_delete_done', { postId: it.postId.slice(0, 24) });
-      continue;
+      settled.add(linkDeleteKey(it));
     }
-    left.push(it);
   }
-  if (left.length !== q.length) await saveLinkDeleteOutbox(left);
+  if (settled.size === 0) return;
+  try {
+    // v4.32.646: итог прохода накладывается на ТЕКУЩУЮ очередь, а не на снимок,
+    // прочитанный до похода в сеть. Прежде хвост прохода писал этот снимок
+    // целиком, и удаление, поставленное в очередь пока шла сеть, исчезало
+    // вместе с ним — копия оставалась на сервере навсегда.
+    await updateLinkDeleteOutbox((cur) => ({
+      next: cur.filter((it) => !settled.has(linkDeleteKey(it))),
+      value: undefined,
+    }));
+  } catch (e) {
+    // Записи остаются в очереди: следующий проход попросит сервер удалить уже
+    // удалённое, и тот ответит «нет такой». Это дешевле, чем потерять запись о
+    // копии, которая на сервере ещё лежит.
+    log.warn('feed_link_delete_commit_skipped', {
+      settled: settled.size,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 /** Сколько контактов приняли `feed_delete`: `total` — кому слали, `success` — кто принял. */

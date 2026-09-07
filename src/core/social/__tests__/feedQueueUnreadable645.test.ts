@@ -254,7 +254,9 @@ describe('форма источника: отказ очереди виден в
   test('таймер повтора не гаснет от непрочитанной очереди', () => {
     expect(CODE).toContain('async function myQueueItems(pair: KeyPairBytes): Promise<QueuedFeedItem[] | null> {');
     expect(CODE).toContain('if (mine === null || mine.length > 0) {');
-    expect(CODE).toContain('if (q === null || q.length > 0 || pendingLinkDeletes > 0) {');
+    // v4.32.646: то же правило распространено на очередь удалений копий —
+    // непрочитанная она тоже держит таймер, а не гасит его.
+    expect(CODE).toContain('if (q === null || q.length > 0 || links === null || links.length > 0) {');
   });
 
   test('репост, не попавший в очередь, не называется поставленным в очередь', () => {
