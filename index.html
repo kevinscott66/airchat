@@ -55,6 +55,12 @@
           var m = /[?&]l=([^&]*)/.exec(window.location.search || '');
           if (!m) return;
           var rest = decodeURIComponent(m[1]);
+          // У ссылки могли быть служебные метки вроде `?utm_source=…`.
+          // Разборщик ссылок приложения их игнорирует, а здесь они раньше
+          // целиком ломали строгую проверку пути и ссылка открывала главную.
+          // Процентно закодированный `?` остаётся `%3F` после одного decode и
+          // потому всё ещё проходит как часть законного сегмента.
+          rest = rest.split(/[?#]/, 1)[0];
           if (!/^[A-Za-z0-9._~:@+%-]+(\/[A-Za-z0-9._~:@+%-]+)*$/.test(rest)) return;
           if (rest.length > 4096) return;
           window.history.replaceState(null, '', '/l/' + rest);
@@ -65,6 +71,6 @@
     </script>
     <noscript>Для работы AirChat нужен JavaScript.</noscript>
     <div id="root"></div>
-  <script src="/_expo/static/js/web/__expo-metro-runtime-1f8f5d3ca6b7f58204d51e14506d73fb.js" defer></script><script src="/_expo/static/js/web/__common-2e57132804c9a070192c4efbf5d890a8.js" defer></script><script src="/_expo/static/js/web/index-80d4d52f67b654a477ed9678daf7ad2b.js" defer></script>
+  <script src="/_expo/static/js/web/__expo-metro-runtime-1f8f5d3ca6b7f58204d51e14506d73fb.js" defer></script><script src="/_expo/static/js/web/__common-f7d8cbfc504a68a976d05ed5b50a1cb9.js" defer></script><script src="/_expo/static/js/web/index-f984b5aa0c032e9f5ad8a5b89dc063d6.js" defer></script>
 </body>
 </html>
