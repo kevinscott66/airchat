@@ -76,6 +76,17 @@ const HIDDEN_PEERS_KEY = 'presence:hidden_peers';
  */
 let presencePid = 1;
 
+/**
+ * Профиль, под которым служба поднята сейчас (v4.32.656).
+ *
+ * Нужен тем, кто хранит своё состояние рядом с её памятью: решение «кто видит,
+ * когда я в сети» лежит в модуле в одном экземпляре, и трогать его от имени
+ * другого номера нельзя — см. presencePrefSync.currentVisibility.
+ */
+export function presenceOwnerPid(): number {
+  return presencePid;
+}
+
 /** Map<peerPubB64, timestampMs> — in-memory кэш. */
 const lastSeenCache = new Map<string, number>();
 
@@ -700,6 +711,15 @@ export async function stopPresenceBroadcast(): Promise<void> {
   peerStatusCache.clear();
   hiddenPeers.clear();
   hiddenPeersKnown = false;
+  // v4.32.656: своё решение «кто видит моё время входа» — такая же
+  // прочитанная-один-раз память профиля, как hiddenPeersKnown, и уходит вместе
+  // с ним. Оставшееся от прошлого аккаунта 'everybody' разрешало рассылать
+  // присутствие нового ещё до того, как его настройку успели прочитать:
+  // безопасный путь (loadPersistedPresence) при переключении может и не
+  // добежать, а эта уборка выполняется всегда. Следующий такт рассылки
+  // перечитает настройку сам — см. loadMyLastSeenVisibility в broadcast.
+  myVisibility = 'everybody';
+  myVisibilityKnown = false;
 }
 
 log.info('presence_service_loaded');

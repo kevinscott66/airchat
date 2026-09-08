@@ -26,6 +26,7 @@ import {
   setPeerLastSeenAllowedFor,
   setMyLastSeenVisibility,
   effectiveMyLastSeenVisibility,
+  presenceOwnerPid,
 } from './presenceService';
 import { shouldShareLastSeenWith, parseLastSeenVisibility, type LastSeenVisibility } from './presencePolicy';
 import { privacyPrefTryGetFor } from '../settings/privacyPrefs';
@@ -104,18 +105,23 @@ async function sendPref(peerPubB64: string, show: boolean): Promise<boolean> {
 }
 
 async function currentVisibility(pid: number): Promise<LastSeenVisibility> {
+  // v4.32.656: память службы принадлежит тому профилю, под которым она поднята.
+  // Для чужого номера ни брать оттуда запасное решение, ни писать туда своё
+  // нельзя: так настройка одного аккаунта отвечала за рассылку другого — и в
+  // ту, и в другую сторону. Чужому номеру остаётся осторожное 'nobody'.
+  const mine = pid === presenceOwnerPid();
   try {
     // v4.32.311: см. privacyPrefs — настройка своя у каждого аккаунта.
     // v4.32.475: отказ базы больше не читается как 'everybody'. Берём последнее
     // прочитанное решение, а пока ничего не прочитано — осторожное 'nobody':
     // рассылка «показывайте моё время» на пустом месте не отзывается.
     const read = await privacyPrefTryGetFor(pid, 'privacy_last_seen_visibility');
-    if (read === null) return effectiveMyLastSeenVisibility();
+    if (read === null) return mine ? effectiveMyLastSeenVisibility() : 'nobody';
     const v = parseLastSeenVisibility(read.value);
-    setMyLastSeenVisibility(v);
+    if (mine) setMyLastSeenVisibility(v);
     return v;
   } catch {
-    return effectiveMyLastSeenVisibility();
+    return mine ? effectiveMyLastSeenVisibility() : 'nobody';
   }
 }
 

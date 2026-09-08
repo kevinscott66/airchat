@@ -67,6 +67,7 @@ jest.mock('../presenceService', () => ({
   },
   setMyLastSeenVisibility: async () => {},
   effectiveMyLastSeenVisibility: async () => 'everybody',
+  presenceOwnerPid: () => 1,
 }));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryGetFor: async () => ({ value: 'everybody' }),

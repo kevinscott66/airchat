@@ -113,7 +113,14 @@ describe('осторожное решение применяется во все
     const sync = read('social/presencePrefSync.ts');
     // v4.32.479: тот же вызов, но с явным номером профиля (см. sentMap).
     expect(sync).toContain('const read = await privacyPrefTryGetFor(pid, ');
-    expect(sync).toContain('if (read === null) return effectiveMyLastSeenVisibility();');
+    // v4.32.656: запасное решение берётся из памяти службы только для её же
+    // профиля; чужому номеру достаётся 'nobody' (см. presenceOwnerPid).
+    expect(sync).toContain('const mine = pid === presenceOwnerPid();');
+    expect(sync).toContain(
+      "if (read === null) return mine ? effectiveMyLastSeenVisibility() : 'nobody';"
+    );
+    expect(sync).toContain('if (mine) setMyLastSeenVisibility(v);');
+    expect(sync).toContain("return mine ? effectiveMyLastSeenVisibility() : 'nobody';");
     expect(sync).not.toContain("privacyPrefGet('privacy_last_seen_visibility')");
   });
 
