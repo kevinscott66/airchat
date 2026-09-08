@@ -1,5 +1,5 @@
 # Deploy from this directory with: flyctl deploy --remote-only
-app = "airchat-signaling-example"
+app = "airchat-signaling"
 primary_region = "ams"
 
 [build]
