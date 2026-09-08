@@ -89,16 +89,17 @@ function canNotify(): boolean {
 }
 
 /**
- * Разрешение спрашивается лениво, при первом показе, а не на старте.
+ * Разрешение спрашивается только из явного запроса настроек, а не при показе.
  *
  * Chrome и Safari требуют, чтобы `requestPermission` шёл из жеста
- * пользователя, и отказ запоминают навсегда. Спросить на загрузке — почти
- * гарантированно получить `denied` на весь домен.
+ * пользователя, и отказ запоминают надолго. Показ баннера вызывается в том
+ * числе приходом сообщения, то есть почти никогда не является жестом:
+ * запросить разрешение оттуда — получить тихий отказ на весь домен.
  */
-async function ensurePermission(): Promise<boolean> {
+async function ensurePermission(prompt: boolean): Promise<boolean> {
   if (!canNotify()) return false;
   if (Notification.permission === 'granted') return true;
-  if (Notification.permission === 'denied') return false;
+  if (!prompt || Notification.permission === 'denied') return false;
   try {
     return (await Notification.requestPermission()) === 'granted';
   } catch {
@@ -108,7 +109,9 @@ async function ensurePermission(): Promise<boolean> {
 
 async function displayNotification(notification: NotifeeNotification): Promise<string> {
   const id = notification.id ?? `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  if (!(await ensurePermission())) return id;
+  // Приход сообщения — не действие человека. Разрешение запрашивается только
+  // через notifee.requestPermission(), который вызывают настройки приложения.
+  if (!(await ensurePermission(false))) return id;
   try {
     const banner = new Notification(notification.title ?? '', {
       body: notification.body ?? '',
@@ -177,7 +180,7 @@ const notifee = {
     return null;
   },
   async requestPermission(): Promise<{ authorizationStatus: number }> {
-    const granted = await ensurePermission();
+    const granted = await ensurePermission(true);
     return {
       authorizationStatus: granted ? AuthorizationStatus.AUTHORIZED : AuthorizationStatus.DENIED,
     };

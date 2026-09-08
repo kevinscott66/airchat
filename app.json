@@ -47,6 +47,9 @@
     "android": {
       "package": "tech.dobropalm.airchat",
       "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "permissions": [
         "android.permission.USE_FULL_SCREEN_INTENT"
       ],

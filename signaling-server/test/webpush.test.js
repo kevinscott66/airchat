@@ -84,14 +84,28 @@ test('подпиской считается только https-адрес из �
   assert.equal(parseSubscription(null), null);
 });
 
-test('адрес внутрь своей сети подпиской не считается', () => {
-  // Иначе сервер по чужой просьбе стучится в собственный периметр (SSRF).
+test('подписка ограничена доверенными Push API endpoint и не становится SSRF', () => {
+  // HTTPS сам по себе не делает URL безопасным: владелец своего ключа мог
+  // зарегистрировать localhost или DNS-имя, которое указывает во внутреннюю
+  // сеть, а relay затем выполнил бы запрос при отправке push.
   for (const endpoint of [
     'http://127.0.0.1/wp/x',
     'http://169.254.169.254/latest/meta-data/',
+    'https://127.0.0.1/wp/x',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://push.internal.example/wp/x',
+    'https://fcm.googleapis.com.evil.example/wp/x',
+    'https://fcm.googleapis.com:8443/wp/x',
     'file:///etc/passwd',
   ]) {
     assert.equal(parseSubscription(JSON.stringify({ endpoint })), null, endpoint);
+  }
+
+  for (const endpoint of [
+    'https://updates.push.services.mozilla.com/wpush/v2/id',
+    'https://web.push.apple.com/QH9x/id',
+  ]) {
+    assert.ok(parseSubscription(JSON.stringify({ endpoint })), endpoint);
   }
 });
 

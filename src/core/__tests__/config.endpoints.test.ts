@@ -147,6 +147,26 @@ describe('адрес ретранслятора из переменной сбо
     expect(cfg.internet?.wsBase).toBe('wss://mine.example.com');
   });
 
+  it('частичный override не теряет остальные поля production-конфига', async () => {
+    // Spread верхнего уровня заменял bundled.internet целиком на этот один
+    // флаг, поэтому после следующего запуска relay молча возвращался к
+    // публичному ntfy.sh. Override должен иметь старшинство только для полей,
+    // которые в нём действительно записаны.
+    process.env.EXPO_PUBLIC_RELAY_URL = 'https://vault.example.com/relay';
+    const cfg = await loadWithOverride({ internet: { enabled: false } });
+    expect(cfg.internet?.enabled).toBe(false);
+    expect(cfg.internet?.relayBase).toBe('https://vault.example.com/relay');
+    expect(cfg.internet?.wsBase).toBe('wss://vault.example.com/relay');
+  });
+
+  it('saveConfigOverride так же сохраняет production relay при частичном изменении', async () => {
+    process.env.EXPO_PUBLIC_RELAY_URL = 'https://vault.example.com/relay';
+    const cfg = await freshConfig().saveConfigOverride({ internet: { enabled: false } });
+    expect(cfg.internet?.enabled).toBe(false);
+    expect(cfg.internet?.relayBase).toBe('https://vault.example.com/relay');
+    expect(cfg.internet?.wsBase).toBe('wss://vault.example.com/relay');
+  });
+
   it('негодная переменная не оставляет сборку без ретранслятора', async () => {
     process.env.EXPO_PUBLIC_RELAY_URL = 'file:///etc/passwd';
     const cfg = await freshConfig().loadConfig();

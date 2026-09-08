@@ -12,7 +12,11 @@ PORT=3001 npm start
 ```
 
 `GET /health` returns a small readiness response. Deploy behind HTTPS/WSS in
-production. The server accepts `CORS_ORIGIN` (default `*`).
+production. The server accepts `CORS_ORIGIN` (default `*`). `TRUST_PROXY`
+remains off by default: set it only behind a proxy that overwrites
+`Fly-Client-IP` or the last `X-Forwarded-For` hop. The included Fly deployment
+enables it, so connection and registration limits apply to each client rather
+than to Fly's shared proxy.
 
 ## Client contract
 

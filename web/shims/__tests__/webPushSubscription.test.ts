@@ -184,6 +184,13 @@ describe('страница, которую ставят на домашний э
     expect(html).toContain('id="root"');
   });
 
+  it('не теряет ссылку приложения из-за UTM-меток на странице GitHub Pages', () => {
+    const html = read(path.join('public', 'index.html'));
+    // `404.html` возвращает deep link через `?l=…`; внешние метки не относятся
+    // к самой ссылке и parseAppLink их всё равно игнорирует.
+    expect(html).toContain("rest = rest.split(/[?#]/, 1)[0]");
+  });
+
   it('манифест описывает установку, а не украшение', () => {
     const manifest = JSON.parse(read(path.join('public', 'manifest.webmanifest')));
     expect(manifest.display).toBe('standalone');

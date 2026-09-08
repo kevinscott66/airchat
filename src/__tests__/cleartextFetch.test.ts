@@ -74,6 +74,18 @@ describe('открытый http наружу', () => {
   });
 });
 
+describe('Android release manifest', () => {
+  it('не запрашивает возможность рисовать поверх других приложений', () => {
+    // Этот special permission нужен Expo только в debug-вариантах. В release
+    // нет ни одного потребителя, а лишняя возможность увеличивает последствия
+    // любой будущей уязвимости в UI.
+    const appConfig = JSON.parse(readFileSync(join(__dirname, '..', '..', 'app.json'), 'utf8')) as {
+      expo?: { android?: { blockedPermissions?: string[] } };
+    };
+    expect(appConfig.expo?.android?.blockedPermissions).toContain('android.permission.SYSTEM_ALERT_WINDOW');
+  });
+});
+
 describe('cleartextFetchHosts', () => {
   it('находит подстановку хоста — так выглядел прототип', () => {
     expect(cleartextFetchHosts('await fetch(`http://${peer.host}:47320/airchat/message`, {})'))

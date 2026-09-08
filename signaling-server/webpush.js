@@ -38,6 +38,29 @@ const JWT_TTL_SECONDS = 12 * 60 * 60;
 const MAX_SUBSCRIPTION_BYTES = 4096;
 const P256_OID = '06082a8648ce3d030107';
 
+/**
+ * Браузерная подписка не является произвольным вебхуком. Её endpoint выдаёт
+ * один из поставщиков Push API, а сервер впоследствии сам делает к нему
+ * запрос. Одной проверки `https:` здесь недостаточно: `https://127.0.0.1/`
+ * и DNS-имя, указывающее во внутреннюю сеть, тоже являются HTTPS URL и
+ * превращают регистрацию собственного ключа в SSRF.
+ *
+ * Список покрывает поддерживаемые движки: Chromium использует FCM, Firefox —
+ * Mozilla Push, Safari — Apple Push. Нового поставщика добавляем здесь
+ * сознательно, после проверки его endpoint-формата, а не превращаем relay в
+ * общий HTTP-клиент.
+ */
+const TRUSTED_PUSH_HOSTS = [
+  'fcm.googleapis.com',
+  'push.services.mozilla.com',
+  'push.apple.com',
+];
+
+function isTrustedPushHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return TRUSTED_PUSH_HOSTS.some((trusted) => host === trusted || host.endsWith(`.${trusted}`));
+}
+
 function base64url(buffer) {
   return Buffer.from(buffer).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -67,9 +90,11 @@ function parseSubscription(token) {
   } catch {
     return null;
   }
-  // Только https и только наружу: иначе сервер по чужой просьбе постучится
-  // куда угодно внутри своей сети (SSRF).
-  if (url.protocol !== 'https:') return null;
+  // Только HTTPS endpoint известных поставщиков и стандартный порт. Иначе
+  // сервер по чужой просьбе постучится куда угодно внутри своей сети (SSRF).
+  // Проверять «не private IP» недостаточно: DNS-имя можно направить во
+  // внутреннюю сеть уже после регистрации.
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || !isTrustedPushHost(url.hostname)) return null;
   return { endpoint: url.href, origin: url.origin };
 }
 
@@ -190,6 +215,7 @@ module.exports = {
   MESSAGE_TTL_SECONDS,
   JWT_TTL_SECONDS,
   MAX_SUBSCRIPTION_BYTES,
+  TRUSTED_PUSH_HOSTS,
   createWebPushClient,
   generateVapidKeys,
   loadVapid,

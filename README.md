@@ -94,7 +94,7 @@ React Native 0.83 · Expo SDK 55 · Hermes · TypeScript · libp2p / Helia ·
 `@noble/curves`, `@noble/ciphers`, `@noble/hashes` · BIP39 · `did-jwt` ·
 expo-sqlite · React Navigation · Sentry · Gradle / Xcode native modules
 
-176k lines of TypeScript across `src/`, 397 test suites, 6185 tests.
+176k lines of TypeScript across `src/`, 542 test suites, 7768 tests.
 
 ## Build
 

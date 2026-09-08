@@ -32,3 +32,8 @@ primary_region = "ams"
 [env]
   NODE_ENV = "production"
   PUSH_TOKEN_DB = "/data/push-tokens.db"
+  # Fly terminates the public connection before it reaches this machine. Its
+  # proxy overwrites Fly-Client-IP, so opt in to using that address for the
+  # connection and registration limits; otherwise every visitor shares the
+  # proxy address and can exhaust the 16-connection cap for the whole service.
+  TRUST_PROXY = "1"

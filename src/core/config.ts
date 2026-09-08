@@ -342,6 +342,28 @@ function deepMerge<T extends Record<string, unknown>>(base: T, patch: Partial<T>
   return out as T;
 }
 
+/**
+ * Пользователь обычно меняет только один из двух адресов relay. Эта пара
+ * является одной настройкой: HTTP и WebSocket обязаны указывать на один
+ * сервер, иначе отправка и приём расходятся. Подставляем недостающую половину
+ * до merge, пока ещё известно, какое поле пришло именно из override, а какое
+ * было у production-конфига.
+ */
+function completeOverrideRelayPair(patch: Partial<AppConfig>): Partial<AppConfig> {
+  const internet = patch.internet;
+  if (!internet || typeof internet !== 'object') return patch;
+  const hasRelay = Object.prototype.hasOwnProperty.call(internet, 'relayBase');
+  const hasWs = Object.prototype.hasOwnProperty.call(internet, 'wsBase');
+  if (hasRelay === hasWs) return patch;
+  return {
+    ...patch,
+    internet: {
+      ...internet,
+      ...(hasRelay ? { wsBase: internet.relayBase } : { relayBase: internet.wsBase }),
+    },
+  };
+}
+
 function patchIpfsUrlsForAndroid(cfg: AppConfig): AppConfig {
   const addUrls = (cfg.ipfs.addApiUrls ?? []).map((u) => resolveIpfsLoopbackForAndroid(u));
   const gatewayUrls = (cfg.ipfs.gatewayUrls ?? []).map((u) => resolveIpfsLoopbackForAndroid(u));
@@ -574,7 +596,14 @@ export async function loadConfig(): Promise<AppConfig> {
   const patch = await readUserOverride();
   try {
     const bundled = bundledConfig();
-    cached = finalizeConfig(deepMerge(DEFAULT_CONFIG, { ...bundled, ...patch }));
+    // Сначала накладываем заводской конфиг на defaults, затем пользовательский
+    // override — по одному слою за раз. Object spread здесь ломает вложенные
+    // секции: `{ ...bundled, ...patch }` при patch вида
+    // `{ internet: { enabled: false } }` выбрасывает из bundled весь internet,
+    // включая адрес собственного relay из переменной сборки. В итоге простое
+    // выключение транспорта возвращало устройство на публичный ntfy.sh после
+    // следующего запуска.
+    cached = finalizeConfig(deepMerge(deepMerge(DEFAULT_CONFIG, bundled), completeOverrideRelayPair(patch)));
     return cached;
   } catch (e) {
     log.warn('config_load_failed', {
@@ -646,7 +675,7 @@ export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<App
     /* no bundled config — defaults + override only */
   }
   cached = finalizeConfig(
-    deepMerge(DEFAULT_CONFIG, { ...bundled, ...mergedOverride } as Partial<AppConfig>),
+    deepMerge(deepMerge(DEFAULT_CONFIG, bundled), completeOverrideRelayPair(mergedOverride)),
   );
   return cached;
 }
