@@ -34,7 +34,7 @@
     "e2e:two-devices": "node e2e/two-devices-test.js",
     "e2e:two-devices:bash": "bash scripts/auto-cross-test.sh",
     "e2e:two-devices:full": "bash -c 'RESET_APP=${RESET_APP:-1} bash scripts/auto-cross-test.sh'",
-    "deploy:signaling": "cd signaling-server && flyctl deploy --local-only",
+    "deploy:signaling": "cd signaling-server && flyctl deploy --remote-only",
     "android:bundle-release": "bash scripts/android-bundle-release.sh",
     "android:emulator-setup": "bash scripts/setup-android-emulator.sh",
     "android:emulator": "bash scripts/start-android-emulator.sh",
