@@ -34,6 +34,13 @@
 #      релизного APK по ABI. Универсальный APK весит 123 МБ и не влезает в
 #      лимит GitHub (100 МБ), поэтому сборка для сайта идёт с
 #      -Pairchat.abiSplits=true -Pexpo.useLegacyPackaging=true.
+#   8. android/app/build.gradle — релизная подпись из ~/.airchat-release/
+#      keystore.properties. По умолчанию expo подписывает release тем же
+#      отладочным ключом, что и debug: такой APK нельзя выкладывать на сайт
+#      (ключ лежит в каждом checkout'е, подделать сборку может кто угодно).
+#      Файла с ключом нет в репозитории и не будет — при его отсутствии
+#      правка молча оставляет отладочную подпись, чтобы сборка на чужой
+#      машине не ломалась.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -176,6 +183,80 @@ new = """    /**
 assert s.count(old) == 1, 'packagingOptions anchor not found in app/build.gradle'
 p.write_text(s.replace(old, new, 1))
 PY7
+fi
+
+# 8. release signingConfig
+if grep -q "airchat-release" "$GRADLE"; then
+  echo "[patch] release signingConfig already present, skipping"
+else
+  echo "[patch] adding release signingConfig to $GRADLE"
+  GRADLE="$GRADLE" python3 - <<'PY8'
+import os, pathlib
+p = pathlib.Path(os.environ['GRADLE'])
+s = p.read_text()
+
+# 8a. signingConfigs { ... } — добавить release рядом с debug.
+old_cfg = """    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+"""
+new_cfg = """    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        /**
+         * airchat-release: ключ для сборок, которые уезжают людям.
+         *
+         * Файл с ключом и паролями лежит ВНЕ репозитория — ~/.airchat-release/
+         * keystore.properties, права 0600. В git его нет и не будет: ключ в
+         * репозитории означает, что собрать «AirChat» с той же подписью может
+         * кто угодно, а Android доверяет обновлению именно по подписи.
+         *
+         * Файла нет — блок остаётся пустым, и buildTypes.release ниже
+         * возвращается к отладочному ключу. Сборка на чужой машине не ломается,
+         * но и в раздачу такой APK попасть не должен: проверять подпись перед
+         * выкладкой — apksigner verify --print-certs.
+         */
+        release {
+            def propsFile = file("${System.properties['user.home']}/.airchat-release/keystore.properties")
+            if (propsFile.exists()) {
+                def props = new Properties()
+                propsFile.withInputStream { props.load(it) }
+                storeFile file(props['storeFile'])
+                storePassword props['storePassword']
+                keyAlias props['keyAlias']
+                keyPassword props['keyPassword']
+            }
+        }
+    }
+"""
+assert s.count(old_cfg) == 1, 'signingConfigs anchor not found in app/build.gradle'
+s = s.replace(old_cfg, new_cfg, 1)
+
+# 8b. buildTypes.release — на новый ключ. Строка `signingConfig
+# signingConfigs.debug` встречается ДВАЖДЫ (debug и release), поэтому якорем
+# служит предшествующий ей комментарий expo, который есть только у release.
+old_use = """            // see https://reactnative.dev/docs/signed-apk-android.
+            signingConfig signingConfigs.debug
+"""
+new_use = """            // see https://reactnative.dev/docs/signed-apk-android.
+            // airchat-release: свой ключ, если он есть на этой машине.
+            signingConfig signingConfigs.release.storeFile != null
+                    ? signingConfigs.release
+                    : signingConfigs.debug
+"""
+assert s.count(old_use) == 1, 'release buildType anchor not found in app/build.gradle'
+s = s.replace(old_use, new_use, 1)
+p.write_text(s)
+PY8
 fi
 
 echo "[patch] done"
