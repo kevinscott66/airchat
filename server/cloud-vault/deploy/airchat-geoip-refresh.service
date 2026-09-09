@@ -6,8 +6,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=airchat-vault
-Environment=CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault
-ExecStart=/usr/bin/node /opt/airchat-cloud-vault/tools/build-geoip.js
+Environment=CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault-example
+# Keep the builder on the same Node runtime as the vault.  The system package
+# on the VPS may be older than Node 22, whereas node:sqlite is a hard runtime
+# requirement of the service and its tooling.
+ExecStart=/opt/node-v22.14.0-linux-x64/bin/node /opt/airchat-cloud-vault-example/tools/build-geoip.js
 # Сборщик пишет через временный файл и переименование, поэтому сервису
 # перезапуск не нужен: таблица читается с диска и подхватится сама.
 TimeoutStartSec=900
@@ -17,4 +20,4 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/airchat-cloud-vault
+ReadWritePaths=/var/lib/airchat-cloud-vault-example
