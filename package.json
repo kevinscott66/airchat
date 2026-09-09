@@ -1,6 +1,6 @@
 {
   "name": "airchat",
-  "version": "4.32.670",
+  "version": "4.32.671",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --dev-client",
