@@ -27,7 +27,13 @@ jest.mock('../../storage/local', () => {
       const v = await kvGet(key);
       return v == null ? { state: 'absent' } : { state: 'plain', text: v };
     }),
-    kvSetSecret: jest.fn(async (key: string, value: string) => kvSet(key, value)),
+    // v4.32.660: настоящий kvSetSecret отвечает, легла ли запись на диск, и
+    // contacts.ts теперь на этот ответ смотрит. Заглушка, возвращавшая undefined,
+    // означала бы «не записалось» на каждой удачной записи.
+    kvSetSecret: jest.fn(async (key: string, value: string) => {
+      await kvSet(key, value);
+      return true;
+    }),
     // v4.32.659: прежде отказ базы здесь БРОСАЛ, и оба чтения выше проходили
     // только благодаря этому — настоящие kvTryGet/kvGet ошибку гасят внутри и
     // отдают null, то есть ровно то же, что «записи нет». Заглушка теперь ведёт

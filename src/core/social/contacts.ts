@@ -90,8 +90,15 @@ async function contactRowGet(pid: number, peerPubB64: string): Promise<string | 
   return cellTextOrNull(await contactRowCell(pid, peerPubB64)) || null;
 }
 
-async function contactRowSet(pid: number, peerPubB64: string, json: string): Promise<void> {
-  await kvSetSecret(profileScopedKey(pid, `${PREFIX}${peerPubB64}`), json);
+/**
+ * Возвращает false, если запись не легла на диск. v4.32.660: kvSetSecret
+ * сообщает исход честно, а здесь он терялся — и все четыре вызывающих
+ * распоряжались несостоявшейся записью как удавшейся: показывали человеку
+ * успех, ставили ключ в указатель контактов, рассылали событие «контакты
+ * изменились».
+ */
+async function contactRowSet(pid: number, peerPubB64: string, json: string): Promise<boolean> {
+  return await kvSetSecret(profileScopedKey(pid, `${PREFIX}${peerPubB64}`), json);
 }
 
 /** Кэш симметричного ключа по base64 ключа пира (чтение kv не на каждое сообщение). */
@@ -307,6 +314,9 @@ export const BAD_PUBLIC_KEY_MESSAGE = 'Некорректный открытый
 /** Тот же случай, что и выше: показывается человеку, поэтому по-русски. */
 export const CONTACT_ROW_UNREADABLE_MESSAGE = 'Не удалось прочитать запись контакта';
 
+/** v4.32.660: запись не легла на диск. Тоже видит человек — по-русски. */
+export const CONTACT_ROW_WRITE_FAILED_MESSAGE = 'Не удалось сохранить запись контакта';
+
 export async function addContact(
   pair: KeyPairBytes,
   peerPublicKey: Uint8Array,
@@ -354,7 +364,7 @@ export async function addContact(
     const cell = await contactRowCell(pid, b64);
     if (!mayOverwrite(cell)) throw new Error(CONTACT_ROW_UNREADABLE_MESSAGE);
     const existing = cellTextOrNull(cell);
-    await contactRowSet(
+    const stored = await contactRowSet(
       pid,
       b64,
       mergeExplicitContactRow(existing, {
@@ -363,6 +373,10 @@ export async function addContact(
         profileCid,
       })
     );
+    // v4.32.660: несостоявшаяся запись — отказ, а не успех. Иначе ключ ложился
+    // в указатель контактов без самой строки: человек видел «контакт добавлен»,
+    // а в списке появлялась пустая позиция, которую самолечение потом убирало.
+    if (!stored) throw new Error(CONTACT_ROW_WRITE_FAILED_MESSAGE);
     await rememberContactIdUnlocked(pid, b64);
   });
   cacheSymKey(pid, b64, sym);
@@ -412,7 +426,7 @@ export async function ensureImplicitContact(
   const created = await withContactLock(pid, async () => {
     const existing = await contactRowCell(pid, b64);
     if (existing.state !== 'absent') return false;
-    await contactRowSet(
+    const stored = await contactRowSet(
       pid,
       b64,
       JSON.stringify({
@@ -421,6 +435,14 @@ export async function ensureImplicitContact(
         implicit: true,
       })
     );
+    // v4.32.660: бросать здесь нельзя — неявный контакт заводится по ходу
+    // приёма чужого сообщения, и отказ базы не повод ронять приём. Но и
+    // отвечать «завёл» неправдой тоже нельзя: ключ в указатель не пойдёт,
+    // implicit_contact_created не запишется, вызывающий узнает про отказ.
+    if (!stored) {
+      log.warn('implicit_contact_write_failed', { peer: b64.slice(0, 12) });
+      return false;
+    }
     await rememberContactIdUnlocked(pid, b64);
     return true;
   });
@@ -796,7 +818,15 @@ export async function setPeerProfileFor(
         (profile.links === undefined ||
           profileLinksKey(sanitizeProfileLinks(j.peerLinks)) === profileLinksKey(profile.links)) &&
         (j.avatarCid ?? '') === next.avatarCid;
-      await contactRowSet(pid, peerPublicKeyB64, JSON.stringify({ ...j, ...next }));
+      const stored = await contactRowSet(pid, peerPublicKeyB64, JSON.stringify({ ...j, ...next }));
+      // v4.32.660: `!same` отвечало «профиль собеседника обновился» по одному
+      // лишь различию присланного и сохранённого — даже когда сохранить не
+      // удалось. Экраны перерисовывались по старой строке и показывали прежнее
+      // имя, а отправитель считал профиль доставленным.
+      if (!stored) {
+        log.warn('contact_peer_profile_write_failed', { peer: peerPublicKeyB64.slice(0, 12) });
+        return false;
+      }
       return !same;
     } catch (e) {
       log.warn('contact_peer_profile_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -827,7 +857,12 @@ export async function renameContact(peerPublicKeyB64: string, newName: string): 
     // v4.32.192 (Round-22 #7): strip control chars + cap name at 64 chars so
     // a malicious profile-card or deep-link can't bloat contacts_index JSON.
     j.displayName = (sanitizeDisplayName(newName, 64) ?? '').trim();
-    await contactRowSet(pid, peerPublicKeyB64, JSON.stringify(j));
+    const stored = await contactRowSet(pid, peerPublicKeyB64, JSON.stringify(j));
+    // v4.32.660: переименование человек делает руками и ждёт ответа. Прежде
+    // при отказе записи он получал «Имя обновлено», а имя оставалось старым —
+    // до перезапуска приложения это выглядело как потерянная правка. Все три
+    // экрана, зовущие renameContact, уже ловят исключение и показывают текст.
+    if (!stored) throw new Error(CONTACT_ROW_WRITE_FAILED_MESSAGE);
   });
   notifyChatStorageChanged();
   emitContactsChanged();

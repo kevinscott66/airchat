@@ -29,7 +29,13 @@ jest.mock('../../storage/local', () => {
       const v = await kvGet(key);
       return v == null ? { state: 'absent' } : { state: 'plain', text: v };
     }),
-    kvSetSecret: jest.fn(async (key: string, value: string) => kvSet(key, value)),
+    // v4.32.660: настоящий kvSetSecret отвечает, легла ли запись на диск, и
+    // contacts.ts теперь на этот ответ смотрит. Заглушка, возвращавшая undefined,
+    // означала бы «не записалось» на каждой удачной записи.
+    kvSetSecret: jest.fn(async (key: string, value: string) => {
+      await kvSet(key, value);
+      return true;
+    }),
     // v4.32.659: указатель контактов contacts.ts читает через scopedKvTryGetFor,
     // а тот работает на kvTryGet/kvSetChecked — без них заглушка обрывала бы
     // чтение TypeError'ом.
