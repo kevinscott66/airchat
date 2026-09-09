@@ -125,6 +125,7 @@ import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { normalizeOwnPronouns } from '../../core/social/peerPronouns';
 import { normalizeOwnStatus } from '../../core/social/peerStatus';
+import { requestPeerProfile } from '../../core/social/profileSync';
 // v4.32.568: всё, чем карточка теперь управляет, уже есть в ядре — она их
 // вызывает, а не заводит второй набор правил рядом с экраном диалога.
 import { profileManager } from '../../core/identity/profileManager';
@@ -439,6 +440,12 @@ export function UserProfilePeek({
         const found = all.find((c) => c.peerPublicKey === resolved.pubB64) ?? null;
         setContact(found);
         setRenameDraft(contactLabel(found?.displayName, fallbackName ?? ''));
+        // v4.32.671: карточка собеседника, чей профиль до нас ни разу не
+        // доезжал, просит его прислать. Без этого она ждала бы конверта,
+        // который отправляет только сам собеседник — открыв приложение и нашу
+        // с ним переписку. Своей карточки это не касается: она читается с
+        // устройства. Частоту ограничивает profileSync.
+        if (!mine && (found?.profileTs ?? 0) === 0) void requestPeerProfile(resolved.pubB64);
       } catch {
         /* ignore — модалка всё равно покажет fallback */
       }
@@ -499,6 +506,13 @@ export function UserProfilePeek({
             pronouns: contact.pronouns,
             peerStatus: contact.peerStatus,
             verified: contact.verified === 'official',
+            // v4.32.671: привязанные учётные записи не передавались сюда
+            // вовсе. Приём их разбирал (v4.32.575), адресная книга хранила,
+            // модель карточки читала `contact.links` — а место вызова его не
+            // клало, и ряд ссылок у собеседника был пуст ВСЕГДА, чем бы он их
+            // ни заполнил. Своя карточка брала их из `own` и работала, поэтому
+            // проверка «у себя видно» ничего не показывала.
+            links: contact.links,
           }
         : null,
       fallbackName,

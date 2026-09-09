@@ -42,7 +42,7 @@ import { DM_PIN_PREFIX } from './dmPinEnvelope';
 import { DISAPPEAR_PREFIX } from './disappearEnvelope';
 import { COPY_GUARD_PREFIX } from './copyGuardEnvelope';
 import { PRESENCE_PREF_PREFIX } from './presenceEnvelope';
-import { PROFILE_PREFIX } from './profileEnvelope';
+import { PROFILE_PREFIX, PROFILE_REQ_PREFIX } from './profileEnvelope';
 import { stripSpoofedSysPrefix } from './sysLineGuard';
 import { isPlainCid } from '../cid';
 import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
@@ -1212,6 +1212,17 @@ export class MessagingService {
       if (inbound) {
         const { handleIncomingPeerProfile } = await import('./profileSync');
         await handleIncomingPeerProfile(textPayload.text, peerPubKeyB64, ownerPid);
+      }
+      return;
+    }
+
+    // v4.32.671: просьба прислать свой профиль. Пузыря не создаёт — это
+    // служебный конверт, как и сам профиль. Ответ уходит тем же конвертом
+    // профиля, с ограничением по частоте (см. profileSync).
+    if (textPayload.text?.startsWith(PROFILE_REQ_PREFIX)) {
+      if (inbound) {
+        const { handleIncomingProfileRequest } = await import('./profileSync');
+        await handleIncomingProfileRequest(textPayload.text, peerPubKeyB64, ownerPid);
       }
       return;
     }

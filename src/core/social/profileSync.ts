@@ -24,8 +24,11 @@ import { canReachPeer } from './sendGate';
 import { avatarVisibilityTryFor, type AvatarVisibility } from '../settings/avatarVisibility';
 import {
   PROFILE_PREFIX,
+  PROFILE_REQ_PREFIX,
   encodeProfileEnvelope,
+  encodeProfileRequest,
   decodeProfileEnvelope,
+  isProfileRequest,
   normalizeOwnBio,
   type PeerProfileEnvelope,
 } from './profileEnvelope';
@@ -41,7 +44,7 @@ import { badgeFor } from '../identity/verification';
 import { didFromPubB64 } from '../identity/did';
 import { log } from '../logger';
 
-export { PROFILE_PREFIX };
+export { PROFILE_PREFIX, PROFILE_REQ_PREFIX };
 
 /**
  * Кому какая версия профиля уже отправлена: { pubB64: ts }.
@@ -344,15 +347,15 @@ export async function broadcastMyProfile(): Promise<void> {
 }
 
 /**
- * Отправить профиль конкретному собеседнику, если он этой версии ещё не
- * видел. Вызывается при открытии чата — так профиль доходит и до тех, кого
- * нет в контактах: рассылка их не охватывает.
+ * Отправить профиль конкретному собеседнику.
+ *
+ * `force` — отправить, даже если эта версия ему уже уходила. Так отвечают на
+ * просьбу прислать профиль: у просящего карточки нет, а карта отправленного
+ * говорит, что есть, — и без `force` ответом на просьбу было бы молчание.
  */
-export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
-  if (!peerPubB64) return;
+async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): Promise<void> {
   const svc = getMessagingService();
   if (!svc) return;
-  const pid = activeProfileId();
   // v4.32.540: этот путь охватывает и тех, кого нет в контактах, — значит для
   // настройки «фото видят только контакты» он и есть та граница, за которую
   // фотография не уходит. Но собеседник МОЖЕТ быть в контактах: тогда фото ему
@@ -366,8 +369,10 @@ export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
   const built = await buildEnvelope(pid, audience);
   if (!built) return;
   const { version } = built;
-  const sent = await loadSent(pid);
-  if (sent[peerPubB64] === version) return;
+  if (!force) {
+    const sent = await loadSent(pid);
+    if (sent[peerPubB64] === version) return;
+  }
   if (!(await canReachPeer(peerPubB64))) return;
   try {
     await svc.sendMessage(peerPubB64, encodeProfileEnvelope(built.env));
@@ -378,6 +383,96 @@ export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
       err: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+/**
+ * Отправить профиль конкретному собеседнику, если он этой версии ещё не
+ * видел. Вызывается при открытии чата — так профиль доходит и до тех, кого
+ * нет в контактах: рассылка их не охватывает.
+ */
+export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
+  if (!peerPubB64) return;
+  await sendProfileTo(activeProfileId(), peerPubB64, false);
+}
+
+/**
+ * Ограничитель частоты для просьб — общий на отправку и на ответ (v4.32.671).
+ *
+ * Живёт в памяти процесса намеренно: это защита от повторов в пределах одного
+ * запуска (карточку открывают по десять раз подряд, а недоброжелатель шлёт
+ * просьбы пачкой), а не учёт, который обязан пережить перезапуск. Место в
+ * хранилище такой записи не стоит: после перезапуска одна лишняя отправка
+ * своей же карточки — не потеря.
+ *
+ * Map хранит порядок вставки, поэтому вычистка самых старых записей при
+ * переполнении — это удаление с начала обхода.
+ */
+const REQ_COOLDOWN_MS = 5 * 60_000;
+const REQ_TRACKED_MAX = 500;
+const reqSentAt = new Map<string, number>();
+const reqAnsweredAt = new Map<string, number>();
+
+function passThrottle(map: Map<string, number>, key: string, now: number): boolean {
+  const at = map.get(key);
+  if (at !== undefined && now - at < REQ_COOLDOWN_MS) return false;
+  for (const k of map.keys()) {
+    if (map.size < REQ_TRACKED_MAX) break;
+    map.delete(k);
+  }
+  map.set(key, now);
+  return true;
+}
+
+/**
+ * Попросить собеседника прислать свой профиль.
+ *
+ * Вызывается карточкой собеседника, о котором нам ещё ничего не присылали.
+ * Ответ придёт обычным конвертом профиля и обновит адресную книгу сам.
+ */
+export async function requestPeerProfile(peerPubB64: string): Promise<void> {
+  if (!peerPubB64) return;
+  const svc = getMessagingService();
+  if (!svc) return;
+  if (!passThrottle(reqSentAt, peerPubB64, Date.now())) return;
+  if (!(await canReachPeer(peerPubB64))) {
+    // Не отправляли — и отметку не держим: следующее открытие карточки должно
+    // попробовать снова, а не ждать пять минут после несостоявшейся отправки.
+    reqSentAt.delete(peerPubB64);
+    return;
+  }
+  try {
+    await svc.sendMessage(peerPubB64, encodeProfileRequest());
+  } catch (e) {
+    reqSentAt.delete(peerPubB64);
+    log.debug('profile_request_failed', {
+      to: peerPubB64.slice(0, 12),
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
+ * Ответить на просьбу прислать профиль. Возвращает true, если конверт наш, —
+ * тогда messaging не сохраняет его как обычное сообщение переписки.
+ *
+ * Отправитель проверен подписью на уровне приёма: отвечаем ему, а не тому, кто
+ * назван в теле, — тела у просьбы нет именно поэтому.
+ */
+export async function handleIncomingProfileRequest(
+  text: string,
+  senderPubB64: string | undefined,
+  ownerPid: number
+): Promise<boolean> {
+  if (!isProfileRequest(text)) return false;
+  if (!senderPubB64) return true;
+  if (!passThrottle(reqAnsweredAt, senderPubB64, Date.now())) return true;
+  try {
+    await sendProfileTo(ownerPid, senderPubB64, true);
+    log.info('profile_request_answered', { to: senderPubB64.slice(0, 12) });
+  } catch (e) {
+    log.warn('profile_request_answer_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+  return true;
 }
 
 /**

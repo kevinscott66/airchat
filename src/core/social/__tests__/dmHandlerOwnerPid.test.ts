@@ -129,6 +129,9 @@ describe('форма исходников', () => {
     ['dmPinSync.ts', 'handleIncomingDmPin'],
     ['disappearSync.ts', 'handleIncomingDisappear'],
     ['profileSync.ts', 'handleIncomingPeerProfile'],
+    // v4.32.671: просьба прислать профиль отвечает конвертом ЭТОГО профиля,
+    // а не активного: ответ уходит на фоне и переживает переключение аккаунта.
+    ['profileSync.ts', 'handleIncomingProfileRequest'],
     ['storyService.ts', 'handleIncomingStory'],
   ];
 
@@ -165,6 +168,7 @@ describe('форма исходников', () => {
       'handleIncomingDmPin',
       'handleIncomingDisappear',
       'handleIncomingPeerProfile',
+      'handleIncomingProfileRequest',
     ]) {
       expect(s).toContain(`await ${fn}(textPayload.text, peerPubKeyB64, ownerPid);`);
     }
