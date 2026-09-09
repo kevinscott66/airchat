@@ -41,6 +41,10 @@ export function VpnStatusBanner({ status, onRetry }: Props): React.ReactElement 
   }
 
   return (
-    <StatusBanner tone="ok" icon="shield-checkmark" text="Защищённое соединение активно" />
+    <StatusBanner
+      tone="ok"
+      icon="shield-checkmark"
+      text="SOCKS-канал активен: защищает поддерживаемые HTTP-запросы, но не весь трафик приложения или устройства."
+    />
   );
 }

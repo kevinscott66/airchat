@@ -8,18 +8,16 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.system.Os
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.zip.ZipInputStream
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
- * Загружает бинарник Xray (релиз GitHub), пишет config и запускает локальный SOCKS5.
- * Полноценный системный VPN (TUN) здесь не поднимается — маршрутизация IPFS HTTP идёт через OkHttp+SOCKS в [AirChatVpnModule].
+ * Запускает Xray, упакованный вместе с подписанным APK, и локальный SOCKS5.
+ * Полноценный системный VPN (TUN) здесь не поднимается — маршрутизация
+ * поддерживаемого HTTP идёт через OkHttp+SOCKS в [AirChatVpnModule].
  */
 class XrayForegroundService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
@@ -28,6 +26,12 @@ class XrayForegroundService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val configJson = intent?.getStringExtra(EXTRA_CONFIG) ?: run {
+      stopSelf()
+      return START_NOT_STICKY
+    }
+    val socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 0)
+    if (socksPort !in 1..65535) {
+      Log.e(TAG, "invalid local SOCKS port")
       stopSelf()
       return START_NOT_STICKY
     }
@@ -54,6 +58,11 @@ class XrayForegroundService : Service() {
         pb.redirectErrorStream(true)
         val p = pb.start()
         xrayProcess = p
+        if (!waitForSocksListener(p, socksPort)) {
+          p.destroyForcibly()
+          xrayProcess = null
+          throw IllegalStateException("Xray did not open the local SOCKS listener")
+        }
         isRunningFlag = true
         val pid = try {
           val m = java.lang.Process::class.java.getMethod("pid")
@@ -62,6 +71,19 @@ class XrayForegroundService : Service() {
           -1
         }
         Log.i(TAG, "xray process started pid=$pid")
+        Thread {
+          try {
+            p.waitFor()
+          } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+          } finally {
+            if (xrayProcess === p) {
+              xrayProcess = null
+              isRunningFlag = false
+              stopSelf(startId)
+            }
+          }
+        }.start()
       } catch (e: Exception) {
         Log.e(TAG, "xray failed: ${e.javaClass.simpleName}: ${e.message}", e)
         isRunningFlag = false
@@ -113,16 +135,7 @@ class XrayForegroundService : Service() {
     return direct
   }
 
-  /** Fallback: скачивание в code_cache (на части OEM всё равно не исполняется). */
-  private fun xrayBinaryDownloaded(): File = File(codeCacheDir, "xray_bin")
-
-  private fun xrayBinaryFile(): File {
-    val apk = xrayBinaryFromApk()
-    if (apk.exists() && apk.length() > 1_000_000L) {
-      return apk
-    }
-    return xrayBinaryDownloaded()
-  }
+  private fun xrayBinaryFile(): File = xrayBinaryFromApk()
 
   private fun ensureXrayBinary() {
     val fromApk = xrayBinaryFromApk()
@@ -130,110 +143,36 @@ class XrayForegroundService : Service() {
       return
     }
 
-    val out = xrayBinaryDownloaded()
-    if (out.exists() && out.length() > 1_000_000L) {
-      out.setExecutable(true, false)
-      chmod755(out)
-      return
-    }
-
-    // Релизы Xray v26+ публикуют Xray-android-arm64-v8a.zip / Xray-android-amd64.zip (старые имена *-64.zip — 404).
-    val abis = Build.SUPPORTED_ABIS
-    val zipName = when {
-      abis.any { it.contains("arm64") || it == "aarch64" } -> "Xray-android-arm64-v8a.zip"
-      abis.any { it.contains("x86_64") } -> "Xray-android-amd64.zip"
-      else -> throw IllegalStateException(
-        "Неподдерживаемая ABI: ${abis.joinToString()}. Нужны arm64-v8a или x86_64 (в релизе нет 32-бит Android zip).",
-      )
-    }
-
-    val primary = "$DOWNLOAD_BASE/$XRAY_VERSION/$zipName"
-    val urls = listOf(
-      primary,
-      "https://mirror.ghproxy.com/$primary",
-    )
-
-    var extracted = false
-    var lastError: Exception? = null
-    for (urlString in urls) {
-      try {
-        extracted = downloadAndExtractXrayZip(urlString, out)
-        if (extracted) break
-      } catch (e: Exception) {
-        lastError = e
-        Log.w(TAG, "xray zip failed: $urlString — ${e.message}")
-      }
-    }
-
-    if (!extracted || !out.exists() || out.length() < 10_000L) {
-      throw lastError ?: IllegalStateException("Не удалось извлечь xray из архива (GitHub недоступен?)")
-    }
-    out.setExecutable(true, false)
-    chmod755(out)
+    throw IllegalStateException("Xray binary is missing from this signed APK")
   }
 
-  /** @return true если бинарник записан и по размеру похож на xray */
-  private fun downloadAndExtractXrayZip(urlString: String, out: File): Boolean {
-    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-      connectTimeout = 60_000
-      readTimeout = 120_000
-      instanceFollowRedirects = true
-      setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36")
-      setRequestProperty("Accept", "*/*")
-    }
-    try {
-      conn.connect()
-      val code = conn.responseCode
-      if (code !in 200..299) {
-        val err = try {
-          conn.errorStream?.bufferedReader()?.use { it.readText() }?.take(160)?.replace("\r\n", " ")
-        } catch (_: Exception) {
-          null
-        }
-        Log.w(TAG, "HTTP $code for $urlString ${err ?: ""}")
-        return false
-      }
-      var extracted = false
-      ZipInputStream(conn.inputStream.buffered()).use { zis ->
-        var entry = zis.nextEntry
-        while (entry != null) {
-          val name = entry.name
-          if (!entry.isDirectory && (name == "xray" || name.endsWith("/xray"))) {
-            FileOutputStream(out).use { fos -> zis.copyTo(fos) }
-            extracted = true
-            break
-          }
-          entry = zis.nextEntry
-        }
-      }
-      return extracted && out.exists() && out.length() >= 10_000L
-    } finally {
-      conn.disconnect()
-    }
-  }
-
-  private fun chmod755(f: File) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+  private fun waitForSocksListener(process: Process, port: Int): Boolean {
+    val deadline = System.nanoTime() + 6_000_000_000L
+    while (System.nanoTime() < deadline) {
+      if (!process.isAlive) return false
       try {
-        Os.chmod(f.absolutePath, 493) // 0755
-        return
-      } catch (_: Throwable) {
+        Socket().use { socket ->
+          socket.connect(InetSocketAddress("127.0.0.1", port), 250)
+          return true
+        }
+      } catch (_: Exception) {
+        try {
+          Thread.sleep(100)
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+          return false
+        }
       }
     }
-    try {
-      Runtime.getRuntime().exec(arrayOf("/system/bin/chmod", "755", f.absolutePath)).waitFor()
-    } catch (_: Exception) {
-    }
+    return false
   }
 
   companion object {
     private const val TAG = "AirChatXray"
     const val EXTRA_CONFIG = "config_json"
+    const val EXTRA_SOCKS_PORT = "socks_port"
     private const val CHANNEL_ID = "airchat_vpn"
     private const val NOTIFICATION_ID = 10042
-    private const val XRAY_VERSION = "v26.2.6"
-    private const val DOWNLOAD_BASE = "https://github.com/XTLS/Xray-core/releases/download"
-
     @Volatile
     var isRunningFlag: Boolean = false
   }

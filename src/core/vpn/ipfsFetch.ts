@@ -8,7 +8,7 @@ import { loadConfig } from '../config';
 // ntfy.sh (the sole online DM transport), Firebase/FCM, signaling, and any
 // future endpoint leaked the real client IP while the user saw "VPN: ON".
 // Now we invert: route everything except private/loopback/mDNS addresses.
-function isPrivateOrLoopbackHost(hostname: string): boolean {
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.localhost')) return true;
   // IPv4 loopback / RFC1918 / link-local
@@ -37,16 +37,11 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   return false;
 }
 
-async function allowSocksFallbackToDirect(): Promise<boolean> {
-  try {
-    const cfg = await loadConfig();
-    return cfg.vpn?.fallbackDirectOnSocksFailure !== false;
-  } catch {
-    return true;
-  }
-}
-
-/** HTTP(S) к публичным IPFS-шлюзам/API — через SOCKS, если встроенный Xray запущен и vpn.routeHttp включён. */
+/**
+ * Маршрутизация известного HTTP(S)-трафика приложения через локальный SOCKS.
+ * Это не системный VPN: сокеты сторонних библиотек и трафик устройства этот
+ * модуль перехватить не может.
+ */
 export async function shouldRouteUrlThroughVpn(url: string): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   const mod = AirChatVpn;
@@ -71,36 +66,31 @@ export async function fetchWithEmbeddedVpnIfNeeded(url: string, init?: RequestIn
   }
 
   const method = (init?.method ?? 'GET').toUpperCase();
-  // v4.32.221 (Paranoid HIGH-2 / partial): the native AirChatVpn SOCKS
-  // helper only wraps GET (fetchGet) and multipart POST (postMultipartFile).
-  // Arbitrary POST/PUT/DELETE still falls through to the system fetch, which
-  // on Android does NOT honor the app's SOCKS config — so the real IP leaks
-  // for non-GET traffic even while VPN is "on". Surface this in logs so the
-  // user/operator can see the gap. Full fix requires wiring Xray as a
-  // VpnService (tun2socks) in the native module; tracked separately.
+  // The native helper supports GET and a dedicated multipart upload only.
+  // Never fall through to React Native's fetch for other methods: it ignores
+  // the SOCKS proxy and would reveal the user's IP while the channel is on.
+  // A real solution for arbitrary requests needs Android VpnService +
+  // tun2socks; until then fail closed.
   if (method !== 'GET') {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { log } = require('../logger');
-      log.warn('vpn_method_bypass', { method, host: (() => { try { return new URL(url).hostname; } catch { return '?'; } })() });
+      log.warn('vpn_method_blocked', { method, host: (() => { try { return new URL(url).hostname; } catch { return '?'; } })() });
     } catch {
       /* logger import optional at early-init paths */
     }
-  }
-  if (method === 'GET') {
-    const fb = await allowSocksFallbackToDirect();
-    const r = await mod.fetchGet(url, fb);
-    // v4.32.203 (Round-33 #1): cap VPN-routed response body before base64 decode.
-    // A hostile gateway can otherwise return a multi-MB body and OOM the heap
-    // before `new Response(buf)` yields. 50MB raw ≈ ~67M base64 chars.
-    if (typeof r.bodyBase64 !== 'string' || r.bodyBase64.length > 67 * 1024 * 1024) {
-      return new Response(new Uint8Array(0), { status: 502, statusText: 'Oversize' });
-    }
-    const buf = Uint8Array.from(Buffer.from(r.bodyBase64, 'base64'));
-    return new Response(buf, { status: r.status, statusText: r.ok ? 'OK' : 'Error' });
+    return new Response(new Uint8Array(0), { status: 503, statusText: 'VPN cannot proxy this request method' });
   }
 
-  return fetch(url, init);
+  const r = await mod.fetchGet(url, false);
+  // v4.32.203 (Round-33 #1): cap VPN-routed response body before base64 decode.
+  // A hostile gateway can otherwise return a multi-MB body and OOM the heap
+  // before `new Response(buf)` yields. 50MB raw ≈ ~67M base64 chars.
+  if (typeof r.bodyBase64 !== 'string' || r.bodyBase64.length > 67 * 1024 * 1024) {
+    return new Response(new Uint8Array(0), { status: 502, statusText: 'Oversize' });
+  }
+  const buf = Uint8Array.from(Buffer.from(r.bodyBase64, 'base64'));
+  return new Response(buf, { status: r.status, statusText: r.ok ? 'OK' : 'Error' });
 }
 
 export async function postMultipartFileViaVpn(
@@ -112,6 +102,5 @@ export async function postMultipartFileViaVpn(
   if (!mod) {
     return { ok: false, status: 0, bodyText: 'no_native_module' };
   }
-  const fb = await allowSocksFallbackToDirect();
-  return mod.postMultipartFile(url, fileUri, fieldName, fb);
+  return mod.postMultipartFile(url, fileUri, fieldName, false);
 }

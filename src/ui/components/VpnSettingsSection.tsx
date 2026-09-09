@@ -288,7 +288,8 @@ export function VpnSettingsSection(): React.ReactElement {
       <Text style={styles.sectionTitle}>VPN (обход блокировок)</Text>
       <Text style={styles.hint}>
         Свой сервер VLESS+Reality. Вставьте ссылку vless:// от провайдера или заполните поля вручную.
-        Данные хранятся только на этом устройстве.
+        Данные хранятся только на этом устройстве. Это локальный SOCKS-канал, а не системный VPN: он не
+        защищает весь трафик приложения или устройства.
       </Text>
       <View style={styles.card}>
         <View style={styles.statusRow}>

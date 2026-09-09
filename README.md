@@ -63,8 +63,9 @@ are never online at the same time, with hop limits and payload caps.
   values route through a queued SecureStore wrapper.
 - **Log scrubbing.** Secrets are stripped from logs and crash reports before
   they leave the device — an always-on pass, separate from PII redaction.
-- **VPN transport.** An Xray core integration (`modules/airchat-vpn`) for
-  environments where the transport layer itself is filtered.
+- **Optional SOCKS transport.** An Android Xray integration
+  (`modules/airchat-vpn`) routes the app's supported HTTP requests through a
+  local SOCKS proxy in filtered environments. It is not a device-wide VPN.
 
 See [SECURITY.md](SECURITY.md) for the threat model and disclosure process.
 

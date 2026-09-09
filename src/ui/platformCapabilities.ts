@@ -24,12 +24,10 @@ import { Platform } from 'react-native';
 export const LOCAL_RADIO_TRANSPORTS_AVAILABLE = Platform.OS !== 'web';
 
 /**
- * Встроенный VPN: Xray в нативном процессе и системный tun-интерфейс.
+ * Встроенный защищённый канал: Xray в нативном процессе и локальный SOCKS.
  *
- * Работает он только на Android, но здесь отсекается именно web, а не всё
- * кроме Android. На iOS раздел показывается и сообщает `unsupported` — это
- * поведение было до веб-порта и меняется отдельно, если понадобится. На web
- * же нет и самого модуля: `airchat-vpn` подменяется на `null` (см.
- * web/shims/airchat-vpn.ts), то есть показывать нечему.
+ * Реализация есть только на Android. На iOS и web не показываем настройку,
+ * которая всё равно не сможет создать канал; на web модуль дополнительно
+ * подменён на `null` (см. web/shims/airchat-vpn.ts).
  */
-export const EMBEDDED_VPN_AVAILABLE = Platform.OS !== 'web';
+export const EMBEDDED_VPN_AVAILABLE = Platform.OS === 'android';

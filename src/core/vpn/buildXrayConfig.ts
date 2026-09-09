@@ -75,7 +75,7 @@ function backupEndpointComplete(
 }
 
 /**
- * Локальный SOCKS5 + VLESS Reality (и опционально второй VLESS + балансировка + прямой выход для доменов).
+ * Локальный SOCKS5 + VLESS Reality (и опционально второй VLESS + балансировка).
  * MTProto в Xray не встроен — см. отдельную документацию / нативный модуль.
  */
 export function buildXrayMobileClientJson(app: AppConfig): string {
@@ -123,35 +123,7 @@ export function buildXrayMobileClientJson(app: AppConfig): string {
     log.info('vpn_xray_dual_outbound');
   }
 
-  outbounds.push({
-    protocol: 'freedom',
-    tag: 'direct',
-    settings: {},
-  });
-
-  const directDomains = new Set<string>();
-  if (cfg.directDomains?.length) {
-    for (const d of cfg.directDomains) {
-      const x = d.trim().toLowerCase();
-      if (x) directDomains.add(x);
-    }
-  }
-  if (cfg.routeBypassDomainsDirect && app.bypassDomains?.length) {
-    for (const d of app.bypassDomains) {
-      const x = d.trim().toLowerCase();
-      if (x) directDomains.add(x);
-    }
-  }
-
   const rules: Record<string, unknown>[] = [];
-  for (const d of directDomains) {
-    rules.push({
-      type: 'field',
-      domain: [`domain:${d}`],
-      outboundTag: 'direct',
-    });
-  }
-
   if (hasBackup) {
     rules.push({
       type: 'field',

@@ -137,13 +137,8 @@ export type AppConfig = {
     publicKey: string;
     shortId: string;
     fingerprint?: string;
-    /** Проксировать HTTP(S) к публичным IPFS-шлюзам через SOCKS, если туннель поднят */
+    /** Проксировать поддерживаемые HTTP(S)-запросы приложения через SOCKS, если туннель поднят */
     routeHttp?: boolean;
-    /**
-     * Если SOCKS к 127.0.0.1 не отвечает, повторить тот же HTTP-запрос без прокси (крайний случай).
-     * По умолчанию true — иначе сообщения/IPFS могут «застыть» при сбое локального SOCKS.
-     */
-    fallbackDirectOnSocksFailure?: boolean;
     /**
      * Резервный VLESS+Reality (например зарубежный узел). При полной конфигурации Xray балансирует
      * трафик между primary и backup (random). VLESS — основной рабочий протокол в приложении.
@@ -158,12 +153,6 @@ export type AppConfig = {
       shortId: string;
       fingerprint?: string;
     };
-    /**
-     * Домены с прямым выходом (freedom), без туннеля — удобно при «белом списке» РФ (yandex, vk, …).
-     */
-    directDomains?: string[];
-    /** Подмешать в direct также `bypassDomains` из корня конфига */
-    routeBypassDomainsDirect?: boolean;
     /**
      * MTProto (Telegram MTProxy) — зарезервировано; полноценная доставка требует нативного клиента MTProto.
      * Пока не используется — оставьте enabled: false.
@@ -266,8 +255,6 @@ const DEFAULT_CONFIG: AppConfig = {
     shortId: '',
     fingerprint: 'chrome',
     routeHttp: true,
-    fallbackDirectOnSocksFailure: true,
-    routeBypassDomainsDirect: false,
     mtproto: { enabled: false },
     sniPool: ['microsoft.com'],
     rotateSniPerStart: false,

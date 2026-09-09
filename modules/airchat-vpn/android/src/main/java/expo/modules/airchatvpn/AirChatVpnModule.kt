@@ -35,12 +35,20 @@ class AirChatVpnModule : Module() {
       try {
         val intent = Intent(ctx, XrayForegroundService::class.java)
         intent.putExtra(XrayForegroundService.EXTRA_CONFIG, configJson)
+        intent.putExtra(XrayForegroundService.EXTRA_SOCKS_PORT, localSocksPort)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
           ctx.startForegroundService(intent)
         } else {
           ctx.startService(intent)
         }
-        true
+        // startForegroundService only confirms that Android accepted the
+        // request. Do not report a working channel until Xray has actually
+        // opened the loopback SOCKS listener.
+        repeat(60) {
+          if (XrayForegroundService.isRunningFlag) return@AsyncFunction true
+          Thread.sleep(100)
+        }
+        false
       } catch (e: Exception) {
         Log.e("AirChatVpn", "start failed", e)
         false

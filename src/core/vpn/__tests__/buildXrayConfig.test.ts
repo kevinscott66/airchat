@@ -75,7 +75,7 @@ describe('buildXrayMobileClientJson — основной сервер', () => {
   it('весь трафик уходит в основной сервер, пока резерва нет', () => {
     const doc = build(PRIMARY);
     const tags = doc.outbounds.map((o) => o.tag);
-    expect(tags).toEqual(['vless-primary', 'direct']);
+    expect(tags).toEqual(['vless-primary']);
     expect(doc.routing.rules.at(-1)).toEqual({
       type: 'field',
       network: 'tcp,udp',
@@ -145,7 +145,7 @@ describe('резервный сервер и балансировщик', () => 
 
   it('неполный резерв игнорируется, а не ломает конфиг', () => {
     const doc = build({ ...PRIMARY, backup: { ...BACKUP, publicKey: '  ' } });
-    expect(doc.outbounds.map((o) => o.tag)).toEqual(['vless-primary', 'direct']);
+    expect(doc.outbounds.map((o) => o.tag)).toEqual(['vless-primary']);
     expect(doc.routing.balancers).toBeUndefined();
     expect(doc.routing.rules.at(-1)?.outboundTag).toBe('vless-primary');
   });
@@ -157,33 +157,12 @@ describe('резервный сервер и балансировщик', () => 
   });
 });
 
-describe('домены в обход туннеля', () => {
-  it('каждый домен получает своё правило на direct — до общего правила', () => {
-    const doc = build({ ...PRIMARY, directDomains: ['VK.com', ' yandex.ru '] });
-    const direct = doc.routing.rules.filter((r) => r.outboundTag === 'direct');
-    expect(direct.map((r) => r.domain?.[0])).toEqual(['domain:vk.com', 'domain:yandex.ru']);
+describe('маршрутизация без прямого обхода', () => {
+  it('не создаёт freedom outbound или правила прямого выхода', () => {
+    const doc = build({ ...PRIMARY } as never, { bypassDomains: ['gosuslugi.ru'] });
+    expect(doc.outbounds.some((o) => o.tag === 'direct' || o.protocol === 'freedom')).toBe(false);
+    expect(doc.routing.rules.every((r) => r.outboundTag !== 'direct')).toBe(true);
     expect(doc.routing.rules.at(-1)?.outboundTag).toBe('vless-primary');
-  });
-
-  it('пустые строки в списке пропускаются', () => {
-    const doc = build({ ...PRIMARY, directDomains: ['', '   ', 'ok.ru'] });
-    expect(doc.routing.rules.filter((r) => r.outboundTag === 'direct')).toHaveLength(1);
-  });
-
-  it('bypassDomains подмешиваются только по флагу', () => {
-    const app = { bypassDomains: ['gosuslugi.ru'] };
-    const off = build({ ...PRIMARY }, app);
-    expect(off.routing.rules.some((r) => r.domain?.[0] === 'domain:gosuslugi.ru')).toBe(false);
-    const on = build({ ...PRIMARY, routeBypassDomainsDirect: true }, app);
-    expect(on.routing.rules.some((r) => r.domain?.[0] === 'domain:gosuslugi.ru')).toBe(true);
-  });
-
-  it('дубликат домена не даёт двух правил', () => {
-    const doc = build(
-      { ...PRIMARY, directDomains: ['vk.com'], routeBypassDomainsDirect: true },
-      { bypassDomains: ['VK.com'] }
-    );
-    expect(doc.routing.rules.filter((r) => r.outboundTag === 'direct')).toHaveLength(1);
   });
 });
 
