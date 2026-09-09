@@ -172,6 +172,19 @@ function toPost(r: FeedDbRow, dek: Uint8Array): FeedPostRow {
   };
 }
 
+/**
+ * Потолок комментариев ОДНОГО автора под ОДНИМ постом.
+ *
+ * v4.32.663: у приёма комментариев своих ограничений по количеству не было
+ * вовсе. Форма конверта проверялась (id и postId до 128 символов, текст до
+ * 2000, имя автора обрезалось), сироты откладывались — но комментарии под
+ * РЕАЛЬНЫМ постом принимались сколько угодно: контакт мог одной рассылкой
+ * набить получателю таблицу feed_comments, а getComments читает и
+ * расшифровывает её целиком, без LIMIT. Полсотни реплик одного человека под
+ * одной записью — заведомо больше, чем бывает в живом обсуждении.
+ */
+export const COMMENTS_MAX_PER_AUTHOR_PER_POST = 50;
+
 export class FeedStorage {
   private db: SQLite.SQLiteDatabase | null = null;
   private readonly profileId: number;
@@ -956,6 +969,24 @@ export class FeedStorage {
       [row.id]
     );
     if (tombstone) return false;
+    // v4.32.663: потолок на автора под этим постом — см.
+    // COMMENTS_MAX_PER_AUTHOR_PER_POST. Считаем ДО расшифровки ключом и до
+    // записи: дорого именно то, что каждая лишняя строка потом читается и
+    // расшифровывается на каждом открытии поста. Повтор уже принятого
+    // комментария на потолке тоже вернёт false — ровно то же, что вернул бы
+    // INSERT OR IGNORE, так что поведение дубликатов не меняется.
+    const mine = await d.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) as count FROM feed_comments WHERE post_id = ? AND author_did = ?',
+      [row.postId, row.authorDid]
+    );
+    if ((mine?.count ?? 0) >= COMMENTS_MAX_PER_AUTHOR_PER_POST) {
+      log.warn('feed_comment_author_limit_drop', {
+        post: row.postId.slice(0, 12),
+        author: row.authorDid.slice(0, 12),
+        have: mine?.count ?? 0,
+      });
+      return false;
+    }
     const dek = await getOrCreateDataEncryptionKey();
     const res = await d.runAsync(
       `INSERT OR IGNORE INTO feed_comments (id, post_id, author_did, author_name, text, timestamp, reactions)
