@@ -58,9 +58,12 @@ jest.mock('../../logger', () => ({
 }));
 
 import { x25519 } from '@noble/curves/ed25519.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   addContact,
   BAD_PUBLIC_KEY_MESSAGE,
+  clearSymKeyCache,
   listContacts,
   handleIncomingInvite,
   getSymmetricKeyForPeer,
@@ -199,6 +202,64 @@ describe('contacts — getSymmetricKeyForPeer', () => {
     const k2 = await getSymmetricKeyForPeer(1, b64);
 
     expect(Buffer.from(k1!).toString('hex')).toBe(Buffer.from(k2!).toString('hex'));
+  });
+});
+
+// ── Потолок кэша ключей на пути чтения (v4.32.665) ────────────────────────────
+
+/**
+ * Дефект: `cacheSymKey` вытесняет самую старую запись, когда в кэше уже
+ * SYM_CACHE_MAX ключей, и добавление контакта звало именно его. А
+ * `getSymmetricKeyForPeer` — путь, по которому идёт каждая расшифровка —
+ * писал в Map напрямую, мимо помощника. Потолок на этом пути не применялся
+ * ни разу: ключ каждого пира, чьё сообщение открыли за сеанс, оставался в
+ * памяти до выхода из учётной записи.
+ *
+ * Проверяем поведением: заполняем кэш через чтение и смотрим, ходит ли за
+ * самым старым ключом ещё раз в хранилище.
+ */
+const CONTACTS_SRC = fs.readFileSync(path.join(__dirname, '..', 'contacts.ts'), 'utf8');
+const SYM_CACHE_MAX = Number(/const SYM_CACHE_MAX = (\d+);/.exec(CONTACTS_SRC)?.[1]);
+
+const readsMock = jest.requireMock('../../storage/local') as {
+  kvGetSecretCell: jest.Mock;
+};
+
+describe('contacts — потолок кэша симметричных ключей', () => {
+  beforeEach(clearKv);
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: потолок задан числом и вытесняет только помощник', () => {
+    expect(SYM_CACHE_MAX).toBeGreaterThan(0);
+    expect(CONTACTS_SRC).toContain('if (symKeyCache.size >= SYM_CACHE_MAX) {');
+    // Единственная запись в Map — внутри помощника. Появится вторая — потолок
+    // снова окажется необязательным.
+    expect(CONTACTS_SRC.split('symKeyCache.set(').length - 1).toBe(1);
+    expect(CONTACTS_SRC).toContain('cacheSymKey(pid, peerPublicKeyB64, sym);');
+  });
+
+  it('чтение ключа тоже вытесняет старые записи', async () => {
+    const alice = makeKeyPair();
+    const peers: string[] = [];
+    for (let i = 0; i < SYM_CACHE_MAX + 6; i++) {
+      const peer = makeKeyPair();
+      await addContact(alice, peer.publicKey, `P${i}`);
+      peers.push(Buffer.from(peer.publicKey).toString('base64'));
+    }
+    // addContact кладёт ключ в кэш сам — очищаем, чтобы кэш заполнил именно
+    // путь чтения, который и чинится.
+    clearSymKeyCache();
+    for (const b64 of peers) expect(await getSymmetricKeyForPeer(1, b64)).not.toBeNull();
+
+    const before = readsMock.kvGetSecretCell.mock.calls.length;
+    // Самый старый пир вытеснен: за ним идут в хранилище заново.
+    expect(await getSymmetricKeyForPeer(1, peers[0])).not.toBeNull();
+    const afterOldest = readsMock.kvGetSecretCell.mock.calls.length;
+    expect(afterOldest).toBeGreaterThan(before);
+
+    // ПРОВЕРКА НЕ ПУСТАЯ: свежий пир ещё в кэше, за ним в хранилище не ходят —
+    // значит счётчик считает попадания, а не растёт на каждом вызове.
+    expect(await getSymmetricKeyForPeer(1, peers[peers.length - 1])).not.toBeNull();
+    expect(readsMock.kvGetSecretCell.mock.calls.length).toBe(afterOldest);
   });
 });
 

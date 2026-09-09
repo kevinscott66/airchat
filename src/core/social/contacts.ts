@@ -993,7 +993,12 @@ export async function getSymmetricKeyForPeer(
     if (!row) return null;
     const j = JSON.parse(row) as { symKey: string };
     const sym = new Uint8Array(Buffer.from(j.symKey, 'base64'));
-    symKeyCache.set(cacheKey, new Uint8Array(sym));
+    // v4.32.665: потолок SYM_CACHE_MAX существовал с самого появления
+    // cacheSymKey, но на горячем пути чтения не применялся — здесь запись
+    // шла в Map напрямую, мимо помощника, и вытеснение не случалось ни разу.
+    // Ключ на каждого пира, чьё сообщение расшифровали за сеанс, оставался в
+    // памяти до выхода из учётной записи.
+    cacheSymKey(pid, peerPublicKeyB64, sym);
     return sym;
   } catch (e) {
     log.warn('contact_symkey_failed', { err: e instanceof Error ? e.message : String(e) });
