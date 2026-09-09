@@ -304,8 +304,16 @@ function persistCallLog(profileId: number, entries = callLog): Promise<void> {
   return enqueueCallLogPersistence(profileId, async () => {
     try {
       const { kvSetSecret } = await import('../storage/local');
-      await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot));
-    } catch { /* ignore */ }
+      // v4.32.661: kvSetSecret отвечает, легла ли запись на диск, а здесь ответ
+      // терялся вместе с пустым catch — сорванная запись журнала не оставляла
+      // ни следа. Показывать человеку нечего (журнал ведётся сам собой), но
+      // диагностика обязана быть: иначе записи просто исчезали к перезапуску.
+      if (!(await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot)))) {
+        log.warn('call_log_persist_failed', { pid: profileId });
+      }
+    } catch (e) {
+      log.warn('call_log_persist_error', { err: e instanceof Error ? e.message : String(e) });
+    }
   });
 }
 
@@ -361,11 +369,18 @@ export async function loadCallLog(pid: number): Promise<void> {
       const legacy = await kvGetSecret(LEGACY_CALL_LOG_KEY);
       if (legacy) {
         raw = legacy;
-        await kvSetSecret(callLogKey(pid), legacy);
-        // v4.32.278: и убрать глобальный ключ. Без этого «разовая» миграция
-        // повторялась бы у каждого профиля — второй аккаунт на том же
-        // устройстве поднимал бы журнал звонков первого как свой.
-        await kvDelete(LEGACY_CALL_LOG_KEY);
+        // v4.32.661: копия не легла — глобальный ключ не трогаем. Прежде
+        // DELETE шёл безусловно, и одна сорванная запись уничтожала журнал
+        // звонков целиком: в scoped-ключ он не попал, а legacy уже стёрт.
+        // Тот же порядок, что в rateLimiter с блок-листом (v4.32.293).
+        if (await kvSetSecret(callLogKey(pid), legacy)) {
+          // v4.32.278: и убрать глобальный ключ. Без этого «разовая» миграция
+          // повторялась бы у каждого профиля — второй аккаунт на том же
+          // устройстве поднимал бы журнал звонков первого как свой.
+          await kvDelete(LEGACY_CALL_LOG_KEY);
+        } else {
+          log.warn('call_log_migrate_failed', { pid });
+        }
       }
     }
     if (raw) {
