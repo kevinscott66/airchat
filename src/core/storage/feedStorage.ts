@@ -829,10 +829,19 @@ export class FeedStorage {
     await d.runAsync('UPDATE feed SET read = 1 WHERE id = ?', [postId]);
   }
 
+  /**
+   * Сколько непрочитанного видно в ленте. Считается ровно то, что отдаёт
+   * getFeed: архивные строки оттуда исключены.
+   *
+   * v4.32.669: счёт шёл по всей таблице. Человек убирал непрочитанную
+   * публикацию в архив — и полоса «N непрочитанных — обновить» повисала
+   * навсегда: пометить прочитанной её больше некому (обработчик видимости
+   * ленты этой строки не встретит), а обновление ленты счётчик не меняло.
+   */
   async getUnreadCount(): Promise<number> {
     const d = await this.ensureDb();
     const row = await d.getFirstAsync<{ count: number }>(
-      'SELECT COUNT(*) as count FROM feed WHERE read = 0'
+      'SELECT COUNT(*) as count FROM feed WHERE read = 0 AND COALESCE(archived, 0) = 0'
     );
     return row?.count ?? 0;
   }
