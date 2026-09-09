@@ -79,7 +79,7 @@ describe('Android release manifest', () => {
     // Этот special permission нужен Expo только в debug-вариантах. В release
     // нет ни одного потребителя, а лишняя возможность увеличивает последствия
     // любой будущей уязвимости в UI.
-    const appConfig = JSON.parse(readFileSync(join(__dirname, '..', '..', 'app.json'), 'utf8')) as {
+    const appConfig = JSON.parse(readFileSync(join(__dirname, '..', '..', 'app.config.base.json'), 'utf8')) as {
       expo?: { android?: { blockedPermissions?: string[] } };
     };
     expect(appConfig.expo?.android?.blockedPermissions).toContain('android.permission.SYSTEM_ALERT_WINDOW');

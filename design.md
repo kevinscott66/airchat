@@ -959,7 +959,7 @@ live. A notification that ignores the user's own switches is worse than none.
 iOS is the mirror image: a data-only push is never displayed with the
 application closed, so it carries an `alert` with `apns-push-type: alert` and
 `apns-priority: 10`, plus `UIBackgroundModes: ["remote-notification"]` in
-`app.json`.
+`app.config.base.json`.
 
 The consequence of the server composing the iOS text is that the text must be
 impersonal — "Новое сообщение — откройте приложение". The relay sees

@@ -72,7 +72,7 @@ async function showIncomingCallBanner(callId: string, contactDid?: string): Prom
       pressAction: { id: 'default' },
       // Полноэкранное намерение — то, чем Android поднимает окно звонка поверх
       // заблокированного экрана. На Android 14+ ему нужно разрешение
-      // USE_FULL_SCREEN_INTENT (объявлено в app.json); без разрешения система
+      // USE_FULL_SCREEN_INTENT (объявлено в app.config.base.json); без разрешения система
       // сама опускает уведомление до обычного баннера, а не отвергает его.
       fullScreenAction: { id: 'default' },
       // Звонок не смахивается сам: он либо принят, либо кончился по времени.

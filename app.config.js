@@ -1,5 +1,5 @@
 /**
- * Дополняет `app.json`: Apple Team ID для автоматической подписи iOS.
+ * Дополняет `app.config.base.json`: Apple Team ID для автоматической подписи iOS.
  * Задаётся одним из способов (первый найденный выигрывает):
  *   - переменная окружения `APPLE_TEAM_ID` или `EXPO_APPLE_TEAM_ID`
  *   - файл `ios-signing.local` в корне репозитория (строка `APPLE_TEAM_ID=XXXXXXXXXX`)
@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const appJson = require('./app.json');
+const appJson = require('./app.config.base.json');
 
 function readTeamFromLocalFile() {
   const p = path.join(__dirname, 'ios-signing.local');

@@ -7,7 +7,7 @@
 #
 # Обновляет ВСЕ 4 места синхронно:
 #   1. worktree/package.json
-#   2. worktree/app.json          (version + android.versionCode)
+#   2. worktree/app.config.base.json (version + android.versionCode)
 #   3. airchat-v430/app.json      (Expo CLI читает отсюда)
 #   4. android/app/build.gradle   (versionCode + versionName для APK)
 #
@@ -27,9 +27,9 @@ echo "→ Обновляю версию: $NEW_VER (versionCode $NEW_CODE)"
 # 1. worktree/package.json
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$WORKTREE/package.json"
 
-# 2. worktree/app.json
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$WORKTREE/app.json"
-sed -i '' "s/\"versionCode\": [0-9]*/\"versionCode\": $NEW_CODE/" "$WORKTREE/app.json"
+# 2. worktree/app.config.base.json
+sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$WORKTREE/app.config.base.json"
+sed -i '' "s/\"versionCode\": [0-9]*/\"versionCode\": $NEW_CODE/" "$WORKTREE/app.config.base.json"
 
 # 3. main app.json (Expo CLI)
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$MAIN_DIR/app.json"
@@ -40,7 +40,7 @@ sed -i '' "s/versionCode [0-9]*/versionCode $NEW_CODE/" "$GRADLE"
 sed -i '' "s/versionName \"[^\"]*\"/versionName \"$NEW_VER\"/" "$GRADLE"
 
 echo "✓ package.json:  $(grep '"version"' "$WORKTREE/package.json" | head -1 | xargs)"
-echo "✓ app.json:      $(grep '"version"' "$WORKTREE/app.json" | head -1 | xargs)"
+echo "✓ app config:    $(grep '"version"' "$WORKTREE/app.config.base.json" | head -1 | xargs)"
 echo "✓ build.gradle:  $(grep 'versionName\|versionCode' "$GRADLE" | tr '\n' ' ' | xargs)"
 echo ""
 echo "Следующий шаг — пересборка с --rerun-tasks:"
