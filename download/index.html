@@ -31,10 +31,16 @@
   .row .name { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
   .row .meta { margin-top: 3px; color: #A6A6BD; font-size: 13px; }
   .row .go { float: right; color: #9B8CFF; font-size: 15px; font-weight: 600; margin-left: 12px; }
-  .row.muted .name { color: #A6A6BD; }
-  ol { margin: 24px 0 0; padding-left: 20px; color: #A6A6BD; font-size: 14px; }
+  .note {
+    padding: 14px 18px; margin-bottom: 12px; border-radius: 18px;
+    background: rgba(155,140,255,.09); border: 1px solid rgba(155,140,255,.28);
+    color: #CFC7FF; font-size: 14px;
+  }
+  ol { margin: 12px 0 0; padding-left: 20px; color: #A6A6BD; font-size: 14px; }
   li { margin-bottom: 7px; }
   h2 { margin: 26px 0 8px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #7C7C96; }
+  .sums { margin: 6px 0 0; color: #7C7C96; font-size: 12px; line-height: 1.7; word-break: break-all; }
+  .sums code { color: #A6A6BD; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
   .foot { margin: 22px 0 0; color: #7C7C96; font-size: 12px; }
 </style>
 </head>
@@ -42,9 +48,48 @@
   <main class="card">
     <img class="icon" src="icon512.png" alt="AirChat">
     <h1>AirChat</h1>
-    <p class="ver">Загрузки для Android временно недоступны</p>
+    <p class="ver">Версия 4.32.671 · Android 8.0 и новее</p>
 
-    <h2>Веб-версия</h2>
+    <h2>Android</h2>
+
+    <a class="row" href="airchat-4.32.671-arm64-v8a.apk">
+      <span class="go">Скачать</span>
+      <div class="name">arm64-v8a</div>
+      <div class="meta">57,8 МБ · почти все телефоны с 2017 года</div>
+    </a>
+
+    <a class="row" href="airchat-4.32.671-armeabi-v7a.apk">
+      <span class="go">Скачать</span>
+      <div class="name">armeabi-v7a</div>
+      <div class="meta">43,7 МБ · старые 32-битные телефоны</div>
+    </a>
+
+    <div class="note">
+      Сборка подписана собственным ключом AirChat. Если раньше стояла сборка
+      с отладочной подписью, Android откажется ставить эту поверх неё:
+      сначала удалите старую. Переписка и ключи хранятся на устройстве —
+      перед удалением сохраните резервную копию из настроек.
+    </div>
+
+    <h2>Как установить</h2>
+    <ol>
+      <li>Скачайте файл, который подходит вашему телефону. Если не знаете какой — arm64-v8a.</li>
+      <li>Откройте его из папки «Загрузки».</li>
+      <li>Android спросит разрешение на установку из этого источника — разрешите.</li>
+      <li>После установки разрешение можно отозвать.</li>
+    </ol>
+
+    <h2>Проверка подлинности</h2>
+    <p class="sums">
+      Подпись: <code>CN=AirChat, OU=AirChat, O=AirChat, C=RU</code><br>
+      SHA-256 сертификата:<br><code>af0e2e3fde039bb1b735c008af0cf83243a7c813a5aba8e80fa6a22601fd12ee</code>
+    </p>
+    <p class="sums">
+      SHA-256 arm64-v8a:<br><code>d48f0484053da2986670d86521c4584aa1ccc5dfabe0037f6196c08f1daa9694</code><br>
+      SHA-256 armeabi-v7a:<br><code>e1cecfd828cde11bd6437646e23c9c6916e784a6e84b22bcabd84c1829497bf9</code>
+    </p>
+
+    <h2>Без установки</h2>
 
     <a class="row" href="https://air.dobropalm.tech/">
       <span class="go">Открыть</span>
@@ -52,7 +97,10 @@
       <div class="meta">Браузер на любом устройстве · без установки</div>
     </a>
 
-    <p class="foot">APK вернутся после публикации релизных сборок с защищённой подписью и контрольными суммами.</p>
+    <p class="foot">
+      Сборки для iPhone раздаются отдельно: каждая подписывается под конкретное
+      устройство. Напишите, если нужна.
+    </p>
   </main>
 </body>
 </html>
