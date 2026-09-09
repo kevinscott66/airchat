@@ -9,7 +9,6 @@ import { sanitizePeerPronouns } from './peerPronouns';
 import { sanitizePeerStatus } from './peerStatus';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import {
-  kvGet,
   kvDelete,
   kvGetSecretCell,
   kvSetSecret,
@@ -18,6 +17,7 @@ import {
   profileKvDelete,
   notifyChatStorageChanged,
 } from '../storage/local';
+import { scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileScopedKey } from '../storage/kvKeys';
 import { cellTextOrNull, mayOverwrite, type AtRestCell } from '../storage/atRestCell';
 import { isPlainCid } from '../cid';
@@ -489,18 +489,16 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
     // v4.32.227: return a shallow copy so a caller doing in-place sort/splice
     // can't corrupt the shared cached array for everyone else.
     if (cached && Date.now() - cached.at < CONTACTS_LIST_TTL_MS) return cached.data.slice();
-    let raw = await profileKvGet(pid, 'contacts_index');
-    // v4.32.124 (AUDIT P0 #8): only the primary profile (pid=1) may inherit
-    // legacy unscoped contacts. Previously every new profile fell back to
-    // global `contacts_index` / `contact:<b64>`, which silently leaked
-    // profile A's contact list into profile B on first open.
-    if (!raw && pid === 1) {
-      raw = await kvGet('contacts_index');
-      if (raw) {
-        await profileKvSet(pid, 'contacts_index', raw);
-        log.info('contacts_index_migrated', { pid });
-      }
-    }
+    // v4.32.659: отказ чтения отличаем от пустоты. profileKvGet сводит их в
+    // один null (kvTryGet гасит ошибку базы внутри себя), и обещание докблока
+    // выше не выполнялось: недоступный момент SQLite экран рисовал как пустую
+    // записную книжку. Наследование общей (беспрефиксной) записи первым
+    // профилем — v4.32.124 (AUDIT P0 #8), остальным она не достаётся, иначе
+    // список профиля A утекал бы профилю B при первом открытии, — делает сам
+    // scopedKvTryGetFor, вместе с правилом «сначала копия, потом удаление».
+    const read = await scopedKvTryGetFor(pid, 'contacts_index');
+    if (read === null) return null;
+    const raw = read.value;
     if (!raw) return [];
     // v4.32.115: Array.isArray guard against corrupted index.
     const parsed = JSON.parse(raw);
@@ -635,9 +633,17 @@ export async function rememberContactId(peerPublicKeyB64: string): Promise<void>
 
 /** v4.32.115: unlocked inner — callers already holding withContactLock use this. */
 async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string): Promise<void> {
-  let raw = await profileKvGet(pid, 'contacts_index');
-  // v4.32.124 (AUDIT P0 #8): legacy fallback only for primary profile.
-  if (!raw) raw = pid === 1 ? ((await kvGet('contacts_index')) ?? '[]') : '[]';
+  // v4.32.659: указатель здесь перечитывается, меняется и кладётся обратно —
+  // поэтому сорванное чтение стоило дороже всего. Прежде оно давало '[]', и на
+  // диск ложился указатель из одной записи: один недоступный момент базы стирал
+  // весь список контактов. Наследование общей записи первым профилем
+  // (v4.32.124, AUDIT P0 #8) теперь внутри scopedKvTryGetFor.
+  const read = await scopedKvTryGetFor(pid, 'contacts_index');
+  if (read === null) {
+    log.warn('contacts_index_read_failed', { pid, op: 'remember' });
+    return;
+  }
+  const raw = read.value ?? '[]';
   try {
     const parsed = JSON.parse(raw);
     // v4.32.115: guard against corrupted index (e.g. `{}` instead of `[]`).
@@ -844,19 +850,27 @@ export async function deleteContact(peerPublicKeyB64: string): Promise<void> {
   const pid = activeProfileId();
   await withContactLock(pid, async () => {
     // Remove from index
-    // v4.32.124 (AUDIT P0 #8): legacy fallback only for primary profile.
-    const raw =
-      (await profileKvGet(pid, 'contacts_index')) ??
-      (pid === 1 ? (await kvGet('contacts_index')) ?? '[]' : '[]');
-    let ids: Set<string>;
-    try {
-      const parsed = JSON.parse(raw);
-      ids = new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
-    } catch {
-      ids = new Set();
+    // v4.32.659: отказ чтения отличаем от пустоты. Наследование общей
+    // (беспрефиксной) записи первым профилем — v4.32.124 (AUDIT P0 #8) —
+    // делает сам scopedKvTryGetFor.
+    const read = await scopedKvTryGetFor(pid, 'contacts_index');
+    if (read === null) {
+      // Класть указатель обратно нельзя: '[]' на месте несостоявшегося чтения
+      // стирал весь список, а просили убрать одного. Строку человека всё равно
+      // удаляем — он просил именно этого, — а из указателя его вычистит
+      // самолечение при следующем удачном чтении списка (badIds выше).
+      log.warn('contacts_index_read_failed', { pid, op: 'delete' });
+    } else {
+      let ids: Set<string>;
+      try {
+        const parsed = JSON.parse(read.value ?? '[]');
+        ids = new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
+      } catch {
+        ids = new Set();
+      }
+      ids.delete(peerPublicKeyB64);
+      await profileKvSet(pid, 'contacts_index', JSON.stringify([...ids]));
     }
-    ids.delete(peerPublicKeyB64);
-    await profileKvSet(pid, 'contacts_index', JSON.stringify([...ids]));
     // v4.32.71: физическое удаление row вместо записи пустой строки.
     await profileKvDelete(pid, `${PREFIX}${peerPublicKeyB64}`);
     // v4.32.286: и старая глобальная строка (до v4.32.124) — иначе удаление

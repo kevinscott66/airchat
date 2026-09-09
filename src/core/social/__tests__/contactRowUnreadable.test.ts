@@ -29,6 +29,14 @@ jest.mock('../../storage/local', () => {
       return v == null ? { state: 'absent' } : { state: 'plain', text: v };
     }),
     kvSetSecret: jest.fn(async (key: string, value: string) => kvSet(key, value)),
+    // v4.32.659: указатель контактов contacts.ts читает через scopedKvTryGetFor,
+    // а тот работает на kvTryGet/kvSetChecked — без них заглушка обрывала бы
+    // чтение TypeError'ом.
+    kvTryGet: jest.fn(async (key: string) => ({ value: await kvGet(key) })),
+    kvSetChecked: jest.fn(async (key: string, value: string) => {
+      await kvSet(key, value);
+      return true;
+    }),
     profileKvGet: jest.fn(async (profileId: number, key: string) => kvGet(`p${profileId}:${key}`)),
     profileKvSet: jest.fn(async (profileId: number, key: string, value: string) =>
       kvSet(`p${profileId}:${key}`, value)),

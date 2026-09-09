@@ -28,8 +28,21 @@ jest.mock('../../storage/local', () => {
       return v == null ? { state: 'absent' } : { state: 'plain', text: v };
     }),
     kvSetSecret: jest.fn(async (key: string, value: string) => kvSet(key, value)),
+    // v4.32.659: прежде отказ базы здесь БРОСАЛ, и оба чтения выше проходили
+    // только благодаря этому — настоящие kvTryGet/kvGet ошибку гасят внутри и
+    // отдают null, то есть ровно то же, что «записи нет». Заглушка теперь ведёт
+    // себя как настоящая: отказ — это null, а не исключение. Разбор «отказ или
+    // пусто» делает scopedKvTryGetFor, у которого для этого три состояния.
+    kvTryGet: jest.fn(async (key: string) => {
+      if (mockReadFails) return null;
+      return { value: await kvGet(key) };
+    }),
+    kvSetChecked: jest.fn(async (key: string, value: string) => {
+      await kvSet(key, value);
+      return true;
+    }),
     profileKvGet: jest.fn(async (profileId: number, key: string) => {
-      if (mockReadFails) throw new Error('database is locked');
+      if (mockReadFails) return null;
       return kvGet(`p${profileId}:${key}`);
     }),
     profileKvSet: jest.fn(async (profileId: number, key: string, value: string) =>
