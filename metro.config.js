@@ -162,11 +162,11 @@ config.server = {
 
 
 // Polyfill for browser Event/EventTarget — required by @libp2p/* on Hermes
-const origGetPolyfills = config.serializer && config.serializer.getPolyfillModulePaths;
+const origGetPolyfills = config.serializer && config.serializer.getPolyfills;
 config.serializer = {
   ...config.serializer,
-  getPolyfillModulePaths: () => {
-    const base = origGetPolyfills ? origGetPolyfills() : [];
+  getPolyfills: (options) => {
+    const base = origGetPolyfills ? origGetPolyfills(options) : [];
     const polyfillPath = path.resolve(__dirname, 'polyfills/event-polyfill.js');
     return fs.existsSync(polyfillPath) ? [...base, polyfillPath] : base;
   },

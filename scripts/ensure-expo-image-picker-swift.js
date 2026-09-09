@@ -4,7 +4,7 @@
  * NSCameraUsageDescription is missing, but those symbols were removed from
  * ExpoModulesCore in SDK 55 → the iOS build fails with
  * "cannot find 'EXFatal' in scope". We always ship the usage descriptions
- * (app.json infoPlist), so that fatal branch is never taken at runtime; here we
+ * (app.config.base.json infoPlist), so that fatal branch is never taken at runtime; here we
  * replace the uncompilable call with a plain NSLog so the file builds.
  *
  * Idempotent; run from `postinstall` so a fresh `npm install` re-applies it.
