@@ -101,9 +101,13 @@ describe('в ленте счётчик спрашивают за конкрет�
   });
 
   test('счётчик сохраняется по авторам', () => {
-    expect(bodyOf(SRC, 'async function savePublishQueue(')).toContain(
-      "kvSet(FEED_QUEUE_LEN_KEY, JSON.stringify(countByAuthor(q)))",
+    // v4.32.667: запись счёта проверяемая, и промах стирает ключ — иначе
+    // разошедшийся кэш держался бы до следующей удачной записи очереди.
+    const body = bodyOf(SRC, 'async function savePublishQueue(');
+    expect(body).toContain(
+      "kvSetChecked(FEED_QUEUE_LEN_KEY, JSON.stringify(countByAuthor(q)))",
     );
+    expect(body).toContain('await kvDelete(FEED_QUEUE_LEN_KEY);');
     expect(SRC).toContain("const FEED_QUEUE_LEN_KEY = 'feed_publish_queue_len_v2';");
   });
 
@@ -127,5 +131,12 @@ describe('проверка не пустая', () => {
 
   test('старая строка счётчика ушла из исходника', () => {
     expect(SRC).not.toContain("kvSet(FEED_QUEUE_LEN_KEY, String(");
+  });
+
+  test('гасящая запись счёта ушла из savePublishQueue', () => {
+    // Голый kvSet отдаёт void и прячет отказ базы: до 667-го catch тут не
+    // срабатывал ни разу, а кэш расходился с очередью молча.
+    const body = bodyOf(SRC, 'async function savePublishQueue(');
+    expect(body).not.toContain('try { await kvSet(FEED_QUEUE_LEN_KEY');
   });
 });

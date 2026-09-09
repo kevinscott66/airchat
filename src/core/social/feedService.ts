@@ -809,7 +809,17 @@ async function savePublishQueue(q: QueuedFeedItem[]): Promise<boolean> {
   }
   // v4.32.xx: синхронизируем cached length — getFeedPublishQueueLength()
   // читает этот маленький ключ вместо MB-сайз JSON.
-  try { await kvSet(FEED_QUEUE_LEN_KEY, JSON.stringify(countByAuthor(q))); } catch { /* noop */ }
+  //
+  // v4.32.667: писался этот счёт голым kvSet, а тот гасит отказ базы внутри и
+  // отдаёт void — catch не срабатывал ни разу. Разошедшийся кэш сам не лечится:
+  // читатель спрашивает его ПЕРВЫМ и до следующей удачной записи очереди отдаёт
+  // вчерашнее число. Опустевшая очередь так и оставалась «1 в очереди», а
+  // «Отправить сейчас» молчал, потому что отправлять уже нечего. Не легло —
+  // стираем ключ: без него счёт считается по самой очереди и снова верен.
+  if (!(await kvSetChecked(FEED_QUEUE_LEN_KEY, JSON.stringify(countByAuthor(q))))) {
+    log.warn('feed_queue_len_write_failed', { count: q.length });
+    await kvDelete(FEED_QUEUE_LEN_KEY);
+  }
   return true;
 }
 
