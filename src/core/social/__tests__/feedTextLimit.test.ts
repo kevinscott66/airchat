@@ -116,3 +116,36 @@ describe('исходники: приём конверта пользуется �
     expect(src).not.toMatch(/^import /m);
   });
 });
+
+describe('исходники: репост принимается по тем же потолкам, что и пост (v4.32.664)', () => {
+  const from = SERVICE.indexOf("case 'feed_repost': {");
+  const to = SERVICE.indexOf("case 'feed_delete':");
+  const body = SERVICE.slice(from, to);
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: разбор репоста найден целиком', () => {
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    expect(body).toContain('await s.savePost({');
+  });
+
+  it('текст и имена режутся общим правилом, а не своим числом', () => {
+    expect(body).toContain('const safeText = clampFeedPostText(d.text)');
+    expect(body).toContain('const safeAuthorName = clampFeedAuthorName(d.authorName);');
+    expect(body).toContain('const safeOrigAuthorName = clampFeedAuthorName(d.originalAuthorName);');
+    expect(body).not.toContain('slice(0, 8_000)');
+  });
+
+  it('номер оригинала и его DID тоже проверяются перед записью', () => {
+    expect(body).toContain('const safeOrigPostId =');
+    expect(body).toContain('const safeOrigAuthorDid =');
+    expect(body).toContain('repostOf: safeOrigPostId,');
+    expect(body).toContain('repostAuthorDid: safeOrigAuthorDid,');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: репост несёт текст оригинала как есть', () => {
+    // Пока отправитель не режет текст сам, любое своё число на приёме ниже
+    // FEED_POST_MAX_CHARS — это молчаливая потеря хвоста у получателя.
+    expect(SERVICE).toContain('const repostText = originalPost.text;');
+    expect(FEED_POST_MAX_CHARS).toBe(10_000);
+  });
+});

@@ -2854,9 +2854,18 @@ async function applyFeedEnvelope(
       // feed_post inline-doc validation at line ~1546; previously an
       // attacker could ship 1000 inline media blobs per repost envelope
       // or megabyte-long strings bloating SQLite+kv on every receiver.
-      const safeText = typeof d.text === 'string' ? d.text.slice(0, 8_000) : '';
-      const safeAuthorName = typeof d.authorName === 'string' ? d.authorName.slice(0, 128) : null;
-      const safeOrigAuthorName = typeof d.originalAuthorName === 'string' ? d.originalAuthorName.slice(0, 128) : d.originalAuthorName;
+      // v4.32.664: потолки берём из общего правила (feedTextLimit), как это
+      // уже делает feed_post. Своё число 8 000 стояло здесь с v4.32.199 и
+      // разошлось с потолком публикации в 10 000: репост несёт ровно текст
+      // оригинала, поэтому длинная запись молча теряла хвост у КАЖДОГО
+      // получателя — то самое расхождение, ради которого в v4.32.527 и
+      // появился общий модуль. Заодно номер оригинала и его DID: они шли в
+      // SQLite как есть, хотя пришли из сети наравне с остальными полями.
+      const safeText = clampFeedPostText(d.text) ?? '';
+      const safeAuthorName = clampFeedAuthorName(d.authorName);
+      const safeOrigAuthorName = clampFeedAuthorName(d.originalAuthorName);
+      const safeOrigPostId = typeof d.originalPostId === 'string' ? d.originalPostId.slice(0, 128) : null;
+      const safeOrigAuthorDid = typeof d.originalAuthorDid === 'string' ? d.originalAuthorDid.slice(0, 128) : null;
       // v4.32.614: номер публикации придумывает отправитель, а имена ключей
       // вложений собраны из одного лишь номера. Без этой сверки чужой
       // подписанный конверт с уже занятым номером подменял картинки под
@@ -2910,9 +2919,9 @@ async function applyFeedEnvelope(
         timestamp: payload.ts,
         read: 0,
         cid: null,
-        repostOf: d.originalPostId,
+        repostOf: safeOrigPostId,
         repostAuthorName: safeOrigAuthorName,
-        repostAuthorDid: d.originalAuthorDid,
+        repostAuthorDid: safeOrigAuthorDid,
       });
       await drainDeferred(payload.postId, s, envelopePid);
       log.info('feed_repost_received', { postId: payload.postId.slice(0, 24), mediaN: mediaCids?.length ?? 0 });
@@ -4454,10 +4463,17 @@ export async function editFeedPost(
     });
     throw new Error('Изменить можно только свою запись');
   }
-  await s.updatePostText(postId, newText);
+  // v4.32.664: в базу и в конверт уходит ровно та строка, которую проверили.
+  // Проверка шла по trimmed, а дальше использовался сырой newText: хвостовые
+  // пробелы не считаются длиной здесь, но считаются у получателя —
+  // isEditableFeedText меряет пришедшую строку целиком. Правка на 10 000
+  // символов с добивкой пробелами проходила отправку, ложилась в свою базу и
+  // отбрасывалась у КАЖДОГО получателя как feed_edit_bad_text, о чём автор
+  // никогда не узнавал.
+  await s.updatePostText(postId, trimmed);
   emitFeedUpdate();
 
-  const data: FeedEditData = { kind: 'edit', newText };
+  const data: FeedEditData = { kind: 'edit', newText: trimmed };
   const payload: FeedEnvelopePayload = {
     type: 'feed_edit',
     postId,

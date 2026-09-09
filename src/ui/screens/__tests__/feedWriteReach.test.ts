@@ -44,6 +44,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 
 import { publicKeyToDidKey } from '../../../core/identity/did';
 import { editFeedPost, setFeedProfileContext } from '../../../core/social/feedService';
+import { FEED_POST_MAX_CHARS, isEditableFeedText } from '../../../core/social/feedTextLimit';
 
 const SCREEN = fs.readFileSync(path.join(__dirname, '..', 'FeedScreen.tsx'), 'utf8');
 const SERVICE = fs.readFileSync(path.join(
@@ -91,6 +92,31 @@ describe('правка записи: отказ выглядит как отка
     expect(body).toContain("throw new Error('Изменить можно только свою запись')");
     // Ни одной ветви, которая молча выходит, не сделав правки.
     expect(body).not.toContain('\n    return;\n');
+  });
+});
+
+describe('правка уходит ровно в том виде, в каком её проверили (v4.32.664)', () => {
+  const padded = 'а'.repeat(FEED_POST_MAX_CHARS) + '   ';
+
+  it('хвостовые пробелы не доезжают до базы', async () => {
+    mockPosts.set('p3', { id: 'p3', authorDid: myDid, text: 'старое' });
+    await editFeedPost(pair, 'p3', padded);
+    // ПРОВЕРКА НЕ ПУСТАЯ: правка вообще дошла до записи.
+    expect(mockUpdated).toHaveLength(1);
+    expect(mockUpdated[0].text).toBe(padded.trim());
+    expect(mockUpdated[0].text).toHaveLength(FEED_POST_MAX_CHARS);
+  });
+
+  it('в конверт кладётся та же проверенная строка', () => {
+    expect(SERVICE).toContain("const data: FeedEditData = { kind: 'edit', newText: trimmed };");
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: получатель меряет пришедшую строку целиком', () => {
+    // Отправитель считает длину по trimmed, получатель — по всей строке.
+    // Пока это так, отправлять непочищенный текст значит рассылать правку,
+    // которую КАЖДЫЙ получатель отбросит как feed_edit_bad_text.
+    expect(isEditableFeedText(padded)).toBe(false);
+    expect(isEditableFeedText(padded.trim())).toBe(true);
   });
 });
 
