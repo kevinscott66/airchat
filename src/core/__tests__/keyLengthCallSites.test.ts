@@ -78,6 +78,22 @@ const FILES = collect(SRC).map((full) => ({
  */
 const BARE_LENGTH = /\.length\s*(?:!==|===|==|!=)\s*(?:32|64)\b/;
 
+/**
+ * Форма ключа в base64, записанная длиной вместо isPubKeyB64.
+ *
+ * v4.32.666. 43, 44 и 48 — это длины base64 от тридцати двух байт (без
+ * выравнивания, с ним и с запасом на url-safe варианты). Ничто другое в этом
+ * коде не измеряется числами 43…48, поэтому сравнение длины именно с ними —
+ * это всегда переписанная заново проверка «похоже на ключ». Длины мало: под
+ * «43…48 символов» подходит и строка из управляющих байтов, и невидимые метки
+ * направления письма, и кириллица — ровно об этом написан pubKeyFormat.
+ *
+ * Ловится только там, где имя выражения говорит о ключе (Pub / Key / b64):
+ * потолок на произвольный текст длиной 48 — законен.
+ */
+const BARE_PUB_B64_LENGTH =
+  /[A-Za-z0-9_$.]*(?:[Pp]ub|[Kk]ey|[Bb]64)[A-Za-z0-9_$.]*\.length\s*(?:[<>]=?|===|!==|==|!=)\s*(?:43|44|48)\b/;
+
 /** Ручной разбор открытого ключа из base64 в обход pubKeyFormat. */
 const MANUAL_PUB_DECODE = /Buffer\.from\(\s*[A-Za-z0-9_$.]*(?:[Pp]ub|[Pp]ublicKey)[A-Za-z0-9_$.]*\s*,\s*'base64'\)/;
 
@@ -91,6 +107,13 @@ describe('длина ключа названа именем, а не число�
 
   it('нигде длина не сравнивается с голым 32 или 64', () => {
     const offenders = FILES.filter((f) => f.lines.some((l) => BARE_LENGTH.test(l))).map((f) => f.key);
+    expect(offenders).toEqual([]);
+  });
+
+  it('форма ключа в base64 нигде не записана длиной', () => {
+    const offenders = FILES.filter(
+      (f) => f.key !== HOME && f.lines.some((l) => BARE_PUB_B64_LENGTH.test(l))
+    ).map((f) => f.key);
     expect(offenders).toEqual([]);
   });
 
@@ -110,6 +133,41 @@ describe('длина ключа названа именем, а не число�
       MANUAL_PUB_DECODE.test("const pk = new Uint8Array(Buffer.from(c.peerPublicKey, 'base64'));")
     ).toBe(true);
     expect(MANUAL_PUB_DECODE.test("Buffer.from(contactPubB64, 'base64')")).toBe(true);
+    // Ровно те восемь проверок, что стояли в коде до круга 4.32.666.
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof env.authorPubB64 !== 'string' || env.authorPubB64.length < 43 || env.authorPubB64.length > 48) return null;"
+      )
+    ).toBe(true);
+    expect(BARE_PUB_B64_LENGTH.test('peerPubKeyB64.length < 43 ||')).toBe(true);
+    expect(BARE_PUB_B64_LENGTH.test('peerPubKeyB64.length > 48')).toBe(true);
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof contactPubB64 !== 'string' || contactPubB64.length < 43 || contactPubB64.length > 48) {"
+      )
+    ).toBe(true);
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof senderPubB64 !== 'string' || senderPubB64.length < 43 || senderPubB64.length > 48) {"
+      )
+    ).toBe(true);
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof env.viewerPubB64 !== 'string' || env.viewerPubB64.length < 43 || env.viewerPubB64.length > 48) return true;"
+      )
+    ).toBe(true);
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof env.requesterPubB64 !== 'string' || env.requesterPubB64.length < 43 || env.requesterPubB64.length > 48) return true;"
+      )
+    ).toBe(true);
+    expect(
+      BARE_PUB_B64_LENGTH.test(
+        "if (typeof r.peerPubB64 !== 'string' || r.peerPubB64.length < 43 || r.peerPubB64.length > 48) continue;"
+      )
+    ).toBe(true);
+    // И равенство с 44 — та же самая проверка, записанная короче.
+    expect(BARE_PUB_B64_LENGTH.test('if (pubB64.length !== 44) return null;')).toBe(true);
   });
 
   it('законные формы не ловятся', () => {
@@ -123,6 +181,12 @@ describe('длина ключа названа именем, а не число�
     expect(MANUAL_PUB_DECODE.test("Buffer.from(pair.publicKey).toString('base64')")).toBe(false);
     // Чужие данные из base64 разбирать по-прежнему можно.
     expect(MANUAL_PUB_DECODE.test("Buffer.from(b64, 'base64').toString('utf8')")).toBe(false);
+    // Потолок на произвольный текст — не утверждение о ключе.
+    expect(BARE_PUB_B64_LENGTH.test('if (name.length > 48) return;')).toBe(false);
+    expect(BARE_PUB_B64_LENGTH.test("if (r.text.length > 4096) continue;")).toBe(false);
+    expect(BARE_PUB_B64_LENGTH.test('if (text.length > 4000) setError();')).toBe(false);
+    // Правильная форма, разумеется, не ловится.
+    expect(BARE_PUB_B64_LENGTH.test('if (!isPubKeyB64(env.authorPubB64)) return null;')).toBe(false);
   });
 
   it('имена длин заведены и ими действительно пользуются', () => {
@@ -141,6 +205,21 @@ describe('длина ключа названа именем, а не число�
     expect(users).toContain('core/crypto/keyManager.ts');
     expect(users).toContain('core/crypto/encrypt.ts');
     expect(users.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('форму ключа проверяют общим правилом, а не в одном файле', () => {
+    // Невырожденность: если isPubKeyB64 перестанут применять, запрет на
+    // запись длиной станет пустым — запрещать будет нечего.
+    const users = FILES.filter((f) => f.lines.some((l) => l.includes('isPubKeyB64'))).map(
+      (f) => f.key
+    );
+    expect(users).toContain(HOME);
+    expect(users).toContain('core/social/groupMessaging.ts');
+    expect(users).toContain('core/social/scheduledMessages.ts');
+    expect(users).toContain('core/social/storyEnvelope.ts');
+    expect(users).toContain('core/security/rateLimiter.ts');
+    expect(users).toContain('core/social/callService.ts');
+    expect(users.length).toBeGreaterThanOrEqual(12);
   });
 
   it('разбор ключа из base64 идёт через pubKeyFormat не в одном файле', () => {

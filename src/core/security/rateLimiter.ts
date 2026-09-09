@@ -366,12 +366,11 @@ export class RateLimiter {
     // v4.32.187 (Round-17 #8): reject garbage shapes at the entry point so
     // we never persist invalid strings that later leak through
     // getBlockedPubKeys / Settings UI.
-    if (
-      typeof peerPubKeyB64 !== 'string' ||
-      peerPubKeyB64.length < 43 ||
-      peerPubKeyB64.length > 48
-    ) {
-      log.warn('rate_limiter_block_invalid_shape', { len: peerPubKeyB64?.length ?? -1 });
+    // v4.32.666: форма ключа — общее правило isPubKeyB64, а не длина: под
+    // «43…48 символов» подходят и управляющие байты, и кириллица.
+    const len = typeof peerPubKeyB64 === 'string' ? peerPubKeyB64.length : -1;
+    if (!isPubKeyB64(peerPubKeyB64)) {
+      log.warn('rate_limiter_block_invalid_shape', { len });
       return false;
     }
     this.blocked.add(peerPubKeyB64);

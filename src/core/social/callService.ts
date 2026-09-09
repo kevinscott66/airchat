@@ -394,7 +394,8 @@ export async function loadCallLog(pid: number): Promise<void> {
           if (clean.length >= MAX_LOG) break;
           if (!e || typeof e !== 'object') continue;
           const r = e as Record<string, unknown>;
-          if (typeof r.peerPubB64 !== 'string' || r.peerPubB64.length < 43 || r.peerPubB64.length > 48) continue;
+          // v4.32.666: форма ключа — общее правило isPubKeyB64, а не длина.
+          if (!isPubKeyB64(r.peerPubB64)) continue;
           if (typeof r.startedAt !== 'number' || !Number.isFinite(r.startedAt)) continue;
           if (r.direction !== 'outgoing' && r.direction !== 'incoming') continue;
           if (r.outcome !== 'answered' && r.outcome !== 'missed' && r.outcome !== 'declined') continue;

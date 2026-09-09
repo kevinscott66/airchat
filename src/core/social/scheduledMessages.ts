@@ -18,6 +18,7 @@ import {
 } from '../storage/local';
 import { fanoutGroupMessage } from './groupMessaging';
 import { groupSendProblem } from './groupSendOutcome';
+import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { log } from '../logger';
 import { isSendableMessageText } from './messageTextLimit';
 import { decideScheduledSend, scheduledSenderLabel, shouldReportScheduledHold } from './scheduledDispatch';
@@ -49,7 +50,8 @@ export async function scheduleMessage(
   // (NaN/Infinity/past/year 3000), arbitrary text length (multi-MB row
   // retry-loops on flushDue hammering SQLite + network), and non-base64
   // contactPubB64 lets a buggy caller silently poison the scheduler.
-  if (typeof contactPubB64 !== 'string' || contactPubB64.length < 43 || contactPubB64.length > 48) {
+  // v4.32.666: форма ключа — общее правило isPubKeyB64, а не длина.
+  if (!isPubKeyB64(contactPubB64)) {
     throw new Error('invalid_contact_pub');
   }
   if (!isSendableMessageText(text)) {
@@ -87,7 +89,7 @@ export async function scheduleGroupMessage(
   if (typeof groupId !== 'string' || groupId.length === 0 || groupId.length > 128) {
     throw new Error('invalid_group_id');
   }
-  if (typeof senderPubB64 !== 'string' || senderPubB64.length < 43 || senderPubB64.length > 48) {
+  if (!isPubKeyB64(senderPubB64)) {
     throw new Error('invalid_sender_pub');
   }
   if (!isSendableMessageText(text)) {

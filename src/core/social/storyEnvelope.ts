@@ -18,6 +18,7 @@
 
 import { readEnvelopeBody } from './envelopeBody';
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
+import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { sanitizeParagraphText } from './sysLineGuard';
 
 export const STORY_PREFIX = '\x13story:';
@@ -55,8 +56,10 @@ export function decodeStoryEnvelope(text: string, now: number): StoryEnvelope | 
   const env = readEnvelopeBody<StoryEnvelope>(text, STORY_PREFIX, 64 * 1024);
   if (!env) return null;
   if (typeof env.id !== 'string' || !env.id || env.id.length > 128) return null;
-  // base64 Ed25519-ключ — 43–48 символов в зависимости от паддинга.
-  if (typeof env.authorPubB64 !== 'string' || env.authorPubB64.length < 43 || env.authorPubB64.length > 48) return null;
+  // v4.32.666: форма ключа — общее правило isPubKeyB64. Одной длины мало:
+  // под «43…48 символов» подходят и управляющие байты, и невидимые метки
+  // направления письма, и кириллица.
+  if (!isPubKeyB64(env.authorPubB64)) return null;
   if (typeof env.authorDid !== 'string' || !env.authorDid || env.authorDid.length > 256) return null;
   if (typeof env.expiresAt !== 'number' || !Number.isFinite(env.expiresAt)) return null;
   // Просроченную сторис не сохраняем, «вечную» — тоже: expiresAt в далёком

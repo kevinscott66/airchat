@@ -10,6 +10,7 @@
  */
 
 import { readEnvelopeBody } from './envelopeBody';
+import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { clampEnvelopeTs } from './envelopeTime';
 import { profileManager } from '../identity/profileManager';
 import { getOwnDisplayNameFor, getOwnUsernameFor } from '../identity/ownProfile';
@@ -355,7 +356,9 @@ export async function handleIncomingGroupReadReceipt(
   try {
     if (typeof env.groupId !== 'string' || !env.groupId || env.groupId.length > 128) return true;
     if (typeof env.lastSeenMsgId !== 'string' || !env.lastSeenMsgId || env.lastSeenMsgId.length > 128) return true;
-    if (typeof env.viewerPubB64 !== 'string' || env.viewerPubB64.length < 43 || env.viewerPubB64.length > 48) return true;
+    // v4.32.666: форма ключа — общее правило isPubKeyB64, а не длина: под
+    // «43…48 символов» подходят и управляющие байты, и кириллица.
+    if (!isPubKeyB64(env.viewerPubB64)) return true;
     if (env.ts != null && (typeof env.ts !== 'number' || !Number.isFinite(env.ts))) return true;
     // v4.32.176: anti-spoof — DM-signer (senderPubB64, Ed25519-верифицированный)
     // должен совпадать с viewerPubB64 в envelope. Раньше любой peer мог
@@ -434,7 +437,7 @@ export async function handleIncomingGroupEnvelope(
   // labels and dialog previews forever. Reject hard.
   if (typeof env.groupId !== 'string' || env.groupId.length === 0 || env.groupId.length > 128) return true;
   if (typeof env.msgId !== 'string' || env.msgId.length === 0 || env.msgId.length > 128) return true;
-  if (typeof env.senderPubB64 !== 'string' || env.senderPubB64.length < 43 || env.senderPubB64.length > 48) return true;
+  if (!isPubKeyB64(env.senderPubB64)) return true;
   if (!withinMessageTextLimit(env.text)) return true;
   // v4.32.238: системную строку («Вы заблокированы в группе» и т. п.) рисует
   // приложение, поэтому участник не вправе её прислать — см. sysLineGuard.
@@ -762,7 +765,7 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
     // requester can't bloat SQLite with a multi-MB message or freeze the
     // admin UI rendering an emoji-bomb name.
     if (typeof env.groupId !== 'string' || env.groupId.length > 128) return true;
-    if (typeof env.requesterPubB64 !== 'string' || env.requesterPubB64.length < 43 || env.requesterPubB64.length > 48) return true;
+    if (!isPubKeyB64(env.requesterPubB64)) return true;
     // v4.32.239: имя заявителя админ видит не только в списке заявок — при
     // одобрении оно подставляется в системную строку «X вступил(а) в группу»
     // (GroupsScreen). Без вычистки control-символов перевод строки внутри
