@@ -164,7 +164,8 @@ describe('форма исходников', () => {
     expect(guard).toBeGreaterThan(0);
     for (const later of [
       'rateLimiter.isBlocked(msg.contactPubB64)',
-      'await deleteScheduledMessage(msg.id);',
+      // v4.32.662: удаление теперь адресное — второй довод pid (см. scheduledOwnerDelete662).
+      'await deleteScheduledMessage(msg.id, pid);',
       'await fanoutGroupMessage(',
       'await svc.sendMessage(',
     ]) {

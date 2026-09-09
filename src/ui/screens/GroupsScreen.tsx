@@ -742,10 +742,15 @@ function GroupChatScreen({
   const closeGrpStats = useCallback(() => setGrpStatsVisible(false), []);
   const handleDeleteGrpScheduled = useCallback((id: string) => {
     runGuardedOp(async () => {
-      await deleteScheduledMessage(id);
+      // v4.32.662: удаляем строку того профиля, под которым её и показали.
+      // Список собран через listGroupScheduledMessages(group.id, pid), а
+      // deleteScheduledMessage без второго довода берёт профиль, активный В
+      // МОМЕНТ УДАЛЕНИЯ. Успей человек переключить профиль с открытым
+      // списком — DELETE не находил строки, но runGuardedOp рапортовал успех.
+      await deleteScheduledMessage(id, pid);
       await reloadGrpScheduled();
     }, 'Не удалось удалить отложенное сообщение', 'ui_group_delete_scheduled_failed');
-  }, [reloadGrpScheduled]);
+  }, [reloadGrpScheduled, pid]);
   /**
    * Своя роль в группе — своя строка в group_members.
    *

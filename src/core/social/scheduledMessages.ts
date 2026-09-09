@@ -185,7 +185,7 @@ async function flushDueOnce(): Promise<void> {
       // v4.32.175: если контакт заблокирован — отменяем отложенное сообщение,
       // иначе scheduled до блокировки до сих пор стрелял в заблокированного.
       if (!msg.groupId && rateLimiter.isBlocked(msg.contactPubB64)) {
-        await deleteScheduledMessage(msg.id);
+        await deleteScheduledMessage(msg.id, pid);
         log.info('scheduled_message_blocked_drop', { id: msg.id.slice(0, 8) });
         continue;
       }
@@ -260,7 +260,7 @@ async function flushDueOnce(): Promise<void> {
           // Права могли отозвать за те часы, что сообщение ждало своего часа:
           // бан, «только чтение», «писать могут только администраторы». Строку
           // расписания снимаем — иначе она будет биться в отказ каждый тик.
-          await deleteScheduledMessage(msg.id);
+          await deleteScheduledMessage(msg.id, pid);
           log.warn('scheduled_group_message_denied', {
             id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), code: problem.code,
           });
@@ -276,7 +276,7 @@ async function flushDueOnce(): Promise<void> {
         if (problem) {
           const staleMs = Date.now() - msg.sendAt;
           if (staleMs > ABANDON_AFTER_MS) {
-            await deleteScheduledMessage(msg.id);
+            await deleteScheduledMessage(msg.id, pid);
             log.warn('scheduled_group_message_abandoned', {
               id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), ageMs: staleMs,
             });
@@ -317,7 +317,14 @@ async function flushDueOnce(): Promise<void> {
         log.info('scheduled_message_sent', { id: msg.id.slice(0, 8), to: msg.contactPubB64.slice(0, 8), mediaCount: mediaUris?.length ?? 0 });
       }
       // Always delete on success (either real cid or outbox-enqueued null return).
-      await deleteScheduledMessage(msg.id);
+      // v4.32.662: и владельца строки — явно. Без второго довода
+      // deleteScheduledMessage берёт профиль, активный В МОМЕНТ УДАЛЕНИЯ, а
+      // между проверкой профиля в начале витка и этой строкой лежит вся
+      // отправка: сетевой круг на сообщение или рассылка всей группе. Успей
+      // человек переключить профиль за это время — DELETE не находил строки,
+      // она доживала до следующего тика и уходила ВТОРОЙ раз. Строки выбраны
+      // по owner_profile_id = pid, так что pid здесь — владелец по построению.
+      await deleteScheduledMessage(msg.id, pid);
     } catch (e) {
       log.warn('scheduled_message_failed', {
         id: msg.id.slice(0, 8),
@@ -327,7 +334,7 @@ async function flushDueOnce(): Promise<void> {
       const ageMs = Date.now() - msg.sendAt;
       if (ageMs > ABANDON_AFTER_MS) {
         try {
-          await deleteScheduledMessage(msg.id);
+          await deleteScheduledMessage(msg.id, pid);
           log.warn('scheduled_message_abandoned', { id: msg.id.slice(0, 8), ageMs });
         } catch { /* ignore */ }
       }

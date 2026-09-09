@@ -1983,10 +1983,15 @@ function ChatThreadView({
   const closeScheduledList = useCallback(() => setScheduledListVisible(false), []);
   const deleteScheduledFromModal = useCallback((id: string) => {
     runGuardedOp(async () => {
-      await deleteScheduledMessage(id);
+      // v4.32.662: тот же профиль, под которым список и собран
+      // (listAllScheduledMessages(activeProfileId)). Без второго довода
+      // deleteScheduledMessage берёт активный профиль в момент удаления, и
+      // после переключения профиля с открытым списком DELETE не находил
+      // строки — а человеку показывали, что всё удалилось.
+      await deleteScheduledMessage(id, activeProfileId);
       await reloadScheduled();
     }, 'Не удалось удалить отложенное сообщение', 'ui_chat_delete_scheduled_failed');
-  }, [reloadScheduled]);
+  }, [reloadScheduled, activeProfileId]);
   const closeStarred = useCallback(() => setStarredVisible(false), []);
   const unstarFromModal = useCallback((id: string) => {
     runGuardedOp(async () => {
