@@ -319,8 +319,15 @@ function persistCallLog(profileId: number, entries = callLog): Promise<void> {
 export async function clearCallLog(): Promise<void> {
   callLog = [];
   emitCallLog();
-  const { profileManager } = await import('../identity/profileManager');
-  const pid = profileManager.getActiveProfile()?.id ?? 1;
+  // v4.32.658: удаляем журнал того профиля, которому он принадлежит, а не того,
+  // что активен в момент нажатия. Тот же перекос, что и в loadCallLog: записи
+  // делаются под `callProfileId`, а очистка выводила владельца заново через
+  // profileManager. После смены аккаунта «Очистить» стирала журнал чужого
+  // профиля, а свой оставляла нетронутым. Если служба звонков не поднята,
+  // владелец неизвестен — журнала в памяти всё равно нет, и трогать хранилище
+  // нельзя.
+  const pid = callProfileId;
+  if (pid === null) return;
   await enqueueCallLogPersistence(pid, async () => {
     try {
       const { kvDelete } = await import('../storage/local');
@@ -332,11 +339,20 @@ export async function clearCallLog(): Promise<void> {
   });
 }
 
-export async function loadCallLog(): Promise<void> {
+/**
+ * v4.32.658: владелец журнала приходит параметром, а не выводится заново.
+ *
+ * Раньше здесь стояло `profileManager.getActiveProfile()?.id ?? 1`, тогда как
+ * все записи журнала идут в `callProfileId` — тот, что передали в
+ * `initCallService`. Между этими двумя моментами есть окно: служба звонков
+ * поднимается после первого кадра, за несколькими await, и если за это время
+ * человек переключил аккаунт, чтение брало журнал нового профиля, а
+ * последующая запись (и перешифровка, и миграция legacy-ключа) клала его в
+ * хранилище старого. Метаданные звонков одного аккаунта оказывались в другом.
+ */
+export async function loadCallLog(pid: number): Promise<void> {
   try {
     const { kvGetSecret, kvSetSecret, kvDelete } = await import('../storage/local');
-    const { profileManager } = await import('../identity/profileManager');
-    const pid = profileManager.getActiveProfile()?.id ?? 1;
     let raw = await kvGetSecret(callLogKey(pid));
     // Миграция с legacy (глобального) ключа — разово копируем в scoped.
     // kvGetSecret пропускает старую незашифрованную строку насквозь, поэтому
@@ -1281,7 +1297,7 @@ export async function initCallService(pair: KeyPairBytes, profileId = 1): Promis
   myPubB64Global = myPub;
   mySigningPair = pair;
   callProfileId = Number.isSafeInteger(profileId) && profileId > 0 ? profileId : 1;
-  await loadCallLog();
+  await loadCallLog(callProfileId);
   if (serviceEpoch !== epoch || myPubB64Global !== myPub) return;
   stopRegisterRetry();
   await ensureRegistered(myPub, epoch);
