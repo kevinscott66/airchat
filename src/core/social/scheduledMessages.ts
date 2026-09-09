@@ -39,6 +39,23 @@ const ABANDON_AFTER_MS = 15 * 60_000;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let flushing = false;
 
+/**
+ * Чей это профиль. `null` — активного нет, и угадывать нельзя.
+ *
+ * v4.32.668: во всех четырёх местах стояло `?? 1` — «активного нет, считаем,
+ * что первый». Дороже всего это обходилось сторожу смены профиля в
+ * `flushDueOnce`: он сравнивает `?? 1` с `?? 1`, поэтому у самого обычного
+ * человека (единственный профиль, номер 1) выход из учётной записи посреди
+ * прохода читался как «профиль тот же». Проход продолжал слать письма и
+ * стирать строки уже разбираемым сервисом — ровно то, ради чего сторож и
+ * заведён. Планирование при отсутствии профиля клало строку в расписание
+ * первого. Лента отказалась угадывать номер профиля раньше
+ * (`feed_storage_profile_unset` в feedService.ts); здесь то же правило.
+ */
+function activePid(): number | null {
+  return profileManager.getActiveProfile()?.id ?? null;
+}
+
 /** Schedule a DM to be sent at `sendAt` (unix ms). */
 export async function scheduleMessage(
   contactPubB64: string,
@@ -62,7 +79,8 @@ export async function scheduleMessage(
   if (sendAt < now - 60_000 || sendAt > now + 365 * 86_400_000) {
     throw new Error('send_at_out_of_range');
   }
-  const pid = profileManager.getActiveProfile()?.id ?? 1;
+  const pid = activePid();
+  if (pid === null) throw new Error('scheduled_profile_unset');
   const id = uuidv4();
   await insertScheduledMessage({
     id,
@@ -104,7 +122,8 @@ export async function scheduleGroupMessage(
   // string to every member per-message.
   if (typeof senderName !== 'string') throw new Error('invalid_sender_name');
   const safeSenderName = senderName.slice(0, 128);
-  const pid = profileManager.getActiveProfile()?.id ?? 1;
+  const pid = activePid();
+  if (pid === null) throw new Error('scheduled_profile_unset');
   const id = uuidv4();
   // contactPubB64 is repurposed as senderPubB64 for group scheduled messages
   await insertScheduledMessage({
@@ -139,7 +158,8 @@ async function flushDue(): Promise<void> {
 }
 
 async function flushDueOnce(): Promise<void> {
-  const pid = profileManager.getActiveProfile()?.id ?? 1;
+  const pid = activePid();
+  if (pid === null) return;
   const svc = getMessagingService();
   if (!svc) return;
 
@@ -165,7 +185,7 @@ async function flushDueOnce(): Promise<void> {
     // signed by profile B's key with profile B's messaging service. Bail
     // out on mismatch — the row stays in scheduled_messages and next tick
     // (now bound to the new active profile) will no-op naturally.
-    if ((profileManager.getActiveProfile()?.id ?? 1) !== pid) {
+    if (activePid() !== pid) {
       log.info('scheduled_flush_profile_switched_abort', { pid });
       break;
     }
