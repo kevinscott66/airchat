@@ -3770,7 +3770,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       <AppPressable
                         key={did}
                         onPress={() => {
-                          const newText = draft.replace(/@([a-zа-яё0-9_.]*)$/i, `@${insert} `);
+                          // v4.32.670: подстановка шла строкой-заменой, а в ней $& $` $' $1
+                          // — управляющие последовательности. Имя контакта — произвольный
+                          // текст от собеседника, поэтому «$&» в имени рвал черновик.
+                          // Функция-замена возвращает текст как есть.
+                          const newText = draft.replace(/@([a-zа-яё0-9_.]*)$/i, () => `@${insert} `);
                           setDraft(newText);
                           setMentionSuggestions([]);
                         }}
