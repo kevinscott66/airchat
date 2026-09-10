@@ -27,6 +27,7 @@ const BAR = () =>
   );
 const CHAT = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'ChatScreen.tsx'), 'utf8');
 const GROUPS = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'GroupsScreen.tsx'), 'utf8');
+const FEED = () => fs.readFileSync(path.join(__dirname, '..', '..', '..', 'ui', 'screens', 'FeedScreen.tsx'), 'utf8');
 
 /** Кусок файла между двумя опорами — чтобы утверждение не ловило соседей. */
 function slice(src: string, from: string, to: string): string {
@@ -113,5 +114,60 @@ describe('плашка в группе', () => {
       /^import \{[^}]*\bUNREADABLE_REACTIONS_TEXT\b[^}]*\} from '\.\.\/\.\.\/core\/storage\/unreadableText';$/m
     );
     expect(src).not.toContain("'Реакции не удалось прочитать'");
+  });
+});
+
+/**
+ * Лента (v4.32.690).
+ *
+ * Тот же столбец, то же трёхсостоянийное чтение (`feedStorage` отдаёт признак
+ * с v4.32.687), тот же запрет записи — и та же цена молчания: пустая карта на
+ * экране читается как «на это никто не реагировал», а нажатие на «＋» получает
+ * отказ, названный в v4.32.689, но приходящий из ниоткуда. Здесь закреплены
+ * оба места ленты: сама публикация и комментарий под ней.
+ */
+describe('плашка в ленте', () => {
+  it('ряд реакций публикации рисует пометку раньше плашек', () => {
+    const body = slice(FEED(), '<View style={styles.reactionsRow}>', '{hasReactions');
+    // ПРОВЕРКА НЕ ПУСТАЯ: опоры стоят по краям одного ряда, а не всего файла.
+    expect(body.length).toBeGreaterThan(200);
+    expect(body.length).toBeLessThan(2000);
+    expect(body).toContain('{item.reactionsUnreadable ? (');
+    expect(body).toContain('{UNREADABLE_REACTIONS_TEXT}');
+    expect(body).toContain('color: colors.warning');
+  });
+
+  it('ряд реакций комментария рисуется и когда карта пуста', () => {
+    const body = slice(FEED(), '{/* Reaction pills row */}', '{Object.entries(cReactions).filter(');
+    expect(body.length).toBeGreaterThan(200);
+    expect(body.length).toBeLessThan(2000);
+    expect(body).toContain('{Object.keys(cReactions).length > 0 || c.reactionsUnreadable ? (');
+    expect(body).toContain('{c.reactionsUnreadable ? (');
+    expect(body).toContain('{UNREADABLE_REACTIONS_TEXT}');
+    expect(body).toContain('color: colors.warning');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: прежних безусловных условий не осталось', () => {
+    const src = FEED();
+    // Публикация: ряд начинался прямо с плашек, минуя признак столбца.
+    expect(src).not.toContain('<View style={styles.reactionsRow}>\n        {hasReactions');
+    // Комментарий: ряд рисовался только при непустой карте.
+    expect(src).not.toContain('{Object.keys(cReactions).length > 0 ? (');
+  });
+
+  it('пометка берётся из общего списка, а не пишется строкой', () => {
+    const src = FEED();
+    expect(src).toMatch(
+      /^import \{[^}]*\bUNREADABLE_REACTIONS_TEXT\b[^}]*\} from '\.\.\/\.\.\/core\/storage\/unreadableText';$/m
+    );
+    expect(src).not.toContain("'Реакции не удалось прочитать'");
+  });
+
+  it('обе строки ленты несут признак столбца', () => {
+    const feedStorage = fs.readFileSync(path.join(__dirname, '..', '..', 'storage', 'feedStorage.ts'), 'utf8');
+    const post = slice(feedStorage, 'export type FeedPostRow = {', '\n};\n');
+    const comment = slice(feedStorage, 'export type FeedCommentRow = {', '\n};\n');
+    expect(post).toMatch(/^ {2}reactionsUnreadable\?: boolean;$/m);
+    expect(comment).toMatch(/^ {2}reactionsUnreadable\?: boolean;$/m);
   });
 });

@@ -35,7 +35,7 @@ import {
   mayReuseFeedText,
   UNREADABLE_POST_ACTION_TEXT,
 } from '../../core/social/feedPostGuard';
-import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT } from '../../core/storage/unreadableText';
+import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
 import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
@@ -668,6 +668,20 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
       ) : null}
 
       <View style={styles.reactionsRow}>
+        {/* v4.32.690: столбец с реакциями, который не открывается ключом этого
+            устройства, до сих пор был неотличим от «на это никто не
+            реагировал»: карта приходила пустой, плашки не рисовались вовсе.
+            Писать в такой столбец запрещено с v4.32.544 — иначе прежние
+            реакции стёрлись бы необратимо, — поэтому нажатие на «＋» получает
+            отказ. Назван он с v4.32.689, но приходил будто из ниоткуда. В
+            переписке и в группе пометка стоит с v4.32.600; лента была
+            последним местом без неё. */}
+        {item.reactionsUnreadable ? (
+          <View style={[styles.reactionBubble, { borderColor: colors.warning }]}>
+            <Ionicons name="alert-circle-outline" size={14} color={colors.warning} />
+            <Text style={[styles.reactionCount, { color: colors.warning }]}>{UNREADABLE_REACTIONS_TEXT}</Text>
+          </View>
+        ) : null}
         {hasReactions
           ? Object.entries(reactions!).map(([emoji, dids]) => (
               <AppPressable
@@ -4021,8 +4035,18 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                           />
                         )}
                         {/* Reaction pills row */}
-                        {Object.keys(cReactions).length > 0 ? (
+                        {/* v4.32.690: та же пометка у комментария. Его столбец
+                            читается тем же трёхсостоянийным правилом, отказ
+                            записи назван с v4.32.689 — а на экране не было ни
+                            следа того, что реакции вообще есть. */}
+                        {Object.keys(cReactions).length > 0 || c.reactionsUnreadable ? (
                           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                            {c.reactionsUnreadable ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 6, paddingVertical: 2, gap: 2, borderWidth: 1, borderColor: colors.warning }}>
+                                <Ionicons name="alert-circle-outline" size={12} color={colors.warning} />
+                                <Text style={{ fontSize: font.xs, color: colors.warning }}>{UNREADABLE_REACTIONS_TEXT}</Text>
+                              </View>
+                            ) : null}
                             {Object.entries(cReactions).filter(([, dids]) => dids.length > 0).map(([emoji, dids]) => (
                               <AppPressable
                                 key={emoji}
