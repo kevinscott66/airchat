@@ -750,6 +750,12 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
    */
   const applyFolderName = useCallback(async (color: string, name: string) => {
     const next = name.trim() ? await setFolderName(color, name) : await removeFolderName(color);
+    // v4.32.699: null — прежние названия не прочитались, поэтому запись не шла.
+    // Показать здесь пустую шапку значило бы соврать: папки на месте.
+    if (!next) {
+      showError('Не удалось прочитать названия папок');
+      return;
+    }
     setFolderNames(next);
     // Вкладку удалённой папки нужно отпустить, иначе список останется
     // отфильтрованным по метке, которой в шапке уже нет.

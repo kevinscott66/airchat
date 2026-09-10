@@ -23,7 +23,7 @@
 import { log } from '../logger';
 import {
   activeProfileIdOrNull,
-  readProfileSharedSecret,
+  tryReadProfileSharedSecret,
   writeProfileSharedSecret,
 } from '../storage/profileSharedKv';
 
@@ -57,20 +57,38 @@ function parseMuted(raw: string | null): Set<string> {
   }
 }
 
-export async function getMutedAuthors(): Promise<Set<string>> {
+/**
+ * Кэш либо чтение из базы. `null` — не прочитали.
+ *
+ * v4.32.699: пустой список, полученный из неудачного чтения, раньше попадал в
+ * кэш и жил там до конца сеанса. Это превращало одну заминку базы в постоянную:
+ * каждое следующее переключение писало новый список поверх старого, взяв за
+ * основу пустоту.
+ */
+async function currentMuted(): Promise<Set<string> | null> {
   const pid = activeProfileIdOrNull();
   if (pid != null && cache?.profileId === pid) return cache.set;
   try {
     // Перенос старой общей записи — в storage/profileSharedKv: правило у неё
     // общее с названиями папок чатов (v4.32.294), и копия здесь разъехалась бы
     // с копией там ровно так же, как разъезжались правила чтения этого списка.
-    const set = parseMuted(await readProfileSharedSecret(MUTED_AUTHORS_KEY));
+    const read = await tryReadProfileSharedSecret(MUTED_AUTHORS_KEY);
+    if (read === null) return null;
+    const set = parseMuted(read.value);
     if (pid != null) cache = { profileId: pid, set };
     return set;
   } catch (e) {
     log.warn('muted_authors_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return new Set();
+    return null;
   }
+}
+
+/**
+ * Для показа: не прочитали — считаем, что заглушённых нет. Лишняя публикация в
+ * ленте обратима, в отличие от записи по такому же предположению.
+ */
+export async function getMutedAuthors(): Promise<Set<string>> {
+  return (await currentMuted()) ?? new Set();
 }
 
 export async function isAuthorMuted(did: string): Promise<boolean> {
@@ -81,9 +99,17 @@ export async function isAuthorMuted(did: string): Promise<boolean> {
 /**
  * Переключить заглушение и вернуть новый список — интерфейс показывает именно
  * то, что записано, а не то, что он предположил.
+ *
+ * `null` — список не прочитался, и поэтому ничего не записано: запись идёт
+ * целиком, так что «взять пустой набор и добавить одного» означало бы вернуть
+ * человеку в ленту всех, кого он когда-либо заглушил.
  */
-export async function toggleMutedAuthor(did: string): Promise<Set<string>> {
-  const current = await getMutedAuthors();
+export async function toggleMutedAuthor(did: string): Promise<Set<string> | null> {
+  const current = await currentMuted();
+  if (current === null) {
+    log.warn('muted_authors_unreadable', { didLen: did.length });
+    return null;
+  }
   const pid = activeProfileIdOrNull();
   if (!did || pid == null) {
     log.warn('muted_authors_no_profile', { didLen: did.length });

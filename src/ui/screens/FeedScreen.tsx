@@ -1288,7 +1288,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // setState-updater'а — React вправе вызвать его дважды, и провал записи
   // интерфейс всё равно не замечал.
   const toggleMuteAuthor = useCallback(async (authorDid: string) => {
-    setMutedAuthors(await toggleMutedAuthor(authorDid));
+    // v4.32.699: null — прежний список не прочитался, и записи не было. Взять
+    // его за пустой значило бы показать, что заглушённых больше нет.
+    const next = await toggleMutedAuthor(authorDid);
+    if (!next) {
+      showError('Не удалось прочитать список заглушённых');
+      return;
+    }
+    setMutedAuthors(next);
   }, []);
 
   // ─── Share to chat ──────────────────────────────────────────────────────────

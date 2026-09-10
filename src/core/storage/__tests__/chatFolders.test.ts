@@ -28,6 +28,13 @@ jest.mock('../local', () => {
       kv[k] = PREFIX + Buffer.from(v, 'utf8').toString('base64');
       return true;
     }),
+    kvTryGet: jest.fn(async (k: string) => ({ value: kv[k] ?? null })),
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const v = kv[k];
+      if (v == null) return { state: 'absent' };
+      if (!v.startsWith(PREFIX)) return { state: 'plain', text: v };
+      return { state: 'plain', text: Buffer.from(v.slice(PREFIX.length), 'base64').toString('utf8') };
+    }),
   };
 });
 
@@ -187,7 +194,8 @@ describe('одна дорога записи', () => {
 
   it('название длиннее предела обрезается при записи', async () => {
     const names = await setFolderName(RED, 'я'.repeat(FOLDER_NAME_MAX_LEN + 5));
-    expect(names[RED]).toHaveLength(FOLDER_NAME_MAX_LEN);
+    expect(names).not.toBeNull();
+    expect(names?.[RED]).toHaveLength(FOLDER_NAME_MAX_LEN);
   });
 
   it('цвет неправильного вида не попадает в запись', async () => {
@@ -200,10 +208,12 @@ describe('одна дорога записи', () => {
     for (let i = 0; i < 32; i++) many[`#${i.toString(16).padStart(6, '0')}`] = `Папка ${i}`;
     mockLocal.__kv[key1] = `enc2:${Buffer.from(JSON.stringify(many), 'utf8').toString('base64')}`;
     const after = await setFolderName(RED, 'Ещё одна');
-    expect(Object.keys(after)).toHaveLength(32);
-    expect(RED in after).toBe(false);
+    expect(after).not.toBeNull();
+    expect(Object.keys(after ?? {})).toHaveLength(32);
+    expect(RED in (after ?? {})).toBe(false);
     // Переименовать уже существующую переполнение не мешает.
     const renamed = await setFolderName('#000000', 'Переименована');
-    expect(renamed['#000000']).toBe('Переименована');
+    expect(renamed).not.toBeNull();
+    expect(renamed?.['#000000']).toBe('Переименована');
   });
 });

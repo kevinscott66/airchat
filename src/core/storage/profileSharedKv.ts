@@ -14,8 +14,9 @@
  * копировать, а стереть — необратимо.
  */
 import { profileManager } from '../identity/profileManager';
+import { cellTextOrNull } from './atRestCell';
 import { profileScopedKey } from './kvKeys';
-import { kvDelete, kvGet, kvGetSecret, kvSetSecret } from './local';
+import { kvDelete, kvGetSecretCell, kvSetSecret, kvTryGet } from './local';
 
 /** Номер активного профиля или null, если менеджер профилей ещё не поднялся. */
 export function activeProfileIdOrNull(): number | null {
@@ -26,15 +27,40 @@ export function activeProfileIdOrNull(): number | null {
  * Прочитать запись профиля, попутно перенеся общую (если она ещё есть).
  * Возвращает сырую строку — разбор и границы остаются за вызывающим, они у
  * каждой записи свои.
+ *
+ * `null` — не прочитали. v4.32.699: раньше здесь возвращалась просто строка, а
+ * отказ базы приходил тем же null, что и «записи нет». Оба вызывающих — список
+ * заглушённых авторов и названия папок чатов — перечитывают запись целиком,
+ * меняют один элемент и кладут обратно ВСЮ. То есть неудачное чтение означало
+ * «в списке никого» и следующая же запись оставляла в нём ровно один элемент:
+ * человек снимал заглушение с одного автора и молча возвращал себе в ленту всех
+ * остальных, а переименование одной папки стирало названия прочих.
  */
-export async function readProfileSharedSecret(key: string): Promise<string | null> {
+export async function tryReadProfileSharedSecret(
+  key: string,
+): Promise<{ value: string | null } | null> {
   const pid = activeProfileIdOrNull();
-  const own = pid == null ? null : await kvGetSecret(profileScopedKey(pid, key));
+  let own: string | null = null;
+  if (pid != null) {
+    const cell = await kvGetSecretCell(profileScopedKey(pid, key));
+    if (cell.state === 'unreadable') return null;
+    own = cellTextOrNull(cell);
+  }
   // Общую запись разбираем даже когда своя уже есть: перенести её надо всем
   // профилям, а не только тому, кто первым открыл нужный экран.
-  const shared = await kvGet(key);
+  const sharedRead = await kvTryGet(key);
+  // Своя запись главнее общей, поэтому её достаточно. А вот когда своей нет,
+  // непрочитанная общая — это неизвестность: вернуть «пусто» значит разрешить
+  // вызывающему затереть ею то, что мы просто не увидели.
+  if (sharedRead === null) return own == null ? null : { value: own };
+  const shared = sharedRead.value;
   if (shared != null) await copySharedToProfiles(key, shared);
-  return own ?? shared;
+  return { value: own ?? shared };
+}
+
+/** То же чтение строкой: отсутствие и нечитаемость снова сливаются в null. */
+export async function readProfileSharedSecret(key: string): Promise<string | null> {
+  return (await tryReadProfileSharedSecret(key))?.value ?? null;
 }
 
 async function copySharedToProfiles(key: string, value: string): Promise<void> {
@@ -43,7 +69,17 @@ async function copySharedToProfiles(key: string, value: string): Promise<void> {
   let copiedEverywhere = true;
   for (const id of profileIds) {
     const scoped = profileScopedKey(id, key);
-    if ((await kvGet(scoped)) != null) continue;
+    // v4.32.699: kvTryGet, а не kvGet. Здесь спрашивают «есть ли уже копия у
+    // этого профиля», и отказ базы отвечал на это «нет» — общая запись
+    // устройства ложилась поверх собственного, уже перенесённого списка чужого
+    // профиля. Не прочитав, ничего не пишем и общую запись сохраняем: перенос
+    // повторится при следующем чтении.
+    const existing = await kvTryGet(scoped);
+    if (existing === null) {
+      copiedEverywhere = false;
+      continue;
+    }
+    if (existing.value !== null) continue;
     if (!(await kvSetSecret(scoped, value))) copiedEverywhere = false;
   }
   if (copiedEverywhere) await kvDelete(key);

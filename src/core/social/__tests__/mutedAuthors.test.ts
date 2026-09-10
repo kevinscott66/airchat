@@ -28,6 +28,13 @@ jest.mock('../../storage/local', () => {
       kv[k] = PREFIX + Buffer.from(v, 'utf8').toString('base64');
       return true;
     }),
+    kvTryGet: jest.fn(async (k: string) => ({ value: kv[k] ?? null })),
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const v = kv[k];
+      if (v == null) return { state: 'absent' };
+      if (!v.startsWith(PREFIX)) return { state: 'plain', text: v };
+      return { state: 'plain', text: Buffer.from(v.slice(PREFIX.length), 'base64').toString('utf8') };
+    }),
   };
 });
 
@@ -91,7 +98,8 @@ describe('заглушённые принадлежат профилю', () => {
   it('повторное переключение снимает', async () => {
     await toggleMutedAuthor(NOISY);
     const after = await toggleMutedAuthor(NOISY);
-    expect(after.has(NOISY)).toBe(false);
+    expect(after).not.toBeNull();
+    expect(after?.has(NOISY)).toBe(false);
     resetMutedAuthorsCache();
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
@@ -99,7 +107,8 @@ describe('заглушённые принадлежат профилю', () => {
   it('без активного профиля не пишет ничего', async () => {
     mockActiveId = null;
     const set = await toggleMutedAuthor(NOISY);
-    expect(set.size).toBe(0);
+    expect(set).not.toBeNull();
+    expect(set?.size).toBe(0);
     expect(Object.keys(mockLocal.__kv)).toEqual([]);
   });
 });
@@ -183,7 +192,8 @@ describe('кэш', () => {
     await getMutedAuthors();
     mockWriteFails = true;
     const set = await toggleMutedAuthor(NOISY);
-    expect(set.has(NOISY)).toBe(false);
+    expect(set).not.toBeNull();
+    expect(set?.has(NOISY)).toBe(false);
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
 });

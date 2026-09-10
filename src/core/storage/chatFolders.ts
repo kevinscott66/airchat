@@ -23,7 +23,7 @@
  */
 import { log } from '../logger';
 import { isColorTag } from './conversationMeta';
-import { readProfileSharedSecret, writeProfileSharedSecret } from './profileSharedKv';
+import { tryReadProfileSharedSecret, writeProfileSharedSecret } from './profileSharedKv';
 
 export const FOLDER_NAMES_KEY = 'folder_names';
 
@@ -83,14 +83,23 @@ export function parseFolderNames(raw: string | null): FolderNames {
   }
 }
 
-/** Названия папок активного профиля (со снятием старой общей записи). */
-export async function loadFolderNames(): Promise<FolderNames> {
+/**
+ * Названия папок активного профиля (со снятием старой общей записи).
+ * `null` — не прочитали.
+ */
+async function readFolderNames(): Promise<FolderNames | null> {
   try {
-    return parseFolderNames(await readProfileSharedSecret(FOLDER_NAMES_KEY));
+    const read = await tryReadProfileSharedSecret(FOLDER_NAMES_KEY);
+    return read === null ? null : parseFolderNames(read.value);
   } catch (e) {
     log.warn('folder_names_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return {};
+    return null;
   }
+}
+
+/** Для показа: не прочитали — рисуем шапку без вкладок, ничего при этом не теряя. */
+export async function loadFolderNames(): Promise<FolderNames> {
+  return (await readFolderNames()) ?? {};
 }
 
 /**
@@ -101,9 +110,18 @@ export async function loadFolderNames(): Promise<FolderNames> {
  * Текущий набор перечитывается здесь же, а не приходит с экрана: писать
  * `{...folderNames}` из состояния React значило бы затирать изменения, о
  * которых экран ещё не знает.
+ *
+ * `null` — набор не прочитался, и поэтому ничего не записано. v4.32.699: до
+ * этого перечитывание отвечало пустым набором и на отказ базы, а записывается
+ * набор целиком — значит переименование одной папки стирало названия всех
+ * остальных, ровно то, от чего перечитывание и заводилось.
  */
-export async function setFolderName(color: string, rawName: string): Promise<FolderNames> {
-  const current = await loadFolderNames();
+export async function setFolderName(color: string, rawName: string): Promise<FolderNames | null> {
+  const current = await readFolderNames();
+  if (current === null) {
+    log.warn('folder_names_unreadable', { color });
+    return null;
+  }
   if (!isColorKey(color)) {
     log.warn('folder_names_bad_color', { len: color.length });
     return current;
@@ -129,6 +147,6 @@ export async function setFolderName(color: string, rawName: string): Promise<Fol
 }
 
 /** Удалить папку. Метки с переписок не снимает — они принадлежат перепискам. */
-export async function removeFolderName(color: string): Promise<FolderNames> {
+export async function removeFolderName(color: string): Promise<FolderNames | null> {
   return await setFolderName(color, '');
 }
