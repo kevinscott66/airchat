@@ -51,7 +51,7 @@ import { listContacts } from './contacts';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
 import { reactionAddRefusal } from './reactionMapPolicy';
-import { reactionLimitError } from './reactionWrite';
+import { reactionLimitError, reactionUnreadableText } from './reactionWrite';
 // v4.32.528: тип, в котором сбой чтения отличим от пустой ленты.
 import type { DbRead } from '../storage/readResult';
 import {
@@ -2743,7 +2743,13 @@ async function applyFeedEnvelope(
           reactions[d.emoji] = [...existing, payload.authorDid];
         }
       }
-      await s.updateCommentReactions(d.commentId, reactions);
+      if (!(await s.updateCommentReactions(d.commentId, reactions))) {
+        // v4.32.689: запись могла не состояться (комментарий уже удалён,
+        // столбец не открывается ключом этого устройства). Раньше журнал в
+        // обоих случаях уверял, что реакция принята.
+        log.warn('feed_comment_reaction_not_stored', { commentId: d.commentId.slice(0, 16) });
+        break;
+      }
       log.info('feed_comment_reaction_received', {
         postId: payload.postId.slice(0, 16),
         commentId: d.commentId.slice(0, 16),
@@ -4358,6 +4364,10 @@ export async function toggleAndBroadcastReaction(
     // спрашивает никогда.
     const limit = existing ? reactionAddRefusal(existing.reactions ?? {}, emoji, myDid) : null;
     if (limit) throw reactionLimitError(limit, 'post');
+    // v4.32.689: вторая причина отказа — столбец не открывается ключом этого
+    // устройства. Общее «не удалось» не отличало её от сбоя записи, а повтор
+    // тут не поможет никогда.
+    if (existing?.reactionsUnreadable) throw new Error(reactionUnreadableText('post'));
     throw new Error('Не удалось сохранить реакцию');
   }
   emitFeedUpdate();
@@ -4526,6 +4536,10 @@ export function toggleCommentReaction(
     const comments = await s.getComments(postId);
     const comment = comments.find((c) => c.id === commentId);
     if (!comment) return comments;
+    // v4.32.689: нечитаемый столбец нельзя молча заменить пустой картой —
+    // рассылка тогда велела бы контактам снять реакции, которые у них есть,
+    // а у нас всего лишь не открываются. Причину называем словами.
+    if (comment.reactionsUnreadable) throw new Error(reactionUnreadableText('comment'));
     const reactions: Record<string, string[]> = comment.reactions ? { ...comment.reactions } : {};
     const existing = Array.isArray(reactions[emoji]) ? reactions[emoji] : [];
     const remove = existing.includes(authorDid);
@@ -4541,7 +4555,11 @@ export function toggleCommentReaction(
       if (limit) throw reactionLimitError(limit, 'comment');
       reactions[emoji] = [...existing, authorDid];
     }
-    await s.updateCommentReactions(commentId, reactions);
+    // v4.32.689: рассылаем только то, что легло к нам. Прежде отказ записи
+    // был беззвучным, и у контактов появлялась реакция, которой у нас нет.
+    if (!(await s.updateCommentReactions(commentId, reactions))) {
+      throw new Error('Реакцию не удалось сохранить: комментарий больше не доступен на этом устройстве');
+    }
     emitFeedUpdate();
 
     const payload: FeedEnvelopePayload = {

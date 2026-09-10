@@ -1077,21 +1077,37 @@ export class FeedStorage {
    * места, где чтение нужно для слияния, guard'ятся у чтения, а здесь карта
    * приходит готовой — отказать правильнее всего прямо перед UPDATE.
    */
-  async updateCommentReactions(commentId: string, reactions: Record<string, string[]>): Promise<void> {
+  /**
+   * v4.32.689: возвращает, состоялась ли запись.
+   *
+   * Отказ был двойным и оба раза беззвучным: нечитаемый столбец выходил
+   * ранним `return`, а несуществующий комментарий — UPDATE'ом, который не
+   * задел ни одной строки. Вызывающий (`toggleCommentReaction`) в обоих
+   * случаях шёл дальше и рассылал реакцию контактам. У них она появлялась, у
+   * нас — нет: расхождение, которое мы же и создали. Ровно это `addReaction`
+   * у поста не даёт сделать с v4.32.608, а у комментария правило не
+   * действовало.
+   */
+  async updateCommentReactions(commentId: string, reactions: Record<string, string[]>): Promise<boolean> {
     const d = await this.ensureDb();
     const dek = await getOrCreateDataEncryptionKey();
     const row = await d.getFirstAsync<{ reactions: string | null }>(
       'SELECT reactions FROM feed_comments WHERE id = ?',
       [commentId],
     );
-    if (row && !mayOverwrite(readAtRestCell(row.reactions, dek))) {
+    if (!row) {
+      log.warn('feed_comment_reaction_row_missing', { commentId: commentId.slice(0, 16) });
+      return false;
+    }
+    if (!mayOverwrite(readAtRestCell(row.reactions, dek))) {
       log.warn('feed_comment_reaction_column_unreadable', { commentId: commentId.slice(0, 16) });
-      return;
+      return false;
     }
     await d.runAsync('UPDATE feed_comments SET reactions = ? WHERE id = ?', [
       encryptAtRestString(JSON.stringify(reactions), dek),
       commentId,
     ]);
+    return true;
   }
 
   async getCommentCount(postId: string): Promise<number> {

@@ -41,7 +41,7 @@ export function reactionWriteFailureText(reason: ReactionWriteFailure): string {
     case 'missing':
       return 'Сообщение не найдено';
     case 'unreadable':
-      return 'Реакции этого сообщения не удалось прочитать: их не открывает ключ этого устройства';
+      return reactionUnreadableText('message');
     case 'limit':
       return reactionLimitText('keys', 'message');
     case 'ownLimit':
@@ -59,6 +59,25 @@ const SUBJECT_IN: Record<ReactionSubject, string> = {
   post: 'посте',
   comment: 'комментарии',
 };
+
+const SUBJECT_OF: Record<ReactionSubject, string> = {
+  message: 'этого сообщения',
+  post: 'этого поста',
+  comment: 'этого комментария',
+};
+
+/**
+ * Столбец с реакциями не открывается ключом этого устройства (v4.32.689).
+ *
+ * Текст был написан в v4.32.599 только для сообщения, потому что причину
+ * называла только запись сообщения. У поста и у комментария тот же отказ
+ * доходил до человека либо общим «Не удалось сохранить реакцию», либо не
+ * доходил вовсе. Повтор тут не поможет никогда — и сказать об этом надо теми
+ * же словами, что и в переписке.
+ */
+export function reactionUnreadableText(subject: ReactionSubject): string {
+  return `Реакции ${SUBJECT_OF[subject]} не удалось прочитать: их не открывает ключ этого устройства`;
+}
 
 /**
  * Текст потолка. Личный называет число — иначе «слишком много» не подсказывает

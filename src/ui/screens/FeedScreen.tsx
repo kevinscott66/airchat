@@ -96,7 +96,6 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
-import { isReactionLimitError } from '../../core/social/reactionWrite';
 import { buildPostLink } from '../../core/net/appLink';
 import { COPIED_LINK } from '../clipboardText';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
@@ -152,7 +151,7 @@ import { Buffer } from 'buffer';
 import { v4 as uuidv4 } from 'uuid';
 import { shortIdentity } from '../identity/shortId';
 import { clockTime, dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
-import { rawErrorText, userErrorText } from '../components/userErrorText';
+import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const MODAL_HEIGHT_COLLAPSED = SCREEN_HEIGHT * 0.72;
@@ -2392,8 +2391,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           );
           // v4.32.608: отказ потолком — не сбой сети, повторять его бесполезно.
           // Эмодзи исчезает с экрана, и без строки человек не знает почему.
-          if (isReactionLimitError(e)) showError(e.message);
-          log.warn('feed_reaction_failed', { err: rawErrorText(e) });
+          // v4.32.689: показываем любой наш русский отказ (потолок,
+          // нечитаемый столбец), а не только потолок. Запасного текста тут
+          // нет намеренно: сбои библиотек и сети должны молчать, как молчали,
+          // — реакция уже отыграна назад на экране, и `Network request
+          // failed` человеку не объяснит ничего.
+          const raw = rawErrorText(e);
+          if (isUserFacingMessage(raw)) showError(raw);
+          log.warn('feed_reaction_failed', { err: raw });
         }
       });
     },
