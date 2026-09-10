@@ -32,6 +32,14 @@ jest.mock('../../storage/local', () => {
     await kvSetSecret(key, stored);
     return stored;
   });
+  // v4.32.701: та же выборка тремя состояниями — карточка перешла на неё,
+  // чтобы «поля нет» не путалось с «поле не прочиталось». Здесь чтение всегда
+  // удаётся, так что 'unreadable' не возвращается никогда; случай сбоя разобран
+  // отдельно, в ownFieldUnreadable701.test.ts.
+  const kvGetSecretCellUpgrading = jest.fn(async (key: string) => {
+    const text = await kvGetSecretUpgrading(key);
+    return text == null ? { state: 'absent' } : { state: 'plain', text };
+  });
   return {
     __kv: kv,
     __prefix: PREFIX,
@@ -42,6 +50,7 @@ jest.mock('../../storage/local', () => {
     kvGetSecret,
     kvSetSecret,
     kvGetSecretUpgrading,
+    kvGetSecretCellUpgrading,
     // Как в storage/local: тонкая обёртка с префиксом `p{id}:` — тесты
     // проверяют настоящее скоупирование, а не упрощённую заглушку.
     kvSetSecretScoped: jest.fn(async (profileId: number, key: string, value: string) =>

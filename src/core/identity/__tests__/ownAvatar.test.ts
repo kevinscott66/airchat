@@ -41,6 +41,12 @@ jest.mock('../../storage/local', () => {
     kvDelete: jest.fn(async (key: string) => { delete kv[key]; }),
     kvGetSecret: jest.fn(async (key: string) => kv[key] ?? null),
     kvGetSecretUpgrading: jest.fn(async (key: string) => kv[key] ?? null),
+    // v4.32.701: та же выборка тремя состояниями — карточка перешла на неё.
+    // Здесь чтение всегда удаётся, поэтому 'unreadable' не возвращается.
+    kvGetSecretCellUpgrading: jest.fn(async (key: string) => {
+      const stored = kv[key];
+      return stored == null ? { state: 'absent' } : { state: 'plain', text: stored };
+    }),
     kvSetSecret,
     kvSetSecretScoped: jest.fn(async (pid: number, key: string, value: string) =>
       kvSetSecret(`p${pid}:${key}`, value)),

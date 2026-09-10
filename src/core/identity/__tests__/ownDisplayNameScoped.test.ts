@@ -27,6 +27,13 @@ jest.mock('../../storage/local', () => {
       if (stored == null) return null;
       return stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored;
     }),
+    // v4.32.701: та же выборка тремя состояниями — карточка перешла на неё.
+    // Здесь чтение всегда удаётся, поэтому 'unreadable' не возвращается.
+    kvGetSecretCellUpgrading: jest.fn(async (key: string) => {
+      const stored = kv[key];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
     kvSetSecretScoped: jest.fn(async (profileId: number, key: string, value: string) =>
       kvSetSecret(`p${profileId}:${key}`, value)),
   };

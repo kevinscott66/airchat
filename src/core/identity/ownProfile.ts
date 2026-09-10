@@ -24,10 +24,11 @@
 import {
   kvDelete,
   kvGetSecret,
-  kvGetSecretUpgrading,
+  kvGetSecretCellUpgrading,
   kvSetSecret,
   kvSetSecretScoped,
 } from '../storage/local';
+import { cellTextOrNull } from '../storage/atRestCell';
 import { profileScopedKey, type OwnProfileKey } from '../storage/kvKeys';
 import { log } from '../logger';
 import { profileManager } from './profileManager';
@@ -104,8 +105,17 @@ export async function ownFieldGet(key: OwnProfileKey): Promise<string | null> {
  * правильный (rcpt.myPub), из-за чего расхождение и не бросалось в глаза.
  */
 export async function ownFieldGetFor(pid: number, key: OwnProfileKey): Promise<string | null> {
-  const own = await kvGetSecretUpgrading(profileScopedKey(pid, key));
-  if (own != null) return own;
+  // v4.32.701: тремя состояниями, а не строкой. Строчная форма сводит «поля
+  // нет» и «поле не прочиталось» к одному null, и на этом стоял перенос ниже:
+  // не открывшаяся своя запись выглядела как отсутствующая, и её место
+  // занимала общая — та самая, что лежит открытым текстом с версий до
+  // v4.32.288. Карточка откатывалась на давнее содержимое, живой шифртекст
+  // затирался переносом, последняя другая копия удалялась, и всё это уходило
+  // контактам по сети: profileSync собирает конверт из этих же чтений. Не
+  // прочитав запись, переписывать её нельзя — то же правило, что вынесено в
+  // kvGetSecretCellScoped (v4.32.552), только здесь перенос написан по месту.
+  const own = await kvGetSecretCellUpgrading(profileScopedKey(pid, key));
+  if (own.state !== 'absent') return cellTextOrNull(own);
   // Общая запись до v4.32.288 принадлежит первому профилю: её писали тогда,
   // когда профиль был один. Остальным она не наследуется — иначе разделение
   // профилей снова стало бы декорацией.
