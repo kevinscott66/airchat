@@ -153,12 +153,30 @@ describe('GroupsScreen — записи в базу больше не остаю
     expect(body).toContain('showError(userErrorText(e, copy.failure))');
   });
 
-  it('все четыре пункта меню берут подпись из одного места', () => {
-    const menuUses = SCREEN.match(/text: groupFlagCopy\(/g) ?? [];
-    expect(menuUses).toHaveLength(4);
+  it('подпись переключателя называет состояние, а слова об успехе общие', () => {
+    // v4.32.680: пункт меню больше не собирается на экране — состав и подписи
+    // окна настроек считает groupHubModel, и подпись там называет СОСТОЯНИЕ
+    // («Писать могут только администраторы»), а не действие («…: вкл»).
+    // Поэтому прежней формы `text: groupFlagCopy(` на экране нет.
+    expect(SCREEN).not.toContain('text: groupFlagCopy' + '(');
+    // Но слова об успехе, системная строка и текст отказа остались общими:
+    // единственное место, где их берут, — сама обёртка toggleGroupFlag
+    // (второе вхождение — команда /readonly, у неё свой showSuccess).
+    expect(SCREEN.match(/groupFlagCopy\(/g) ?? []).toHaveLength(2);
+    expect(SCREEN).toContain('const copy = groupFlagCopy(key, current);');
     const toggles = SCREEN.match(/toggleGroupFlag\('/g) ?? [];
-    // четыре пункта меню плюс команда /readonly
+    // четыре ветки окна настроек плюс команда /readonly
     expect(toggles.length).toBeGreaterThanOrEqual(5);
+    // ПОВОД ДЛЯ ПРАВКИ ЖИВ: подписи флагов действительно переехали в модель,
+    // и каждая её строка сходится с веткой обработчика на экране.
+    const MODEL = fs.readFileSync(
+      path.join(__dirname, '../../components/groupHubModel.ts'),
+      'utf8'
+    );
+    for (const id of ['admin_only_posting', 'admin_only_pinning', 'require_approval', 'anonymous_posting']) {
+      expect(MODEL).toContain(`id: '${id}'`);
+      expect(SCREEN).toContain(`case '${id}':`);
+    }
   });
 
   it('операции со строкой списка не перерисовывают список в хвосте обещания', () => {

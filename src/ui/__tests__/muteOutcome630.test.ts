@@ -103,8 +103,20 @@ describe('отказ доходит до человека', () => {
     const src = read('screens/GroupsScreen.tsx');
     // runGuardedOp/runRowOp показывают fallback: машинный опознаватель до
     // экрана не доходит (см. userErrorText).
-    expect(src.split("throw new Error('mute_unset_failed')").length - 1).toBe(3);
-    expect(src.split("throw new Error('mute_set_failed')").length - 1).toBe(3);
+    // v4.32.680: было по три — два одинаковых пункта меню (участнику и
+    // администратору) плюс команда. Меню слились в одно окно настроек, копия
+    // ушла; осталось по два, и оба обязаны быть на месте.
+    expect(src.split("throw new Error('mute_unset_failed')").length - 1).toBe(2);
+    expect(src.split("throw new Error('mute_set_failed')").length - 1).toBe(2);
+    // ПОВОД ДЛЯ ПРАВКИ ЖИВ: уцелевшая ветка лежит в обработчике окна, а не в
+    // ещё одном списке пунктов, и по-прежнему под runGuardedOp.
+    const at = src.indexOf("case 'mute': {");
+    expect(at).toBeGreaterThan(0);
+    const body = src.slice(at, src.indexOf("case 'auto_translate': {", at));
+    expect(body.length).toBeGreaterThan(500);
+    expect(body).toContain("throw new Error('mute_unset_failed')");
+    expect(body).toContain("throw new Error('mute_set_failed')");
+    expect(body).toContain("runGuardedOp(");
   });
 
   it('лента не переключает значок поста без записи', () => {

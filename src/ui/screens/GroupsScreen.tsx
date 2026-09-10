@@ -164,7 +164,7 @@ import { buildGroupInviteLink } from '../../core/social/groupInviteLink';
 import { markGroupLeft } from '../../core/social/groupLeaveMark';
 import { buildGroupLink, webForm } from '../../core/net/appLink';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX, normalizeOwnGroupDescription, normalizeOwnGroupName } from '../../core/social/groupNameRule';
-import { canSendToGroup, slowModeRemaining, slowModeSysLine, formatSlowMode, MAX_SLOWMODE_SECONDS, type SendRole } from '../../core/social/groupSendPolicy';
+import { canSendToGroup, slowModeRemaining, slowModeSysLine, MAX_SLOWMODE_SECONDS, type SendRole } from '../../core/social/groupSendPolicy';
 import { isAdminRole, ownGroupRole } from '../../core/social/ownGroupRole';
 import { createTimerScope, type TimerScope } from '../../core/lifecycle/timerScope';
 import { hitLabel, stepHitIndex } from '../../core/social/searchCursor';
@@ -205,6 +205,8 @@ import { GroupAdminLogModal } from '../components/modals/groups/GroupAdminLogMod
 import { GroupJoinRequestsModal } from '../components/modals/groups/GroupJoinRequestsModal';
 import { GroupMemberSheetModal } from '../components/modals/groups/GroupMemberSheetModal';
 import { GroupQuickReactModal } from '../components/modals/groups/GroupQuickReactModal';
+import { GroupSettingsModal } from '../components/modals/groups/GroupSettingsModal';
+import type { GroupHubFacts, GroupSettingId } from '../components/groupHubModel';
 import {
   type GrpDateSepItem,
   type GrpUnreadSepItem,
@@ -622,6 +624,7 @@ function GroupChatScreen({
   const feed = useMemo(() => feedGround(colors, wallpaper), [colors, wallpaper]);
   const [wallpaperPickerVisible, setWallpaperPickerVisible] = useState(false);
   const [grpStatsVisible, setGrpStatsVisible] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [grpStats, setGrpStats] = useState<GroupStats | null>(null);
   const [gateway, setGateway] = useState('');
   // v4.32.246: аватар может быть зашифрованным вложением (`nb:`) — тогда его
@@ -3368,6 +3371,316 @@ function GroupChatScreen({
   // Android reaction picker modal
   const REACTION_EMOJIS = ['❤️', '👍', '👎', '😂', '😮', '😢', '🔥', '👏'];
 
+  // v4.32.680: настройки группы и канала — одно своё окно вместо двух
+  // системных списков подряд (семнадцать пунктов у администратора, восемь у
+  // участника). Состав, порядок и подписи считает groupHubModel; здесь только
+  // обработка нажатий — тела веток перенесены из прежних openSheet дословно.
+  const settingsFacts: GroupHubFacts = {
+    // «Супергруппа» на этом экране всюду ведёт себя как группа — ровно как в
+    // прежних ветках `group.type === 'channel' ? … : …`.
+    type: group.type === 'channel' ? 'channel' : 'group',
+    amAdmin,
+    muted: isGrpMuted,
+    autoTranslate,
+    fontSizePt: grpChatFontSize,
+    slowModeSeconds,
+    disappearMs,
+    adminOnlyPosting,
+    adminOnlyPinning,
+    requireApproval,
+    anonymousPosting,
+  };
+
+  const handleGroupSetting = (id: GroupSettingId, next?: boolean): void => {
+    switch (id) {
+      case 'mute': {
+        const kind: MuteKind = group.type === 'channel' ? 'channel' : 'group';
+        if (isGrpMuted) {
+          // v4.32.531: без .catch отказ базы оставлял чат беззвучным и
+          // не говорил об этом ни строчкой.
+          runGuardedOp(async () => {
+            await setGroupMuted(group.id, pid, false);
+            // v4.32.630: muteUnset гасит отказ базы и отвечает
+            // false — без проверки строка меню переключалась, а
+            // запись глушения оставалась на месте.
+            if (!(await muteUnset(kind, group.id))) throw new Error('mute_unset_failed');
+            setIsGrpMuted(false);
+            showSuccess('Уведомления включены');
+          }, 'Не удалось включить уведомления');
+          return;
+        }
+        const snooze = (ms: number | null, label: string) => () => runGuardedOp(async () => {
+          const u = ms === null ? null : Date.now() + ms;
+          await setGroupMutedUntil(group.id, pid, u);
+          // v4.32.630: см. выше — ответ setMuted тоже надо спросить.
+          if (!(await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined))) {
+            throw new Error('mute_set_failed');
+          }
+          setIsGrpMuted(true);
+          showSuccess(label);
+        }, 'Не удалось отключить уведомления');
+        openSheet('Отключить уведомления', '', [
+          { text: '1 час', onPress: snooze(3_600_000, 'Без звука на 1 час') },
+          { text: '8 часов', onPress: snooze(8 * 3_600_000, 'Без звука на 8 часов') },
+          { text: '1 день', onPress: snooze(86_400_000, 'Без звука на 1 день') },
+          { text: '1 неделя', onPress: snooze(7 * 86_400_000, 'Без звука на 1 неделю') },
+          { text: 'Навсегда', onPress: snooze(null, 'Уведомления отключены') },
+          { text: 'Отмена', style: 'cancel' },
+        ]);
+        return;
+      }
+      case 'auto_translate': {
+        // Положение приходит из окна: пересчитывать его от autoTranslate
+        // нельзя — окно не закрылось и уже нарисовало новое.
+        const newVal = next ?? !autoTranslate;
+        void scopedKvSet(chatAutoTranslateKey(groupConvId(group.id)), newVal ? '1' : '0').then(() => {
+          setAutoTranslate(newVal);
+          if (!newVal) setTranslationCache({});
+        });
+        return;
+      }
+      case 'wallpaper':
+        setWallpaperPickerVisible(true);
+        return;
+      case 'font_size':
+        openSheet('Размер шрифта', 'Выберите размер:', [
+          { text: 'Маленький (13)', onPress: () => { setGrpChatFontSize(13); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '13'); } },
+          { text: 'Обычный (15)', onPress: () => { setGrpChatFontSize(15); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '15'); } },
+          { text: 'Крупный (17)', onPress: () => { setGrpChatFontSize(17); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '17'); } },
+          { text: 'Очень крупный (20)', onPress: () => { setGrpChatFontSize(20); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '20'); } },
+          { text: 'По умолчанию', onPress: () => { setGrpChatFontSize(null); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), ''); } },
+          { text: 'Отмена', style: 'cancel' },
+        ]);
+        return;
+      case 'media':
+        setMediaGalleryVisible(true);
+        return;
+      case 'starred':
+        void listStarredMessages(pid).then((entries) => {
+          setStarredEntries(entries.filter((e) => e.kind === 'group' && e.contextId === group.id));
+          setStarredVisible(true);
+        });
+        return;
+      case 'recently_deleted':
+        openGrpRecentlyDeleted();
+        return;
+      case 'slow_mode':
+        openSheet('Медленный режим', 'Задержка между сообщениями:', [
+          ...[
+            { text: 'Выкл', secs: 0 },
+            { text: '10 сек', secs: 10 },
+            { text: '30 сек', secs: 30 },
+            { text: '1 мин', secs: 60 },
+            { text: '5 мин', secs: 300 },
+          ].map(({ text: t, secs }) => ({
+            text: t,
+            onPress: () => { requestAnimationFrame(() => { runGuardedOp(() => applySlowMode(secs), 'Не удалось изменить медленный режим'); }); },
+          })),
+          { text: 'Отмена', style: 'cancel' as const },
+        ]);
+        return;
+      case 'disappear':
+        openSheet(
+          'Исчезающие сообщения',
+          // Один и тот же таймер, но у администратора он общий, а у участника
+          // действует только на его экране — и это надо сказать вслух.
+          amAdmin
+            ? 'Таймер применяется у всех участников и действует на сообщения, отправленные после включения.'
+            : 'Выбор действует только на вашем устройстве: общий таймер группы включает администратор.',
+          [
+            ...DISAPPEAR_OPTIONS.map(({ text: t, ms }) => ({
+              text: t,
+              onPress: () => { requestAnimationFrame(() => { runGuardedOp(() => applyDisappear(ms), 'Не удалось изменить таймер исчезновения'); }); },
+            })),
+            { text: 'Отмена', style: 'cancel' as const },
+          ]
+        );
+        return;
+      // Приглашает администратор: ссылка объявляет своего автора
+      // админом группы — у обычного участника это ложное заявление.
+      case 'invite_link':
+        requestAnimationFrame(() => { void (async () => {
+        // v4.32.260: ссылку собирает groupInviteLink — один
+        // сборщик на все четыре кнопки приглашения. Здесь список
+        // участников не клали вовсе (4.32.173, ради приватности),
+        // а разбор его требовал — основная кнопка приглашения
+        // выдавала ссылку, которую приложение же и отвергало.
+        //
+        // v4.32.303: и токен — то, чем ссылку потом отзывают. У
+        // групп, созданных до этой версии, его нет: заводим здесь.
+        // v4.32.303: готовую ссылку в БД больше не пишем — она
+        // несёт токен, а колонка invite_link не шифруется и никем
+        // не читается (см. схему groups).
+        const showInviteSheet = async (token: string): Promise<void> => {
+          // v4.32.606: наружу уходит https-форма той же ссылки.
+          const link = webForm(buildGroupInviteLink({
+            id: group.id,
+            name: group.name,
+            type: group.type,
+            adminPub: myPubB64,
+            requireApproval,
+            members: await listGroupMembers(group.id, pid),
+            token,
+          }));
+          openSheet('Пригласительная ссылка', link, [
+            {
+              text: COPY_ACTION,
+              onPress: () => {
+                Clipboard.setString(link);
+                showSuccess(COPIED_LINK);
+              },
+            },
+            {
+              text: 'Поделиться',
+              onPress: () => void Share.share({ message: `Присоединяйтесь к "${group.name}" в AirChat:\n${link}` }),
+            },
+            /*
+             * v4.32.303: «Сбросить» вернулась — теперь она
+             * действительно отзывает ссылку.
+             *
+             * До v4.32.260 кнопка обнуляла локальную колонку
+             * invite_link и рапортовала «Ссылка сброшена», но
+             * ссылка была чистой функцией от {id, name, adminPub,
+             * requireApproval}: следующее нажатие выдавало ровно
+             * ту же строку, а все ранее разосланные продолжали
+             * пускать в группу. Кнопку убрали и записали, что
+             * настоящий отзыв требует токена. Вот он.
+             */
+            {
+              text: 'Сбросить ссылку',
+              style: 'destructive',
+              onPress: () => {
+                Alert.alert(
+                  'Сбросить ссылку?',
+                  'Все ранее разосланные ссылки перестанут пускать в группу. Тех, кто уже вступил, это не затронет.',
+                  [
+                    { text: 'Отмена', style: 'cancel' },
+                    {
+                      text: 'Сбросить',
+                      style: 'destructive',
+                      onPress: () => { void (async () => {
+                        try {
+                          const next = await rotateGroupInviteToken(group.id, pid, myPubB64, myDisplayName);
+                          await insertGroupSysMessage(group.id, pid, myPubB64, 'Пригласительная ссылка сброшена: прежние больше не действуют');
+                          // v4.32.452: «сброшена» — только если о новом
+                          // токене узнали другие администраторы. Иначе
+                          // их кнопка продолжит выдавать ссылки, которые
+                          // группа уже не пускает, а отзыв выглядел бы
+                          // состоявшимся.
+                          if (!announceInviteToken(next.announced)) {
+                            showSuccess('Ссылка сброшена — прежние больше не действуют');
+                          }
+                          // Показываем новую сразу: иначе «сбросил
+                          // и не понял, где взять действующую».
+                          await showInviteSheet(next.token);
+                        } catch (e) {
+                          showError(userErrorText(e, 'Не удалось сбросить ссылку'));
+                        }
+                      })(); },
+                    },
+                  ]
+                );
+              },
+            },
+            { text: 'Закрыть', style: 'cancel' },
+          ]);
+        };
+        const invite = await ensureGroupInviteToken(group.id, pid, myPubB64, myDisplayName);
+        // null — группу не прочитать ЛИБО столбец с токеном не
+        // открылся ключом (v4.32.601). Показать ссылку было бы
+        // хуже, чем не показать: она ни с чем не сверяется.
+        if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
+        announceInviteToken(invite.announced);
+        await showInviteSheet(invite.token);
+        })(); });
+        return;
+      case 'stats':
+        // v4.32.531: раньше без .catch — при занятой базе пункт «Статистика»
+        // просто ничего не открывал, и это выглядело как неработающая кнопка.
+        void getGroupStats(group.id, pid)
+          .then((s) => { setGrpStats(s); setGrpStatsVisible(true); })
+          .catch((e) => showError(userErrorText(e, 'Не удалось собрать статистику')));
+        return;
+      // v4.32.256: рассылка обязательна. Без неё настройку знал только
+      // нажавший: второй администратор выдавал ссылку без одобрения, а
+      // «Имена отправителей скрыты» было правдой ровно на одном
+      // устройстве. v4.32.531: и подписи, и патч, и порядок «сначала
+      // запись — потом слова» теперь общие для всех четырёх.
+      //
+      // v4.32.680: положение переключателя окно уже показало, поэтому
+      // подпись строки берёт groupHubModel и называет СОСТОЯНИЕ; слова
+      // об успехе, системная строка и патч по-прежнему одни на всех —
+      // их выбирает groupFlagCopy внутри toggleGroupFlag.
+      case 'admin_only_posting':
+        toggleGroupFlag('adminOnlyPosting', adminOnlyPosting, setAdminOnlyPosting);
+        return;
+      case 'admin_only_pinning':
+        toggleGroupFlag('adminOnlyPinning', adminOnlyPinning, setAdminOnlyPinning);
+        return;
+      case 'require_approval':
+        toggleGroupFlag('requireApproval', requireApproval, setRequireApproval);
+        return;
+      case 'anonymous_posting':
+        toggleGroupFlag('anonymousPosting', anonymousPosting, setAnonymousPosting);
+        return;
+      case 'export':
+        requestAnimationFrame(() => { void (async () => {
+        try {
+          const allMsgs = await listAllGroupMessages({ groupId: group.id, ownerProfileId: pid });
+          // v4.32.532: файл сохранят и на него сошлются, поэтому
+          // выгружаем либо всё, либо ничего.
+          if (!shouldApplyRows(allMsgs)) { showError('Не удалось прочитать переписку для экспорта'); return; }
+          const sorted = [...allMsgs].sort((a, b) => a.createdAt - b.createdAt);
+          const txt = sorted.map((m) => {
+            const d = fullDateTime(m.createdAt);
+            // v4.32.256: экспорт выписывал имена отправителей даже
+            // при включённых анонимных постах — то есть настройка
+            // скрывала имена на экране и тут же выкладывала их в
+            // файл, которым делятся наружу.
+            const who = anonymousPosting
+              ? (m.senderPubB64 === myPubB64 ? 'Вы' : 'Участник')
+              // v4.32.593: в файл идёт имя либо короткий ключ, но
+              // никогда пометка о непрочитанном столбце.
+              : outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64));
+            // v4.32.604: у непрочитанной реплики текста нет, и
+            // пустая строка в файле выдавала её за отправленную пустоту.
+            return `[${d}] ${who}: ${exportBody(m)}`;
+          }).join('\n');
+          // v4.32.310: см. cacheFiles — имя общее для всех
+          // экспортов, иначе за файлом никто не убирает.
+          // v4.32.313: и отдача общая — три копии расходились.
+          const shared = await shareTextExport('group', txt, 'Экспорт группы', Date.now());
+          if (!shared) Alert.alert('Экспорт', 'Системное «Поделиться» недоступно на этом устройстве');
+        } catch (e) {
+          Alert.alert('Ошибка', userErrorText(e, 'Не удалось выгрузить переписку'));
+        }
+        })(); });
+        return;
+      case 'clear_history':
+        Alert.alert('Очистить историю?', 'Все сообщения этой группы будут удалены локально. Это действие нельзя отменить.', [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Очистить', style: 'destructive',
+            // v4.32.531: успех объявлялся без оглядки на исход, а
+            // перечитывание ленты висело отдельным необработанным
+            // обещанием. Теперь «История очищена» говорится только
+            // после удаления.
+            onPress: () => { requestAnimationFrame(() => { void (async () => {
+              try {
+                await clearGroupMessages(group.id, pid);
+              } catch (e) {
+                showError(userErrorText(e, 'Не удалось очистить историю'));
+                return;
+              }
+              showSuccess('История очищена');
+              await loadMessages();
+            })(); }); },
+          },
+        ]);
+        return;
+    }
+  };
+
   return (
     <View style={{ flex: 1 }}>
       {/* v4.32.410: обои-снимок раньше подставлялись в backgroundColor путём к
@@ -3485,428 +3798,16 @@ function GroupChatScreen({
               </View>
             ) : null}
           </AppPressable>
-          {/* Non-admin member options (visible to everyone) */}
-          {!amAdmin ? (
-            <AppPressable
-              style={gcStyles.iconBtn}
-              onPress={() => {
-                const disappearLabel = `Исчезающие сообщения: ${formatDisappearLabel(disappearMs).toLowerCase()}`;
-                // v4.32.227 (BUG-09): меню участника тоже через ActionSheet.
-                openSheet('Параметры чата', '', [
-                  {
-                    text: isGrpMuted ? 'Включить уведомления' : 'Отключить уведомления…',
-                    onPress: () => {
-                      const kind: MuteKind = group.type === 'channel' ? 'channel' : 'group';
-                      if (isGrpMuted) {
-                        // v4.32.531: без .catch отказ базы оставлял чат беззвучным и
-                        // не говорил об этом ни строчкой.
-                        runGuardedOp(async () => {
-                          await setGroupMuted(group.id, pid, false);
-                          // v4.32.630: muteUnset гасит отказ базы и отвечает
-                          // false — без проверки строка меню переключалась, а
-                          // запись глушения оставалась на месте.
-                          if (!(await muteUnset(kind, group.id))) throw new Error('mute_unset_failed');
-                          setIsGrpMuted(false);
-                          showSuccess('Уведомления включены');
-                        }, 'Не удалось включить уведомления');
-                      } else {
-                        const snooze = (ms: number | null, label: string) => () => runGuardedOp(async () => {
-                          const u = ms === null ? null : Date.now() + ms;
-                          await setGroupMutedUntil(group.id, pid, u);
-                          // v4.32.630: см. выше — ответ setMuted тоже надо спросить.
-                          if (!(await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined))) {
-                            throw new Error('mute_set_failed');
-                          }
-                          setIsGrpMuted(true);
-                          showSuccess(label);
-                        }, 'Не удалось отключить уведомления');
-                        // v4.32.227 (BUG-09): 6 опций → ActionSheet.
-                        openSheet('Отключить уведомления', '', [
-                          { text: '1 час', onPress: snooze(3_600_000, 'Без звука на 1 час') },
-                          { text: '8 часов', onPress: snooze(8 * 3_600_000, 'Без звука на 8 часов') },
-                          { text: '1 день', onPress: snooze(86_400_000, 'Без звука на 1 день') },
-                          { text: '1 неделя', onPress: snooze(7 * 86_400_000, 'Без звука на 1 неделю') },
-                          { text: 'Навсегда', onPress: snooze(null, 'Уведомления отключены') },
-                          { text: 'Отмена', style: 'cancel' },
-                        ]);
-                      }
-                    },
-                  },
-                  {
-                    text: autoTranslate ? '🌐 Автоперевод: вкл' : '🌐 Автоперевод: выкл',
-                    onPress: () => {
-                      const newVal = !autoTranslate;
-                      void scopedKvSet(chatAutoTranslateKey(groupConvId(group.id)), newVal ? '1' : '0').then(() => {
-                        setAutoTranslate(newVal);
-                        if (!newVal) setTranslationCache({});
-                      });
-                    },
-                  },
-                  {
-                    text: 'Фон чата',
-                    onPress: () => setWallpaperPickerVisible(true),
-                  },
-                  {
-                    text: `Размер шрифта${grpChatFontSize ? ` (${grpChatFontSize}пт)` : ''}`,
-                    onPress: () => {
-                      openSheet('Размер шрифта', 'Выберите размер:', [
-                        { text: 'Маленький (13)', onPress: () => { setGrpChatFontSize(13); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '13'); } },
-                        { text: 'Обычный (15)', onPress: () => { setGrpChatFontSize(15); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '15'); } },
-                        { text: 'Крупный (17)', onPress: () => { setGrpChatFontSize(17); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '17'); } },
-                        { text: 'Очень крупный (20)', onPress: () => { setGrpChatFontSize(20); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '20'); } },
-                        { text: 'По умолчанию', onPress: () => { setGrpChatFontSize(null); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), ''); } },
-                        { text: 'Отмена', style: 'cancel' },
-                      ]);
-                    },
-                  },
-                  {
-                    text: disappearLabel,
-                    onPress: () => openSheet(
-                      'Исчезающие сообщения',
-                      'Выбор действует только на вашем устройстве: общий таймер группы включает администратор.',
-                      [
-                        ...DISAPPEAR_OPTIONS.map(({ text: t, ms }) => ({
-                          text: t,
-                          onPress: () => { requestAnimationFrame(() => { runGuardedOp(() => applyDisappear(ms), 'Не удалось изменить таймер исчезновения'); }); },
-                        })),
-                        { text: 'Отмена', style: 'cancel' as const },
-                      ]
-                    ),
-                  },
-                  {
-                    text: 'Избранные сообщения',
-                    onPress: () => void listStarredMessages(pid).then((entries) => { setStarredEntries(entries.filter((e) => e.kind === 'group' && e.contextId === group.id)); setStarredVisible(true); }),
-                  },
-                  {
-                    text: 'Медиафайлы',
-                    onPress: () => setMediaGalleryVisible(true),
-                  },
-                  {
-                    text: 'Недавно удалённые',
-                    onPress: openGrpRecentlyDeleted,
-                  },
-                  { text: 'Отмена', style: 'cancel' },
-                ]);
-              }}
-            >
-              <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
-            </AppPressable>
-          ) : null}
-          {amAdmin ? (
-            <AppPressable
-              style={gcStyles.iconBtn}
-              onPress={() => {
-                const currentSlowLabel = slowModeSeconds > 0 ? `Медленный режим: ${formatSlowMode(slowModeSeconds)}` : 'Медленный режим: выкл';
-                const disappearLabel = `Исчезающие сообщения: ${formatDisappearLabel(disappearMs).toLowerCase()}`;
-                // v4.32.227 (BUG-09): ~15 пунктов через ActionSheet (Android-safe);
-                // (BUG-09 #3) заголовок зависит от типа: канал → «Настройки канала».
-                openSheet(group.type === 'channel' ? 'Настройки канала' : 'Настройки группы', '', [
-                  {
-                    text: isGrpMuted ? 'Включить уведомления' : 'Отключить уведомления…',
-                    onPress: () => {
-                      const kind: MuteKind = group.type === 'channel' ? 'channel' : 'group';
-                      if (isGrpMuted) {
-                        // v4.32.531: без .catch отказ базы оставлял чат беззвучным и
-                        // не говорил об этом ни строчкой.
-                        runGuardedOp(async () => {
-                          await setGroupMuted(group.id, pid, false);
-                          // v4.32.630: muteUnset гасит отказ базы и отвечает
-                          // false — без проверки строка меню переключалась, а
-                          // запись глушения оставалась на месте.
-                          if (!(await muteUnset(kind, group.id))) throw new Error('mute_unset_failed');
-                          setIsGrpMuted(false);
-                          showSuccess('Уведомления включены');
-                        }, 'Не удалось включить уведомления');
-                      } else {
-                        const snooze = (ms: number | null, label: string) => () => runGuardedOp(async () => {
-                          const u = ms === null ? null : Date.now() + ms;
-                          await setGroupMutedUntil(group.id, pid, u);
-                          // v4.32.630: см. выше — ответ setMuted тоже надо спросить.
-                          if (!(await muteSet(kind, group.id, u !== null ? { untilMs: u } : undefined))) {
-                            throw new Error('mute_set_failed');
-                          }
-                          setIsGrpMuted(true);
-                          showSuccess(label);
-                        }, 'Не удалось отключить уведомления');
-                        // v4.32.227 (BUG-09): 6 опций → ActionSheet.
-                        openSheet('Отключить уведомления', '', [
-                          { text: '1 час', onPress: snooze(3_600_000, 'Без звука на 1 час') },
-                          { text: '8 часов', onPress: snooze(8 * 3_600_000, 'Без звука на 8 часов') },
-                          { text: '1 день', onPress: snooze(86_400_000, 'Без звука на 1 день') },
-                          { text: '1 неделя', onPress: snooze(7 * 86_400_000, 'Без звука на 1 неделю') },
-                          { text: 'Навсегда', onPress: snooze(null, 'Уведомления отключены') },
-                          { text: 'Отмена', style: 'cancel' },
-                        ]);
-                      }
-                    },
-                  },
-                  {
-                    text: currentSlowLabel,
-                    onPress: () => openSheet('Медленный режим', 'Задержка между сообщениями:', [
-                      ...[
-                        { text: 'Выкл', secs: 0 },
-                        { text: '10 сек', secs: 10 },
-                        { text: '30 сек', secs: 30 },
-                        { text: '1 мин', secs: 60 },
-                        { text: '5 мин', secs: 300 },
-                      ].map(({ text: t, secs }) => ({
-                        text: t,
-                        onPress: () => { requestAnimationFrame(() => { runGuardedOp(() => applySlowMode(secs), 'Не удалось изменить медленный режим'); }); },
-                      })),
-                      { text: 'Отмена', style: 'cancel' as const },
-                    ]),
-                  },
-                  {
-                    text: disappearLabel,
-                    onPress: () => openSheet(
-                      'Исчезающие сообщения',
-                      'Таймер применяется у всех участников и действует на сообщения, отправленные после включения.',
-                      [
-                        ...DISAPPEAR_OPTIONS.map(({ text: t, ms }) => ({
-                          text: t,
-                          onPress: () => { requestAnimationFrame(() => { runGuardedOp(() => applyDisappear(ms), 'Не удалось изменить таймер исчезновения'); }); },
-                        })),
-                        { text: 'Отмена', style: 'cancel' as const },
-                      ]
-                    ),
-                  },
-                  {
-                    text: autoTranslate ? '🌐 Автоперевод: вкл' : '🌐 Автоперевод: выкл',
-                    onPress: () => {
-                      const newVal = !autoTranslate;
-                      void scopedKvSet(chatAutoTranslateKey(groupConvId(group.id)), newVal ? '1' : '0').then(() => {
-                        setAutoTranslate(newVal);
-                        if (!newVal) setTranslationCache({});
-                      });
-                    },
-                  },
-                  {
-                    text: 'Фон чата',
-                    onPress: () => setWallpaperPickerVisible(true),
-                  },
-                  {
-                    text: `Размер шрифта${grpChatFontSize ? ` (${grpChatFontSize}пт)` : ''}`,
-                    onPress: () => {
-                      openSheet('Размер шрифта', 'Выберите размер:', [
-                        { text: 'Маленький (13)', onPress: () => { setGrpChatFontSize(13); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '13'); } },
-                        { text: 'Обычный (15)', onPress: () => { setGrpChatFontSize(15); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '15'); } },
-                        { text: 'Крупный (17)', onPress: () => { setGrpChatFontSize(17); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '17'); } },
-                        { text: 'Очень крупный (20)', onPress: () => { setGrpChatFontSize(20); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '20'); } },
-                        { text: 'По умолчанию', onPress: () => { setGrpChatFontSize(null); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), ''); } },
-                        { text: 'Отмена', style: 'cancel' },
-                      ]);
-                    },
-                  },
-                  {
-                    text: 'Медиафайлы',
-                    onPress: () => setMediaGalleryVisible(true),
-                  },
-                  {
-                    text: 'Избранные сообщения',
-                    onPress: () => void listStarredMessages(pid).then((entries) => {
-                      setStarredEntries(entries.filter((e) => e.kind === 'group' && e.contextId === group.id));
-                      setStarredVisible(true);
-                    }),
-                  },
-                  // Приглашает администратор: ссылка объявляет своего автора
-                  // админом группы — у обычного участника это ложное заявление.
-                  ...(amAdmin ? [{
-                    text: 'Пригласительная ссылка',
-                    onPress: () => { requestAnimationFrame(() => { void (async () => {
-                      // v4.32.260: ссылку собирает groupInviteLink — один
-                      // сборщик на все четыре кнопки приглашения. Здесь список
-                      // участников не клали вовсе (4.32.173, ради приватности),
-                      // а разбор его требовал — основная кнопка приглашения
-                      // выдавала ссылку, которую приложение же и отвергало.
-                      //
-                      // v4.32.303: и токен — то, чем ссылку потом отзывают. У
-                      // групп, созданных до этой версии, его нет: заводим здесь.
-                      // v4.32.303: готовую ссылку в БД больше не пишем — она
-                      // несёт токен, а колонка invite_link не шифруется и никем
-                      // не читается (см. схему groups).
-                      const showInviteSheet = async (token: string): Promise<void> => {
-                        // v4.32.606: наружу уходит https-форма той же ссылки.
-                        const link = webForm(buildGroupInviteLink({
-                          id: group.id,
-                          name: group.name,
-                          type: group.type,
-                          adminPub: myPubB64,
-                          requireApproval,
-                          members: await listGroupMembers(group.id, pid),
-                          token,
-                        }));
-                        openSheet('Пригласительная ссылка', link, [
-                          {
-                            text: COPY_ACTION,
-                            onPress: () => {
-                              Clipboard.setString(link);
-                              showSuccess(COPIED_LINK);
-                            },
-                          },
-                          {
-                            text: 'Поделиться',
-                            onPress: () => void Share.share({ message: `Присоединяйтесь к "${group.name}" в AirChat:\n${link}` }),
-                          },
-                          /*
-                           * v4.32.303: «Сбросить» вернулась — теперь она
-                           * действительно отзывает ссылку.
-                           *
-                           * До v4.32.260 кнопка обнуляла локальную колонку
-                           * invite_link и рапортовала «Ссылка сброшена», но
-                           * ссылка была чистой функцией от {id, name, adminPub,
-                           * requireApproval}: следующее нажатие выдавало ровно
-                           * ту же строку, а все ранее разосланные продолжали
-                           * пускать в группу. Кнопку убрали и записали, что
-                           * настоящий отзыв требует токена. Вот он.
-                           */
-                          {
-                            text: 'Сбросить ссылку',
-                            style: 'destructive',
-                            onPress: () => {
-                              Alert.alert(
-                                'Сбросить ссылку?',
-                                'Все ранее разосланные ссылки перестанут пускать в группу. Тех, кто уже вступил, это не затронет.',
-                                [
-                                  { text: 'Отмена', style: 'cancel' },
-                                  {
-                                    text: 'Сбросить',
-                                    style: 'destructive',
-                                    onPress: () => { void (async () => {
-                                      try {
-                                        const next = await rotateGroupInviteToken(group.id, pid, myPubB64, myDisplayName);
-                                        await insertGroupSysMessage(group.id, pid, myPubB64, 'Пригласительная ссылка сброшена: прежние больше не действуют');
-                                        // v4.32.452: «сброшена» — только если о новом
-                                        // токене узнали другие администраторы. Иначе
-                                        // их кнопка продолжит выдавать ссылки, которые
-                                        // группа уже не пускает, а отзыв выглядел бы
-                                        // состоявшимся.
-                                        if (!announceInviteToken(next.announced)) {
-                                          showSuccess('Ссылка сброшена — прежние больше не действуют');
-                                        }
-                                        // Показываем новую сразу: иначе «сбросил
-                                        // и не понял, где взять действующую».
-                                        await showInviteSheet(next.token);
-                                      } catch (e) {
-                                        showError(userErrorText(e, 'Не удалось сбросить ссылку'));
-                                      }
-                                    })(); },
-                                  },
-                                ]
-                              );
-                            },
-                          },
-                          { text: 'Закрыть', style: 'cancel' },
-                        ]);
-                      };
-                      const invite = await ensureGroupInviteToken(group.id, pid, myPubB64, myDisplayName);
-                      // null — группу не прочитать ЛИБО столбец с токеном не
-                      // открылся ключом (v4.32.601). Показать ссылку было бы
-                      // хуже, чем не показать: она ни с чем не сверяется.
-                      if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
-                      announceInviteToken(invite.announced);
-                      await showInviteSheet(invite.token);
-                    })(); }); },
-                  }] : []),
-                  {
-                    text: 'Статистика',
-                    // v4.32.531: раньше без .catch — при занятой базе пункт «Статистика»
-                    // просто ничего не открывал, и это выглядело как неработающая кнопка.
-                    onPress: () => void getGroupStats(group.id, pid)
-                      .then((s) => { setGrpStats(s); setGrpStatsVisible(true); })
-                      .catch((e) => showError(userErrorText(e, 'Не удалось собрать статистику'))),
-                  },
-                  {
-                    text: 'Недавно удалённые',
-                    onPress: openGrpRecentlyDeleted,
-                  },
-                  // v4.32.256: рассылка обязательна. Без неё настройку знал только
-                  // нажавший: второй администратор выдавал ссылку без одобрения, а
-                  // «Имена отправителей скрыты» было правдой ровно на одном
-                  // устройстве. v4.32.531: и подписи, и патч, и порядок «сначала
-                  // запись — потом слова» теперь общие для всех четырёх.
-                  ...(group.type !== 'channel' ? [{
-                    text: groupFlagCopy('adminOnlyPosting', adminOnlyPosting).menu,
-                    onPress: () => toggleGroupFlag('adminOnlyPosting', adminOnlyPosting, setAdminOnlyPosting),
-                  }] : []),
-                  ...(group.type !== 'channel' ? [{
-                    text: groupFlagCopy('adminOnlyPinning', adminOnlyPinning).menu,
-                    onPress: () => toggleGroupFlag('adminOnlyPinning', adminOnlyPinning, setAdminOnlyPinning),
-                  }] : []),
-                  {
-                    text: groupFlagCopy('requireApproval', requireApproval).menu,
-                    onPress: () => toggleGroupFlag('requireApproval', requireApproval, setRequireApproval),
-                  },
-                  {
-                    text: groupFlagCopy('anonymousPosting', anonymousPosting).menu,
-                    onPress: () => toggleGroupFlag('anonymousPosting', anonymousPosting, setAnonymousPosting),
-                  },
-                  {
-                    text: 'Экспорт чата',
-                    onPress: () => { requestAnimationFrame(() => { void (async () => {
-                      try {
-                        const allMsgs = await listAllGroupMessages({ groupId: group.id, ownerProfileId: pid });
-                        // v4.32.532: файл сохранят и на него сошлются, поэтому
-                        // выгружаем либо всё, либо ничего.
-                        if (!shouldApplyRows(allMsgs)) { showError('Не удалось прочитать переписку для экспорта'); return; }
-                        const sorted = [...allMsgs].sort((a, b) => a.createdAt - b.createdAt);
-                        const txt = sorted.map((m) => {
-                          const d = fullDateTime(m.createdAt);
-                          // v4.32.256: экспорт выписывал имена отправителей даже
-                          // при включённых анонимных постах — то есть настройка
-                          // скрывала имена на экране и тут же выкладывала их в
-                          // файл, которым делятся наружу.
-                          const who = anonymousPosting
-                            ? (m.senderPubB64 === myPubB64 ? 'Вы' : 'Участник')
-                            // v4.32.593: в файл идёт имя либо короткий ключ, но
-                            // никогда пометка о непрочитанном столбце.
-                            : outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64));
-                          // v4.32.604: у непрочитанной реплики текста нет, и
-                          // пустая строка в файле выдавала её за отправленную пустоту.
-                          return `[${d}] ${who}: ${exportBody(m)}`;
-                        }).join('\n');
-                        // v4.32.310: см. cacheFiles — имя общее для всех
-                        // экспортов, иначе за файлом никто не убирает.
-                        // v4.32.313: и отдача общая — три копии расходились.
-                        const shared = await shareTextExport('group', txt, 'Экспорт группы', Date.now());
-                        if (!shared) Alert.alert('Экспорт', 'Системное «Поделиться» недоступно на этом устройстве');
-                      } catch (e) {
-                        Alert.alert('Ошибка', userErrorText(e, 'Не удалось выгрузить переписку'));
-                      }
-                    })(); }); },
-                  },
-                  {
-                    text: 'Очистить историю',
-                    style: 'destructive',
-                    onPress: () => {
-                      Alert.alert('Очистить историю?', 'Все сообщения этой группы будут удалены локально. Это действие нельзя отменить.', [
-                        { text: 'Отмена', style: 'cancel' },
-                        {
-                          text: 'Очистить', style: 'destructive',
-                          // v4.32.531: успех объявлялся без оглядки на исход, а
-                          // перечитывание ленты висело отдельным необработанным
-                          // обещанием. Теперь «История очищена» говорится только
-                          // после удаления.
-                          onPress: () => { requestAnimationFrame(() => { void (async () => {
-                            try {
-                              await clearGroupMessages(group.id, pid);
-                            } catch (e) {
-                              showError(userErrorText(e, 'Не удалось очистить историю'));
-                              return;
-                            }
-                            showSuccess('История очищена');
-                            await loadMessages();
-                          })(); }); },
-                        },
-                      ]);
-                    },
-                  },
-                  { text: 'Отмена', style: 'cancel' },
-                ]);
-              }}
-            >
-              <Ionicons name="settings-outline" size={22} color={colors.text} />
-            </AppPressable>
-          ) : null}
+          {/* v4.32.680: одна кнопка настроек вместо двух — окно у группы и
+              канала своё, а его состав зависит от прав (см. groupHubModel). */}
+          <AppPressable
+            style={gcStyles.iconBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Настройки"
+            onPress={() => setSettingsOpen(true)}
+          >
+            <Ionicons name={amAdmin ? 'settings-outline' : 'ellipsis-vertical'} size={22} color={colors.text} />
+          </AppPressable>
         </GlassSurface>
       )}
 
@@ -4680,6 +4581,14 @@ function GroupChatScreen({
         onClose={closeGrpStats}
         grpStats={grpStats}
         memberCount={group.memberCount}
+      />
+
+      {/* Настройки группы и канала — своё окно (v4.32.680) */}
+      <GroupSettingsModal
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        facts={settingsFacts}
+        onSelect={handleGroupSetting}
       />
 
       {/* Recently deleted group messages panel */}

@@ -190,7 +190,16 @@ describe('BEFORE — чем отвечал прежний вопрос', () => {
       'utf8'
     );
     expect(screen.split("group.type === 'channel'").length - 1).toBeGreaterThanOrEqual(5);
-    expect(screen).toContain("group.type !== 'channel'");
+    // v4.32.680: пункты, скрытые в канале, уехали в groupHubModel вместе со
+    // всем составом окна настроек. Условие не исчезло — сменило место, и вид
+    // по-прежнему приходит туда одной и той же строкой из базы.
+    expect(screen).toContain("type: group.type === 'channel' ? 'channel' : 'group',");
+    const model = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'ui', 'components', 'groupHubModel.ts'),
+      'utf8'
+    );
+    expect(model.split("f.type === 'channel'").length - 1).toBeGreaterThanOrEqual(2);
+    expect(model).toContain("id: 'admin_only_posting' as const");
   });
 });
 
