@@ -223,7 +223,18 @@ export async function sweepExpiredMutes(): Promise<{ removed: number; migrated: 
   let removed = 0;
   let migrated = 0;
   for (const k of keys) {
-    const parsed = parseMuteValue(await scopedKvGet(k), now);
+    // v4.32.696: сбой чтения — это не «записи нет», и здесь их нельзя
+    // путать. По `scopedKvGet` они были неотличимы, а уборка на этом
+    // основании РЕШАЕТ за человека: истёкшую запись удаляет, неканоническую
+    // переносит. Нечитаемая выглядела как `{ muted: false, untilMs: null }`
+    // и переезжала под каноническое имя значением `'1'` — то есть как
+    // бессрочное глушение, которого никто не ставил, — а источник стирался,
+    // и вернуться было некуда. Ключ пришёл из scopedKvListKeysByPrefix,
+    // значит он существует: null здесь означает только отказ базы.
+    // Пропускаем: уборка повторяется на каждом выходе на передний план.
+    const read = await scopedKvTryGet(k);
+    if (read === null) continue;
+    const parsed = parseMuteValue(read.value, now);
     if (muteExpired(parsed, now)) {
       try { await scopedKvDelete(k); removed++; } catch { /* noop */ }
       continue;
