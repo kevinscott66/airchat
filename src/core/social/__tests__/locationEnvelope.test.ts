@@ -19,6 +19,8 @@ import {
   parseLocationMeta,
   sanitizeLocationLabel,
 } from '../locationEnvelope';
+import { decideLiveLocUpdate } from '../liveLocRowIdentity';
+import { liveLocState } from '../liveLocFreshness';
 
 const NOW = 1_800_000_000_000;
 const rawLoc = (payload: unknown): string => `${LOCATION_PREFIX}${JSON.stringify(payload)}`;
@@ -113,14 +115,32 @@ describe('parseLiveLoc', () => {
     );
   });
 
-  it('v4.32.563: время отправки принимается, но не из будущего', () => {
+  it('v4.32.563: время отправки принимается, а старое — не повод его выбросить', () => {
     expect(parseLiveLoc(rawLive({ ...ok, ts: NOW - 90_000 }), NOW)!.ts).toBe(NOW - 90_000);
     expect(parseLiveLoc(rawLive({ ...ok, ts: NOW - 9e11 }), NOW)!.ts).toBe(NOW - 9e11);
-    // Иначе вечно «свежая» точка — тот же приём, что и expireAt на сто лет.
-    for (const ts of [NOW + 120_000, 9e15, Infinity, NaN, '5', null]) {
+    expect(parseLiveLoc(rawLive({ ...ok }), NOW)).not.toHaveProperty('ts');
+    for (const ts of [Infinity, NaN, '5', null]) {
       expect(parseLiveLoc(rawLive({ ...ok, ts }), NOW)).not.toHaveProperty('ts');
     }
-    expect(parseLiveLoc(rawLive({ ...ok }), NOW)).not.toHaveProperty('ts');
+  });
+
+  it('v4.32.688: потолок времени отправки — конец сессии, а не часы получателя', () => {
+    // `ts` за концом сессии заморозил бы карту: он стал бы «самой новой»
+    // посылкой, а все следующие — «старее» и отбрасывались бы, пока горит
+    // плашка LIVE. Оба числа написаны часами отправителя, поэтому и потолок
+    // берётся оттуда же.
+    for (const ts of [ok.expireAt + 120_000, NOW + 9e11, 9e15]) {
+      expect(parseLiveLoc(rawLive({ ...ok, ts }), NOW)).not.toHaveProperty('ts');
+    }
+    expect(parseLiveLoc(rawLive({ ...ok, ts: ok.expireAt }), NOW)!.ts).toBe(ok.expireAt);
+
+    // А вот часы получателя на решение не влияют: спеши они или отставай,
+    // время отправки остаётся при посылке. До v4.32.688 на отстающих часах
+    // оно пропадало — молча, у каждой посылки подряд.
+    const live = { ...ok, expireAt: NOW + 30 * 60_000, ts: NOW };
+    for (const skew of [-6 * 60 * 60_000, -60 * 60_000, -90_000, 0, 90_000, 60 * 60_000]) {
+      expect(parseLiveLoc(rawLive(live), NOW + skew)!.ts).toBe(NOW);
+    }
   });
 
   it('expireAt не числом — null', () => {
@@ -176,5 +196,44 @@ describe('потолок длины конверта', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('v4.32.688: отстающие часы получателя больше не глушат две защиты', () => {
+  // Сессия отправителя: полчаса, такты каждые 30 секунд.
+  const expireAt = NOW + 30 * 60_000;
+  const live = (ts: number): string =>
+    rawLive({ lat: 55.75, lon: 37.61, expireAt, liveId: 'live-1', ts });
+
+  // Часы получателя отстают на пять минут — обычное дело на телефоне без
+  // синхронизации времени. Раньше этого хватало, чтобы `ts` пропал у всех
+  // посылок подряд.
+  const behind = 5 * 60_000;
+
+  it('посылку, подсунутую назад, по-прежнему отбрасываем', () => {
+    const fresh = parseLiveLoc(live(NOW), NOW - behind)!;
+    const older = parseLiveLoc(live(NOW - 60_000), NOW - behind)!;
+    expect(fresh.ts).toBe(NOW);
+    expect(older.ts).toBe(NOW - 60_000);
+    expect(decideLiveLocUpdate(fresh, older)).toEqual({ kind: 'skip', code: 'stale' });
+    expect(decideLiveLocUpdate(older, fresh)).toEqual({ kind: 'apply' });
+  });
+
+  it('замершая рассылка по-прежнему подписывается «не обновляется»', () => {
+    const stopped = parseLiveLoc(live(NOW - 10 * 60_000), NOW - behind)!;
+    expect(
+      liveLocState({ expireAt: stopped.expireAt, now: NOW - behind, updatedAt: stopped.ts })
+    ).toBe('stale');
+    const ticking = parseLiveLoc(live(NOW - behind), NOW - behind)!;
+    expect(
+      liveLocState({ expireAt: ticking.expireAt, now: NOW - behind, updatedAt: ticking.ts })
+    ).toBe('live');
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: без времени отправки обе защиты молчат', () => {
+    const noTs = parseLiveLoc(rawLive({ lat: 55.75, lon: 37.61, expireAt, liveId: 'live-1' }), NOW)!;
+    expect(noTs).not.toHaveProperty('ts');
+    expect(decideLiveLocUpdate({ ts: NOW }, noTs)).toEqual({ kind: 'apply' });
+    expect(liveLocState({ expireAt, now: NOW, updatedAt: noTs.ts })).toBe('live');
   });
 });

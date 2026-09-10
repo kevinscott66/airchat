@@ -132,7 +132,14 @@ describe('форма исходников', () => {
     const e = ENVELOPE();
     expect(e).toContain('if (o.expireAt > now + LIVELOC_MAX_AHEAD_MS) return null;');
     expect(e).not.toContain('o.expireAt < now - LIVELOC_MAX_SKEW_MS');
-    expect(e).toContain("if (typeof o.ts === 'number' && isFinite(o.ts) && o.ts <= now + LIVELOC_MAX_SKEW_MS) out.ts = o.ts;");
+    // v4.32.688: потолок времени отправки — конец его же сессии. Прежняя
+    // форма сравнивала часы отправителя с часами получателя, и на отстающем
+    // телефоне `ts` пропадал у каждой посылки — вместе с подписью
+    // «Геолокация не обновляется», ради которой он и заведён.
+    expect(e).toContain(
+      "if (typeof o.ts === 'number' && isFinite(o.ts) && o.ts <= o.expireAt + LIVELOC_MAX_SKEW_MS) out.ts = o.ts;",
+    );
+    expect(e).not.toContain('o.ts <= now + LIVELOC_MAX_SKEW_MS');
   });
 
   it('пузырь считает состояние модулем, а не сравнением со сроком', () => {
