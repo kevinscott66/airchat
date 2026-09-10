@@ -15,7 +15,7 @@
  * Журнал профильный и локальный. Он не уходит ни собеседнику, ни на сервер.
  */
 
-import { scopedKvGet, scopedKvSet } from '../storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../storage/profileScopedKv';
 import { log } from '../logger';
 
 export type ReportReason = 'spam' | 'abuse' | 'fraud' | 'illegal' | 'other';
@@ -56,13 +56,29 @@ function parseReports(raw: string | null): ContactReport[] {
   }
 }
 
-export async function listContactReports(): Promise<ContactReport[]> {
+/**
+ * Прочитать журнал, отличая отказ базы от пустоты (v4.32.695).
+ *
+ * `scopedKvGet` сводил их в один null, и recordContactReport, дописав жалобу
+ * поверх «пустого» журнала, стирала весь прежний след: до двухсот записей о
+ * том, кого и за что человек уже отметил, заменялись одной новой.
+ *
+ * Испорченное содержимое сюда не относится: его модуль намеренно читает как
+ * пустоту (см. parseReports) — восстанавливать там нечего, и дописывать поверх
+ * можно. Здесь различается только «база не ответила».
+ */
+async function readReports(): Promise<ContactReport[] | null> {
   try {
-    return parseReports(await scopedKvGet(KEY));
+    const read = await scopedKvTryGet(KEY);
+    return read === null ? null : parseReports(read.value);
   } catch (e) {
     log.warn('contact_reports_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    return null;
   }
+}
+
+export async function listContactReports(): Promise<ContactReport[]> {
+  return (await readReports()) ?? [];
 }
 
 /** Была ли уже жалоба на этого человека. Карточка подписывает пункт по-другому. */
@@ -80,8 +96,19 @@ export async function recordContactReport(
   reason: ReportReason,
   blocked: boolean,
 ): Promise<void> {
-  const prev = await listContactReports();
+  const prev = await readReports();
+  if (prev === null) {
+    // v4.32.695: не прочитали — не пишем. Иначе эта одна жалоба легла бы
+    // поверх всего прежнего следа. Отказ уходит броском, потому что карточка
+    // профиля уже его ждёт: там жалоба обёрнута в catch с текстом «Не удалось
+    // записать жалобу», и до сих пор в этот catch было нечему приходить.
+    log.warn('contact_report_journal_unreadable', { reason });
+    throw new Error('Журнал жалоб не прочитался. Попробуйте ещё раз.');
+  }
   const next = [{ did, reason, at: Date.now(), blocked }, ...prev].slice(0, MAX_REPORTS);
-  await scopedKvSet(KEY, JSON.stringify(next));
+  if (!await scopedKvSetChecked(KEY, JSON.stringify(next))) {
+    log.warn('contact_report_write_failed', { reason });
+    throw new Error('Жалоба не записалась. Попробуйте ещё раз.');
+  }
   log.info('contact_reported', { reason, blocked });
 }

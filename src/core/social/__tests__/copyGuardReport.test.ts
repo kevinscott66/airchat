@@ -37,6 +37,16 @@ jest.mock('../../storage/profileScopedKv', () => {
     scopedKvTryGetFor: jest.fn(async (pid: number, k: string) =>
       mockBroken ? null : { value: kv[scoped(pid, k)] ?? null }
     ),
+    // v4.32.695: журнал жалоб читается тройственно и пишется с проверкой —
+    // подделка отвечает так же, как оригинал: отказ значением, не броском.
+    scopedKvTryGet: jest.fn(async (k: string) =>
+      mockBroken ? null : { value: kv[k] ?? null }
+    ),
+    scopedKvSetChecked: jest.fn(async (k: string, v: string) => {
+      if (mockWriteFails) return false;
+      kv[k] = v;
+      return true;
+    }),
     scopedKvSetCheckedFor: jest.fn(async (pid: number, k: string, v: string) => {
       if (mockWriteFails) return false;
       kv[scoped(pid, k)] = v;
