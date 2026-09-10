@@ -20,6 +20,7 @@ import { fanoutGroupMessage } from './groupMessaging';
 import { groupSendProblem } from './groupSendOutcome';
 import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { log } from '../logger';
+import { ErrorHandler, ErrorSeverity } from '../errorHandler';
 import { isSendableMessageText } from './messageTextLimit';
 import { decideScheduledSend, scheduledSenderLabel, shouldReportScheduledHold } from './scheduledDispatch';
 import { getOwnDisplayNameFor } from '../identity/ownProfile';
@@ -54,6 +55,29 @@ let flushing = false;
  */
 function activePid(): number | null {
   return profileManager.getActiveProfile()?.id ?? null;
+}
+
+/**
+ * v4.32.709: сказать вслух, что отложенное сообщение не ушло и его больше нет.
+ *
+ * Все три ветки, где строка расписания снимается недоставленной, до сих пор
+ * ограничивались строкой в лог. А снимается вместе с ней сам текст: своей
+ * копии у отложенного сообщения нет нигде. Личную пишет sendMessage, но до
+ * записи дело не доходит — requireOnlineWrite бросает раньше
+ * (CACHE_ONLY_MODE); групповую пишет этот же проход, но только после удачной
+ * рассылки. Из «Запланированных» сообщение пропадало ровно так же, как если
+ * бы ушло, и человек имел все основания считать, что оно отправлено.
+ *
+ * Ни текста сообщения, ни ключа собеседника, ни номера группы сюда не кладём:
+ * message и context уходят в Sentry (см. ErrorHandler).
+ */
+function reportScheduledLost(code: string, message: string): void {
+  void ErrorHandler.getInstance().handle({
+    code,
+    message,
+    severity: ErrorSeverity.ERROR,
+    retryable: false,
+  });
 }
 
 /** Schedule a DM to be sent at `sendAt` (unix ms). */
@@ -286,6 +310,10 @@ async function flushDueOnce(): Promise<void> {
           log.warn('scheduled_group_message_denied', {
             id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), code: problem.code,
           });
+          reportScheduledLost(
+            'SCHEDULED_DENIED',
+            'Отложенное сообщение в группу не отправлено: писать в ней больше нельзя.'
+          );
           continue;
         }
         // v4.32.440: два случая, которые до разбора ответа выглядели как «права
@@ -302,6 +330,10 @@ async function flushDueOnce(): Promise<void> {
             log.warn('scheduled_group_message_abandoned', {
               id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), ageMs: staleMs,
             });
+            reportScheduledLost(
+              'SCHEDULED_NOT_SENT',
+              'Отложенное сообщение не отправлено: связи не было слишком долго. Наберите его заново.'
+            );
           } else {
             log.info('scheduled_group_message_retry', {
               id: msg.id.slice(0, 8),
@@ -358,6 +390,10 @@ async function flushDueOnce(): Promise<void> {
         try {
           await deleteScheduledMessage(msg.id, pid);
           log.warn('scheduled_message_abandoned', { id: msg.id.slice(0, 8), ageMs });
+          reportScheduledLost(
+            'SCHEDULED_NOT_SENT',
+            'Отложенное сообщение не отправлено: связи не было слишком долго. Наберите его заново.'
+          );
         } catch { /* ignore */ }
       }
     }
