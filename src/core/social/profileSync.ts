@@ -208,7 +208,24 @@ function avatarAllowed(visibility: AvatarVisibility | null, audience: Audience):
   return true;
 }
 
-async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Promise<Built | null> {
+/**
+ * Собрать конверт профиля.
+ *
+ * v4.32.707: положение переключателя «кто видит фото» приходит сверху готовым,
+ * а не читается здесь во второй раз. Прежде его читали дважды: один раз —
+ * чтобы решить, считать ли собеседника посторонним, второй — уже здесь, чтобы
+ * решить, класть ли фотографию. Между двумя чтениями стоит база, и ответы у
+ * них расходятся: первое не удалось (`null`) или застало прежнее `everybody`,
+ * второе вернуло `contacts`. Тогда собеседника по списку контактов не
+ * проверяли вовсе — и фотография уходила ровно тому, от кого её и прятали.
+ * Одно чтение на отправку такого расхождения не допускает, а отозвать
+ * отправленную фотографию нельзя.
+ */
+async function buildEnvelope(
+  pid: number,
+  audience: Audience,
+  visibility: AvatarVisibility | null,
+): Promise<Built | null> {
   const name = await getOwnDisplayNameFor(pid);
   const username = await getOwnUsernameFor(pid);
   // v4.32.378: тем же правилом, каким конверт чистится на сборке. Иначе
@@ -239,7 +256,7 @@ async function buildEnvelope(pid: number, audience: Audience = 'contacts'): Prom
     stamp = now;
     await scopedKvSetFor(pid, CHANGED_AT_KEY, String(stamp));
   }
-  const shareAvatar = avatarAllowed(await avatarVisibilityTryFor(pid), audience);
+  const shareAvatar = avatarAllowed(visibility, audience);
   const avatarCid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
   // v4.32.547: бумага на галочку едет тем же конвертом, что и имя, — иначе ей
   // понадобился бы свой транспорт, а она нужна ровно там же и ровно тогда же.
@@ -320,7 +337,9 @@ export async function broadcastMyProfile(): Promise<void> {
   // ждёт сеть на каждом собеседнике, и «активный» к её концу может означать
   // уже другой аккаунт.
   const pid = activeProfileId();
-  const built = await buildEnvelope(pid);
+  // v4.32.707: рассылка идёт по списку контактов, поэтому аудитория здесь
+  // всегда «contacts»; переключатель читается один раз на всю рассылку.
+  const built = await buildEnvelope(pid, 'contacts', await avatarVisibilityTryFor(pid));
   if (!built) return;
   const text = encodeProfileEnvelope(built.env);
   const { version } = built;
@@ -377,11 +396,13 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
   // положено, и «direct» здесь означало бы, что настройка прячет фото и от
   // тех, для кого её включали. Поэтому список читается — но только когда от
   // ответа что-то зависит.
+  // v4.32.707: читаем ОДИН раз и это же значение несём в сборку конверта.
+  const visibility = await avatarVisibilityTryFor(pid);
   const audience: Audience =
-    (await avatarVisibilityTryFor(pid)) === 'contacts' && !(await isMyContact(pid, peerPubB64))
+    visibility === 'contacts' && !(await isMyContact(pid, peerPubB64))
       ? 'direct'
       : 'contacts';
-  const built = await buildEnvelope(pid, audience);
+  const built = await buildEnvelope(pid, audience, visibility);
   if (!built) return;
   const { version } = built;
   if (!force) {

@@ -115,10 +115,28 @@ describe('рассылка карточки: непрочитанное не о�
 
   it('оба места рассылки берут пробующее чтение', () => {
     const src = codeOnly(SYNC());
-    // Импорт и два вызова — ни одного прежнего читателя не осталось.
+    // Импорт и по вызову на каждый из двух путей отправки — ни одного
+    // прежнего, разбирающего `null` в самое разрешающее, читателя не осталось.
     expect(src.split('avatarVisibilityTryFor').length - 1).toBe(3);
-    expect(src).toContain('avatarAllowed(await avatarVisibilityTryFor(pid), audience)');
     expect(src).not.toContain('avatarVisibilityFor(');
+  });
+
+  it('v4.32.707: на одну отправку приходится одно чтение', () => {
+    // Здесь стояло `avatarAllowed(await avatarVisibilityTryFor(pid), audience)`:
+    // сборка конверта читала настройку ВТОРОЙ раз, уже после того как по
+    // первому чтению решили, посторонний ли собеседник. Разошедшиеся ответы
+    // отдавали фотографию ровно тому, от кого её прятали (см.
+    // social/__tests__/avatarAudienceSingleRead707.test.ts).
+    const src = codeOnly(SYNC());
+    expect(src).toContain('const shareAvatar = avatarAllowed(visibility, audience);');
+    expect(src).not.toContain('avatarAllowed(await avatarVisibilityTryFor(');
+    const build = slice(src, 'async function buildEnvelope(', '\n}');
+    expect(build).toContain('visibility: AvatarVisibility | null,');
+    expect(build).not.toContain('avatarVisibilityTryFor');
+    const one = slice(src, 'async function sendProfileTo(', '\n}');
+    expect(one).toContain('const visibility = await avatarVisibilityTryFor(pid);');
+    expect(one).toContain('await buildEnvelope(pid, audience, visibility)');
+    expect(one.split('avatarVisibilityTryFor').length - 1).toBe(1);
   });
 });
 

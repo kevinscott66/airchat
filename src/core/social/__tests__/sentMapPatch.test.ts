@@ -103,7 +103,13 @@ describe('у захода один владелец от начала до ко�
     expect(profileSrc).not.toMatch(/await scopedKvGet\(/);
     expect(profileSrc).toContain('const pid = activeProfileId();');
     expect(profileSrc).toContain('await listContactsFor(pid)');
-    expect(profileSrc).toContain('await buildEnvelope(pid)');
+    // v4.32.707: сборке конверта достаётся не только выбранный номер, но и
+    // прочитанное ЭТИМ ЖЕ номером положение «кто видит фото» — второго чтения
+    // внутри сборки больше нет, и подменить номер между ними нечему.
+    expect(profileSrc).toContain(
+      "await buildEnvelope(pid, 'contacts', await avatarVisibilityTryFor(pid))"
+    );
+    expect(profileSrc).not.toMatch(/buildEnvelope\(activeProfileId\(\)/);
     expect(profileSrc).toContain('await getOwnDisplayNameFor(pid)');
   });
 
