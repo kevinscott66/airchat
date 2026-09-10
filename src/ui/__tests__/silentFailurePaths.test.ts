@@ -211,15 +211,31 @@ describe('U8: медиа одного собеседника не попадаю
     const lines = codeLines(src);
     const at = lines.findIndex((l) => l.includes('let cancelled = false;'));
     if (at < 0) return false;
-    const block = lines.slice(at, at + 60).join('\n');
+    const body = lines.slice(at, at + 60);
+    const block = body.join('\n');
     // v4.32.640: обе выборки окна проверяют отмену ДО того, как что-то
     // применить. Раньше медиа применялись через `if (!cancelled) setItems`,
     // теперь у чтения три исхода и проверка стоит первой строкой — важна не
     // форма, а то, что ни одна ветка не пишет в состояние после отмены.
     const guards = block.match(/if \(cancelled\) return;/g) ?? [];
-    return guards.length >= 2
-      && !block.includes('.then(setItems)')
-      && block.includes('return () => { cancelled = true; };');
+    if (guards.length < 2) return false;
+    if (block.includes('.then(setItems)')) return false;
+    if (!block.includes('return () => { cancelled = true; };')) return false;
+    // v4.32.685: счёт проверок отмены оказался слеп. Их стало три, и снятие
+    // любой одной оставляло две — предел «хотя бы две» держался, а дыра
+    // возвращалась. Считать надо не проверки, а то, что после КАЖДОГО
+    // ожидания состояние трогают, лишь убедившись, что чтение ещё нужно:
+    // каждое `.then`/`.catch`/`await` снова снимает защиту, и вернуть её
+    // может только проверка отмены.
+    let guarded = true;
+    for (const line of body) {
+      if (/\.then\(|\.catch\(|await /.test(line)) guarded = false;
+      if (line.includes('if (cancelled) return;')) guarded = true;
+      if (guarded) continue;
+      if (line.includes('if (!cancelled)')) continue;
+      if (/\bset[A-Z]\w*\(/.test(line)) return false;
+    }
+    return true;
   };
 
   it('смена prop отменяет прежнее чтение', () => {
@@ -231,6 +247,29 @@ describe('U8: медиа одного собеседника не попадаю
       'void listConversationMedia(contactPubB64, ownerProfileId).then(setItems);',
       '}, [active, contactPubB64, ownerProfileId]);',
     ].join('\n');
+    expect(honest(before)).toBe(false);
+  });
+
+  it('BEFORE: проверок отмены две, но одна ветка пишет после ожидания', () => {
+    // Контроль на новую часть предиката (v4.32.685): проверок ровно две, и
+    // прежний счётчик такой образец пропускал. Но первая выборка применяет
+    // строки сразу после ответа — ровно та дыра, которую правка закрывала.
+    const before = [
+      'let cancelled = false;',
+      'void listConversationMedia(contactPubB64, ownerProfileId).then((rows) => {',
+      'if (!shouldApplyRows(rows)) { setReadFailed(true); return; }',
+      'setItems([...rows]);',
+      '});',
+      'void import(\'../../../../core/storage/local\').then(async (m) => {',
+      'const msgs = await m.listAllChatMessages({ contactPubB64, ownerProfileId });',
+      'if (cancelled) return;',
+      'setSharedLinks(links.reverse());',
+      'if (cancelled) return;',
+      'setSharedDocs(docs.reverse());',
+      '});',
+      'return () => { cancelled = true; };',
+    ].join('\n');
+    expect(before.match(/if \(cancelled\) return;/g)).toHaveLength(2);
     expect(honest(before)).toBe(false);
   });
 

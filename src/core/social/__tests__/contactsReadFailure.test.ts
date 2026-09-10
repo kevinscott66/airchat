@@ -8,6 +8,10 @@
  */
 
 let mockReadFails = false;
+// v4.32.685: отказ базы приходит не только как «нет ответа» от kvTryGet.
+// Строка контакта читается ГЛУБЖЕ, уже после разбора указателя, и там сбой
+// SQLite прилетает исключением — его ловит catch всей функции.
+let mockCellThrows = false;
 
 jest.mock('../../storage/local', () => {
   const kv: Record<string, string> = {};
@@ -24,6 +28,7 @@ jest.mock('../../storage/local', () => {
     // поэтому «непрочитанная» из этой заглушки не приходит вовсе — приходят
     // только «есть» и «нет», а отказ базы (mockReadFails) кидает, как и настоящая.
     kvGetSecretCell: jest.fn(async (key: string) => {
+      if (mockCellThrows) throw new Error('database is locked');
       const v = await kvGet(key);
       return v == null ? { state: 'absent' } : { state: 'plain', text: v };
     }),
@@ -86,6 +91,7 @@ const mockLocal = jest.requireMock('../../storage/local') as { __kv: Record<stri
 function reset(): void {
   for (const k of Object.keys(mockLocal.__kv)) delete mockLocal.__kv[k];
   mockReadFails = false;
+  mockCellThrows = false;
   // Модульный TTL-кэш списка иначе переживает очистку kv.
   invalidateContactsList();
 }
@@ -122,6 +128,53 @@ describe('listContactsRead отличает отказ от пустоты', () 
 
   test('listContactsFor при отказе по-прежнему отвечает пустым списком', async () => {
     mockReadFails = true;
+    // Проверкам «в контактах ли он» диагноз не нужен: у них ответ, а не null.
+    expect(await listContactsFor(1)).toEqual([]);
+  });
+});
+
+/**
+ * Сбой ПОСРЕДИ чтения — тоже отказ, а не пустая записная книжка (v4.32.685).
+ *
+ * Отказ приходит двумя разными путями. Первый — kvTryGet не отвечает вовсе:
+ * его разбирает ранний выход по `read === null`, и его проверял круг 622.
+ * Второй — SQLite срывается уже после того, как указатель разобран, на чтении
+ * очередной строки контакта; такой отказ прилетает исключением, и ловит его
+ * catch всей функции. Оба обязаны отвечать null: экран рисует по одному и тому
+ * же списку, и во втором случае человек с полной записной книжкой увидел бы
+ * «Добавьте первый контакт» ровно так же.
+ */
+describe('сбой посреди чтения — тоже отказ', () => {
+  test('исключение на строке контакта — null, а не пустой список', async () => {
+    const me = makeKeyPair();
+    const peer = makeKeyPair();
+    await addContact(me, peer.publicKey, 'Боб');
+    invalidateContactsList();
+
+    mockCellThrows = true;
+    expect(await listContactsRead()).toBeNull();
+    invalidateContactsList();
+    expect(await listContactsReadFor(1)).toBeNull();
+  });
+
+  test('проверка не пустая: без сбоя тот же контакт читается', async () => {
+    const me = makeKeyPair();
+    const peer = makeKeyPair();
+    await addContact(me, peer.publicKey, 'Боб');
+    invalidateContactsList();
+
+    const read = await listContactsReadFor(1);
+    expect(read).toHaveLength(1);
+    expect(read?.[0].displayName).toBe('Боб');
+  });
+
+  test('listContactsFor и на исключении отвечает пустым списком', async () => {
+    const me = makeKeyPair();
+    const peer = makeKeyPair();
+    await addContact(me, peer.publicKey, 'Боб');
+    invalidateContactsList();
+
+    mockCellThrows = true;
     // Проверкам «в контактах ли он» диагноз не нужен: у них ответ, а не null.
     expect(await listContactsFor(1)).toEqual([]);
   });
