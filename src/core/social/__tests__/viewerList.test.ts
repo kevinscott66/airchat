@@ -51,9 +51,17 @@ describe('разбор списка посмотревших', () => {
     expect(parseViewerList('{')).toEqual({ viewers: [], unknown: true });
   });
 
-  it('не-массив и не-строки внутри отсеиваются', () => {
-    expect(parseViewerList('{"a":1}')).toEqual({ viewers: [], unknown: false });
-    expect(parseViewerList('["a",1,null,"b"]').viewers).toEqual(['a', 'b']);
+  // v4.32.679: раньше здесь стояло `unknown: false` — не-массив выдавался за
+  // факт «никто не смотрел». Разорванный JSON рядом всё это время отвечал
+  // честно, хотя порча одна и та же.
+  it('не-массив — тоже неизвестность, а не ноль', () => {
+    expect(parseViewerList('{"a":1}')).toEqual({ viewers: [], unknown: true });
+    expect(parseViewerList('{}')).toEqual({ viewers: [], unknown: true });
+    expect(parseViewerList('42')).toEqual({ viewers: [], unknown: true });
+  });
+
+  it('не-строки внутри массива отсеиваются, а список остаётся известным', () => {
+    expect(parseViewerList('["a",1,null,"b"]')).toEqual({ viewers: ['a', 'b'], unknown: false });
   });
 });
 

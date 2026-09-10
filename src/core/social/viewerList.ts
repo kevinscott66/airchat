@@ -61,7 +61,15 @@ export function parseViewerList(raw: string | null | undefined, unreadable?: boo
   if (!raw) return { viewers: [], unknown: false };
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return { viewers: [], unknown: false };
+    // v4.32.679: не-массив — та же порча, что и не-JSON, просто успевшая
+    // разобраться. Писатель кладёт сюда одну-единственную форму —
+    // `JSON.stringify` массива ключей; `{}`, `42` или `null` в столбце могли
+    // взяться только от недописанной записи (её и описывает оговорка
+    // v4.32.189 в local.ts). Раньше такая строка отвечала «никто не смотрел»
+    // и «никто не прочитал» — фактом, хотя подтвердить его нечем: ровно та
+    // подмена догадки фактом, ради которой модуль и написан. Ниже, у
+    // разорванного JSON, ответ всё это время был честный.
+    if (!Array.isArray(parsed)) return { viewers: [], unknown: true };
     return { viewers: parsed.filter((x): x is string => typeof x === 'string'), unknown: false };
   } catch {
     // Строка есть, но это не JSON: столбец испорчен, а не зашифрован чужим
