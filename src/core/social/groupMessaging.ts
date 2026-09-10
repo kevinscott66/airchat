@@ -69,6 +69,7 @@ import { privacyPrefTryBoolFor, readReceiptsAllowedFor } from '../settings/priva
 import { log } from '../logger';
 import { isPollMessage } from './pollEnvelope';
 import { decideMetaField } from './groupMetaEvents';
+import { formatGroupHandle } from './groupHandle';
 
 export const GROUP_MSG_PREFIX = '\x02grp:';
 
@@ -1724,6 +1725,26 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       patch.avatarCid = env.avatarCid;
       if (avatarDecision.announce) events.push({ field: 'avatarCid', text: 'Аватар группы обновлён' });
       else log.warn('group_meta_avatar_unreadable', { gid: env.groupId.slice(0, 8) });
+    }
+    /**
+     * v4.32.681: публичный адрес — «@имя». Ярлык без реестра (groupHandle.ts),
+     * поэтому применяется тем же правилом трёх состояний, что название и
+     * описание: непрочитанный свой столбец лечится присланным значением, но
+     * молча — сравнить было не с чем.
+     *
+     * Пустая строка в конверте означает «адрес убрали», и в столбец идёт NULL,
+     * а не пустая строка: пустая строка — это прочитанная ячейка со значением
+     * «», и следующий такой же конверт выглядел бы совпадением.
+     */
+    const handleDecision = decideMetaField(env.username, group.username ?? '', group.usernameUnreadable);
+    if (handleDecision.apply && env.username != null && (await fresh('username'))) {
+      patch.username = env.username || null;
+      if (handleDecision.announce) {
+        events.push({
+          field: 'username',
+          text: env.username ? `Публичный адрес группы: ${formatGroupHandle(env.username)}` : 'Публичный адрес группы убран',
+        });
+      } else log.warn('group_meta_username_unreadable', { gid: env.groupId.slice(0, 8) });
     }
     if (env.adminOnlyPosting != null && env.adminOnlyPosting !== group.adminOnlyPosting && (await fresh('adminOnlyPosting'))) {
       patch.adminOnlyPosting = env.adminOnlyPosting;

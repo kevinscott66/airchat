@@ -24,6 +24,8 @@ function group(over: Record<string, unknown> = {}) {
     avatar_cid: null,
     type: 'group',
     invite_token: null,
+    // v4.32.681: публичный адрес группы — такая же зашифрованная ячейка.
+    username: null,
     is_admin: 1,
     member_count: 3,
     unread_count: 0,

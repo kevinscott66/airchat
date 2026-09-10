@@ -49,6 +49,11 @@ export type GroupBackupRow = {
    * администратор до потери устройства успел отозвать.
    */
   invite_token: string | null;
+  /**
+   * v4.32.681: публичный адрес — «@имя» без собачки, тоже enc2-шифротекст.
+   * Реестра у него нет, опознают группу по GR…/CH… (см. groupHandle.ts).
+   */
+  username: string | null;
   is_admin: number;
   member_count: number;
   unread_count: number;
@@ -117,6 +122,8 @@ const REACTIONS_MAX = 16_384;
 const SEEN_BY_MAX = 32_768;
 /** Токен — 22 символа, но едет шифротекстом: запас на enc2-обёртку. */
 const TOKEN_MAX = 512;
+/** Адрес — не длиннее USERNAME_MAX (32), но едет шифротекстом. */
+const USERNAME_CELL_MAX = 512;
 /**
  * Аватар группы. 256 символов хватало ровно до тех пор, пока в колонке лежал
  * настоящий CID (46 символов). На телефоне IPFS выключен, и туда ложится
@@ -193,6 +200,7 @@ export function sanitizeGroupRows(input: unknown): { rows: GroupBackupRow[]; dro
     const description = optionalText(r.description, DESCRIPTION_MAX);
     const avatarCid = optionalText(r.avatar_cid, AVATAR_CID_MAX);
     const inviteToken = optionalText(r.invite_token, TOKEN_MAX);
+    const username = optionalText(r.username, USERNAME_CELL_MAX);
     const preview = optionalText(r.last_message_preview, PREVIEW_MAX);
     const senderName = optionalText(r.last_message_sender_name, NAME_MAX);
     const pinnedMessageId = optionalText(r.pinned_message_id, ID_MAX);
@@ -200,6 +208,7 @@ export function sanitizeGroupRows(input: unknown): { rows: GroupBackupRow[]; dro
     const draft = optionalText(r.draft_text, TEXT_MAX);
     if (
       description === undefined || avatarCid === undefined || inviteToken === undefined ||
+      username === undefined ||
       preview === undefined || senderName === undefined || pinnedMessageId === undefined ||
       pinnedMessageText === undefined || draft === undefined
     ) { dropped++; continue; }
@@ -220,6 +229,7 @@ export function sanitizeGroupRows(input: unknown): { rows: GroupBackupRow[]; dro
       avatar_cid: avatarCid,
       type: r.type,
       invite_token: inviteToken,
+      username,
       is_admin: isAdmin,
       member_count: memberCount,
       unread_count: unread,

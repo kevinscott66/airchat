@@ -389,3 +389,41 @@ describe('форма конверта', () => {
     }
   });
 });
+
+/**
+ * v4.32.681: публичный адрес группы и канала — «@имя» в конверте 'meta'.
+ *
+ * Реестра у такого адреса нет (см. groupHandle.ts), поэтому единственная
+ * защита от подделки на приёме — канон и полный отказ на мусоре. Адрес
+ * рисуется в шапке обычным <Text>, мимо отрисовщика тела сообщения: «подрежь и
+ * покажи, что осталось» здесь означало бы показать обрезок чужой строки как
+ * настоящий адрес.
+ */
+describe('meta: публичный адрес группы', () => {
+  it('адрес приводится к канону: без собачки, в нижнем регистре', () => {
+    expect(decodeGroupCtlEnvelope(enc({ ...BASE, op: 'meta', username: '@AirCafe' })))
+      .toMatchObject({ username: 'aircafe' });
+    expect(decodeGroupCtlEnvelope(enc({ ...BASE, op: 'meta', username: '  air_cafe ' })))
+      .toMatchObject({ username: 'air_cafe' });
+  });
+
+  it('пустая строка остаётся пустой: это «адрес убрали»', () => {
+    // Не null и не отсутствие поля: применяющая сторона отличает «адрес сняли»
+    // от «про адрес в этом конверте ничего не сказано».
+    expect(decodeGroupCtlEnvelope(enc({ ...BASE, op: 'meta', username: '' })))
+      .toMatchObject({ username: '' });
+  });
+
+  it('негодный адрес отбрасывает конверт целиком, а не подрезается', () => {
+    for (const bad of ['air cafe', 'кафе', 'a', 'a'.repeat(33), 'air-cafe', 42, {}, []]) {
+      expect([bad, decodeGroupCtlEnvelope(enc({ ...BASE, op: 'meta', username: bad }))])
+        .toEqual([bad, null]);
+    }
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: конверт без адреса по-прежнему принимается', () => {
+    const ok = decodeGroupCtlEnvelope(enc({ ...BASE, op: 'meta', name: 'Наши' }));
+    expect(ok).toMatchObject({ op: 'meta', name: 'Наши' });
+    expect(ok && 'username' in ok).toBe(false);
+  });
+});

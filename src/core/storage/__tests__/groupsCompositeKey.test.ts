@@ -133,7 +133,7 @@ describe('список колонок берётся у базы, а не из �
     expect(MIGRATION).toContain('rebuildColumns(cols');
     // Ни одной колонки, добавленной поздними ALTER TABLE, здесь быть не должно:
     // если она тут перечислена — значит список опять пишут руками.
-    for (const late of ['disappear_after_ms', 'slow_mode_seconds', 'admin_only_posting', 'invite_token', 'draft_text']) {
+    for (const late of ['disappear_after_ms', 'slow_mode_seconds', 'admin_only_posting', 'invite_token', 'username', 'draft_text']) {
       expect(MIGRATION).not.toContain(late);
     }
   });

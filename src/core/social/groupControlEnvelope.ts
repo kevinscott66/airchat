@@ -27,6 +27,7 @@ import { MIN_AUTO_DELETE_MS, MAX_AUTO_DELETE_MS } from '../storage/autoDeletePol
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { sanitizeDisplayName as sanitizeName, sanitizeParagraphText, stripSpoofedSysPrefix } from './sysLineGuard';
 import { isInviteToken } from './groupInviteToken';
+import { normalizeGroupHandle } from './groupHandle';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX } from './groupNameRule';
 import { withinMessageTextLimit } from './messageTextLimit';
 import { isAssignableRole, type AssignableRole } from './groupRolePolicy';
@@ -138,6 +139,8 @@ export type GroupCtlOp =
       requireApproval?: boolean;
       anonymousPosting?: boolean;
       inviteToken?: string;
+      /** v4.32.681: публичный адрес — «@имя». Пустая строка = адрес убрали. */
+      username?: string;
     }
   /**
    * Правка своего сообщения. Права проверяются по авторству строки, а не по
@@ -230,6 +233,16 @@ export function decodeGroupCtlEnvelope(text: string): GroupCtlEnvelope | null {
     // ссылкам, выданным собственным администратором, пока он не сбросит их ещё
     // раз. Форму проверяет тот же модуль, что её и задаёт.
     if (env.inviteToken != null && !isInviteToken(env.inviteToken)) return null;
+    // v4.32.681: публичный адрес. Пустая строка — «адрес убрали», и таким она
+    // и остаётся. Всё остальное приводится к канону (нижний регистр, без
+    // собачки); мусор отбрасывает конверт целиком, а не «подрезается»: адрес
+    // рисуется обычным <Text> в шапке, то есть мимо отрисовщика тела
+    // сообщения, и обрезок чужой строки выглядел бы там как настоящий адрес.
+    if (env.username != null && env.username !== '') {
+      const handle = normalizeGroupHandle(env.username);
+      if (handle == null) return null;
+      env.username = handle;
+    }
     if (env.slowModeSeconds != null) {
       if (typeof env.slowModeSeconds !== 'number' || !Number.isFinite(env.slowModeSeconds)) return null;
       env.slowModeSeconds = Math.max(0, Math.min(MAX_SLOWMODE_SECONDS, Math.floor(env.slowModeSeconds)));

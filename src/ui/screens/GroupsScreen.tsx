@@ -274,7 +274,8 @@ import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
 import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { listContactsFor } from '../../core/social/contacts';
-import { normalizeUsername } from '../../core/identity/username';
+import { normalizeUsername, USERNAME_MAX } from '../../core/identity/username';
+import { checkGroupHandle, formatGroupHandle } from '../../core/social/groupHandle';
 import { collectHashtags } from '../../core/text/entities';
 import { UserProfilePeek } from '../components/UserProfilePeek';
 import { canModerate } from '../../core/social/groupModerationPolicy';
@@ -4915,6 +4916,11 @@ function GroupMembersScreen({
    */
   const nameGate = useRef(createEditCommitGate(group.name)).current;
   const descGate = useRef(createEditCommitGate(group.description ?? '')).current;
+  // v4.32.681: публичный адрес «@имя» — тот же порядок, что у названия и
+  // описания: своё значение спрашиваем у калитки, а не у замороженного пропа.
+  const [editingHandle, setEditingHandle] = useState(false);
+  const [handleInput, setHandleInput] = useState(group.username ?? '');
+  const handleGate = useRef(createEditCommitGate(group.username ?? '')).current;
   // Join requests
   const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [joinReqVisible, setJoinReqVisible] = useState(false);
@@ -5065,6 +5071,49 @@ function GroupMembersScreen({
       setEditingDesc(false);
     }
   }, [descInput, descGate, group.id, group.descriptionUnreadable, pid, myPubB64, myName]);
+
+  /**
+   * v4.32.681: публичный адрес группы или канала.
+   *
+   * Реестра у него нет (см. groupHandle.ts): это ярлык, который ставит
+   * администратор и который едет тем же конвертом 'meta'. Правила самого имени
+   * — общие с аккаунтами, поэтому канал не может назваться @official или
+   * @support. Опознают группу по-прежнему по GR…/CH… ниже.
+   */
+  const saveHandle = useCallback(async () => {
+    const raw = handleInput.trim();
+    let next = '';
+    if (raw) {
+      const check = checkGroupHandle(raw, group.type === 'channel' ? 'channel' : 'group');
+      if (!check.ok) {
+        setEditingHandle(false);
+        setHandleInput(group.username ?? '');
+        showError(check.text);
+        return;
+      }
+      next = check.handle;
+    } else if (group.usernameUnreadable === true) {
+      // Тот же разбор, что у описания (decideOwnDescriptionWrite): поле правки
+      // заполняется из group.username, а он у непрочитанного столбца null.
+      // Выход из фокуса стёр бы целый шифртекст и разослал бы пустоту всем.
+      setEditingHandle(false);
+      showError('Адрес не удалось прочитать — введите новый, чтобы его заменить');
+      return;
+    }
+    if (!handleGate.begin(next)) { setEditingHandle(false); return; }
+    try {
+      await updateGroupMeta(group.id, pid, { username: next || null });
+      handleGate.commit(next);
+      setHandleInput(next);
+      showSuccess(next ? 'Публичный адрес обновлён' : 'Публичный адрес убран');
+      announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'meta', username: next }, myName));
+    } catch {
+      handleGate.rollback();
+      showError('Не удалось сохранить публичный адрес');
+    } finally {
+      setEditingHandle(false);
+    }
+  }, [handleInput, handleGate, group.id, group.type, group.username, group.usernameUnreadable, pid, myPubB64, myName]);
 
   // v4.32.230: забаненные хранятся как строки с role='banned' — в списке
   // участников их показывать нельзя (иначе бан выглядит как обычный участник).
@@ -5309,6 +5358,43 @@ function GroupMembersScreen({
               <Text style={[gcStyles.headerName, { color: colors.text }]}>{nameInput}</Text>
             </AppPressable>
           )}
+          {/*
+            v4.32.681: публичный адрес. Стоит рядом с постоянным
+            идентификатором намеренно: адрес — ярлык без реестра, две разные
+            группы вправе выбрать одну строку, и опознаётся группа по GR…/CH…
+          */}
+          {editingHandle ? (
+            <TextInput
+              style={[gmStyles.handleInput, { color: colors.primary, borderColor: colors.primary }]}
+              value={handleInput}
+              onChangeText={setHandleInput}
+              onSubmitEditing={() => void saveHandle()}
+              onBlur={() => void saveHandle()}
+              placeholder="публичный_адрес"
+              placeholderTextColor={colors.textMuted}
+              maxLength={USERNAME_MAX}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+              returnKeyType="done"
+            />
+          ) : handleInput ? (
+            <AppPressable
+              onPress={amAdmin ? () => setEditingHandle(true) : () => {
+                Clipboard.setString(formatGroupHandle(handleInput));
+                showSuccess('Публичный адрес скопирован');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Публичный адрес: ${formatGroupHandle(handleInput)}`}
+              testID="group_handle"
+            >
+              <Text style={{ color: colors.primary, fontSize: font.sm }}>{formatGroupHandle(handleInput)}</Text>
+            </AppPressable>
+          ) : amAdmin ? (
+            <AppPressable onPress={() => setEditingHandle(true)} accessibilityRole="button" accessibilityLabel="Добавить публичный адрес" testID="group_handle_add">
+              <Text style={{ color: colors.textMuted, fontSize: font.sm }}>+ Добавить публичный адрес</Text>
+            </AppPressable>
+          ) : null}
           {editingDesc ? (
             <TextInput
               style={[gmStyles.descInput, { color: colors.textSecondary, borderColor: colors.border }]}
@@ -5561,6 +5647,7 @@ const gmStyles = StyleSheet.create({
   avatarEditBadge: { position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   nameInput: { fontSize: 17, fontWeight: '600', borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0 },
   descInput: { fontSize: 13, borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0, minHeight: 40 },
+  handleInput: { fontSize: font.sm, borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0 },
   memberSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 12, paddingHorizontal: 16 },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
   sheetBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg, paddingVertical: 12 },

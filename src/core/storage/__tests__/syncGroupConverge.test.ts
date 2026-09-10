@@ -74,6 +74,7 @@ function row(over: Partial<GroupBackupRow> = {}): GroupBackupRow {
     avatar_cid: 'nb:abc',
     type: 'group',
     invite_token: 'tok',
+    username: 'aircafe',
     is_admin: 1,
     member_count: 3,
     unread_count: 0,
@@ -121,7 +122,7 @@ describe('applySyncGroup: запись сходится, а не игнорир�
     // Пропущенный столбец — это поле, которое не сойдётся никогда и будет
     // гонять мутации по кругу ровно так же, как гонял весь INSERT OR IGNORE.
     const columns = [
-      'name', 'description', 'avatar_cid', 'type', 'invite_token', 'is_admin',
+      'name', 'description', 'avatar_cid', 'type', 'invite_token', 'username', 'is_admin',
       'member_count', 'unread_count', 'mention_count', 'muted', 'muted_until',
       'pinned', 'archived', 'last_message_at', 'last_message_preview',
       'last_message_sender_name', 'last_message_sender_pub', 'pinned_message_id',

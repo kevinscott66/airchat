@@ -1175,6 +1175,22 @@ async function ensureGroupInviteTokenColumn(database: SQLite.SQLiteDatabase): Pr
   }
 }
 
+/**
+ * v4.32.681: публичный адрес группы или канала — «@имя». Ярлык, не реестр:
+ * см. groupHandle.ts. Лежит шифртекстом (см. AT_REST_COLUMNS) — по адресу
+ * видно, в какие каналы ходит владелец устройства.
+ */
+async function ensureGroupUsernameColumn(database: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    const cols = await database.getAllAsync<{ name: string }>('PRAGMA table_info(groups)');
+    if (!cols.some((c) => c.name === 'username')) {
+      await database.execAsync('ALTER TABLE groups ADD COLUMN username TEXT');
+    }
+  } catch (e) {
+    log.warn('group_username_column_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 async function ensureScheduledGroupIdColumn(database: SQLite.SQLiteDatabase): Promise<void> {
   try {
     const cols = await database.getAllAsync<{ name: string }>('PRAGMA table_info(scheduled_messages)');
@@ -1830,6 +1846,7 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
       await ensureGroupAdminOnlyPostingColumn(database);
       await ensureGroupRequireApprovalColumn(database);
       await ensureGroupInviteTokenColumn(database);
+      await ensureGroupUsernameColumn(database);
       await ensureGroupAnonymousPostingColumn(database);
       await ensureGroupAdminOnlyPinningColumn(database);
       await ensureGroupMessageViewCountColumn(database);
@@ -3609,7 +3626,7 @@ export async function exportGroupBackupRows(ownerProfileId: number): Promise<{
   const empty = { groups: [], messages: [], members: [] };
   const d = await db();
   const groups = await d.getAllAsync<GroupBackupRow>(
-      `SELECT id, name, description, avatar_cid, type, invite_token, is_admin, member_count,
+      `SELECT id, name, description, avatar_cid, type, invite_token, username, is_admin, member_count,
             unread_count, mention_count, muted, muted_until, pinned, archived,
             last_message_at, last_message_preview, last_message_sender_name,
             last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
@@ -3668,16 +3685,16 @@ export async function importGroupBackupRows(
       for (const g of groups.rows) {
         await d.runAsync(
           `INSERT OR IGNORE INTO groups
-             (id, owner_profile_id, name, description, avatar_cid, type, invite_token, is_admin,
+             (id, owner_profile_id, name, description, avatar_cid, type, invite_token, username, is_admin,
               member_count, unread_count, mention_count, muted, muted_until, pinned, archived,
               last_message_at, last_message_preview, last_message_sender_name,
               last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
               disappear_after_ms, disappear_set_at, slow_mode_seconds, admin_only_posting,
               admin_only_pinning, anonymous_posting, require_approval, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             g.id, ownerProfileId, g.name, g.description, g.avatar_cid, g.type, g.invite_token,
-            g.is_admin, g.member_count, g.unread_count, g.mention_count, g.muted, g.muted_until,
+            g.username, g.is_admin, g.member_count, g.unread_count, g.mention_count, g.muted, g.muted_until,
             g.pinned, g.archived, g.last_message_at, g.last_message_preview,
             g.last_message_sender_name, g.last_message_sender_pub, g.pinned_message_id,
             g.pinned_message_text, g.draft_text, g.disappear_after_ms, g.disappear_set_at,
@@ -3765,19 +3782,20 @@ export async function applySyncGroup(
   const dek = await getOrCreateDataEncryptionKey();
   await d.runAsync(
     `INSERT INTO groups
-       (id, owner_profile_id, name, description, avatar_cid, type, invite_token, is_admin,
+       (id, owner_profile_id, name, description, avatar_cid, type, invite_token, username, is_admin,
         member_count, unread_count, mention_count, muted, muted_until, pinned, archived,
         last_message_at, last_message_preview, last_message_sender_name,
         last_message_sender_pub, pinned_message_id, pinned_message_text, draft_text,
         disappear_after_ms, disappear_set_at, slow_mode_seconds, admin_only_posting,
         admin_only_pinning, anonymous_posting, require_approval, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id, owner_profile_id) DO UPDATE SET
        name = excluded.name,
        description = excluded.description,
        avatar_cid = excluded.avatar_cid,
        type = excluded.type,
        invite_token = excluded.invite_token,
+       username = excluded.username,
        is_admin = excluded.is_admin,
        member_count = excluded.member_count,
        unread_count = excluded.unread_count,
@@ -3808,6 +3826,7 @@ export async function applySyncGroup(
       encryptAtRestIfPlain(g.avatar_cid, dek),
       g.type,
       encryptAtRestIfPlain(g.invite_token, dek),
+      encryptAtRestIfPlain(g.username, dek),
       g.is_admin, g.member_count, g.unread_count, g.mention_count, g.muted, g.muted_until,
       g.pinned, g.archived, g.last_message_at,
       encryptAtRestIfPlain(g.last_message_preview, dek),
@@ -5905,6 +5924,18 @@ export type GroupRow = {
    * отозванная ссылка снова начинала пускать в группу. См. groupInviteToken.
    */
   inviteTokenUnreadable?: boolean;
+  /**
+   * v4.32.681: публичный адрес — «@имя» без собачки, канонический (нижний
+   * регистр). null — адреса нет. Реестра у него нет: опознают группу по
+   * неизменяемому GR…/CH…, см. groupHandle.ts.
+   */
+  username: string | null;
+  /**
+   * Столбец с адресом не открылся ключом данных. Тогда `username` — null, и
+   * это НЕ «адреса нет»: затирать столбец и печатать «адрес убран» нельзя
+   * (см. groupMetaEvents), иначе непрочитанный адрес пропал бы навсегда.
+   */
+  usernameUnreadable?: boolean;
   isAdmin: boolean;
   memberCount: number;
   unreadCount: number;
@@ -6179,6 +6210,8 @@ function rowToGroup(r: Record<string, unknown>, dek: Uint8Array): GroupRow {
   // пустая строка от неудачи означала «черновика нет» и стиралась первой же
   // отложенной записью (см. draftGuard).
   const draftCell = readAtRestCell((r.draft_text as string | null) ?? null, dek);
+  // v4.32.681: публичный адрес — тем же правилом, что название и описание.
+  const userCell = readAtRestCell((r.username as string | null) ?? null, dek);
   return {
     id: r.id as string,
     ownerProfileId: r.owner_profile_id as number,
@@ -6193,6 +6226,8 @@ function rowToGroup(r: Record<string, unknown>, dek: Uint8Array): GroupRow {
     avatarCidUnreadable: unreadableFromCellState(avatarCell.state),
     type: (r.type as GroupType) ?? 'group',
     ...readTokenCell((r.invite_token as string | null) ?? null, dek),
+    username: cellTextOrNull(userCell),
+    usernameUnreadable: unreadableFromCellState(userCell.state),
     isAdmin: !!(r.is_admin as number),
     memberCount: r.member_count as number,
     unreadCount: r.unread_count as number,
@@ -6360,7 +6395,7 @@ export async function groupIdState(id: string, ownerProfileId: number): Promise<
 export async function updateGroupMeta(
   id: string,
   ownerProfileId: number,
-  patch: Partial<Pick<GroupRow, 'name' | 'description' | 'avatarCid' | 'inviteToken' | 'memberCount' | 'adminOnlyPosting' | 'requireApproval' | 'anonymousPosting' | 'adminOnlyPinning' | 'isAdmin'>>
+  patch: Partial<Pick<GroupRow, 'name' | 'description' | 'avatarCid' | 'inviteToken' | 'username' | 'memberCount' | 'adminOnlyPosting' | 'requireApproval' | 'anonymousPosting' | 'adminOnlyPinning' | 'isAdmin'>>
 ): Promise<void> {
   const d = await db();
   const sets: string[] = [];
@@ -6370,6 +6405,7 @@ export async function updateGroupMeta(
   if (patch.description !== undefined) { sets.push('description = ?'); vals.push(encryptAtRestNullable(patch.description, dek)); }
   if (patch.avatarCid !== undefined) { sets.push('avatar_cid = ?'); vals.push(encryptAtRestNullable(patch.avatarCid, dek)); }
   if (patch.inviteToken !== undefined) { sets.push('invite_token = ?'); vals.push(encryptAtRestNullable(patch.inviteToken, dek)); }
+  if (patch.username !== undefined) { sets.push('username = ?'); vals.push(encryptAtRestNullable(patch.username, dek)); }
   if (patch.memberCount !== undefined) { sets.push('member_count = ?'); vals.push(patch.memberCount); }
   if (patch.adminOnlyPosting !== undefined) { sets.push('admin_only_posting = ?'); vals.push(patch.adminOnlyPosting ? 1 : 0); }
   if (patch.requireApproval !== undefined) { sets.push('require_approval = ?'); vals.push(patch.requireApproval ? 1 : 0); }
