@@ -1216,6 +1216,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         );
       });
       if (!accepted) return;
+      // v4.32.694: согласие человек дал прямо сейчас, поэтому перевод идёт в
+      // любом случае. Запись отвечает лишь за то, спросим ли снова: не легла —
+      // спросим, и это безопасная сторона.
       await setCloudTranslateAllowed(true);
     }
     const url = buildTranslateUrl(post.text, target);

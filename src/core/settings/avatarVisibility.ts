@@ -49,7 +49,7 @@ export async function avatarVisibilityTryFor(pid: number): Promise<AvatarVisibil
   return read === null ? null : parseAvatarVisibility(read.value);
 }
 
-/** Записать решение активного профиля. */
-export async function setAvatarVisibility(value: AvatarVisibility): Promise<void> {
-  await privacyPrefSet(KEY, value);
+/** Записать решение активного профиля; `false` — запись не легла (v4.32.694). */
+export async function setAvatarVisibility(value: AvatarVisibility): Promise<boolean> {
+  return privacyPrefSet(KEY, value);
 }

@@ -21,7 +21,7 @@
  */
 import { kvDelete, kvGet, kvSetChecked } from '../storage/local';
 import { notifyOnlineKey, profileScopedKey, type PrivacyPrefKey } from '../storage/kvKeys';
-import { scopedKvGet, scopedKvGetFor, scopedKvTryGetFor, scopedKvSet } from '../storage/profileScopedKv';
+import { scopedKvGet, scopedKvGetFor, scopedKvTryGetFor, scopedKvSetChecked } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { log } from '../logger';
 
@@ -54,10 +54,28 @@ export async function privacyPrefGetFor(pid: number, key: PrivacyPrefKey): Promi
   return scopedKvGetFor(pid, key);
 }
 
-/** Записать переключатель активному профилю. */
-export async function privacyPrefSet(key: PrivacyPrefKey, value: string): Promise<void> {
-  await scopedKvSet(key, value);
+/**
+ * Записать переключатель активному профилю; `false` — запись не легла
+ * (v4.32.694).
+ *
+ * Возвращалось `void`, и отказ базы терялся здесь целиком: `scopedKvSet` гасит
+ * ответ `kvSetChecked`, промис резолвился успешно, и вызывающий не мог узнать
+ * ничего. Экран настроек при этом переставляет переключатель ДО записи — то
+ * есть человек видел выбранное им положение, за которым на диске ничего нет.
+ *
+ * Для этих четырёх переключателей цена ошибки односторонняя. «Никто» и «только
+ * контакты» — это запреты; не легли — при следующем запуске вернётся прежнее
+ * разрешающее значение, а человек уверен, что закрылся. Поэтому отказ обязан
+ * дойти до экрана: см. notifyOnlineSet, там то же место исправлено в v4.32.654.
+ */
+export async function privacyPrefSet(key: PrivacyPrefKey, value: string): Promise<boolean> {
+  const ok = await scopedKvSetChecked(key, value);
+  if (!ok) {
+    log.warn('privacy_pref_write_failed', { key });
+    return false;
+  }
   log.debug('privacy_pref_set', { key });
+  return true;
 }
 
 /** `true`/`false` из kv, где значения хранятся строкой. */

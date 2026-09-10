@@ -162,7 +162,9 @@ describe('переключатель существует', () => {
   it('настройки его показывают и записывают', () => {
     const s = readFileSync(join(SRC, 'ui/screens/SettingsScreen.tsx'), 'utf8');
     expect(s).toContain('<Text style={styles.label}>Облачный перевод</Text>');
-    expect(s).toContain('void setCloudTranslateAllowed(v);');
+    // v4.32.694: отказ записи возвращает переключатель на место и говорит
+    // об этом; молча оставить его в новом положении больше нельзя.
+    expect(s).toContain('void applyPrivacyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v));');
     expect(s).toContain('cloudTranslateAllowed(),');
   });
 

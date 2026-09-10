@@ -491,6 +491,37 @@ function SettingsScreenImpl({
   }, [profileRefreshToken]);
 
   /**
+   * Переставить переключатель приватности и вернуть его назад, если запись не
+   * легла (v4.32.694).
+   *
+   * Экран переставляет переключатель сразу, до записи, — иначе он бы «залипал»
+   * на время обращения к базе. Раньше запись возвращала void, отказ терялся, и
+   * несовпадение всплывало только при следующем запуске: человек выбрал
+   * «Никто», увидел «Никто» и получил обратно «Все». Для запрета это худший
+   * вид ошибки — молчаливое разрешение.
+   *
+   * Поэтому: не легло — возвращаем положение переключателя и говорим об этом.
+   * Продолжение (рассылка нового решения собеседникам) выполняется только
+   * после успешной записи, иначе разосланное и сохранённое разъедутся.
+   */
+  const applyPrivacyPref = useCallback(
+    async (write: () => Promise<boolean>, revert: () => void): Promise<boolean> => {
+      let ok = false;
+      try {
+        ok = await write();
+      } catch (e) {
+        log.warn('privacy_pref_apply_failed', { err: rawErrorText(e) });
+      }
+      if (!ok) {
+        revert();
+        showError('Настройка не сохранилась. Попробуйте ещё раз.');
+      }
+      return ok;
+    },
+    [],
+  );
+
+  /**
    * v4.32.253: шаблоны быстрых ответов читались и создавались с зашитым
    * профилем 1, а показывает их в переписке AttachSheet по АКТИВНОМУ профилю.
    * На втором профиле это значило: список в настройках — чужой, а всё
@@ -1395,9 +1426,13 @@ function SettingsScreenImpl({
             <AppPressable
               key={val}
               onPress={() => {
+                const prev = lastSeenVisibility;
                 setLastSeenVisibility(val);
                 setMyLastSeenVisibility(val);
-                void privacyPrefSet('privacy_last_seen_visibility', val).then(() => broadcastLastSeenPref());
+                void applyPrivacyPref(
+                  () => privacyPrefSet('privacy_last_seen_visibility', val),
+                  () => { setLastSeenVisibility(prev); setMyLastSeenVisibility(prev); },
+                ).then((ok) => { if (ok) return broadcastLastSeenPref(); });
               }}
               style={{
                 paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.xl,
@@ -1433,10 +1468,14 @@ function SettingsScreenImpl({
               accessibilityRole="radio"
               accessibilityState={{ selected: avatarVisibility === val }}
               onPress={() => {
+                const prev = avatarVisibility;
                 setAvatarVisibilityState(val);
                 // Новую карточку разошлём сразу: иначе выбор «Никто» вступал бы
                 // в силу только при следующей правке профиля.
-                void setAvatarVisibility(val).then(() => broadcastMyProfile());
+                void applyPrivacyPref(
+                  () => setAvatarVisibility(val),
+                  () => setAvatarVisibilityState(prev),
+                ).then((ok) => { if (ok) return broadcastMyProfile(); });
               }}
               style={{
                 paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.xl,
@@ -1457,21 +1496,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Сообщения только от контактов</Text>
             <Text style={styles.desc}>Незнакомцы не смогут написать вам</Text>
           </View>
-          <AppSwitch value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void privacyPrefSet('privacy_only_contacts_msg', String(v)); }} />
+          <AppSwitch value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void applyPrivacyPref(() => privacyPrefSet('privacy_only_contacts_msg', String(v)), () => setOnlyContactsCanMsg(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Добавление в группы — только контакты</Text>
             <Text style={styles.desc}>Незнакомцы не смогут добавить вас в группу</Text>
           </View>
-          <AppSwitch value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void privacyPrefSet('privacy_only_contacts_group', String(v)); }} />
+          <AppSwitch value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void applyPrivacyPref(() => privacyPrefSet('privacy_only_contacts_group', String(v)), () => setOnlyContactsCanAddToGroup(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Не отправлять уведомления о прочтении</Text>
             <Text style={styles.desc}>Отправители не будут видеть, что вы прочли их сообщения</Text>
           </View>
-          <AppSwitch value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void privacyPrefSet('privacy_disable_read_receipts', String(v)); }} />
+          <AppSwitch value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void applyPrivacyPref(() => privacyPrefSet('privacy_disable_read_receipts', String(v)), () => setDisableReadReceipts(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
@@ -1485,7 +1524,7 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Облачный перевод</Text>
             <Text style={styles.desc}>Выключено: перевод не работает, зато текст не покидает устройство. Включённый отправляет переводимое сообщение на сторонний сервис api.mymemory.translated.net в открытом виде — шифрование до него не доходит. Решение своё у каждого аккаунта</Text>
           </View>
-          <AppSwitch value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void setCloudTranslateAllowed(v); }} />
+          <AppSwitch value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void applyPrivacyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v)); }} />
         </View>
       </View>
 

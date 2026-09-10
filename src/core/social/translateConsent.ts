@@ -49,7 +49,11 @@ export async function cloudTranslateAllowed(): Promise<boolean> {
   return cloudTranslateAllowedFor(profileManager.getActiveProfile()?.id ?? 1);
 }
 
-/** Записать решение аккаунту на экране: его принимает человек, глядя в экран. */
-export async function setCloudTranslateAllowed(allowed: boolean): Promise<void> {
-  await privacyPrefSet(CLOUD_TRANSLATE_KEY, String(allowed));
+/**
+ * Записать решение аккаунту на экране: его принимает человек, глядя в экран.
+ * `false` — запись не легла (v4.32.694); тогда согласия нет, и говорить об
+ * обратном нельзя.
+ */
+export async function setCloudTranslateAllowed(allowed: boolean): Promise<boolean> {
+  return privacyPrefSet(CLOUD_TRANSLATE_KEY, String(allowed));
 }

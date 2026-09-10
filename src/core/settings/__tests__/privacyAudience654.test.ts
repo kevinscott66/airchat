@@ -19,7 +19,8 @@ import path from 'path';
 
 const mockTryGetFor = jest.fn();
 jest.mock('../privacyPrefs', () => ({
-  privacyPrefSet: jest.fn(async () => {}),
+  // v4.32.694: запись отвечает, легла ли она.
+  privacyPrefSet: jest.fn(async () => true),
   privacyPrefTryGetFor: (...a: unknown[]) => mockTryGetFor(...a),
 }));
 
