@@ -54,7 +54,9 @@ describe('потерянное отложенное сообщение назв�
 
   it('все три снятия недоставленной строки зовут отчёт', () => {
     const flush = codeOnly(FLUSH());
-    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(4); // объявление + три вызова
+    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(5); // объявление + четыре вызова
+    // v4.32.714: четвёртый вызов — отказ sendMessage у личного отложенного сообщения.
+    expect(countOf(flush, "'SCHEDULED_REFUSED',")).toBe(1);
     expect(flush).toContain("'SCHEDULED_DENIED',");
     expect(countOf(flush, "'SCHEDULED_NOT_SENT',")).toBe(2);
     expect(countOf(flush, LOST_TEXT)).toBe(2);
@@ -96,7 +98,7 @@ describe('потерянное отложенное сообщение назв�
 describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы целы', () => {
   it('число удалений строки расписания не изменилось', () => {
     const flush = FLUSH();
-    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(5);
+    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(6);
     expect(codeOnly(flush)).not.toContain('deleteScheduledMessage(msg.id)');
   });
 

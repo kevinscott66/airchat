@@ -46,9 +46,10 @@ describe('удаление отложенного сообщения адрес�
     );
   });
 
-  it('все пять удалений в flushDueOnce передают pid', () => {
+  it('все шесть удалений в flushDueOnce передают pid', () => {
     const flush = FLUSH();
-    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(5);
+    // v4.32.714: шестое — снятие строки, отправку которой отклонили.
+    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(6);
     expect(codeOnly(flush)).not.toContain('deleteScheduledMessage(msg.id)');
   });
 

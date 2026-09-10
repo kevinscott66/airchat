@@ -367,10 +367,35 @@ async function flushDueOnce(): Promise<void> {
         );
         log.info('scheduled_group_message_sent', { id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8) });
       } else {
-        await svc.sendMessage(msg.contactPubB64, msg.text, mediaUris);
+        // v4.32.714: непустой ответ — конверт ушёл; null — отказ, и отказ
+        // окончательный. sendMessage отдаёт null шестью путями, и для
+        // отложенного сообщения опасны два из них: нет общего ключа
+        // (NO_SESSION_DM) и негодный peerDid — оба возвращают null ДО того,
+        // как заведены messageId и черновая строка, то есть текста не остаётся
+        // нигде. Раньше здесь писалось scheduled_message_sent и строка
+        // расписания удалялась: сообщение исчезало молча — ровно тот случай,
+        // ради которого в v4.32.713 перестали считать null успехом у
+        // служебного конверта. Блокировка и часовой лимит отсечены проверками
+        // выше, а «нет маршрута в сеть» оставляет в переписке строку со
+        // статусом failed — поэтому отчёт сперва просит заглянуть в чат.
+        const cid = await svc.sendMessage(msg.contactPubB64, msg.text, mediaUris);
+        if (!cid) {
+          await deleteScheduledMessage(msg.id, pid);
+          log.warn('scheduled_message_refused', {
+            id: msg.id.slice(0, 8),
+            to: msg.contactPubB64.slice(0, 8),
+          });
+          reportScheduledLost(
+            'SCHEDULED_REFUSED',
+            'Отложенное сообщение не ушло: отправить его не удалось. Проверьте переписку — если сообщения там нет, наберите его заново.'
+          );
+          continue;
+        }
         log.info('scheduled_message_sent', { id: msg.id.slice(0, 8), to: msg.contactPubB64.slice(0, 8), mediaCount: mediaUris?.length ?? 0 });
       }
-      // Always delete on success (either real cid or outbox-enqueued null return).
+      // Строка расписания снимается только после подтверждённой отправки:
+      // у личного сообщения это непустой cid, у группового — записанная
+      // строка беседы. Отказ уходит веткой выше и сюда не доходит.
       // v4.32.662: и владельца строки — явно. Без второго довода
       // deleteScheduledMessage берёт профиль, активный В МОМЕНТ УДАЛЕНИЯ, а
       // между проверкой профиля в начале витка и этой строкой лежит вся
