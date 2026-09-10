@@ -54,6 +54,7 @@ import {
   ownFieldGet,
   ownFieldSet,
   sanitizeOwnDisplayName,
+  type OwnProfileKey,
 } from '../../../../core/identity/ownProfile';
 import { checkUsernameClaim } from '../../../../core/identity/reservedUsernames';
 import { saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
@@ -268,11 +269,26 @@ export function ProfileEditModal({
    * человеку есть что исправить. Остальные поля к этому моменту уже записаны,
    * и это правильно: терять набранное «О себе» из-за спора о юзернейме не за
    * что.
+   *
+   * v4.32.708: отказ самой записи теперь тоже оставляет окно открытым и
+   * назван вслух. Прежде он не назывался никак: успех показывался и окно
+   * закрывалось независимо от того, легло ли что-нибудь в базу.
    */
   const save = useCallback(async (): Promise<void> => {
     setBusy(true);
     try {
       let touchedProfile = false;
+      // v4.32.708: ownFieldSet отвечает `false`, когда запись не прошла, и до
+      // сих пор этот ответ здесь выбрасывался — все девять раз. Окно
+      // закрывалось со словами «Профиль сохранён», карточка уезжала
+      // контактам, а в базе оставалось прежнее. Узнавал об этом человек сам,
+      // в следующее открытие окна: поле снова прежнее и ничего не сказано.
+      let writeFailed = false;
+      const put = async (key: OwnProfileKey, value: string): Promise<boolean> => {
+        const ok = await ownFieldSet(key, value);
+        if (!ok) writeFailed = true;
+        return ok;
+      };
 
       const name = sanitizeOwnDisplayName(draft.name);
       if (!name) {
@@ -280,7 +296,14 @@ export function ProfileEditModal({
         return;
       }
       if (name !== saved.name) {
-        await ownFieldSet(OWN_DISPLAY_NAME_KEY, name);
+        // Имя — единственное поле, ради которого стоит остановиться сразу:
+        // сразу за ним переименовывается профиль и переиздаётся карточка, и
+        // делать это под именем, которого в базе нет, значит развести их
+        // насовсем.
+        if (!(await put(OWN_DISPLAY_NAME_KEY, name))) {
+          showError('Не удалось сохранить имя. Попробуйте ещё раз');
+          return;
+        }
         await profileManager.init();
         const ap = profileManager.getActiveProfile();
         if (ap) await profileManager.renameProfile(ap.id, name);
@@ -291,7 +314,7 @@ export function ProfileEditModal({
 
       const bio = normalizeOwnBio(draft.bio);
       if (bio !== saved.bio) {
-        await ownFieldSet('user_bio', bio);
+        await put('user_bio', bio);
         const kp = await loadKeyPair();
         if (kp) void republishProfileFromKv(kp).catch(() => { /* офлайн: облако необязательно */ });
         touchedProfile = true;
@@ -299,13 +322,13 @@ export function ProfileEditModal({
 
       const status = normalizeOwnStatus(draft.status);
       if (status !== saved.status) {
-        await ownFieldSet('user_custom_status', status);
+        await put('user_custom_status', status);
         touchedProfile = true;
       }
 
       const pronouns = cleanPronouns(draft.pronouns);
       if (pronouns !== saved.pronouns) {
-        await ownFieldSet('user_pronouns', pronouns);
+        await put('user_pronouns', pronouns);
         // v4.32.616: местоимения теперь едут в конверте профиля, значит их
         // правка — такая же новая версия карточки, как правка имени. Без
         // этой отметки поле записывалось бы в базу и не уезжало никому.
@@ -319,15 +342,23 @@ export function ProfileEditModal({
         // Бумага пишется тем же заходом, что и имя: имя без своей бумаги —
         // это заявка, и разъехаться они не должны даже на один запуск.
         await Promise.all([
-          ownFieldSet('user_website', website),
-          ownFieldSet('user_twitter', twitter),
-          ownFieldSet('user_github', github),
+          put('user_website', website),
+          put('user_twitter', twitter),
+          put('user_github', github),
         ]);
       }
       await Promise.all([
-        ownFieldSet('user_twitter_proof', twitter && proofs.x ? encodeLinkProofRecord(proofs.x) : ''),
-        ownFieldSet('user_github_proof', github && proofs.github ? encodeLinkProofRecord(proofs.github) : ''),
+        put('user_twitter_proof', twitter && proofs.x ? encodeLinkProofRecord(proofs.x) : ''),
+        put('user_github_proof', github && proofs.github ? encodeLinkProofRecord(proofs.github) : ''),
       ]);
+
+      // Дальше — общий реестр имён по сети. Занимать в нём имя, когда своя же
+      // база только что отказала в записи, не за чем: успех был бы объявлен
+      // о том, чего не произошло.
+      if (writeFailed) {
+        showError('Часть изменений не сохранилась. Попробуйте ещё раз');
+        return;
+      }
 
       let handle = saved.handle;
       const wanted = draft.handle.trim().replace(/^@/, '').toLowerCase();

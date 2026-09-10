@@ -73,7 +73,16 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
       const pair = pairProp;
       const id = publicKeyToDidKey(pair.publicKey);
       setDid(id);
-      await ownFieldSet(OWN_DISPLAY_NAME_KEY, uname);
+      // v4.32.708: ownFieldSet отвечает `false`, когда запись не прошла, и
+      // этот ответ здесь выбрасывался. Человека пускали дальше, в приложение,
+      // а на следующем холодном запуске загрузка спрашивает ровно это поле —
+      // им и проверяется «регистрация пройдена» (App.tsx). Не найдя его, она
+      // возвращала на этот же экран: имени нет ни под таб-баром, ни у
+      // контактов, ни в группах, и почему — не сказано ни слова.
+      if (!(await ownFieldSet(OWN_DISPLAY_NAME_KEY, uname))) {
+        showError('Не удалось сохранить имя. Попробуйте ещё раз');
+        return;
+      }
       // v4.32.75: переименовываем активный профиль в только что введённое имя.
       // Без этого на fresh-install/re-import profileManager создавал профиль с
       // дефолтным именем «Личный» (см. profileManager.ts:192), и под таб-баром
