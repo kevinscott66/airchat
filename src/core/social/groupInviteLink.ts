@@ -46,7 +46,7 @@
 
 import { publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import { isInviteToken } from './groupInviteToken';
-import { FALLBACK_GROUP_NAME } from './groupNameRule';
+import { FALLBACK_GROUP_NAME, OWN_GROUP_NAME_MAX } from './groupNameRule';
 import { isGroupType, type SendGroupType } from './groupSendPolicy';
 import { sanitizeDisplayName } from './sysLineGuard';
 
@@ -131,7 +131,10 @@ export function buildGroupInviteLink(params: {
     // проверку `if (!name) return null` не проходит. Нажавший «Пригласительная
     // ссылка» получал её молча, а «Недействительная ссылка приглашения» видел
     // тот, кому он её отправил.
-    name: sanitizeName(params.name) ?? FALLBACK_GROUP_NAME,
+    // v4.32.674: то же число, что у конверта и у редактора. Умолчание
+    // sanitizeName здесь (64) — длина имени человека, и ссылка резала ею
+    // название группы: приглашённый по ссылке видел половину.
+    name: sanitizeName(params.name, OWN_GROUP_NAME_MAX) ?? FALLBACK_GROUP_NAME,
     type: params.type,
     adminPub: params.adminPub,
     requireApproval: params.requireApproval,
@@ -183,7 +186,7 @@ export function parseGroupInviteLink(input: string): GroupInvitePayload | null {
 
   if (typeof p.id !== 'string' || p.id.length === 0 || p.id.length > 64) return null;
   if (!isB64_32(p.adminPub)) return null;
-  const name = sanitizeName(p.name);
+  const name = sanitizeName(p.name, OWN_GROUP_NAME_MAX);
   if (!name) return null;
 
   // v4.32.513: вида нет у ссылок прежних версий — для них ответ прежний,

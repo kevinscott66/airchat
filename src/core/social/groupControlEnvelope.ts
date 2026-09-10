@@ -270,7 +270,18 @@ export function decodeGroupCtlEnvelope(text: string): GroupCtlEnvelope | null {
     return env;
   }
   if (env.op === 'invite') {
-    const name = sanitizeName(env.groupName);
+    // v4.32.674: название группы мерится своим числом — тем же, что у 'meta'
+    // строкой выше и у редактора. Здесь стояла умолчательная длина
+    // sanitizeDisplayName (64) — та, которой меряются ИМЕНА ЛЮДЕЙ, — и
+    // приглашение резало название вдвое. Отправитель кладёт в конверт до 128
+    // символов (groupMessaging, normalizeOwnGroupName), получатель обрезал до
+    // 64 и с этим огрызком заводил у себя группу (createGroup). Дальше он не
+    // выправлялся ничем: 'meta' приходит только если название кто-то менял, а
+    // до тех пор у автора группа называлась одним, у приглашённых другим —
+    // ровно та поломка, ради которой писался groupNameRule.
+    //
+    // Имена участников ниже остаются на 64: это люди, а не группа.
+    const name = sanitizeName(env.groupName, OWN_GROUP_NAME_MAX);
     if (!name || !name.trim()) return null;
     env.groupName = name;
     // v4.32.513: правило «что такое вид группы» — одно на конверт и на
