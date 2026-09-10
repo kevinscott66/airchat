@@ -49,6 +49,7 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async () => undefined),
   kvDeleteByPrefix: jest.fn(async () => undefined),
   kvGetInlineAttachment: jest.fn(async (k: string) => mockBlobs.get(k) ?? null),
+  kvTryGetInlineAttachment: jest.fn(async (k: string) => ({ value: mockBlobs.get(k) ?? null })),
   kvSetInlineAttachment: jest.fn(async () => true),
   kvTryListKeysByPrefix: jest.fn(async () => []),
   setPollVote: jest.fn(async () => undefined),

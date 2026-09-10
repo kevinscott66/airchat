@@ -73,6 +73,7 @@ jest.mock('../local', () => ({
   kvSet: jest.fn(async () => undefined),
   kvDelete: jest.fn(async () => undefined),
   kvGetInlineAttachment: jest.fn(async () => null),
+  kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => undefined),
   kvDeleteByPrefix: jest.fn(async (p: string) => {
     mockPrefixDeletes.push(p);

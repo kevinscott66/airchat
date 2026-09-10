@@ -2310,21 +2310,37 @@ export async function kvSetChecked(key: string, value: string): Promise<boolean>
  * Не получилось переписать — вложение всё равно отдаётся, следующее чтение
  * попробует снова; хуже провал не делает, открытым остаётся ровно то, что там
  * и так лежало.
+ *
+ * v4.32.703: у чтения появился трёхзначный вход — то же разделение, что у
+ * kvTryGet и kvGet. `null` значит «прочитать не удалось»: база занята, ключ
+ * недоступен, шифртекст не разобрался. `{ value: null }` значит «строки нет».
+ * Разница не косметическая: репост копирует байты оригинала, и на схлопнутом
+ * ответе временный сбой чтения выглядел как «фотографии не было» — репост
+ * уходил контактам без снимка, отчитываясь об успехе. Кому разница
+ * безразлична — тому по-прежнему kvGetInlineAttachment.
  */
-export async function kvGetInlineAttachment(key: string): Promise<string | null> {
-  const stored = await kvGet(key);
-  if (stored == null) return null;
+export async function kvTryGetInlineAttachment(
+  key: string
+): Promise<{ value: string | null } | null> {
+  const cell = await kvTryGet(key);
+  if (cell === null) return null;
+  const stored = cell.value;
+  if (stored == null) return { value: null };
   try {
     const dek = await getOrCreateDataEncryptionKey();
     if (!isInlineBlobEncrypted(stored)) {
       await kvSetChecked(key, encodeInlineBlob(stored, dek));
-      return stored;
+      return { value: stored };
     }
-    return decodeInlineBlob(stored, dek);
+    return { value: decodeInlineBlob(stored, dek) };
   } catch (e) {
     log.warn('kv_inline_get_failed', { err: e instanceof Error ? e.message : String(e) });
     return null;
   }
+}
+
+export async function kvGetInlineAttachment(key: string): Promise<string | null> {
+  return (await kvTryGetInlineAttachment(key))?.value ?? null;
 }
 
 /** Возвращает, легло ли вложение. Открытым текстом взамен не пишем никогда. */

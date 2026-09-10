@@ -68,6 +68,7 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
   kvGetInlineAttachment: jest.fn(async () => null),
+  kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
   kvTryListKeysByPrefix: jest.fn(async () => []),
   setPollVote: jest.fn(async () => undefined),
@@ -262,6 +263,21 @@ describe('форма источника: отказ очереди виден в
   test('репост, не попавший в очередь, не называется поставленным в очередь', () => {
     const at = CODE.indexOf("log.warn('feed_repost_enqueue_failed'");
     expect(at).toBeGreaterThan(-1);
-    expect(CODE.slice(at, at + 220)).toContain('return { ok: true, cid: newPostId };');
+    const end = CODE.indexOf('\n    }\n', at);
+    expect(end).toBeGreaterThan(at);
+    const branch = CODE.slice(at, end);
+    // v4.32.703: у возврата появился хвост `...dropped` — сколько снимков оригинала
+    // перенести не вышло. Само утверждение прежнее: сорвавшаяся постановка в очередь
+    // не смеет назвать себя очередью.
+    expect(branch).toContain('return { ok: true, cid: newPostId, ...dropped };');
+    expect(branch).not.toContain('queued: true');
+  });
+
+  test('ПРОВЕРКА НЕ ПУСТАЯ: удачная постановка в очередь как раз и говорит про очередь', () => {
+    expect(CODE).toContain('return { ok: true, cid: newPostId, queued: true, ...dropped };');
+  });
+
+  test('ПРОВЕРКА НЕ ПУСТАЯ: потерянные снимки досчитываются до самого возврата', () => {
+    expect(CODE).toContain('const dropped = mediaDropped > 0 ? { mediaDropped } : {};');
   });
 });

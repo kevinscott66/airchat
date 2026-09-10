@@ -37,7 +37,7 @@ import {
   takeDeferred,
   type DeferredStore,
 } from './feedDeferred';
-import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
+import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
 import {
   INLINE_MEDIA_PREFIX,
   INLINE_DOC_PREFIX,
@@ -1876,6 +1876,9 @@ export async function publishRepost(
   const mediaBase64s: string[] = [];
   const mediaMimes: string[] = [];
   const newMediaCids: string[] = [];
+  // v4.32.703: сколько снимков оригинала перенести не вышло по причине,
+  // которая повтором не лечится, — байтов нет на устройстве и не будет.
+  let mediaDropped = 0;
   for (let i = 0; i < origCids.length; i++) {
     const c = origCids[i];
     if (!c?.startsWith('inline:')) {
@@ -1893,8 +1896,31 @@ export async function publishRepost(
     if (colon < 0) continue;
     const origIdx = afterSemi.slice(0, colon);
     const origPostId = afterSemi.slice(colon + 1);
-    const b64 = await kvGetInlineAttachment(`feed_inline_media:${origPostId}:${origIdx}`);
-    if (!b64) continue;
+    // v4.32.703: раньше здесь стояло схлопывающее чтение и `continue` на любой
+    // его отказ. Занятая база и недоступный ключ — состояния временные, но
+    // выглядели они точно так же, как «снимка нет»: репост уходил всем
+    // контактам без фотографии, а человеку показывали «Репост опубликован».
+    // Подпись ставится под тем, что человек считает своей записью, а не под её
+    // огрызком, — поэтому на сбое устройства мы не публикуем ничего.
+    const cell = await kvTryGetInlineAttachment(`feed_inline_media:${origPostId}:${origIdx}`);
+    if (cell === null) {
+      log.warn('feed_repost_inline_media_read_failed', {
+        postId: newPostId.slice(0, 24),
+        idx: i,
+      });
+      await cleanupInlinePayloads(newPostId);
+      return { ok: false };
+    }
+    const b64 = cell.value;
+    if (b64 === null) {
+      // Строки нет вовсе. Так бывает законно: на приёме чужого поста неудачная
+      // запись вложения только пишется в журнал (см. ниже, feed_inline_media_
+      // receive_save_failed), и ссылка остаётся указывать в пустоту. Обрывать
+      // на этом репост значило бы запретить репостить такие посты навсегда —
+      // считаем снимок потерянным и говорим об этом вслух.
+      mediaDropped++;
+      continue;
+    }
     const newI = mediaBase64s.length;
     // v4.32.625: сначала запись, потом ссылка — и запись проверяется.
     // Здесь ответ kvSetInlineAttachment не смотрели вовсе, а ссылка на снимок
@@ -1907,12 +1933,16 @@ export async function publishRepost(
         postId: newPostId.slice(0, 24),
         idx: newI,
       });
-      continue;
+      // v4.32.703: и здесь тоже отказ устройства, а не отсутствие снимка.
+      await cleanupInlinePayloads(newPostId);
+      return { ok: false };
     }
     mediaBase64s.push(b64);
     mediaMimes.push(mime);
     newMediaCids.push(`inline:${mime};${newI}:${newPostId}`);
   }
+
+  const dropped = mediaDropped > 0 ? { mediaDropped } : {};
 
   // Локально сохранить запись-репост.
   const s = await ensureStorage();
@@ -1987,12 +2017,12 @@ export async function publishRepost(
       // отказах. Теперь попасть можно, и говорить «в очереди» нельзя: записи в
       // очереди нет, повтора не будет, а репост уже виден у себя в ленте.
       log.warn('feed_repost_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
-      return { ok: true, cid: newPostId };
+      return { ok: true, cid: newPostId, ...dropped };
     }
-    return { ok: true, cid: newPostId, queued: true };
+    return { ok: true, cid: newPostId, queued: true, ...dropped };
   }
   log.info('feed_repost_ok', { postId: newPostId.slice(0, 24), delivered: result?.delivered.success ?? 0 });
-  return { ok: true, cid: newPostId };
+  return { ok: true, cid: newPostId, ...dropped };
 }
 
 /**

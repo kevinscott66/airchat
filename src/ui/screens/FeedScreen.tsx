@@ -2454,6 +2454,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             // очереди повторов. Показывать «опубликован» в этом случае было бы
             // неправдой: контакты его ещё не получили.
             showSuccess(t('queued' in result && result.queued ? 'feed.repostQueued' : 'feed.repostPublished'));
+            // v4.32.703: часть снимков оригинала могла не найтись на устройстве —
+            // репост уходит без них, и молчать об этом нельзя: человек видит у
+            // себя в ленте запись, которая отличается от той, что он репостил.
+            if (result.mediaDropped && result.mediaDropped > 0) {
+              Alert.alert(
+                t('feed.mediaPartialSkipped'),
+                t('feed.repostMediaDroppedDetail', { count: result.mediaDropped })
+              );
+            }
             void loadFeed();
           } else {
             showError(t('feed.repostFailed'));
