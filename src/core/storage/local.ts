@@ -8188,6 +8188,26 @@ export async function setStoryAlbumItemMediaFile(
   );
 }
 
+/**
+ * Запомнить общий адрес копии, поднявшейся со второй попытки.
+ *
+ * Адрес писался ровно один раз — при вставке строки, и повтора у него не было
+ * (v4.32.686). Ответ проверяется: строку могли удалить, пока шла загрузка, и
+ * тогда «записали» было бы неправдой — повтор обязан узнать, что ему больше не
+ * за что держаться.
+ */
+export async function setStoryAlbumItemMediaCid(
+  id: string, ownerProfileId: number, cid: string
+): Promise<boolean> {
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  const res = await d.runAsync(
+    'UPDATE story_album_items SET media_cid = ? WHERE id = ? AND owner_profile_id = ?',
+    [encryptAtRestString(cid, dek), id, ownerProfileId]
+  );
+  return (res.changes ?? 0) > 0;
+}
+
 export async function deleteStoryAlbumItem(id: string, ownerProfileId: number): Promise<void> {
   const d = await db();
   await d.runAsync(

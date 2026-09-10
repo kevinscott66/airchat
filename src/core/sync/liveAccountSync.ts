@@ -327,6 +327,21 @@ async function collectPending(
   mnemonic: string,
   ownerProfileId: number,
 ): Promise<{ mutations: SyncMutation[]; pendingHeads: Map<string, PendingHead> }> {
+  // v4.32.686: строка альбома, у которой не вышла общая копия, придерживается
+  // — и адрес ей писался ровно один раз, при вставке. Одна минута без сети
+  // оставляла альбом навсегда невидимым на втором устройстве аккаунта, причём
+  // молча: на этом телефоне он полный. Повтор идёт ДО сбора — поднявшаяся
+  // копия уедет наверх в этом же заходе. Отказ повтора — обычное дело, ронять
+  // из-за него весь заход нельзя.
+  try {
+    const { retryHeldAlbumUploads } = await import('../social/storyAlbums');
+    await retryHeldAlbumUploads(ownerProfileId);
+  } catch (e) {
+    log.warn('live_sync_album_upload_retry_failed', {
+      ownerProfileId,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
   const [entities, heads] = await Promise.all([
     collectLocalEntities(ownerProfileId),
     getSyncEntityHeads(ownerProfileId),

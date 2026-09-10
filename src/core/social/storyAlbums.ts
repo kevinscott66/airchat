@@ -27,6 +27,7 @@ import {
   listAllStoryAlbumItems,
   listStoryAlbumItems,
   listStoryAlbums,
+  setStoryAlbumItemMediaCid,
   setStoryAlbumItemMediaFile,
   storyAlbumFileNames,
   storyAlbumItemExists,
@@ -41,6 +42,7 @@ import {
   sweepStoryAlbumFiles,
 } from '../media/storyAlbumFiles';
 import { orphanAlbumItems } from './storyAlbumOrphans';
+import { heldAlbumUploads } from './storyAlbumRetry';
 import { uploadMediaToCid } from '../media/mediaUpload';
 import { log } from '../logger';
 
@@ -226,4 +228,35 @@ export async function sweepOrphanAlbumItems(ownerProfileId: number): Promise<num
   if (files.length > 0) await deleteStoryAlbumFiles(files);
   log.info('story_album_orphan_items_swept', { removed: lost.length, files: files.length });
   return lost.length;
+}
+
+/**
+ * Поднять общие копии для строк, которым их не хватило.
+ *
+ * Зовётся перед выгрузкой: строка, у которой адрес появился прямо сейчас,
+ * уедет наверх в этом же заходе. Правило «кому нужен повтор» и цена ошибки
+ * описаны в storyAlbumRetry.
+ *
+ * Это подчистка, а не часть переноса: неудача повтора — обычное дело (сети
+ * нет ровно так же, как её не было в первый раз), и уронить заход она права
+ * не имеет. Ответ базы проверяется: строку могли снести, пока шла загрузка,
+ * и записывать адрес было бы уже некуда.
+ */
+export async function retryHeldAlbumUploads(ownerProfileId: number): Promise<number> {
+  const items = await listAllStoryAlbumItems(ownerProfileId);
+  const held = heldAlbumUploads(items);
+  if (held.length === 0) return 0;
+  let filled = 0;
+  for (const row of held) {
+    if (!row.mediaFile) continue;
+    const cid = await uploadAlbumCopy(row.mediaFile, row.mediaType);
+    if (!cid) continue;
+    if (!(await setStoryAlbumItemMediaCid(row.id, ownerProfileId, cid))) {
+      log.info('story_album_cid_write_missed', { id: row.id });
+      continue;
+    }
+    filled += 1;
+  }
+  if (filled > 0) log.info('story_album_uploads_retried', { held: held.length, filled });
+  return filled;
 }
