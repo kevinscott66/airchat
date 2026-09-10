@@ -24,7 +24,9 @@ import {
   deleteStoryAlbumItem,
   insertStoryAlbum,
   insertStoryAlbumItem,
+  listAllStoryAlbumItems,
   listStoryAlbumItems,
+  listStoryAlbums,
   setStoryAlbumItemMediaFile,
   storyAlbumFileNames,
   storyAlbumItemExists,
@@ -38,6 +40,7 @@ import {
   storyAlbumUriFromName,
   sweepStoryAlbumFiles,
 } from '../media/storyAlbumFiles';
+import { orphanAlbumItems } from './storyAlbumOrphans';
 import { uploadMediaToCid } from '../media/mediaUpload';
 import { log } from '../logger';
 
@@ -197,4 +200,30 @@ export async function sweepOrphanAlbumFiles(): Promise<number> {
     return 0;
   }
   return await sweepStoryAlbumFiles(names);
+}
+
+/**
+ * Убрать строки, потерявшие свой альбом.
+ *
+ * Зовётся после разбора очередного захода синхронизации — не в середине:
+ * строка альбома и сам альбом едут отдельными сущностями, и обогнать друг
+ * друга внутри одного захода для них нормально. Само правило «потеряна» и
+ * цена ошибки описаны в storyAlbumOrphans.
+ *
+ * Файл копии уходит вместе со строкой: после удаления его имени не останется
+ * нигде, а общая уборка файлов (sweepOrphanAlbumFiles) зовётся только при
+ * удалении профиля.
+ */
+export async function sweepOrphanAlbumItems(ownerProfileId: number): Promise<number> {
+  const [albums, items] = await Promise.all([
+    listStoryAlbums(ownerProfileId),
+    listAllStoryAlbumItems(ownerProfileId),
+  ]);
+  const lost = orphanAlbumItems(items, albums.map((a) => a.id), Date.now());
+  if (lost.length === 0) return 0;
+  for (const row of lost) await deleteStoryAlbumItem(row.id, ownerProfileId);
+  const files = lost.map((i) => i.mediaFile).filter((n): n is string => !!n);
+  if (files.length > 0) await deleteStoryAlbumFiles(files);
+  log.info('story_album_orphan_items_swept', { removed: lost.length, files: files.length });
+  return lost.length;
 }

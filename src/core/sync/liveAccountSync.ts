@@ -606,6 +606,7 @@ async function runLiveSync(
       (await getSyncEntityHeads(ownerProfileId)).map((head) => [entityKey(head.entityKind, head.entityId), head]),
     );
     let messagesChanged = false;
+    let albumsChanged = false;
     const result = await syncAccountOnce({
       mnemonic,
       pair,
@@ -634,9 +635,29 @@ async function runLiveSync(
           updatedAt: mutation.updatedAt,
         });
         if (mutation.entityKind === 'message') messagesChanged = true;
+        if (mutation.entityKind === 'story_album'
+          || mutation.entityKind === 'story_album_item') albumsChanged = true;
       },
       afterProjection: async () => {
         if (messagesChanged) await rebuildConversationsFromMessages(ownerProfileId);
+        // v4.32.684: строка альбома и сам альбом — разные сущности с разными
+        // счётчиками ревизий, и порядок между ними ничем не закреплён. Строка,
+        // приехавшая к альбому, которого здесь нет, не видна ни в одном списке,
+        // но вечно уезжает обратно в облако и держит копию снимка на диске.
+        // Уборка идёт ПОСЛЕ разбора всего захода: внутри него обогнать свой
+        // альбом — обычное дело. Это уборка, а не часть переноса, поэтому её
+        // отказ не имеет права уронить проход.
+        if (albumsChanged) {
+          try {
+            const { sweepOrphanAlbumItems } = await import('../social/storyAlbums');
+            await sweepOrphanAlbumItems(ownerProfileId);
+          } catch (e) {
+            log.warn('live_sync_album_orphan_sweep_failed', {
+              ownerProfileId,
+              err: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
       },
       onServerReset: async () => {
         // v4.32.615: сбрасываются отпечатки, а НЕ строки целиком. Номера
