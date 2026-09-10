@@ -10,7 +10,7 @@ import {
 import { BlurView } from 'expo-blur';
 import Svg, { Defs, Ellipse, RadialGradient, Stop } from 'react-native-svg';
 import { useColors } from '../ThemeContext';
-import { glass, lightColors, withAlpha } from '../theme';
+import { darkColors, glass, lightColors, withAlpha } from '../theme';
 import { useReducedTransparency } from '../motionPrefs';
 
 export type GlassSurfaceProps = ViewProps & {
@@ -41,6 +41,19 @@ export type GlassSurfaceProps = ViewProps & {
    * (таббар, листы), и цветное пятно в каждой из них — это уже обои.
    */
   wash?: boolean;
+  /**
+   * Какой палитрой красить стекло.
+   *
+   * `auto` — темой приложения, как везде. `dark` — всегда тёмной, независимо
+   * от выбранной темы: так красятся слои поверх чужого кадра — редактор и
+   * просмотрщик сторис. У них фон — фотография, а не поверхность приложения,
+   * и светлое стекло на ней читается как выцветшее пятно.
+   *
+   * v4.32.691. Признак нужен ещё и потому, что `BlurView` здесь ребёнок и
+   * ложится ПОВЕРХ заливки контейнера: светлый `tint` осветлил бы плашку,
+   * которую снаружи попросили сделать тёмной ради контраста подписи.
+   */
+  tone?: 'auto' | 'dark';
   style?: StyleProp<ViewStyle>;
 };
 
@@ -114,10 +127,12 @@ export function GlassSurface({
   variant = 'regular',
   rim = true,
   wash = false,
+  tone = 'auto',
   style,
   ...viewProps
 }: GlassSurfaceProps): React.ReactElement {
-  const colors = useColors();
+  const themeColors = useColors();
+  const colors = tone === 'dark' ? darkColors : themeColors;
   const isLight = colors.background === lightColors.background;
   const tint = isLight ? 'light' : 'dark';
   const solid = useReducedTransparency();

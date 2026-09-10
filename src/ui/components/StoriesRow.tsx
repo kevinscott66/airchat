@@ -17,14 +17,13 @@ import {
   Alert,
   TextInput,
   KeyboardAvoidingView,
-  Platform,
   Animated,
 } from 'react-native';
 import { AppPressable } from './AppPressable';
 // v4.32.27: Modal заменён на AppModal — автоматически оборачивает в
 // GestureHandlerRootView, чтобы RNGH Pressable внутри Modal получал касания.
 import { AppModal as Modal } from './AppModal';
-import * as ImagePicker from 'expo-image-picker';
+import { StoryComposerModal, type StoryDraft } from './StoryComposerModal';
 import * as FileSystem from 'expo-file-system/legacy';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
@@ -62,10 +61,9 @@ import { mayCountViewers, parseViewerList, storyRingUnread, viewerCount } from '
  * темы слушаются везде: normalizeAccent гарантирует читаемость белой надписи
  * поверх любой из них.
  */
-import { avatarShape, darkColors, font, inkOn, mediaScrim, nestedFill, primaryInk, radius, STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG } from '../theme';
+import { avatarShape, darkColors, font, inkOn, mediaScrim, primaryInk, radius, STORY_TEXT_VIEWER_BG } from '../theme';
 import { useColors } from '../ThemeContext';
 import { showError } from './userFeedback';
-import { showPermissionDeniedAlert } from '../permissionAlert';
 import { log } from '../../core/logger';
 // v4.32.50: модалка профиля при тапе на имя автора сторис.
 import { UserProfilePeek } from './UserProfilePeek';
@@ -532,205 +530,6 @@ const sb = StyleSheet.create({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Story Composer — image preview + caption input before publishing
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ComposerVideo — muted, looping preview of a picked video (expo-video). The
-// useVideoPlayer hook lives at this child's top level so StoryComposer can
-// render it conditionally (isVideo ? … : <Image/>) without breaking hook rules.
-function ComposerVideo({ uri }: { uri: string }): React.ReactElement {
-  const player = useVideoPlayer(uri, (p) => {
-    p.loop = true;
-    p.muted = true;
-    p.play();
-  });
-  return (
-    <VideoView
-      player={player}
-      style={sc.preview}
-      contentFit="cover"
-      nativeControls={false}
-    />
-  );
-}
-
-function StoryComposer({
-  uri,
-  isVideo,
-  onPublish,
-  onCancel,
-}: {
-  uri: string;
-  isVideo?: boolean;
-  onPublish: (text: string | null) => void;
-  onCancel: () => void;
-}): React.ReactElement {
-  const [caption, setCaption] = useState('');
-  const c = useColors();
-
-  // v4.32.27: на Android KAV behavior=undefined (no-op) — чтобы не конкурировать
-  // с native adjustResize (манифест). Было behavior="height" → KAV сам анимировал
-  // height через Animated API, параллельно с native resize → preview/caption
-  // скакали в каждом кадре при show/hide клавиатуры. caption absolute bottom:40
-  // теперь стабильно следует за верхней границей клавиатуры через adjustResize.
-  const composerBehavior = Platform.OS === 'ios' ? 'padding' : undefined;
-  return (
-    <Modal visible animationType="slide" statusBarTranslucent onRequestClose={onCancel} presentationStyle="overFullScreen">
-      <KeyboardAvoidingView style={sc.root} behavior={composerBehavior}>
-        {isVideo ? (
-          <ComposerVideo uri={uri} />
-        ) : (
-          <Image source={{ uri }} style={sc.preview} resizeMode="cover" />
-        )}
-        {/* Header */}
-        <View style={sc.header}>
-          <AppPressable onPress={onCancel} hitSlop={16} style={sc.headerPlate}>
-            <Ionicons name="close" size={28} color={mediaScrim.ink} />
-          </AppPressable>
-          <Text style={sc.headerTitle}>Новая сторис</Text>
-          <AppPressable
-            style={[sc.publishBtn, { backgroundColor: c.primary }]}
-            onPress={() => onPublish(caption.trim() || null)}
-          >
-            <Text style={[sc.publishText, { color: primaryInk(c).text }]}>Опубликовать</Text>
-          </AppPressable>
-        </View>
-        {/* Caption input */}
-        <View style={sc.captionWrap}>
-          <TextInput
-            style={sc.captionInput}
-            placeholder="Добавить подпись…"
-            placeholderTextColor={mediaScrim.inkMuted}
-            value={caption}
-            onChangeText={setCaption}
-            multiline
-            maxLength={200}
-            returnKeyType="done"
-          />
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-const sc = StyleSheet.create({
-  root: { flex: 1, backgroundColor: mediaScrim.fill },
-  preview: { ...StyleSheet.absoluteFillObject },
-  header: {
-    position: 'absolute',
-    top: 48,
-    left: 12,
-    right: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: { color: mediaScrim.ink, fontSize: 17, fontWeight: '600', backgroundColor: mediaScrim.bar, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 5, overflow: 'hidden' },
-  headerPlate: { backgroundColor: mediaScrim.bar, borderRadius: radius.xl, padding: 6 },
-  publishBtn: { borderRadius: radius.xl, paddingHorizontal: 16, paddingVertical: 7 },
-  publishText: { fontWeight: '700', fontSize: 14 },
-  captionWrap: {
-    position: 'absolute',
-    bottom: 40,
-    left: 12,
-    right: 12,
-    backgroundColor: mediaScrim.bar,
-    borderRadius: radius.lg,
-    padding: 12,
-  },
-  captionInput: {
-    color: mediaScrim.ink,
-    fontSize: 16,
-    minHeight: 44,
-    maxHeight: 120,
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TextStoryComposer — text-only story (no media)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TextStoryComposer({
-  onPublish,
-  onCancel,
-}: {
-  onPublish: (text: string) => void;
-  onCancel: () => void;
-}): React.ReactElement {
-  const [text, setText] = useState('');
-  const [bgIdx, setBgIdx] = useState(0);
-  const inputRef = React.useRef<TextInput>(null);
-
-  React.useEffect(() => { setTimeout(() => inputRef.current?.focus(), 200); }, []);
-
-  // v4.32.27: layout стабильный при show/hide клавиатуры.
-  // Раньше: `flex:1 + justifyContent:'center'` внутри `KeyboardAvoidingView
-  // behavior='height'` на Android. При анимации IME Android natively делал
-  // `adjustResize` (манифест), И параллельно KAV анимировал собственный height
-  // — flex-центрированный TextInput в каждом кадре пересчитывал позицию, текст
-  // визуально «бегал по экрану туда-сюда». Фикс:
-  // (a) на Android KAV-обёртка убрана (behavior=undefined делает её no-op'ом) —
-  //     только native adjustResize, одна анимация без конкуренции;
-  // (b) TextInput прикреплён `marginTop: 160` вместо flex-центрирования —
-  //     его позиция относительно верха экрана не зависит от высоты контейнера
-  //     и остаётся стабильной при изменении размера окна;
-  // (c) swatches остались на `bottom: 40` absolute — adjustResize сдвигает их
-  //     вместе с нижней границей окна, вслед за клавиатурой.
-  const innerBehavior = Platform.OS === 'ios' ? 'padding' : undefined;
-  // Фон здесь ИЗВЕСТЕН — его только что выбрал автор, — поэтому чернила
-  // считаются от него, а не пишутся белым «на глаз» (v4.32.415). Кнопка
-  // «Опубликовать» — вложенная плашка на том же фоне, и её чернила считаются
-  // уже от неё: сперва заливка, потом чернила (правило 395-го).
-  const bg = STORY_TEXT_BACKGROUNDS[bgIdx];
-  const ink = inkOn(darkColors, bg);
-  const plate = nestedFill(bg);
-  const plateInk = inkOn(darkColors, plate);
-  return (
-    <Modal visible animationType="slide" statusBarTranslucent onRequestClose={onCancel} presentationStyle="overFullScreen">
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={innerBehavior}>
-        <View style={{ flex: 1, backgroundColor: bg, alignItems: 'center', padding: 24 }}>
-          {/* Header */}
-          <View style={{ position: 'absolute', top: 48, left: 12, right: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <AppPressable onPress={onCancel} hitSlop={16}>
-              <Ionicons name="close" size={28} color={ink.text} />
-            </AppPressable>
-            <Text style={{ color: ink.text, fontSize: 17, fontWeight: '600' }}>Текстовая сторис</Text>
-            <AppPressable
-              style={{ backgroundColor: plate, borderRadius: radius.xl, paddingHorizontal: 16, paddingVertical: 7 }}
-              onPress={() => text.trim() && onPublish(text.trim())}
-            >
-              <Text style={{ color: plateInk.text, fontWeight: '700', fontSize: 14 }}>Опубликовать</Text>
-            </AppPressable>
-          </View>
-          {/* Text input — marginTop стабильный (v4.32.27), не прыгает при анимации клавиатуры */}
-          <TextInput
-            ref={inputRef}
-            style={{ color: ink.text, fontSize: 24, fontWeight: '600', textAlign: 'center', lineHeight: 34, width: '100%', minHeight: 80, marginTop: 160 }}
-            value={text}
-            onChangeText={setText}
-            placeholder="Введите текст…"
-            placeholderTextColor={ink.secondary}
-            multiline
-            maxLength={280}
-            returnKeyType="default"
-          />
-          {/* Background color swatches */}
-          <View style={{ position: 'absolute', bottom: 40, flexDirection: 'row', gap: 10 }}>
-            {STORY_TEXT_BACKGROUNDS.map((color, i) => (
-              <AppPressable
-                key={i}
-                onPress={() => setBgIdx(i)}
-                style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: color, borderWidth: i === bgIdx ? 3 : 1, borderColor: ink.text }}
-              />
-            ))}
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Main export
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -751,9 +550,7 @@ export function StoriesRow({
 }: Props): React.ReactElement {
   const [groups, setGroups] = useState<StoryGroup[]>([]);
   const [viewerTarget, setViewerTarget] = useState<{ stories: StoryRow[]; index: number } | null>(null);
-  const [composerUri, setComposerUri] = useState<string | null>(null);
-  const [composerMediaType, setComposerMediaType] = useState<'image' | 'video'>('image');
-  const [textComposerVisible, setTextComposerVisible] = useState(false);
+  const [composerVisible, setComposerVisible] = useState(false);
   const [storyNameMap, setStoryNameMap] = useState<Record<string, string>>({});
   const c = useColors();
   const pid = profileManager.getActiveProfile()?.id ?? 1;
@@ -827,58 +624,15 @@ export function StoriesRow({
     return unsub;
   }, [reload]);
 
-  // v4.32.49: empty deps безопасны — внутри используются только React state
-  // setters (гарантированно stable) и imported-функции (showPermissionDeniedAlert,
-  // setComposerUri, setTextComposerVisible). Никаких state-значений через closure.
-  const createStory = useCallback(async () => {
-    Alert.alert('Новая сторис', 'Выберите тип', [
-      {
-        text: '📝 Текст',
-        onPress: () => setTextComposerVisible(true),
-      },
-      {
-        text: '🖼 Фото',
-        onPress: async () => {
-          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (!perm.granted) {
-            showPermissionDeniedAlert('Галерея', 'Чтобы опубликовать сторис с фото, разрешите доступ к галерее.');
-            return;
-          }
-          // v4.32.54: quality:1 + exif:false избегает NoSuchMethodError в CompressionImageExporter.
-          const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
-            aspect: [9, 16],
-            quality: 1,
-            exif: false,
-          });
-          if (result.canceled || !result.assets[0]) return;
-          setComposerMediaType('image');
-          setComposerUri(result.assets[0].uri);
-        },
-      },
-      {
-        text: '🎬 Видео',
-        onPress: async () => {
-          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (!perm.granted) {
-            showPermissionDeniedAlert('Галерея', 'Чтобы опубликовать сторис с видео, разрешите доступ к галерее.');
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-            allowsEditing: true,
-            aspect: [9, 16],
-            videoMaxDuration: 30,
-          });
-          if (result.canceled || !result.assets[0]) return;
-          setComposerMediaType('video');
-          setComposerUri(result.assets[0].uri);
-        },
-      },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
-  }, []);
+  // v4.32.691: тип сторис больше не спрашивается заранее.
+  //
+  // Раньше здесь стоял системный Alert.alert со списком «Текст / Фото /
+  // Видео», и выбрать приходилось вслепую — до того, как человек увидел хоть
+  // один экран. Теперь открывается один редактор, а тип переключается внутри
+  // него: набранный текст при переключении не теряется, и передумать можно не
+  // выходя. Заодно ушёл чужой системный лист поверх приложения — редактор
+  // сделан на нашем стекле и в нашей теме.
+  const createStory = useCallback(() => { setComposerVisible(true); }, []);
 
   // v4.32.49: inflight-ref защищает от double-publish при быстром double-tap
   // на кнопку "Опубликовать". setComposerUri(null) асинхронный → вторая
@@ -887,38 +641,19 @@ export function StoriesRow({
   // синхронно и блокирует второй вызов.
   const publishingRef = useRef(false);
 
-  const publishFromComposer = useCallback(async (text: string | null) => {
+  const publishDraft = useCallback(async (draft: StoryDraft) => {
     if (publishingRef.current) return;
-    if (!composerUri) return;
     publishingRef.current = true;
-    const uri = composerUri;
-    const mt = composerMediaType;
-    setComposerUri(null);
+    setComposerVisible(false);
     try {
       if (pair) {
-        const res = await publishStory(pair, uri, text, mt);
+        // Текстовая сторис (uri === null) рассылается тем же личным
+        // сообщением, что и медийная, — и без транспорта её так же не увидит
+        // никто. Поэтому проверка результата одна на оба случая.
+        const res = await publishStory(pair, draft.uri, draft.text, draft.mediaType);
         // Без этого автор видел бы свою сторис с видео (локальный файл), а у
         // контактов она была бы пустой — и он бы об этом не узнал.
-        const problem = storyPublishProblem(res, mt);
-        if (problem) showError(problem);
-      }
-    } catch (e) {
-      showError(userErrorText(e, 'Не удалось опубликовать историю'));
-    } finally {
-      publishingRef.current = false;
-    }
-    await reload();
-  }, [composerUri, composerMediaType, pair, reload]);
-
-  const publishTextStory = useCallback(async (text: string) => {
-    if (publishingRef.current) return;
-    publishingRef.current = true;
-    setTextComposerVisible(false);
-    try {
-      if (pair) {
-        // Текстовая сторис тоже может остаться на устройстве: рассылка идёт
-        // тем же личным сообщением, и без транспорта её не увидит никто.
-        const problem = storyPublishProblem(await publishStory(pair, null, text, 'image'), 'image');
+        const problem = storyPublishProblem(res, draft.mediaType);
         if (problem) showError(problem);
       }
     } catch (e) {
@@ -948,18 +683,10 @@ export function StoriesRow({
             </AppPressable>
           </View>
         </View>
-        {composerUri ? (
-          <StoryComposer
-            uri={composerUri}
-            isVideo={composerMediaType === 'video'}
-            onPublish={(text) => void publishFromComposer(text)}
-            onCancel={() => setComposerUri(null)}
-          />
-        ) : null}
-        {textComposerVisible ? (
-          <TextStoryComposer
-            onPublish={(text) => void publishTextStory(text)}
-            onCancel={() => setTextComposerVisible(false)}
+        {composerVisible ? (
+          <StoryComposerModal
+            onPublish={(draft) => void publishDraft(draft)}
+            onCancel={() => setComposerVisible(false)}
           />
         ) : null}
       </>
@@ -1026,21 +753,13 @@ export function StoriesRow({
           onOpenChatWithPeer={onOpenChatWithPeer}
         />
       ) : null}
-      {composerUri ? (
-        <StoryComposer
-          uri={composerUri}
-          // v4.32.626: ветка пустого состояния этот признак передавала, а
-          // основная — нет, и выбранное видео открывалось в <Image>: чёрный
-          // кадр вместо ролика на самом частом пути.
-          isVideo={composerMediaType === 'video'}
-          onPublish={(text) => void publishFromComposer(text)}
-          onCancel={() => setComposerUri(null)}
-        />
-      ) : null}
-      {textComposerVisible ? (
-        <TextStoryComposer
-          onPublish={(text) => void publishTextStory(text)}
-          onCancel={() => setTextComposerVisible(false)}
+      {/* v4.32.626 разошлась с веткой пустого состояния в признаке «это
+          видео», и ролик открывался картинкой — чёрный кадр вместо кино.
+          С 691-й расходиться нечему: редактор один и признаков у него нет. */}
+      {composerVisible ? (
+        <StoryComposerModal
+          onPublish={(draft) => void publishDraft(draft)}
+          onCancel={() => setComposerVisible(false)}
         />
       ) : null}
     </>

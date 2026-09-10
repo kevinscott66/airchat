@@ -26,9 +26,25 @@ const count = (s: string, needle: string): number => s.split(needle).length - 1;
 
 it('истории: видео в полосе показывается видео и на основном пути', () => {
   const s = bare('components/StoriesRow.tsx');
-  // Пустое состояние знало про isVideo с самого начала; основной путь — нет,
-  // и .mp4 уезжал в <Image>, то есть в пустой чёрный кадр.
-  expect(count(s, "isVideo={composerMediaType === 'video'}")).toBe(2);
+  // Дефект 626-го: редактор рисовался из двух мест, и признак «это видео»
+  // ветка пустого состояния передавала, а основная — нет; .mp4 уезжал в
+  // <Image>, то есть в пустой чёрный кадр.
+  //
+  // v4.32.691 закрыла его не вторым признаком, а тем, что признака больше
+  // нет: редактор один на все три типа и тип узнаёт сам. Поэтому здесь
+  // проверяется уже не совпадение двух значений, а невозможность их
+  // разойтись — обе точки отрисовки передают ОДНО И ТО ЖЕ.
+  expect(s).not.toContain('isVideo');
+  expect(count(s, '<StoryComposerModal')).toBe(2);
+  expect(count(s, 'onPublish={(draft) => void publishDraft(draft)}')).toBe(2);
+  expect(count(s, 'onCancel={() => setComposerVisible(false)}')).toBe(2);
+  // И тип, с которым сторис уходит в сеть, берётся у самого черновика —
+  // и при рассылке, и при разборе её исхода. Разъехаться им не на чем.
+  expect(s).toContain('await publishStory(pair, draft.uri, draft.text, draft.mediaType);');
+  expect(s).toContain('storyPublishProblem(res, draft.mediaType)');
+  // Решение «это видео» принимается ровно в одном месте — в редакторе.
+  const comp = bare('components/StoryComposerModal.tsx');
+  expect(count(comp, "mode === 'video' ? 'video' : 'image'")).toBe(1);
 });
 
 it('профили: отказ переименования называется вслух', () => {
@@ -107,7 +123,7 @@ it('экраны пароля не молчат на отказе хранили
 
 it('ПРОВЕРКА НЕ ПУСТАЯ: все девять файлов на месте и это те самые экраны', () => {
   const anchors: Array<[string, string]> = [
-    ['components/StoriesRow.tsx', 'composerMediaType'],
+    ['components/StoriesRow.tsx', 'StoryComposerModal'],
     ['components/ProfileSelector.tsx', 'profileManager.renameProfile('],
     ['screens/SettingsScreen.tsx', 'authGuard.hasPassword()'],
     ['screens/ChatScreen.tsx', 'clearChatHistory(peerB64, activeProfileId)'],
