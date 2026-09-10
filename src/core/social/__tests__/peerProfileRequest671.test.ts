@@ -27,6 +27,11 @@ import path from 'path';
 const mockKv = new Map<string, string>();
 jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvGetFor: jest.fn(async (pid: number, key: string) => mockKv.get(`${pid}:${key}`) ?? null),
+  // v4.32.693: карта «эту версию он уже видел» читается трёхзначно — `null`
+  // означает отказ базы, и запись поверх настоящей карты не идёт.
+  scopedKvTryGetFor: jest.fn(async (pid: number, key: string) => ({
+    value: mockKv.get(`${pid}:${key}`) ?? null,
+  })),
   scopedKvSetFor: jest.fn(async (pid: number, key: string, v: string) => {
     mockKv.set(`${pid}:${key}`, v);
   }),

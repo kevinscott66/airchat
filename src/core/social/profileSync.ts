@@ -13,7 +13,7 @@
  * Кому уже отправлено — помнится в kv, чтобы открытие чата не превращалось в
  * повторную рассылку одного и того же.
  */
-import { scopedKvGetFor, scopedKvSet, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvGetFor, scopedKvSet, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
 import { ownAvatarNameFor, ownAvatarUriFor } from '../identity/ownAvatar';
 import { listContactsFor, setPeerProfileFor } from './contacts';
@@ -78,8 +78,17 @@ function activeProfileId(): number {
   return profileManager.getActiveProfile()?.id ?? 1;
 }
 
-async function loadSent(pid: number): Promise<SentMap> {
-  return parseSentMap(await scopedKvGetFor(pid, SENT_KEY), isSentVersion);
+/**
+ * Карта из базы; `null` — прочитать не удалось (v4.32.693).
+ *
+ * То же место и та же причина, что в presencePrefSync: отказ базы приходил
+ * сюда пустой картой, правка домешивалась к пустоте и записывалась поверх
+ * настоящей. Здесь потеря дешевле — «эту версию он уже видел» восстановится
+ * лишней рассылкой, — но повод один, и правило должно быть одним.
+ */
+async function loadSent(pid: number): Promise<SentMap | null> {
+  const read = await scopedKvTryGetFor(pid, SENT_KEY);
+  return read === null ? null : parseSentMap(read.value, isSentVersion);
 }
 
 /**
@@ -95,7 +104,13 @@ let sentTx: Promise<unknown> = Promise.resolve();
 async function recordSent(pid: number, patch: SentMap): Promise<void> {
   if (Object.keys(patch).length === 0) return;
   const run = async () => {
-    const merged = trimSentMap(mergeSentMap(await loadSent(pid), patch), SENT_MAX);
+    // v4.32.693: не прочитали — не пишем; см. loadSent.
+    const stored = await loadSent(pid);
+    if (stored === null) {
+      log.warn('profile_sent_unreadable', { pid, patch: Object.keys(patch).length });
+      return;
+    }
+    const merged = trimSentMap(mergeSentMap(stored, patch), SENT_MAX);
     await scopedKvSetFor(pid, SENT_KEY, JSON.stringify(merged));
   };
   const started = sentTx.then(run, run);
@@ -318,7 +333,7 @@ export async function broadcastMyProfile(): Promise<void> {
     return;
   }
 
-  const sent = await loadSent(pid);
+  const sent = (await loadSent(pid)) ?? {};
   const fresh: SentMap = {};
   for (const peer of contacts) {
     // Переключились на другой аккаунт — рассылка чужой карточки под чужой же
@@ -370,7 +385,7 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
   if (!built) return;
   const { version } = built;
   if (!force) {
-    const sent = await loadSent(pid);
+    const sent = (await loadSent(pid)) ?? {};
     if (sent[peerPubB64] === version) return;
   }
   if (!(await canReachPeer(peerPubB64))) return;

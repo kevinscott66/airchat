@@ -17,7 +17,7 @@
  * рядом работает вторая половина, которую никто снаружи не отменит, —
  * взаимность в presenceService (скрыл своё время — не видишь чужое).
  */
-import { scopedKvGetFor, scopedKvSetFor } from '../storage/profileScopedKv';
+import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { listContactsFor } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentFlag, trimSentMap } from './sentMap';
@@ -57,8 +57,24 @@ function activeProfileId(): number {
   return profileManager.getActiveProfile()?.id ?? 1;
 }
 
-async function loadSent(pid: number): Promise<SentMap> {
-  return parseSentMap(await scopedKvGetFor(pid, SENT_KEY), isSentFlag);
+/**
+ * Карта из базы; `null` — прочитать не удалось (v4.32.693).
+ *
+ * Раньше здесь стояло простое чтение, и отказ базы приходил тем же пустым
+ * ответом, что и нетронутая карта. Дальше по этому ответу принимались два
+ * разных решения, и оба неверных.
+ *
+ * Хуже — в recordSent: правка домешивалась к пустой карте и записывалась
+ * поверх настоящей. Список «кому уже сказано» после этого состоял из одной
+ * последней правки, а всё остальное исчезало НАВСЕГДА. Именно из него
+ * broadcastLastSeenPref берёт тех, кого нет в контактах: человека удалили из
+ * адресной книги ПОСЛЕ того, как ему сказали «показывай моё время», и отзыв
+ * доходит до него только по этому списку. Потеряли список — человек видит
+ * время входа, а его владелец уверен, что закрыл его всем.
+ */
+async function loadSent(pid: number): Promise<SentMap | null> {
+  const read = await scopedKvTryGetFor(pid, SENT_KEY);
+  return read === null ? null : parseSentMap(read.value, isSentFlag);
 }
 
 /**
@@ -74,7 +90,15 @@ let sentTx: Promise<unknown> = Promise.resolve();
 async function recordSent(pid: number, patch: SentMap): Promise<void> {
   if (Object.keys(patch).length === 0) return;
   const run = async () => {
-    const merged = trimSentMap(mergeSentMap(await loadSent(pid), patch), SENT_MAX);
+    // v4.32.693: не прочитали — не пишем. Потерянная правка стоит лишней
+    // отправки на следующем заходе, потерянная карта — недоставленного
+    // отзыва; см. loadSent.
+    const stored = await loadSent(pid);
+    if (stored === null) {
+      log.warn('presence_pref_sent_unreadable', { pid, patch: Object.keys(patch).length });
+      return;
+    }
+    const merged = trimSentMap(mergeSentMap(stored, patch), SENT_MAX);
     await scopedKvSetFor(pid, SENT_KEY, JSON.stringify(merged));
   };
   const started = sentTx.then(run, run);
@@ -145,7 +169,7 @@ export async function broadcastLastSeenPref(): Promise<void> {
     log.warn('presence_pref_contacts_failed', { err: e instanceof Error ? e.message : String(e) });
   }
   const contactSet = new Set(contactPubs);
-  const sent = await loadSent(pid);
+  const sent = (await loadSent(pid)) ?? {};
   const targets = new Set<string>([...contactPubs, ...Object.keys(sent)]);
   const fresh: SentMap = {};
   for (const peer of targets) {
@@ -175,7 +199,7 @@ export async function syncLastSeenPrefTo(peerPubB64: string): Promise<void> {
     isContact = (await listContactsFor(pid)).some((c) => c.peerPublicKey === peerPubB64);
   } catch { /* считаем «не контакт» — так строже */ }
   const show = shouldShareLastSeenWith({ visibility, isContact });
-  const sent = await loadSent(pid);
+  const sent = (await loadSent(pid)) ?? {};
   // «Показывать» — состояние по умолчанию у любого клиента; пока мы ничего не
   // просили, отправлять «да» незачем.
   if (sent[peerPubB64] === show || (sent[peerPubB64] === undefined && show)) return;
