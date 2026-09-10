@@ -15,6 +15,7 @@ import { publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import {
   FeedStorage,
   deleteFeedDbForProfile,
+  listFeedDbProfileIds,
   type FeedPostRow,
   type FeedCommentRow,
   type FeedViewerRow,
@@ -3391,9 +3392,24 @@ export async function rebindFeedToProfile(profileId: number): Promise<void> {
  * списку активного профиля «чей это ключ» не определить, и чужие вложения
  * выглядят как байты удалённых постов. null — хотя бы один список не
  * прочитался: тогда вызывающий сирот не ищет вовсе.
+ *
+ * v4.32.704: список профилей брался у одного лишь снимка в SecureStore, а он
+ * умеет молча укорачиваться — испорченную строку разбор отбрасывает, а вовсе
+ * нечитаемый снимок подменяет одним профилем по умолчанию. Список короче
+ * настоящего здесь не безобиден: вложения оставшихся профилей после этого
+ * выглядят брошенными и стираются. Поэтому номера собираются из двух
+ * независимых источников: снимка и файлов баз ленты на диске. Файлы переживают
+ * порчу снимка, снимок работает там, где файлов не видно (веб). Отказ — только
+ * когда снимок неполон И файлы недоступны: тогда полного списка нет ни у кого.
  */
 async function listPostIdsEverywhere(): Promise<string[] | null> {
-  const ids = profileManager.getProfileIds();
+  const { ids: stateIds, complete } = profileManager.getProfileIdsComplete();
+  const diskIds = await listFeedDbProfileIds();
+  if (!complete && diskIds === null) {
+    log.warn('feed_postids_profile_list_incomplete', {});
+    return null;
+  }
+  const ids = diskIds === null ? stateIds : [...new Set([...stateIds, ...diskIds])];
   if (ids.length === 0) return null;
   const out: string[] = [];
   for (const id of ids) {

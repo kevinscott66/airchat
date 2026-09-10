@@ -89,6 +89,17 @@ function toProfile(row: ProfileStateV1['profiles'][0], pair: KeyPairBytes): Prof
 
 class ProfileManager {
   private state: ProfileStateV1 | null = null;
+  /**
+   * Снимок профилей на диске принят не целиком (v4.32.704).
+   *
+   * Разбор снимка отбрасывает строки, которые не прошли проверку, и молча
+   * продолжает работу с остатком: испорченная строка не вправе подсунуть чужую
+   * ключевую пару. Но список профилей после этого КОРОЧЕ настоящего, а по нему
+   * решают, чьи вложения на устройстве считать брошенными. Отметка держится до
+   * конца работы приложения: строки уже не восстановить, и делать вид, что
+   * список полон, нельзя.
+   */
+  private snapshotIncomplete = false;
   private initialized = false;
   /** Все вызовы `init()` ждут одну и ту же работу (раньше `initialized=true` ставился до await — второй вызов «успевал» раньше первого). */
   private initPromise: Promise<void> | null = null;
@@ -182,6 +193,7 @@ class ProfileManager {
             this.state = null;
           } else if (clean.length !== this.state.profiles.length) {
             log.warn('profile_manager_dropped_invalid_rows', { before: this.state.profiles.length, after: clean.length });
+            this.snapshotIncomplete = true;
             this.state = { ...this.state, profiles: clean };
           }
         }
@@ -191,6 +203,12 @@ class ProfileManager {
         this.state = null;
       }
     }
+
+    // v4.32.704: снимок на диске был, а состояние из него не собралось — размер,
+    // разбор, версия или все строки сразу. Дальше создастся один профиль по
+    // умолчанию, и его номер ничего не говорит о том, сколько их было на самом
+    // деле.
+    if (raw && !this.state) this.snapshotIncomplete = true;
 
     if (!this.state) {
       log.debug('profile_manager_step', { step: 'migrate_or_create_default' });
@@ -353,6 +371,17 @@ class ProfileManager {
    */
   getProfileIds(): number[] {
     return this.state?.profiles.map((row) => row.id) ?? [];
+  }
+
+  /**
+   * Те же номера, но со словом о полноте списка (v4.32.704).
+   *
+   * `complete: false` значит «на диске лежал снимок, и принять его целиком не
+   * вышло». Тем, кто по списку профилей решает судьбу данных — чьи вложения
+   * брошены, кому нести общий секрет, — короткий список молча выдавать нельзя.
+   */
+  getProfileIdsComplete(): { ids: number[]; complete: boolean } {
+    return { ids: this.getProfileIds(), complete: !this.snapshotIncomplete };
   }
 
   /**
@@ -599,6 +628,7 @@ class ProfileManager {
       /* ignore */
     }
     this.state = null;
+    this.snapshotIncomplete = false;
     this.mnemonicCache = null;
     this.initPromise = null;
     this.initialized = false;

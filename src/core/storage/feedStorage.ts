@@ -1307,6 +1307,34 @@ export function feedDbProfileId(fileName: string): number | null {
 }
 
 /**
+ * Номера профилей, чьи базы ленты лежат на диске (v4.32.704).
+ *
+ * Файлы переживают всё: и удаление строки профиля из снимка, и порчу самого
+ * снимка. Поэтому там, где по списку профилей решают судьбу данных, файлы —
+ * второй источник, независимый от SecureStore.
+ *
+ * `null` — не «пусто», а «спросить не у кого»: каталога приложения нет (веб) или
+ * он не прочитался. Пустой массив значит, что каталог прочитан и баз в нём нет.
+ */
+export async function listFeedDbProfileIds(): Promise<number[] | null> {
+  const base = FileSystem.documentDirectory;
+  if (!base) return null;
+  try {
+    const dir = `${base}SQLite/`;
+    if (!(await FileSystem.getInfoAsync(dir)).exists) return [];
+    const out: number[] = [];
+    for (const name of await FileSystem.readDirectoryAsync(dir)) {
+      const id = feedDbProfileId(name);
+      if (id !== null) out.push(id);
+    }
+    return out;
+  } catch (e) {
+    log.warn('feed_db_scan_failed', { err: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
+/**
  * Удалить базы ленты ВСЕХ профилей — для полного сброса устройства (v4.32.308).
  *
  * Сброс кошелька удалял главную базу и ключ, а базы ленты не трогал вовсе:
@@ -1329,18 +1357,8 @@ export function feedDbProfileId(fileName: string): number | null {
  */
 export async function deleteAllFeedDbs(knownProfileIds: readonly number[] = []): Promise<number> {
   const ids = new Set<number>(knownProfileIds.filter((id) => Number.isSafeInteger(id) && id > 0));
-  try {
-    const dir = `${FileSystem.documentDirectory ?? ''}SQLite/`;
-    if (FileSystem.documentDirectory && (await FileSystem.getInfoAsync(dir)).exists) {
-      for (const name of await FileSystem.readDirectoryAsync(dir)) {
-        const id = feedDbProfileId(name);
-        if (id !== null) ids.add(id);
-      }
-    }
-  } catch (e) {
-    // Каталог не прочитался — остаются переданные номера: это лучше, чем ничего.
-    log.warn('feed_db_scan_failed', { err: e instanceof Error ? e.message : String(e) });
-  }
+  // Каталог не прочитался — остаются переданные номера: это лучше, чем ничего.
+  for (const id of (await listFeedDbProfileIds()) ?? []) ids.add(id);
   const failed: number[] = [];
   for (const id of ids) {
     try {

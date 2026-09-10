@@ -247,7 +247,37 @@ describe('вызывающий даёт общий список, а не сво�
 
   it('уборка спрашивает посты всех профилей', () => {
     expect(feedService).toContain('const knownPostIdsEverywhere = await listPostIdsEverywhere();');
-    expect(feedService).toContain('profileManager.getProfileIds()');
+  });
+
+  /**
+   * v4.32.704: раньше здесь стояло `profileManager.getProfileIds()` — «список
+   * берётся у менеджера профилей». Этого мало: тот список умеет молча
+   * укорачиваться, а короткий список объявляет чужие вложения брошенными.
+   * Теперь закреплено, что источников два и что отказ наступает ровно тогда,
+   * когда полного списка нет ни у одного из них.
+   */
+  it('список профилей собирается из снимка И из файлов баз', () => {
+    expect(feedService).toContain(
+      'const { ids: stateIds, complete } = profileManager.getProfileIdsComplete();'
+    );
+    expect(feedService).toContain('const diskIds = await listFeedDbProfileIds();');
+    expect(feedService).toContain(
+      'const ids = diskIds === null ? stateIds : [...new Set([...stateIds, ...diskIds])];'
+    );
+  });
+
+  it('неполный снимок без файлов означает отказ от поиска сирот', () => {
+    expect(feedService).toContain('if (!complete && diskIds === null) {');
+    const at = feedService.indexOf('if (!complete && diskIds === null) {');
+    expect(at).toBeGreaterThan(-1);
+    expect(feedService.slice(at, at + 200)).toContain('return null;');
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: одиночный список профилей сюда больше не приходит', () => {
+    const at = feedService.indexOf('async function listPostIdsEverywhere(');
+    expect(at).toBeGreaterThan(-1);
+    const body = feedService.slice(at, feedService.indexOf('\n}\n', at));
+    expect(body).not.toContain('profileManager.getProfileIds()');
   });
 
   it('прежняя форма вызова не вернулась', () => {
