@@ -152,7 +152,13 @@ describe('остальные исходы разбираются как преж
 describe('форма правки закреплена', () => {
   it('поле карточки читается формой с тремя исходами', () => {
     expect(ownSrc).toContain('const own = await kvGetSecretCellUpgrading(profileScopedKey(pid, key));');
-    expect(ownSrc).toContain("if (own.state !== 'absent') return cellTextOrNull(own);");
+    // v4.32.705: три исхода теперь доживают и до вызывающего. Прежде чтение
+    // сводило «не прочиталось» к «поля нет» прямо здесь (`cellTextOrNull`), и
+    // спросить о разнице было негде — на этом открывалась проверка двойников
+    // username.
+    expect(ownSrc).toContain("if (own.state === 'unreadable') return null;");
+    expect(ownSrc).toContain("if (own.state === 'plain') return { text: own.text };");
+    expect(ownSrc).toContain('return (await ownFieldTryGetFor(pid, key))?.text ?? null;');
   });
 
   it('и строчная форма из чтения карточки убрана целиком', () => {

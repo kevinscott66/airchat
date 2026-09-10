@@ -28,7 +28,6 @@ import {
   kvSetSecret,
   kvSetSecretScoped,
 } from '../storage/local';
-import { cellTextOrNull } from '../storage/atRestCell';
 import { profileScopedKey, type OwnProfileKey } from '../storage/kvKeys';
 import { log } from '../logger';
 import { profileManager } from './profileManager';
@@ -105,6 +104,22 @@ export async function ownFieldGet(key: OwnProfileKey): Promise<string | null> {
  * правильный (rcpt.myPub), из-за чего расхождение и не бросалось в глаза.
  */
 export async function ownFieldGetFor(pid: number, key: OwnProfileKey): Promise<string | null> {
+  return (await ownFieldTryGetFor(pid, key))?.text ?? null;
+}
+
+/**
+ * То же поле, но «не прочиталось» отдельно от «не записано» (v4.32.705).
+ *
+ * `null` — запись на месте, и открыть её не удалось. `{ text: null }` — записи
+ * нет вовсе. Строчная форма выше сводит оба случая к одному null, и читающим
+ * местам этого довольно: показать нечего и там, и там. Но проверка «не занято
+ * ли имя соседним профилем» строится на обратном утверждении — «у соседа
+ * этого имени НЕТ», — а такое утверждение из нечитаемой ячейки не следует.
+ */
+export async function ownFieldTryGetFor(
+  pid: number,
+  key: OwnProfileKey,
+): Promise<{ text: string | null } | null> {
   // v4.32.701: тремя состояниями, а не строкой. Строчная форма сводит «поля
   // нет» и «поле не прочиталось» к одному null, и на этом стоял перенос ниже:
   // не открывшаяся своя запись выглядела как отсутствующая, и её место
@@ -115,16 +130,17 @@ export async function ownFieldGetFor(pid: number, key: OwnProfileKey): Promise<s
   // прочитав запись, переписывать её нельзя — то же правило, что вынесено в
   // kvGetSecretCellScoped (v4.32.552), только здесь перенос написан по месту.
   const own = await kvGetSecretCellUpgrading(profileScopedKey(pid, key));
-  if (own.state !== 'absent') return cellTextOrNull(own);
+  if (own.state === 'unreadable') return null;
+  if (own.state === 'plain') return { text: own.text };
   // Общая запись до v4.32.288 принадлежит первому профилю: её писали тогда,
   // когда профиль был один. Остальным она не наследуется — иначе разделение
   // профилей снова стало бы декорацией.
-  if (pid !== 1) return null;
+  if (pid !== 1) return { text: null };
   const legacy = await kvGetSecret(key);
-  if (legacy == null) return null;
+  if (legacy == null) return { text: null };
   // v4.32.293: исходную запись убираем, только если копия действительно легла.
   if (await kvSetSecret(profileScopedKey(pid, key), legacy)) await kvDelete(key);
-  return legacy;
+  return { text: legacy };
 }
 
 /**
@@ -233,14 +249,51 @@ export async function getOwnUsernameFor(pid: number): Promise<string | null> {
   return normalizeUsername(await ownFieldGetFor(pid, OWN_USERNAME_KEY));
 }
 
-/** Не разрешать два одинаковых username на одном устройстве у разных DID. */
+/**
+ * Username заданного аккаунта с отдельным ответом «прочитать не удалось».
+ *
+ * `null` — у профиля есть запись имени, и она не открылась.
+ */
+export async function getOwnUsernameTryFor(pid: number): Promise<{ username: string | null } | null> {
+  const cell = await ownFieldTryGetFor(pid, OWN_USERNAME_KEY);
+  return cell === null ? null : { username: normalizeUsername(cell.text) };
+}
+
+/**
+ * Не разрешать два одинаковых username на одном устройстве у разных DID.
+ *
+ * v4.32.705: ответ «нет, не занято» здесь равносилен разрешению записать имя,
+ * и выдавать его наугад нельзя. Прежде проверка спрашивала у соседних профилей
+ * строку имени, а строка не различает «имени нет» и «ячейка не открылась»:
+ * сосед с нечитаемым хендлом молча считался безымянным, и два DID на одном
+ * устройстве занимали один и тот же `@handle`. Имя — единственный
+ * человекочитаемый адрес в приложении, и различить таких двоих получателю
+ * конверта нечем.
+ *
+ * По той же причине список профилей берётся с отметкой о полноте (v4.32.704):
+ * укоротившийся снимок прячет соседа целиком, а спрятанный сосед — это опять
+ * «не занято» без всяких оснований.
+ *
+ * Поэтому оба тумана отвечают «занято». Отказ человек переживёт — экран
+ * предложит другое имя; разошедшийся по сети двойник не отзывается ничем.
+ */
 export async function isUsernameTakenByAnotherProfile(username: string, pid = activeProfileId()): Promise<boolean> {
   const normalized = normalizeUsername(username);
   if (!normalized) return false;
   await profileManager.init();
-  for (const candidatePid of profileManager.getProfileIds()) {
+  const { ids, complete } = profileManager.getProfileIdsComplete();
+  if (!complete) {
+    log.warn('username_local_check_profiles_incomplete', {});
+    return true;
+  }
+  for (const candidatePid of ids) {
     if (candidatePid === pid) continue;
-    if ((await getOwnUsernameFor(candidatePid)) === normalized) return true;
+    const read = await getOwnUsernameTryFor(candidatePid);
+    if (read === null) {
+      log.warn('username_local_check_unreadable', { pid: candidatePid });
+      return true;
+    }
+    if (read.username === normalized) return true;
   }
   return false;
 }
