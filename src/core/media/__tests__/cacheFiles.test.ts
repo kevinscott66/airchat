@@ -75,17 +75,30 @@ describe('имя файла выгрузки', () => {
 });
 
 describe('очистка кэша из настроек', () => {
-  it('убирает выгруженную переписку и вложения', async () => {
+  it('убирает выгруженную переписку и вложения, на которые никто не ссылается', async () => {
     mockDirFiles = ['airchat_export_chat_1.txt', 'airchat_media_a.bin', 'photo.JPG'];
-    expect(await clearCacheFiles()).toBe(3);
+    expect(await clearCacheFiles(async () => new Set<string>())).toBe(3);
+  });
+
+  it('вложение, на которое ссылается уцелевшая строка, остаётся', async () => {
+    // v4.32.702: ровно то, ради чего уборке передаётся список живых ссылок.
+    // Раньше «Удалить временные файлы и освободить место» уносило вложение из
+    // живой переписки: строка на месте, превью на месте, а по нажатию — ничего.
+    mockDirFiles = ['airchat_export_chat_1.txt', 'airchat_media_a.bin', 'photo.JPG'];
+    expect(await clearCacheFiles(async () => new Set(['a']))).toBe(2);
+    expect(deleted).not.toContain('/cache/airchat_media_a.bin');
   });
 
   it('не трогает то, что может быть в работе', async () => {
     // Куски IPFS и картинки постов ленты могут показываться прямо сейчас:
     // снести их на живом приложении — получить пустой квадрат вместо картинки.
     mockDirFiles = ['ipfs_http_add_1.bin', 'feed_q_abc_0.img', 'unknown.dat'];
-    expect(await clearCacheFiles()).toBe(0);
+    const loadLiveIds = jest.fn(async () => new Set<string>());
+    expect(await clearCacheFiles(loadLiveIds)).toBe(0);
     expect(deleted).toEqual([]);
+    // И расшифровывать всю переписку ради списка ссылок не понадобилось:
+    // вложений в кэше нет, значит и сверять нечего.
+    expect(loadLiveIds).not.toHaveBeenCalled();
   });
 });
 

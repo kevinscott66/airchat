@@ -64,7 +64,7 @@ import { ACCENT_SWATCHES, avatarShape, badgeTint, colorsForScheme, contrastingIn
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import {
-  kvGet, kvSet, clearAllMessageHistory,
+  kvGet, kvSet, clearAllMessageHistory, liveAttachmentBlobIds,
   listQuickReplies, addQuickReply, updateQuickReply, deleteQuickReply,
   type QuickReply,
 } from '../../core/storage/local';
@@ -1084,7 +1084,10 @@ function SettingsScreenImpl({
       // создаются. Пока он жил здесь, экспорт переписки писал .txt под тремя
       // разными именами, и ни одно из них в список не входило: расшифрованная
       // беседа оставалась в кэше, сколько бы раз кэш ни чистили.
-      await clearCacheFiles();
+      // v4.32.702: уборщику передаётся источник живых ссылок. Без него он
+      // стирал вложения из живой переписки — те, у которых копии больше нигде
+      // нет (см. cacheSweepPolicy).
+      await clearCacheFiles(liveAttachmentBlobIds);
       await loadCacheSize();
       showSuccess('Кэш очищен');
     } catch { showError('Не удалось очистить кэш'); }
