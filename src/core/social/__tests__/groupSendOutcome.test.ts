@@ -42,7 +42,12 @@ describe('v4.32.450 — беда рассылки названа в одном �
   it('два случая разведены, потому что решения по ним обратные', () => {
     expect(outcomeSrc).toContain('export type GroupSendProblem =');
     expect(outcomeSrc).toContain("| { kind: 'denied'; code: SendDenyCode }");
-    expect(outcomeSrc).toContain("| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' };");
+    // v4.32.700: третья причина недоставки — состав группы не прочитался.
+    // Она обязана быть именно недоставкой, а не отказом в правах: по 'denied'
+    // планировщик СНИМАЕТ строку расписания, а сбой чтения повторить стоит.
+    expect(outcomeSrc).toContain(
+      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };"
+    );
   });
 
   it('успех с нулём принявших бедой считается, пустая группа — нет', () => {
@@ -50,6 +55,11 @@ describe('v4.32.450 — беда рассылки названа в одном �
     expect(b).not.toBe('');
     expect(b).toContain("if (res.members > 0 && res.sent === 0) return { kind: 'undelivered', reason: 'all_failed' };");
     expect(b).toContain('return null;');
+    // v4.32.700: причина отказа переносится как есть, а не сплющивается в
+    // 'no_service' — иначе «состав не прочитался» назовётся отсутствием службы.
+    expect(b).toContain("if (res.reason === 'denied') return { kind: 'denied', code: res.code };");
+    expect(b).toContain("return { kind: 'undelivered', reason: res.reason };");
+    expect(b).not.toContain(": { kind: 'undelivered', reason: 'no_service' };");
   });
 
   it('текст отказа по правам берётся из политики, а не переписан заново', () => {
@@ -65,6 +75,12 @@ describe('v4.32.450 — беда рассылки названа в одном �
     const b = bodyOf(outcomeSrc, 'export function groupSendProblemText(');
     expect(b).toContain('Сообщение осталось только у вас.');
     expect(b).toContain('Сообщение не ушло никому из участников: нет связи. Оно осталось только у вас.');
+    expect(b).toContain(
+      "return 'Не удалось прочитать состав группы, отправлять было некому. Сообщение осталось только у вас.';"
+    );
+    // Все три ветки кончаются одинаково: строка уже видна в переписке.
+    const phrases = b.split('\n').filter((l) => l.includes('осталось только у вас'));
+    expect(phrases).toHaveLength(3);
   });
 });
 
@@ -117,7 +133,8 @@ describe('v4.32.450 — ни один вызов не выбрасывает и�
 
   it('короткая причина — для перечислений, целая фраза туда не лезет', () => {
     const b = bodyOf(outcomeSrc, 'export function groupSendProblemShort(');
-    expect(b).toContain("sendDenyText(problem.code).toLowerCase() : 'нет связи';");
+    expect(b).toContain("if (problem.kind === 'denied') return sendDenyText(problem.code).toLowerCase();");
+    expect(b).toContain("return problem.reason === 'members_unreadable' ? 'состав не прочитан' : 'нет связи';");
   });
 });
 

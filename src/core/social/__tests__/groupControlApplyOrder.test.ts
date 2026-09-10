@@ -79,6 +79,11 @@ jest.mock('../../storage/local', () => ({
   listGroups: jest.fn(async (pid: number) => mockGroups.filter((g) => g.ownerProfileId === pid)),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
+  // v4.32.700: та же выборка, но формой с третьим исходом — отправляющая
+  // сторона перешла на неё. Здесь чтение всегда удаётся, поэтому null не
+  // возвращается никогда: G3 проверяет счёт доставок, а не сбой базы.
+  listGroupMembersRead: jest.fn(async (gid: string, pid: number) =>
+    (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async () => true),
   touchGroupConversation: jest.fn(async () => {}),

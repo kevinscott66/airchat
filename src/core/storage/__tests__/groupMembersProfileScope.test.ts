@@ -165,7 +165,13 @@ describe('групповые пути спрашивают состав у св�
 
   it('рассылка сообщения спрашивает у службы, которая его и отправит', () => {
     const f = bodyOf(GM, 'export async function fanoutGroupMessage(');
-    expect(f).toContain('await listGroupMembers(groupId, (await svc.groupRecipient()).pid)');
+    // v4.32.700: тот же профиль, но формой, отличающей пустоту от сбоя чтения.
+    // Прежняя отдавала на сбое пустой список — адресатов не оказывалось, и
+    // рассылка отвечала «успех, принявших ноль», что разбор исхода считает
+    // законной пустой группой.
+    expect(f).toContain('await listGroupMembersRead(groupId, (await svc.groupRecipient()).pid)');
+    expect(f).not.toContain('await listGroupMembers(groupId, (await svc.groupRecipient()).pid)');
+    expect(f).toContain("return { ok: false, reason: 'members_unreadable' };");
   });
 
   it('вердикт отправки считается по тому же профилю, что и рассылка', () => {

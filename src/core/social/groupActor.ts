@@ -34,7 +34,13 @@
  * ролью. Раньше этот `as` стоял пять раз; теперь один.
  */
 
-import { getGroup, listGroupMembers, type GroupMemberRow, type GroupRow } from '../storage/local';
+import {
+  getGroup,
+  listGroupMembers,
+  listGroupMembersRead,
+  type GroupMemberRow,
+  type GroupRow,
+} from '../storage/local';
 import type { SendRole } from './groupSendPolicy';
 
 /**
@@ -81,5 +87,29 @@ export async function lookupGroupActor(
   const group = await getGroup(groupId, ownerProfileId);
   if (!group) return { group: null, members: [], role: null };
   const members = await listGroupMembers(groupId, ownerProfileId);
+  return { group, members, role: roleOf(members, actorPubB64) };
+}
+
+/**
+ * То же, что `lookupGroupActor`, но отличающее «состава нет» от «состав не
+ * прочитался» (v4.32.700).
+ *
+ * `listGroupMembers` на сбое чтения отдаёт пустой список, и роль по нему
+ * выходит null — то есть «отправитель не участник». Для приёма чужого конверта
+ * такой ответ безобиден: конверт просто не применится, а отправитель повторит.
+ * Для СВОЕЙ отправки он губителен: своё же сообщение объявляется запрещённым и
+ * пропадает — планировщик отложенных снимает строку расписания именно по
+ * отказу в правах. Кому важно различие, берёт эту обёртку: null здесь значит
+ * «проверять нечем», и решение остаётся за вызывающим.
+ */
+export async function lookupGroupActorRead(
+  groupId: string,
+  actorPubB64: string,
+  ownerProfileId: number
+): Promise<GroupActor | null> {
+  const group = await getGroup(groupId, ownerProfileId);
+  if (!group) return { group: null, members: [], role: null };
+  const members = await listGroupMembersRead(groupId, ownerProfileId);
+  if (!members) return null;
   return { group, members, role: roleOf(members, actorPubB64) };
 }

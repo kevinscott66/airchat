@@ -50,6 +50,9 @@ describe('итог групповой рассылки различает отк
   it('тип разделяет «нет службы» и «нет прав»', () => {
     expect(messaging).toContain('export type GroupFanoutResult =');
     expect(messaging).toContain("{ ok: false; reason: 'no_service' }");
+    // v4.32.700: «состав не прочитался» — свой случай. Служба на месте,
+    // не отвечает база; сливать его с 'no_service' значит врать в журнале.
+    expect(messaging).toContain("{ ok: false; reason: 'members_unreadable' }");
     expect(messaging).toContain("{ ok: false; reason: 'denied'; code: SendDenyCode }");
     expect(messaging).toContain('{ ok: true; members: number; sent: number; failed: number }');
   });
@@ -62,6 +65,7 @@ describe('итог групповой рассылки различает отк
     expect(code.some((l) => l.trim() === 'return false;')).toBe(false);
     // отказы возвращаются каждый со своей причиной
     expect(code.some((l) => l.includes("return { ok: false, reason: 'no_service' };"))).toBe(true);
+    expect(code.some((l) => l.includes("return { ok: false, reason: 'members_unreadable' };"))).toBe(true);
     expect(code.some((l) => l.includes("return { ok: false, reason: 'denied', code: verdict.code };"))).toBe(true);
   });
 
@@ -116,7 +120,9 @@ describe('итог групповой рассылки различает отк
     expect(scheduler).toContain('const problem = groupSendProblem(fanout);');
     // Отказ по правам и отказ по связи разведены: решения по ним обратные.
     expect(outcome).toContain("| { kind: 'denied'; code: SendDenyCode }");
-    expect(outcome).toContain("| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' };");
+    expect(outcome).toContain(
+      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };"
+    );
   });
 
   it('срок отказа от попыток записан одним правилом', () => {

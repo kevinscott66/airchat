@@ -190,10 +190,17 @@ describe('вызывающие подключены к дому', () => {
     // Четыре приёмника конвертов (реакция, голос, завершение опроса,
     // отметка о прочтении в группе) и одна отправляющая сторона (проверка
     // права на отправку в группу).
-    const total = FILES.filter((f) => f.key !== HOME)
-      .flatMap((f) => f.lines)
-      .filter((l) => l.includes('await lookupGroupActor(')).length;
-    expect(total).toBe(5);
+    const outside = FILES.filter((f) => f.key !== HOME).flatMap((f) => f.lines);
+    const collapsing = outside.filter((l) => l.includes('await lookupGroupActor(')).length;
+    // v4.32.700: отправляющая сторона перешла на форму, отличающую «состава
+    // нет» от «состав не прочитался»: по пустому списку роль выходит null,
+    // вердикт — «вы не участник», и СВОЁ сообщение объявляется запрещённым.
+    // Четыре приёмника конвертов остались на прежней — им пустой ответ
+    // безобиден, конверт просто не применится.
+    const reading = outside.filter((l) => l.includes('await lookupGroupActorRead(')).length;
+    expect(collapsing).toBe(4);
+    expect(reading).toBe(1);
+    expect(collapsing + reading).toBe(5);
   });
 
   it('roleOf зовут там, где список участников уже прочитан', () => {

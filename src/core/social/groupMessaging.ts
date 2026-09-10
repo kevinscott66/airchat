@@ -45,7 +45,7 @@ import { activeRecipients, fanoutControlEnvelope } from './controlFanout';
 import type { FanoutResult } from './controlFanout';
 import type { GroupControlOutcome } from './groupControlOutcome';
 import { canApplyGroupMessageOp, canSendToGroup, mediaKindOfText, slowModeSysLine, type SendDenyCode, type SendVerdict } from './groupSendPolicy';
-import { lookupGroupActor, roleOf } from './groupActor';
+import { lookupGroupActor, lookupGroupActorRead, roleOf } from './groupActor';
 import { isAdminRole, ownGroupRole, roleAfterCtl } from './ownGroupRole';
 import { displayNameOrNull, sanitizeDisplayName, stripSpoofedSysPrefix } from './sysLineGuard';
 import { previewLabelForText, truncateReplyPreview } from './messagePreview';
@@ -153,7 +153,16 @@ export async function groupSendVerdict(
   try {
     const svc = getMessagingService();
     const pid = svc ? (await svc.groupRecipient()).pid : (profileManager.getActiveProfile()?.id ?? 1);
-    const actor = await lookupGroupActor(groupId, senderPubB64, pid);
+    // v4.32.700: состав, который не прочитался, — не пустая группа. С пустым
+    // списком роль выходит null, вердикт — «вы не участник», и СВОЁ сообщение
+    // объявляется запрещённым: планировщик отложенных снимает строку
+    // расписания именно по отказу в правах, и текст пропадает навсегда.
+    // Отказ чтения — это отказ проверки, а не отказ в праве.
+    const actor = await lookupGroupActorRead(groupId, senderPubB64, pid);
+    if (!actor) {
+      log.warn('group_send_verdict_unreadable', { gid: groupId.slice(0, 8) });
+      return { allowed: true };
+    }
     if (!actor.group) return { allowed: true };
     return canSendToGroup({
       role: actor.role,
@@ -188,6 +197,11 @@ export type GroupFanoutResult =
   | { ok: true; members: number; sent: number; failed: number }
   /** Службы обмена нет — ничего не отправлено, повторить позже. */
   | { ok: false; reason: 'no_service' }
+  /**
+   * Состав группы не прочитался — адресов нет, повторить позже (v4.32.700).
+   * Отдельно от `no_service`: служба на месте, не отвечает база.
+   */
+  | { ok: false; reason: 'members_unreadable' }
   /** Права не позволяют — повторять бессмысленно. */
   | { ok: false; reason: 'denied'; code: SendDenyCode };
 
@@ -214,7 +228,18 @@ export async function fanoutGroupMessage(
 
   // v4.32.466: состав спрашивается у своего профиля — его называет служба
   // переписки, чьим ключом сообщение и уйдёт.
-  const members = await listGroupMembers(groupId, (await svc.groupRecipient()).pid);
+  //
+  // v4.32.700: и читается формой, отличающей пустоту от сбоя. Прежняя отдавала
+  // на сбое пустой список: адресатов не оказывалось, рассылка возвращала
+  // `ok: true` с нулём принявших, разбор исхода считал это законной пустой
+  // группой — локальная копия писалась, строка расписания снималась, и
+  // сообщение не получал никто. Здесь нужны настоящие адреса, поэтому отказ
+  // чтения закрывает отправку, а не открывает её.
+  const members = await listGroupMembersRead(groupId, (await svc.groupRecipient()).pid);
+  if (!members) {
+    log.warn('group_fanout_members_unreadable', { gid: groupId.slice(0, 8) });
+    return { ok: false, reason: 'members_unreadable' };
+  }
 
   // v4.32.234: единственная точка, через которую уходит ЛЮБОЕ сообщение
   // группы (текст, медиа, голос, опрос, отложенное, пересланное). Проверка

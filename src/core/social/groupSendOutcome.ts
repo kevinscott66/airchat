@@ -28,14 +28,17 @@ import { sendDenyText, type SendDenyCode } from './groupSendPolicy';
  */
 export type GroupSendProblem =
   | { kind: 'denied'; code: SendDenyCode }
-  | { kind: 'undelivered'; reason: 'no_service' | 'all_failed' };
+  | { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };
 
 /** Беда рассылки, либо null — если сообщение принял хотя бы кто-то. */
 export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | null {
   if (!res.ok) {
-    return res.reason === 'denied'
-      ? { kind: 'denied', code: res.code }
-      : { kind: 'undelivered', reason: 'no_service' };
+    if (res.reason === 'denied') return { kind: 'denied', code: res.code };
+    // v4.32.700: «состав не прочитался» — тоже недоставка, а не отказ в правах:
+    // повторять здесь как раз имеет смысл, база отвечает не всегда с первого
+    // раза. Прежде такой сбой оборачивался пустым списком участников и уходил
+    // в успех с нулём принявших.
+    return { kind: 'undelivered', reason: res.reason };
   }
   // ok:true с нулём принявших — не успех. Пустая группа (адресатов не было
   // вовсе) бедой не считается: рассылать было некому и незачем.
@@ -49,9 +52,11 @@ export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | nul
  * строка при этом уже видна в переписке.
  */
 export function groupSendProblemText(problem: GroupSendProblem): string {
-  return problem.kind === 'denied'
-    ? `${sendDenyText(problem.code)}. Сообщение осталось только у вас.`
-    : 'Сообщение не ушло никому из участников: нет связи. Оно осталось только у вас.';
+  if (problem.kind === 'denied') return `${sendDenyText(problem.code)}. Сообщение осталось только у вас.`;
+  if (problem.reason === 'members_unreadable') {
+    return 'Не удалось прочитать состав группы, отправлять было некому. Сообщение осталось только у вас.';
+  }
+  return 'Сообщение не ушло никому из участников: нет связи. Оно осталось только у вас.';
 }
 
 /**
@@ -59,5 +64,6 @@ export function groupSendProblemText(problem: GroupSendProblem): string {
  * Там уже сказано, что не отправлено, и целая фраза в списке не читается.
  */
 export function groupSendProblemShort(problem: GroupSendProblem): string {
-  return problem.kind === 'denied' ? sendDenyText(problem.code).toLowerCase() : 'нет связи';
+  if (problem.kind === 'denied') return sendDenyText(problem.code).toLowerCase();
+  return problem.reason === 'members_unreadable' ? 'состав не прочитан' : 'нет связи';
 }
