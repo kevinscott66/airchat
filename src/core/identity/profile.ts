@@ -3,13 +3,14 @@ import { signJson } from '../crypto/signature';
 import { log } from '../logger';
 import {
   kvDelete,
-  kvGetSecret,
-  kvGetSecretUpgrading,
+  kvGetSecretCell,
+  kvGetSecretCellUpgrading,
   kvSetSecret,
   kvSetSecretScoped,
   notifyChatStorageChanged,
   profileScopedKey,
 } from '../storage/local';
+import { cellTextOrNull } from '../storage/atRestCell';
 import { isPlainCid } from '../cid';
 import { publicKeyToDidKey } from './did';
 import { getOwnDisplayName, ownFieldGet, ownFieldSet } from './ownProfile';
@@ -179,8 +180,17 @@ function parseTips(raw: string | null, did: string | null): Record<string, strin
 async function claimSharedConversationTips(
   pid: number,
   did: string | null
-): Promise<Record<string, string>> {
-  const sharedRaw = await kvGetSecret(CONVERSATION_TIPS_KEY);
+): Promise<Record<string, string> | null> {
+  // v4.32.697: общая запись читается ячейкой. Не открывшийся шифртекст — не
+  // «забирать нечего»: забрав из него пустоту, мы записали бы пустую запись
+  // профиля, и общая осталась бы лежать навсегда — перенос повторяется только
+  // пока своей записи нет. То же правило, что у kvGetSecretCellScoped.
+  const shared = await kvGetSecretCell(CONVERSATION_TIPS_KEY);
+  if (shared.state === 'unreadable') {
+    log.warn('conversation_tips_shared_unreadable', { pid });
+    return null;
+  }
+  const sharedRaw = cellTextOrNull(shared);
   if (!did) return parseTips(sharedRaw, null);
   const mine = parseTips(sharedRaw, did);
   // Не записалось — общую запись не трогаем: иначе свои пары исчезнут, а
@@ -194,20 +204,42 @@ async function claimSharedConversationTips(
   return mine;
 }
 
-/** Чтение подсказок ровно того профиля, который назван — без обращения к «активному». */
-async function readTipsFor(pid: number, did: string | null): Promise<Record<string, string>> {
+/**
+ * Чтение подсказок ровно того профиля, который назван — без обращения к
+ * «активному». null означает «не прочиталось» и НЕ означает «подсказок нет».
+ *
+ * v4.32.697: здесь стояло kvGetSecretUpgrading, а он сводит к одному null и
+ * «записи нет», и «не открылась» — при том, что рядом, в local.ts, ровно для
+ * этого случая заведена ячейка с третьим состоянием. Разница нужна не чтению,
+ * а записи: updateTips читает эту же запись, дополняет и кладёт обратно
+ * целиком. Заминка базы или недоступный ключ приходили сюда как «подсказок
+ * нет», и следующее же отправленное сообщение записывало карту из одной
+ * своей пары поверх всех остальных. Подсказка — это хвост переписки, по
+ * которому обход истории находит предыдущее сообщение; потеряв её, обход
+ * упирается в пропуск, и восстановить хвост локально уже нечем.
+ */
+async function readTipsFor(
+  pid: number,
+  did: string | null
+): Promise<Record<string, string> | null> {
   try {
-    const raw = await kvGetSecretUpgrading(profileScopedKey(pid, CONVERSATION_TIPS_KEY));
-    if (raw == null) return await claimSharedConversationTips(pid, did);
-    return parseTips(raw, did);
-  } catch {
-    return {};
+    const cell = await kvGetSecretCellUpgrading(profileScopedKey(pid, CONVERSATION_TIPS_KEY));
+    if (cell.state === 'unreadable') return null;
+    if (cell.state === 'absent') return await claimSharedConversationTips(pid, did);
+    return parseTips(cell.text, did);
+  } catch (e) {
+    log.warn('conversation_tips_read_failed', {
+      pid,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return null;
   }
 }
 
 export async function getLocalConversationTips(): Promise<Record<string, string>> {
   const active = profileManager.getActiveProfile();
-  return await readTipsFor(active?.id ?? 1, active?.did ?? null);
+  // Показывать нечего в обоих случаях, а различие важно только записи.
+  return (await readTipsFor(active?.id ?? 1, active?.did ?? null)) ?? {};
 }
 
 /**
@@ -257,6 +289,12 @@ async function updateTips(
 ): Promise<boolean> {
   const run = async (): Promise<boolean> => {
     const tips = await readTipsFor(pid, did);
+    if (tips === null) {
+      // v4.32.697: не прочитали — не пишем. Иначе одна новая пара легла бы
+      // поверх всех прежних. Вызывающий уже умеет отвечать на «не записалось».
+      log.warn('conversation_tips_unreadable', { pid });
+      return false;
+    }
     return await kvSetSecretScoped(pid, CONVERSATION_TIPS_KEY, JSON.stringify(apply(tips)));
   };
   const started = tipsTx.then(run, run);

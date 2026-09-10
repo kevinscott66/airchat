@@ -37,6 +37,20 @@ jest.mock('../../storage/local', () => {
       await kvSetSecret(k, stored);
       return stored;
     }),
+    // v4.32.697: подсказки читаются ячейкой — «нет записи» и «не открылась»
+    // здесь разные ответы. Подделка отвечает так же, как оригинал.
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
+    kvGetSecretCellUpgrading: jest.fn(async (k: string) => {
+      const stored = kv[k];
+      if (stored == null) return { state: 'absent' };
+      if (stored.startsWith(PREFIX)) return { state: 'plain', text: stored.slice(PREFIX.length) };
+      await kvSetSecret(k, stored);
+      return { state: 'plain', text: stored };
+    }),
     kvSetSecretScoped: jest.fn(async (pid: number, k: string, v: string) =>
       kvSetSecret(`p${pid}:${k}`, v)),
     profileScopedKey: (pid: number, k: string) => `p${pid}:${k}`,
