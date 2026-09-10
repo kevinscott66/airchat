@@ -83,7 +83,10 @@ describe('v4.32.446 — итог доставки конверта опроса 
     expect(fanoutCode.split('getMessagingService()').length - 1).toBe(1);
     expect(fanoutCode.split('svc.sendMessage(').length - 1).toBe(1);
     expect(funnelBody()).toContain('const svc = getMessagingService();');
-    expect(funnelBody()).toContain('await svc.sendMessage(pub, payload);');
+    // v4.32.713: принятым считается только непустой ответ sendMessage —
+    // null у служебного конверта означает отказ навсегда, очереди у него нет.
+    expect(funnelBody()).toContain('const cid = await svc.sendMessage(pub, payload);');
+    expect(funnelBody()).toContain('if (cid) {');
   });
 });
 
