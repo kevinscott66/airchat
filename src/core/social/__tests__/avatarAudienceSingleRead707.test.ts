@@ -40,7 +40,9 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvSet: jest.fn(async () => {}),
 }));
 
-const mockSend = jest.fn(async () => {});
+// v4.32.715: пустой ответ sendMessage теперь означает отказ, а отказ не
+// заносится в карту «этому уже сообщено». Возвращаем настоящий cid.
+const mockSend = jest.fn(async () => 'cid-707');
 jest.mock('../messaging', () => ({
   getMessagingService: () => ({ sendMessage: (...a: unknown[]) => mockSend(...(a as [])) }),
 }));

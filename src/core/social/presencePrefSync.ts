@@ -117,7 +117,20 @@ async function sendPref(peerPubB64: string, show: boolean): Promise<boolean> {
     return false;
   }
   try {
-    await svc.sendMessage(peerPubB64, encodePresencePrefEnvelope({ show, ts: Date.now() }));
+    // v4.32.715: пустой ответ — отказ. Проверка выше знает только про
+    // блокировку и часовой лимит; нет общего ключа, негодный peerDid,
+    // исчерпанный лимит служебных конвертов и «нет маршрута в сеть» видны
+    // только здесь. Записанный как доставка отказ означает неотправленную
+    // просьбу «не показывай моё время последнего входа» — и повторить её
+    // будет некому.
+    const cid = await svc.sendMessage(
+      peerPubB64,
+      encodePresencePrefEnvelope({ show, ts: Date.now() })
+    );
+    if (!cid) {
+      log.info('presence_pref_send_refused', { to: peerPubB64.slice(0, 12) });
+      return false;
+    }
     return true;
   } catch (e) {
     log.warn('presence_pref_send_failed', {

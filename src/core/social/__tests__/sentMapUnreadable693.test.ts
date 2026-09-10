@@ -63,8 +63,11 @@ jest.mock('../presenceService', () => ({
 }));
 jest.mock('../messaging', () => ({
   getMessagingService: () => ({
+    // v4.32.715: пустой ответ — отказ, и он больше не попадает в карту
+    // «этому уже сообщено». Возвращаем cid, чтобы проверять именно карту.
     sendMessage: async (peer: string, text: string) => {
       mockSent.push({ peer, text });
+      return 'cid-693';
     },
   }),
 }));

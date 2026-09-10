@@ -354,6 +354,7 @@ export async function broadcastMyProfile(): Promise<void> {
 
   const sent = (await loadSent(pid)) ?? {};
   const fresh: SentMap = {};
+  let refused = 0;
   for (const peer of contacts) {
     // Переключились на другой аккаунт — рассылка чужой карточки под чужой же
     // парой ключей не продолжается. Что успели отправить, записываем ниже.
@@ -367,7 +368,20 @@ export async function broadcastMyProfile(): Promise<void> {
     // изменения профиля). См. sendGate.
     if (!(await canReachPeer(peer))) continue;
     try {
-      await svc.sendMessage(peer, text);
+      // v4.32.715: пустой ответ — отказ, а не отправка. canReachPeer выше
+      // отсекает лишь два повода из шести: блокировку и выбранный часовой
+      // лимит. Остальные четыре — нет общего ключа, негодный peerDid,
+      // исчерпанный лимит служебных конвертов и «нет маршрута в сеть» —
+      // видны только по возвращённому значению, а служебный конверт не
+      // оставляет и строки в переписке. Отметка «эту версию он получил»
+      // ставилась всё равно, и дальше рассылка его пропускала: новое имя и
+      // фотография не доезжали до собеседника уже никогда. Ровно от этого и
+      // заводили проверку перед отправкой в v4.32.320.
+      const cid = await svc.sendMessage(peer, text);
+      if (!cid) {
+        refused += 1;
+        continue;
+      }
       fresh[peer] = version;
     } catch (e) {
       log.debug('profile_send_failed', {
@@ -377,7 +391,12 @@ export async function broadcastMyProfile(): Promise<void> {
     }
   }
   await recordSent(pid, fresh);
-  log.info('profile_broadcast', { contacts: contacts.length, version, sent: Object.keys(fresh).length });
+  log.info('profile_broadcast', {
+    contacts: contacts.length,
+    version,
+    sent: Object.keys(fresh).length,
+    refused,
+  });
 }
 
 /**
@@ -411,7 +430,14 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
   }
   if (!(await canReachPeer(peerPubB64))) return;
   try {
-    await svc.sendMessage(peerPubB64, encodeProfileEnvelope(built.env));
+    // v4.32.715: см. broadcastMyProfile — отказ не записывается как доставка.
+    // Здесь цена ошибки та же: карта скажет «эту версию он видел», и досылка
+    // при следующем открытии переписки промолчит.
+    const cid = await svc.sendMessage(peerPubB64, encodeProfileEnvelope(built.env));
+    if (!cid) {
+      log.info('profile_sync_refused', { to: peerPubB64.slice(0, 12) });
+      return;
+    }
     await recordSent(pid, { [peerPubB64]: version });
   } catch (e) {
     log.debug('profile_sync_failed', {
@@ -477,7 +503,11 @@ export async function requestPeerProfile(peerPubB64: string): Promise<void> {
     return;
   }
   try {
-    await svc.sendMessage(peerPubB64, encodeProfileRequest());
+    // v4.32.715: просьба, отправить которую отказались, не должна занимать
+    // окно на пять минут — это пять минут пустой карточки на ровном месте.
+    // Тот же довод, что и у ветки «не дойдёт» выше.
+    const cid = await svc.sendMessage(peerPubB64, encodeProfileRequest());
+    if (!cid) reqSentAt.delete(peerPubB64);
   } catch (e) {
     reqSentAt.delete(peerPubB64);
     log.debug('profile_request_failed', {

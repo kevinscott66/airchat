@@ -38,7 +38,10 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvSet: jest.fn(async () => {}),
 }));
 
-const mockSend = jest.fn(async () => {});
+// v4.32.715: пустой ответ sendMessage — это отказ, и с тех пор отказ не
+// записывается как доставка. Здесь конверт должен уходить по-настоящему,
+// иначе проверки ниже перестанут проверять то, ради чего заведены.
+const mockSend = jest.fn(async () => 'cid-671');
 jest.mock('../messaging', () => ({
   getMessagingService: () => ({ sendMessage: (...a: unknown[]) => mockSend(...(a as [])) }),
 }));
