@@ -163,7 +163,7 @@ import { canPinInGroup, type PinRole } from '../../core/social/groupPinPolicy';
 import { buildGroupInviteLink } from '../../core/social/groupInviteLink';
 import { markGroupLeft } from '../../core/social/groupLeaveMark';
 import { buildGroupLink, webForm } from '../../core/net/appLink';
-import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX, normalizeOwnGroupDescription, normalizeOwnGroupName } from '../../core/social/groupNameRule';
+import { normalizeOwnGroupDescription, normalizeOwnGroupName } from '../../core/social/groupNameRule';
 import { canSendToGroup, slowModeRemaining, slowModeSysLine, MAX_SLOWMODE_SECONDS, type SendRole } from '../../core/social/groupSendPolicy';
 import { isAdminRole, ownGroupRole } from '../../core/social/ownGroupRole';
 import { createTimerScope, type TimerScope } from '../../core/lifecycle/timerScope';
@@ -226,6 +226,7 @@ import {
 import { GrpMessageBlock } from './groups-components/text/GrpMessageBlock';
 import { GrpCollapsibleBlock } from './groups-components/text/GrpCollapsibleBlock';
 import { GroupAvatar } from './groups-components/GroupAvatar';
+import { GroupProfileHeader } from './groups-components/GroupProfileHeader';
 import { GrpSenderAvatar } from './groups-components/GrpSenderAvatar';
 import { PersonAvatar } from '../components/PersonAvatar';
 import { PollBubble } from './groups-components/PollBubble';
@@ -274,8 +275,8 @@ import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
 import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { listContactsFor } from '../../core/social/contacts';
-import { normalizeUsername, USERNAME_MAX } from '../../core/identity/username';
-import { checkGroupHandle, formatGroupHandle } from '../../core/social/groupHandle';
+import { normalizeUsername } from '../../core/identity/username';
+import { checkGroupHandle } from '../../core/social/groupHandle';
 import { collectHashtags } from '../../core/text/entities';
 import { UserProfilePeek } from '../components/UserProfilePeek';
 import { canModerate } from '../../core/social/groupModerationPolicy';
@@ -298,7 +299,7 @@ import {
   isTrulyMissing,
   lookupValue,
 } from '../../core/utils/lookupResult';
-import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK, COPIED_ID } from '../clipboardText';
+import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 export { ruPlural, membersLabel, subscribersLabel };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5327,118 +5328,46 @@ function GroupMembersScreen({
         inviteLinkQr={qrLink}
       />
 
-      {/* Group info header */}
-      <View style={[gmStyles.infoHeader, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
-        <AppPressable onPress={() => void uploadAvatar()} disabled={!amAdmin} accessibilityRole="button" accessibilityLabel="Изменить фото группы" accessibilityState={{ disabled: !amAdmin }}>
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={gmStyles.avatarLarge} />
-          ) : (
-            <GroupAvatar name={group.name} size={80} type={group.type} />
-          )}
-          {amAdmin ? (
-            <View style={[gmStyles.avatarEditBadge, { backgroundColor: colors.primary }]}>
-              <Ionicons name="camera" size={14} color={contrastingInk(colors.primary)} />
-            </View>
-          ) : null}
-        </AppPressable>
-        <View style={{ flex: 1, gap: 4 }}>
-          {editingName ? (
-            <TextInput
-              style={[gmStyles.nameInput, { color: colors.text, borderColor: colors.primary }]}
-              value={nameInput}
-              onChangeText={setNameInput}
-              onSubmitEditing={() => void saveName()}
-              onBlur={() => void saveName()}
-              maxLength={OWN_GROUP_NAME_MAX}
-              autoFocus
-              returnKeyType="done"
-            />
-          ) : (
-            <AppPressable onPress={amAdmin ? () => setEditingName(true) : undefined}>
-              <Text style={[gcStyles.headerName, { color: colors.text }]}>{nameInput}</Text>
-            </AppPressable>
-          )}
-          {/*
-            v4.32.681: публичный адрес. Стоит рядом с постоянным
-            идентификатором намеренно: адрес — ярлык без реестра, две разные
-            группы вправе выбрать одну строку, и опознаётся группа по GR…/CH…
-          */}
-          {editingHandle ? (
-            <TextInput
-              style={[gmStyles.handleInput, { color: colors.primary, borderColor: colors.primary }]}
-              value={handleInput}
-              onChangeText={setHandleInput}
-              onSubmitEditing={() => void saveHandle()}
-              onBlur={() => void saveHandle()}
-              placeholder="публичный_адрес"
-              placeholderTextColor={colors.textMuted}
-              maxLength={USERNAME_MAX}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus
-              returnKeyType="done"
-            />
-          ) : handleInput ? (
-            <AppPressable
-              onPress={amAdmin ? () => setEditingHandle(true) : () => {
-                Clipboard.setString(formatGroupHandle(handleInput));
-                showSuccess('Публичный адрес скопирован');
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={`Публичный адрес: ${formatGroupHandle(handleInput)}`}
-              testID="group_handle"
-            >
-              <Text style={{ color: colors.primary, fontSize: font.sm }}>{formatGroupHandle(handleInput)}</Text>
-            </AppPressable>
-          ) : amAdmin ? (
-            <AppPressable onPress={() => setEditingHandle(true)} accessibilityRole="button" accessibilityLabel="Добавить публичный адрес" testID="group_handle_add">
-              <Text style={{ color: colors.textMuted, fontSize: font.sm }}>+ Добавить публичный адрес</Text>
-            </AppPressable>
-          ) : null}
-          {editingDesc ? (
-            <TextInput
-              style={[gmStyles.descInput, { color: colors.textSecondary, borderColor: colors.border }]}
-              value={descInput}
-              onChangeText={setDescInput}
-              onBlur={() => void saveDesc()}
-              placeholder="Описание группы…"
-              placeholderTextColor={colors.textMuted}
-              maxLength={OWN_GROUP_DESC_MAX}
-              multiline
-              autoFocus
-            />
-          ) : (
-            <AppPressable onPress={amAdmin ? () => setEditingDesc(true) : undefined}>
-              <Text style={[{ color: colors.textSecondary, fontSize: 13 }]} numberOfLines={2}>
-                {descInput || (amAdmin ? '+ Добавить описание' : '')}
-              </Text>
-            </AppPressable>
-          )}
-          <Text style={{ color: colors.textMuted, fontSize: 12 }}>{membersLabel(members.length)}</Text>
-          {/*
-            v4.32.540: постоянный идентификатор группы. Название и фото меняет
-            любой администратор — по ним нельзя понять, та ли это группа, в
-            которую тебя звали. Это выводится из uuid и не меняется, а
-            приставка (`GR`/`CH`) отличает группу от канала: у канала с тем же
-            uuid идентификатор ДРУГОЙ, перепутать их нельзя.
-          */}
-          {groupPublicId ? (
-            <AppPressable
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-              onPress={() => {
-                Clipboard.setString(groupPublicId);
-                showSuccess(COPIED_ID);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={`Постоянный идентификатор: ${groupPublicId}`}
-              testID="group_public_id"
-            >
-              <Text style={{ color: colors.textMuted, fontSize: font.xs, letterSpacing: 0.5 }}>{groupPublicId}</Text>
-              <Ionicons name="copy-outline" size={12} color={colors.textMuted} />
-            </AppPressable>
-          ) : null}
-        </View>
-      </View>
+      {/*
+        v4.32.682: шапка группы и канала — карточка профиля.
+
+        Раньше здесь стояла строка в две колонки, набранная прямо в этом
+        файле: состав шапки нигде не был записан, канал звался группой
+        (`membersLabel` без разбора вида), а непрочитанная ячейка выглядела
+        как пустое место. Состав переехал в `groupProfileModel`, вид — в
+        `GroupProfileHeader`; здесь остались только данные и обработчики.
+      */}
+      <GroupProfileHeader
+        facts={{
+          type: group.type === 'channel' ? 'channel' : 'group',
+          amAdmin,
+          name: nameInput,
+          nameUnreadable: group.nameUnreadable,
+          handle: handleInput || null,
+          handleUnreadable: group.usernameUnreadable,
+          description: descInput,
+          descriptionUnreadable: group.descriptionUnreadable,
+          publicId: groupPublicId,
+          memberCount: members.length,
+        }}
+        avatarUri={avatarUri}
+        onPickAvatar={() => void uploadAvatar()}
+        editingName={editingName}
+        nameInput={nameInput}
+        onNameChange={setNameInput}
+        onNameEdit={() => setEditingName(true)}
+        onNameSave={() => void saveName()}
+        editingHandle={editingHandle}
+        handleInput={handleInput}
+        onHandleChange={setHandleInput}
+        onHandleEdit={() => setEditingHandle(true)}
+        onHandleSave={() => void saveHandle()}
+        editingDesc={editingDesc}
+        descInput={descInput}
+        onDescChange={setDescInput}
+        onDescEdit={() => setEditingDesc(true)}
+        onDescSave={() => void saveDesc()}
+      />
 
       <View style={{ paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6, gap: 6 }}>
@@ -5642,12 +5571,6 @@ const gmStyles = StyleSheet.create({
   avatarLetter: { fontSize: 18, fontWeight: '600' },
   name: { fontSize: 15, fontWeight: '500' },
   role: { fontSize: 12, marginTop: 1 },
-  infoHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 16, borderBottomWidth: StyleSheet.hairlineWidth },
-  avatarLarge: avatarShape(80),
-  avatarEditBadge: { position: 'absolute', bottom: 0, right: 0, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  nameInput: { fontSize: 17, fontWeight: '600', borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0 },
-  descInput: { fontSize: 13, borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0, minHeight: 40 },
-  handleInput: { fontSize: font.sm, borderBottomWidth: 1, paddingVertical: 2, paddingHorizontal: 0 },
   memberSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 12, paddingHorizontal: 16 },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
   sheetBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg, paddingVertical: 12 },

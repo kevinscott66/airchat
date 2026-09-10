@@ -160,7 +160,9 @@ describe('шкалы совпадают с design.md', () => {
  */
 const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/screens/FeedScreen.tsx': 72,
-  'ui/screens/GroupsScreen.tsx': 60,
+  // v4.32.682: шапка группы уехала в GroupProfileHeader, где кегль берётся
+  // только из `font` — четыре числа ушли вместе с ней.
+  'ui/screens/GroupsScreen.tsx': 56,
   'ui/screens/ChatScreen.tsx': 31,
   'ui/screens/ChatListScreen.tsx': 29,
   'ui/screens/ContactsScreen.tsx': 20,
@@ -240,7 +242,8 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
 };
 
 const RADIUS_BASELINE: Record<string, number> = {
-  'ui/screens/GroupsScreen.tsx': 9,
+  // v4.32.682: там же ушёл кружок значка «сменить фото» — теперь radius.full.
+  'ui/screens/GroupsScreen.tsx': 8,
   'ui/components/AttachSheet.tsx': 8,
   'ui/screens/ChatScreen.tsx': 6,
   'ui/screens/FeedScreen.tsx': 5,
