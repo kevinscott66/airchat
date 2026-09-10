@@ -17,7 +17,6 @@ import { unreadableFromCellState } from './unreadableText';
 import { applyReaction, parseReactionMap } from '../social/reactionMapPolicy';
 import {
   AT_REST_PREFIX,
-  decryptAtRestNullable,
   encryptAtRestNullable,
   encryptAtRestString,
   getOrCreateDataEncryptionKey,
@@ -37,6 +36,8 @@ export type FeedCommentRow = {
   textUnreadable?: boolean;
   /** v4.32.589: имя автора комментария есть в базе, но ключ его не открывает. */
   nameUnreadable?: boolean;
+  /** v4.32.687: карта реакций есть в базе, но ключ её не открывает. */
+  reactionsUnreadable?: boolean;
 };
 
 export type FeedSyncTombstone = {
@@ -88,6 +89,8 @@ export type FeedPostRow = {
   nameUnreadable?: boolean;
   /** v4.32.589: то же про имя автора оригинала у репоста. */
   repostNameUnreadable?: boolean;
+  /** v4.32.687: карта реакций есть в базе, но ключ её не открывает. */
+  reactionsUnreadable?: boolean;
 };
 
 /** v4.32.48: метаданные документа поста. Без base64 — он живёт в kvStore. */
@@ -135,6 +138,28 @@ type FeedDbRow = {
   documents: string | null;
 };
 
+/**
+ * Реакции столбцом: значение и то, открылся ли столбец ключом (v4.32.687).
+ *
+ * У сообщений такое чтение стоит с v4.32.600, у ленты его не было: пять мест
+ * читали `reactions` через `decryptAtRestNullable`, а тот при неудаче отдаёт
+ * пустоту — неотличимо от «никто не реагировал». Показ от этого беднеет, но
+ * дороже другое: выгрузка наверх отдаёт строку целиком, и пустая карта уехала
+ * бы новой ревизией и стёрла целые реакции на здоровых устройствах аккаунта.
+ * Признак живёт рядом со значением, чтобы придержать строку могла та сторона,
+ * которая знает, что прочитать не удалось.
+ */
+function readFeedReactions(
+  stored: string | null,
+  dek: Uint8Array,
+): { reactions: Record<string, string[]> | null; reactionsUnreadable: boolean } {
+  const cell = readAtRestCell(stored, dek);
+  return {
+    reactions: parseJsonColumn<Record<string, string[]>>(cellTextOrNull(cell)),
+    reactionsUnreadable: unreadableFromCellState(cell.state),
+  };
+}
+
 function toPost(r: FeedDbRow, dek: Uint8Array): FeedPostRow {
   // v4.32.587: читаем состоянием, а не строкой. Столбец, не открывшийся
   // ключом, приходил пустотой, и запись рисовалась карточкой без содержимого
@@ -156,7 +181,7 @@ function toPost(r: FeedDbRow, dek: Uint8Array): FeedPostRow {
     timestamp: r.timestamp,
     read: r.read,
     cid: r.cid,
-    reactions: parseJsonColumn<Record<string, string[]>>(decryptAtRestNullable(r.reactions, dek)),
+    ...readFeedReactions(r.reactions, dek),
     repostOf: r.repost_of ?? null,
     repostAuthorName: cellTextOrNull(repostNameCell),
     repostAuthorDid: r.repost_author_did ?? null,
@@ -568,7 +593,7 @@ export class FeedStorage {
     );
     if (!row?.reactions) return {};
     const dek = await getOrCreateDataEncryptionKey();
-    return parseJsonColumn<Record<string, string[]>>(decryptAtRestNullable(row.reactions, dek)) ?? {};
+    return readFeedReactions(row.reactions, dek).reactions ?? {};
   }
 
   async getFeed(limit = 50, offset = 0): Promise<FeedPostRow[]> {
@@ -636,7 +661,7 @@ export class FeedStorage {
           authorName: cellTextOrNull(nameCell),
           text: cellTextOrNull(textCell) ?? '',
           timestamp: row.timestamp,
-          reactions: parseJsonColumn<Record<string, string[]>>(decryptAtRestNullable(row.reactions, dek)),
+          ...readFeedReactions(row.reactions, dek),
           textUnreadable: unreadableFromCellState(textCell.state),
           nameUnreadable: unreadableFromCellState(nameCell.state),
         };
@@ -1037,7 +1062,7 @@ export class FeedStorage {
         authorName: cellTextOrNull(nameCell),
         text: cellTextOrNull(textCell) ?? '',
         timestamp: r.timestamp,
-        reactions: parseJsonColumn<Record<string, string[]>>(decryptAtRestNullable(r.reactions, dek)),
+        ...readFeedReactions(r.reactions, dek),
         textUnreadable: unreadableFromCellState(textCell.state),
         nameUnreadable: unreadableFromCellState(nameCell.state),
       };
@@ -1132,7 +1157,7 @@ export class FeedStorage {
     );
     if (!row) return null;
     const dek = await getOrCreateDataEncryptionKey();
-    const reactions = parseJsonColumn<Record<string, string[]>>(decryptAtRestNullable(row.reactions, dek));
+    const { reactions } = readFeedReactions(row.reactions, dek);
     return { authorDid: row.author_did, postId: row.post_id, reactions };
   }
 

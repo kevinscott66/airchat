@@ -28,6 +28,8 @@ export interface MaybeUnreadablePost {
   nameUnreadable?: boolean;
   /** v4.32.589: то же про имя автора оригинала у репоста. */
   repostNameUnreadable?: boolean;
+  /** v4.32.687: карта реакций есть в базе, но ключ её не открывает. */
+  reactionsUnreadable?: boolean;
 }
 
 /** Не открылась ли хоть одна из зашифрованных половин записи. */
@@ -56,6 +58,8 @@ export interface MaybeUnreadableComment {
   textUnreadable?: boolean;
   /** v4.32.589: имя автора комментария есть в базе, но ключ его не открывает. */
   nameUnreadable?: boolean;
+  /** v4.32.687: карта реакций есть в базе, но ключ её не открывает. */
+  reactionsUnreadable?: boolean;
 }
 
 /**
@@ -77,16 +81,33 @@ export function feedCommentIsUnreadable(comment: MaybeUnreadableComment | null |
  * не за что. А выгрузка отдаёт строку целиком — с именем, — поэтому придержать
  * её должно любое непрочитанное поле, иначе пустое имя уедет наверх новой
  * ревизией и перетрёт целое имя на здоровых устройствах.
+ *
+ * v4.32.687: реакции — такое же поле, и до этой версии его тут не было. Карта
+ * читалась двумя состояниями, не открывшийся столбец приходил пустотой, и
+ * выгрузка отдавала строку как «на неё никто не реагировал». Приёмник кладёт
+ * её через `reactions = excluded.reactions` — без вопросов, — так что целые
+ * реакции на втором устройстве стирались, и молча: там просто становилось
+ * пусто. Писать в непрочитанный столбец запрещено с v4.32.544, а вот отдавать
+ * его наружу как пустой — нет.
  */
 export function feedPostIsHeldFromSync(post: MaybeUnreadablePost | null | undefined): boolean {
   if (!post) return false;
-  return feedPostIsUnreadable(post) || post.nameUnreadable === true || post.repostNameUnreadable === true;
+  return (
+    feedPostIsUnreadable(post) ||
+    post.nameUnreadable === true ||
+    post.repostNameUnreadable === true ||
+    post.reactionsUnreadable === true
+  );
 }
 
 /** То же правило для комментария. */
 export function feedCommentIsHeldFromSync(comment: MaybeUnreadableComment | null | undefined): boolean {
   if (!comment) return false;
-  return feedCommentIsUnreadable(comment) || comment.nameUnreadable === true;
+  return (
+    feedCommentIsUnreadable(comment) ||
+    comment.nameUnreadable === true ||
+    comment.reactionsUnreadable === true
+  );
 }
 
 /** Строка отказа для тех действий, которые отдают запись наружу. */
