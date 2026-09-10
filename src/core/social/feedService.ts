@@ -2519,8 +2519,17 @@ export async function deleteFeedPostLocal(postId: string): Promise<void> {
  */
 const DEFERRED_KEY_PREFIX = 'feed_deferred_v1:p';
 
-async function loadDeferred(pid: number): Promise<DeferredStore> {
-  return parseDeferredStore(await kvGet(`${DEFERRED_KEY_PREFIX}${pid}`));
+/**
+ * `null` — полка не прочиталась. v4.32.698: здесь стоял kvGet, а он отвечает
+ * одинаковым null и когда полка пуста, и когда база не ответила. Разница
+ * важна не чтению, а записи: полка кладётся обратно ЦЕЛИКОМ, поэтому пустая
+ * полка на входе означала «стереть всё, что там лежало». Одна заминка базы
+ * уносила отложенные комментарии и реакции по всем остальным публикациям, а
+ * повторно их никто не пришлёт.
+ */
+async function loadDeferred(pid: number): Promise<DeferredStore | null> {
+  const read = await kvTryGet(`${DEFERRED_KEY_PREFIX}${pid}`);
+  return read === null ? null : parseDeferredStore(read.value);
 }
 
 async function saveDeferred(pid: number, store: DeferredStore): Promise<void> {
@@ -2537,7 +2546,14 @@ async function saveDeferred(pid: number, store: DeferredStore): Promise<void> {
 async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promise<void> {
   const event = deferredFromPayload(payload);
   if (!event) return;
-  await saveDeferred(pid, addDeferred(await loadDeferred(pid), payload.postId, event, Date.now()));
+  const store = await loadDeferred(pid);
+  if (store === null) {
+    // Не прочитали — не пишем: иначе это одно событие легло бы поверх всей
+    // полки. Само событие теряется так же, как терялось до появления полки.
+    log.warn('feed_deferred_unreadable', { pid, type: payload.type });
+    return;
+  }
+  await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
   log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
 }
 
@@ -2553,7 +2569,7 @@ async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promis
  */
 async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number): Promise<void> {
   const store = await loadDeferred(pid);
-  if (!store[payload.postId]) return;
+  if (store === null || !store[payload.postId]) return;
   const event = deferredFromPayload(payload);
   if (!event) return;
   await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
@@ -2567,7 +2583,9 @@ async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number
  * оставаться и падать снова при каждой следующей публикации.
  */
 async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promise<void> {
-  const taken = takeDeferred(await loadDeferred(pid), postId, Date.now());
+  const store = await loadDeferred(pid);
+  if (store === null) return;
+  const taken = takeDeferred(store, postId, Date.now());
   if (taken.events.length === 0) return;
   await saveDeferred(pid, taken.store);
   for (const event of taken.events) {

@@ -92,9 +92,18 @@ function forgeWrapper(inner: Uint8Array, h: unknown): Uint8Array {
   return out;
 }
 
-/** Пересылка запускается без await — дать очереди микрозадач провернуться. */
+/**
+ * Пересылка запускается без await — дать очереди задач провернуться.
+ *
+ * v4.32.698: здесь стоял счёт микрозадач вручную (12 оборотов `Promise.resolve`).
+ * Число это ни на чём не основано: цепочка пересылки идёт через настоящий
+ * rateLimiter и настоящий local.ts, и её длина в оборотах меняется от любой
+ * правки в соседнем коде — тест начинал врать про «не переслали», хотя
+ * пересылка честно происходила такт спустя. Через setImmediate ждём не
+ * заданное число оборотов, а опустошения очереди микрозадач целиком.
+ */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+  for (let i = 0; i < 3; i += 1) await new Promise<void>((r) => setImmediate(r));
 }
 
 const send = multiTransportRouter.send as unknown as jest.Mock;
