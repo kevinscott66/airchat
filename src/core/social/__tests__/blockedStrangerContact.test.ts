@@ -23,6 +23,8 @@ const mockEnsure = jest.fn(async () => true);
 const mockRefresh = jest.fn();
 const mockGroup = jest.fn(async () => true);
 const mockBlocked = { current: false };
+/** Номера профилей, у которых служба спрашивала контакты (v4.32.710). */
+const mockScopePids: number[] = [];
 const mockEnvelope: { current: unknown } = { current: null };
 
 jest.mock('../../storage/local', () => ({
@@ -57,6 +59,9 @@ jest.mock('../messageStore', () => ({
 const mockSym = new Uint8Array(32).fill(7);
 jest.mock('../contacts', () => ({
   getSymmetricKeyForPeer: async () => mockSym,
+  // v4.32.710: служба берёт контакты у своего владельца, а не у активного
+  // профиля, и номер, с которым её спрашивают, здесь записывается.
+  listContactsFor: async (pid: number) => { mockScopePids.push(pid); return []; },
   listContacts: async () => [],
   ensureImplicitContact: (...a: unknown[]) => mockEnsure(...(a as [])),
   deriveSymmetricKeyForStranger: () => mockSym,
@@ -145,6 +150,7 @@ beforeEach(() => {
   mockRefresh.mockClear();
   mockGroup.mockClear();
   mockBlocked.current = false;
+  mockScopePids.length = 0;
 });
 
 describe('строка контакта для незнакомца', () => {
@@ -154,6 +160,14 @@ describe('строка контакта для незнакомца', () => {
     expect(mockSaved).toHaveLength(1);
     // Счётчик переподписки живой: без него проверка ниже ничего не значила бы.
     expect(mockRefresh).toHaveBeenCalled();
+  });
+
+  it('контакты спрашиваются у владельца службы, а не у активного профиля', async () => {
+    await deliver('привет, это я');
+    // Спрашивали хотя бы раз (приём конверта + переподписка) и каждый раз —
+    // про профиль, которому принадлежит пара ключей службы.
+    expect(mockScopePids.length).toBeGreaterThan(0);
+    expect(mockScopePids.every((p) => p === 1)).toBe(true);
   });
 
   it('заблокированный незнакомец контакт не заводит', async () => {

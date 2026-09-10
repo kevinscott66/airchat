@@ -49,7 +49,7 @@ import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { isNbCid } from '../media/mediaBlob';
 import { isIpfsEnabled } from '../transport/ipfs/heliaNode';
 import { multiTransportRouter } from '../transport/multiTransport';
-import { getSymmetricKeyForPeer, listContacts, ensureImplicitContact, deriveSymmetricKeyForStranger, clearSymKeyCache } from './contacts';
+import { getSymmetricKeyForPeer, listContactsFor, ensureImplicitContact, deriveSymmetricKeyForStranger, clearSymKeyCache } from './contacts';
 import {
   IPFSMessageStore,
   parseEnvelopeFromWire,
@@ -191,9 +191,25 @@ async function localPathTo(contactPubB64: string): Promise<boolean> {
   return multiTransportRouter.hasLocalPath(did);
 }
 
-async function findContactPubKeyByDid(did: string): Promise<string | null> {
+/**
+ * Есть ли у ЭТОГО аккаунта контакт с таким did:key (v4.32.710).
+ *
+ * Спрашивали у активного профиля — у того, чей экран сейчас открыт. А ответ
+ * нужен тому, чьим ключом расшифрован конверт: приём ждёт сеть, и сменить
+ * аккаунт человек за это время успевает. Свой же собеседник после
+ * переключения выглядел незнакомцем, и дальше в receiveDirectLanEnvelope
+ * включалась ветка для незнакомцев: при включённом «сообщения только от
+ * контактов» письмо своего же контакта отбрасывалось молча и навсегда
+ * (dm_rejected_non_contact), а отправитель считал его доставленным.
+ *
+ * Правило то же, что у listContactsFor (v4.32.465): «активный» — это про
+ * экран, а не про работу. Соседние вопросы в том же приёме — ключ пира и
+ * настройка приватности — на номер профиля перешли ещё в v4.32.460, а этот,
+ * самый первый, остался на активном.
+ */
+async function findContactPubKeyByDid(did: string, ownerProfileId: number): Promise<string | null> {
   try {
-    const contacts = await listContacts();
+    const contacts = await listContactsFor(ownerProfileId);
     for (const c of contacts) {
       if (didFromPubB64(c.peerPublicKey) === did) return c.peerPublicKey;
     }
@@ -391,7 +407,12 @@ export class MessagingService {
   private static readonly GOSSIP_FANOUT_LIMIT = 64;
   private async gossipDmToContacts(payload: Uint8Array, recipientDid: string, myDid: string): Promise<void> {
     try {
-      const contacts = await listContacts();
+      // v4.32.710: веер идёт по контактам ВЛАДЕЛЬЦА службы, а не активного
+      // профиля. recipientDid в конверте открыт — по нему и пересылают, — и
+      // рассылка его по чужой записной книжке связывала бы два аккаунта
+      // одного человека в глазах их общих знакомых. Заодно и мост через
+      // общего контакта переставал работать: у другого профиля его нет.
+      const contacts = await listContactsFor(await this.ownerProfileId());
       let sent = 0;
       for (const c of contacts) {
         if (sent >= MessagingService.GOSSIP_FANOUT_LIMIT) break;
@@ -539,7 +560,11 @@ export class MessagingService {
       if (!stillFresh()) { try { inboxUnsub(); } catch { /* ignore */ } }
       else this.unsub.push(inboxUnsub);
     }
-    const contacts = await listContacts();
+    // v4.32.710: подписываемся на топики контактов владельца пары ключей.
+    // Выше уже был await за сетью (subscribeToSelfInbox), и активный профиль
+    // за это время мог смениться: служба подписывалась на чужих собеседников
+    // и не слышала своих.
+    const contacts = await listContactsFor(await this.ownerProfileId());
     if (!stillFresh()) return;
     let subscribedCount = 0;
     for (const c of contacts) {
@@ -715,7 +740,7 @@ export class MessagingService {
     // Sym-key derivation is deterministic (ECDH + canonical salt over sorted
     // pub keys) and purely in-memory — no side-effects. Only on decrypt
     // success do we commit the implicit contact row.
-    let peerPubKeyB64 = await findContactPubKeyByDid(em.senderDid);
+    let peerPubKeyB64 = await findContactPubKeyByDid(em.senderDid, await this.ownerProfileId());
     let needsImplicitContact = false;
     let senderPk: Uint8Array | null = null;
     if (!peerPubKeyB64) {
@@ -2224,7 +2249,11 @@ export class MessagingService {
       log.warn('push_missing_contact_did');
       return;
     }
-    const contacts = await listContacts();
+    // v4.32.710: пуш открывает переписку того аккаунта, которому она
+    // адресована. По контактам активного профиля свой же собеседник не
+    // находился, и сообщение из уведомления не подгружалось вовсе
+    // (push_no_contact_for_did).
+    const contacts = await listContactsFor(await this.ownerProfileId());
     for (const c of contacts) {
       if (didFromPubB64(c.peerPublicKey) === contactDid) {
         await this.receiveCid(cid.trim(), c.peerPublicKey);
