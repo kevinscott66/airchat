@@ -6,6 +6,7 @@ import { AppPressable } from '../../AppPressable';
 import { KeyboardHost } from '../../KeyboardHost';
 import { useTheme } from '../../../ThemeContext';
 import { font, primaryInk, radius, scrim } from '../../../theme';
+import { correctAnswerAfterRemove, NO_CORRECT_ANSWER } from '../../../../core/social/pollCorrectAnswer';
 
 // ─── Poll Creator Modal ───────────────────────────────────────────────────────
 export function DmPollCreatorModal({
@@ -15,7 +16,7 @@ export function DmPollCreatorModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  onCreate: (question: string, options: string[], correctAnswer?: number, anonymous?: boolean) => void;
+  onCreate: (question: string, options: string[], correctAnswer?: number, anonymous?: boolean) => boolean;
 }): React.ReactElement {
   const { colors } = useTheme();
   const [question, setQuestion] = useState('');
@@ -24,14 +25,45 @@ export function DmPollCreatorModal({
   const [correctAnswer, setCorrectAnswer] = useState(0);
   const [anonymous, setAnonymous] = useState(false);
   const reset = () => { setQuestion(''); setOptions(['', '']); setIsQuiz(false); setCorrectAnswer(0); setAnonymous(false); };
+  // v4.32.676: то же правило, что в групповой форме (v4.32.622/652) — до
+  // лички оно не доехало. correctAnswer здесь индекс строки в options, а
+  // удаление варианта перенумеровывало список, не трогая отметку: отметив
+  // «Б» в «А, Б, В» и удалив «А», человек отправлял викторину, где верным
+  // считается «В». Удаление самой отмеченной строки отметку снимает, а не
+  // переносит на соседа: назначить верным то, чего не выбирали, — та же
+  // ошибка с другого конца.
+  const removeOption = (i: number) => {
+    if (options.length <= 2) return;
+    setOptions((prev) => prev.filter((_, j) => j !== i));
+    setCorrectAnswer((prev) => correctAnswerAfterRemove(prev, i));
+  };
   const submit = () => {
     const q = question.trim();
-    const opts = options.map((o) => o.trim()).filter(Boolean);
+    // v4.32.676: индекс верного ответа считаем по тому же списку, который
+    // уходит в makePollText, — пустой вариант выше сдвигал нумерацию.
+    const kept: number[] = [];
+    const opts: string[] = [];
+    options.forEach((o, i) => {
+      const v = o.trim();
+      if (v) { opts.push(v); kept.push(i); }
+    });
     if (!q || opts.length < 2) {
       Alert.alert('Опрос', 'Укажите вопрос и хотя бы 2 варианта');
       return;
     }
-    onCreate(q, opts, isQuiz ? correctAnswer : undefined, anonymous || undefined);
+    if (isQuiz && correctAnswer === NO_CORRECT_ANSWER) {
+      Alert.alert('Опрос', 'Отметьте верный вариант ответа');
+      return;
+    }
+    const answer = kept.indexOf(correctAnswer);
+    if (isQuiz && answer < 0) {
+      Alert.alert('Опрос', 'Отметьте верный вариант: он не может быть пустым');
+      return;
+    }
+    // v4.32.676: форму чистим только после того, как её приняли. Раньше её
+    // стирали безусловно, и отказ (слишком длинный вариант, превышен лимит)
+    // уносил всё набранное вместе с собой.
+    if (!onCreate(q, opts, isQuiz ? answer : undefined, anonymous || undefined)) return;
     reset();
     onClose();
   };
@@ -63,7 +95,7 @@ export function DmPollCreatorModal({
                 style={{ flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, borderWidth: isQuiz && correctAnswer === i ? 1 : 0, borderColor: colors.success }}
               />
               {options.length > 2 ? (
-                <AppPressable onPress={() => setOptions((prev) => prev.filter((_, j) => j !== i))} style={{ marginLeft: 8 }}>
+                <AppPressable onPress={() => removeOption(i)} style={{ marginLeft: 8 }}>
                   <Ionicons name="remove-circle-outline" size={20} color={colors.textMuted} />
                 </AppPressable>
               ) : null}

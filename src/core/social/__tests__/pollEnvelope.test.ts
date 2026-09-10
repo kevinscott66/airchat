@@ -47,9 +47,13 @@ describe('makePollText', () => {
     expect(() => makePollText('Вопрос', Array.from({ length: POLL_MAX_OPTIONS + 1 }, (_, i) => `в${i}`))).toThrow(PollValidationError);
   });
 
-  it('правильный ответ вне диапазона просто не делает опрос викториной', () => {
-    expect(parsePollText(makePollText('Вопрос', ['Да', 'Нет'], 5))?.correctAnswer).toBeUndefined();
-    expect(parsePollText(makePollText('Вопрос', ['Да', 'Нет'], 1.5))?.correctAnswer).toBeUndefined();
+  // v4.32.676: прежде такой опрос собирался, только поле correctAnswer в него
+  // не писалось — викторина молча становилась обычным опросом. Отправитель об
+  // этом не узнавал, а получатели видели викторину без верного ответа.
+  it('правильный ответ вне списка — это отказ, а не тихая потеря викторины', () => {
+    expect(() => makePollText('Вопрос', ['Да', 'Нет'], 5)).toThrow(PollValidationError);
+    expect(() => makePollText('Вопрос', ['Да', 'Нет'], 1.5)).toThrow(PollValidationError);
+    expect(() => makePollText('Вопрос', ['Да', 'Нет'], -1)).toThrow(PollValidationError);
   });
 
   it('управляющие символы вычищаются на отправке — иначе свой опрос выглядит иначе у собеседника', () => {

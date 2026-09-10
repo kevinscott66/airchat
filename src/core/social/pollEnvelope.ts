@@ -87,7 +87,21 @@ export function makePollText(
   if (question.trim().length > POLL_MAX_QUESTION_LENGTH) {
     throw new PollValidationError(`Вопрос слишком длинный (макс. ${POLL_MAX_QUESTION_LENGTH} символов)`);
   }
-  const trimmed = options.map((o) => o.trim()).filter((o) => o.length > 0);
+  // v4.32.676: номера вариантов везём вместе со списком. correctAnswer — это
+  // индекс строки в `options`, а до конверта доезжает дважды отфильтрованный
+  // список: сначала выпадают пустые строки, потом те, от которых после
+  // вычистки управляющих символов ничего не осталось. Обе чистки
+  // перенумеровывают варианты, а отметка верного ответа оставалась на старом
+  // номере — и викторина уходила собеседнику с чужим правильным ответом.
+  const trimmed: string[] = [];
+  const trimmedFrom: number[] = [];
+  options.forEach((o, i) => {
+    const v = o.trim();
+    if (v.length > 0) {
+      trimmed.push(v);
+      trimmedFrom.push(i);
+    }
+  });
   if (trimmed.length < POLL_MIN_OPTIONS) throw new PollValidationError('Нужно минимум 2 варианта ответа');
   if (trimmed.length > POLL_MAX_OPTIONS) throw new PollValidationError(`Слишком много вариантов (макс. ${POLL_MAX_OPTIONS})`);
   const longOpt = trimmed.find((o) => o.length > POLL_MAX_OPTION_LENGTH);
@@ -96,13 +110,30 @@ export function makePollText(
   }
   // Вариант целиком из управляющих символов после вычистки схлопывается в
   // пустую строку — такой в опрос не годится, и минимум проверяется заново.
-  const opts = trimmed
-    .map((o) => (sanitizeDisplayName(o, POLL_MAX_OPTION_LENGTH) ?? '').trim())
-    .filter((o) => o.length > 0);
+  const opts: string[] = [];
+  const optsFrom: number[] = [];
+  trimmed.forEach((o, i) => {
+    const v = (sanitizeDisplayName(o, POLL_MAX_OPTION_LENGTH) ?? '').trim();
+    if (v.length > 0) {
+      opts.push(v);
+      optsFrom.push(trimmedFrom[i]);
+    }
+  });
   if (opts.length < POLL_MIN_OPTIONS) throw new PollValidationError('Нужно минимум 2 варианта ответа');
   const payload: Poll = { question: q, options: opts };
-  if (correctAnswer !== undefined && Number.isInteger(correctAnswer) && correctAnswer >= 0 && correctAnswer < opts.length) {
-    payload.correctAnswer = correctAnswer;
+  if (correctAnswer !== undefined) {
+    // v4.32.676: отметка переезжает вместе со списком. Если отмеченного
+    // варианта в списке не осталось (пустая строка, только управляющие
+    // символы, индекс вне диапазона) — это отказ, а не молчаливое разжалование
+    // викторины в обычный опрос: прежде поле просто не писалось, и у всех
+    // участников оказывалась викторина без верного ответа, в которой каждый
+    // получал «❌ Неверно» один раз и навсегда. Дробное и отрицательное число
+    // сюда попадает по тому же правилу — в списке номеров его нет.
+    const moved = optsFrom.indexOf(correctAnswer);
+    if (moved < 0) {
+      throw new PollValidationError('Отметьте верный вариант: он не может быть пустым');
+    }
+    payload.correctAnswer = moved;
   }
   if (anonymous) payload.anonymous = true;
   if (allowMultiple) payload.allowMultiple = true;

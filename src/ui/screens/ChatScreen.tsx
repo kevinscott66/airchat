@@ -4215,16 +4215,18 @@ function ChatThreadView({
         visible={pollCreatorVisible}
         onClose={() => setPollCreatorVisible(false)}
         onCreate={(question, options, correctAnswer) => {
-          if (!peerB64) return;
+          if (!peerB64) return false;
           const svc = getMessagingService();
-          if (!svc) return;
+          if (!svc) return false;
           // v4.32.48: обработка PollValidationError (длина вопроса/вариантов, минимум 2 опции).
           let pollText: string;
           try {
             pollText = makePollText(question, options, correctAnswer);
           } catch (err) {
+            // v4.32.676: отказ возвращается в форму — она остаётся открытой и
+            // сохраняет набранное, чтобы было что править.
             Alert.alert('Ошибка опроса', userErrorText(err, 'Проверьте вопрос и варианты ответа'));
-            return;
+            return false;
           }
           setSending(true);
           // v4.32.620: sendMessage отвечает null, когда отправки не было
@@ -4238,6 +4240,7 @@ function ChatThreadView({
               void appendNewMessages();
             })
             .catch((e) => { setSending(false); showError(userErrorText(e, 'Не удалось отправить опрос')); });
+          return true;
         }}
       />
       {peerB64 ? (
