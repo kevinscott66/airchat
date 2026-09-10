@@ -103,7 +103,7 @@ import { TabRefProvider, type TabName } from './ui/TabRefContext';
 import { TabBarInsetProvider } from './ui/TabBarInset';
 import { getTotalUnreadCount, getTotalGroupUnreadCount } from './core/storage/local';
 import { loadPersistedPresence, startPresenceBroadcast, stopPresenceBroadcast } from './core/social/presenceService';
-import { listContacts } from './core/social/contacts';
+import { listContacts, listContactsFor } from './core/social/contacts';
 import { startScheduler, stopScheduler } from './core/social/scheduledMessages';
 import { initCallService } from './core/social/callService';
 import { initBackgroundKeepalive } from './core/social/backgroundKeepalive';
@@ -905,8 +905,16 @@ function MainTabs({
           }
           if (!alive) return;
           let peerKeys: string[] = [];
+          // v4.32.711: список собеседников — того аккаунта, чьей парой ключей
+          // работает служба присутствия. Номер для неё уже считался строкой
+          // ниже, а сам список брался у профиля, открытого на экране: между
+          // началом запуска и этой строкой стоит десяток ожиданий сети, и
+          // человек успевает переключить аккаунт. Тогда «был(а) в сети»
+          // поднималось с диска под своим номером, но по чужим ключам, — и для
+          // собственных собеседников оставалось пустым до перезапуска.
+          const presencePid = ownerPidForPublicKey(pair.publicKey);
           try {
-            const contacts = await listContacts();
+            const contacts = await listContactsFor(presencePid);
             peerKeys = contacts.map((c) => c.peerPublicKey);
           } catch (e) {
             log.warn('presence_contacts_failed', {
@@ -915,7 +923,7 @@ function MainTabs({
           }
           if (!alive) return;
           try {
-            await loadPersistedPresence(peerKeys, ownerPidForPublicKey(pair.publicKey));
+            await loadPersistedPresence(peerKeys, presencePid);
           } catch (e) {
             log.warn('presence_load_persisted_failed', {
               err: e instanceof Error ? e.message : String(e),

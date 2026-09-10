@@ -15,7 +15,7 @@ import { ownerPidForPublicKeyB64 } from '../identity/ownerPidLookup';
 import { ownFieldGetFor } from '../identity/ownProfile';
 import { pubsubPublish, pubsubSubscribe } from '../transport/ipfs/pubsub';
 import { isIpfsEnabled } from '../transport/ipfs/heliaNode';
-import { listContacts } from './contacts';
+import { listContactsFor } from './contacts';
 import { privacyPrefTryGet } from '../settings/privacyPrefs';
 import { sanitizePeerStatus } from './peerStatus';
 import { parseHiddenPeers, withHiddenPeer } from './hiddenPeers';
@@ -539,7 +539,12 @@ async function resubscribeFailed(myPubB64: string): Promise<void> {
   // Fresh scan — new contacts may exist that weren't known at startup.
   let contactIds: string[] = [];
   try {
-    const contacts = await listContacts();
+    // v4.32.711: контакты — того аккаунта, под которым поднята служба
+    // (presencePid), а не открытого на экране. Обход повторяется раз в минуту
+    // всё время работы, и человек успевает переключить профиль: подписка
+    // уходила на чужих собеседников, а свои так и оставались в failedPeers —
+    // «в сети» у них не загоралось до перезапуска.
+    const contacts = await listContactsFor(presencePid);
     contactIds = contacts.map((c) => c.peerPublicKey);
   } catch (e) {
     log.warn('presence_sweep_list_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -588,7 +593,11 @@ export async function startPresenceBroadcast(myPubB64: string): Promise<void> {
   // Initial subscribe pass — failures here are recorded in failedPeers and
   // the retry sweep will try again every RETRY_SWEEP_INTERVAL_MS.
   try {
-    const contacts = await listContacts();
+    // v4.32.711: номер тот же, что у остальных решений службы, — он выставлен
+    // выше из пары ключей, которой она представляется сети. Активный профиль
+    // здесь не подходит по той же причине, что и у статуса ниже (v4.32.482):
+    // рассылка идёт от имени ключа, а не экрана.
+    const contacts = await listContactsFor(presencePid);
     for (const c of contacts) {
       await subscribeToPeer(c.peerPublicKey, myPubB64);
     }
