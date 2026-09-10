@@ -48,7 +48,8 @@ import {
 } from './feedOrphanScan';
 import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
-import { listContacts } from './contacts';
+import { listContacts, listContactsFor } from './contacts';
+import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
 import { reactionAddRefusal } from './reactionMapPolicy';
@@ -1122,7 +1123,16 @@ async function republishQueuedItem(
 
   // Проверяем: доставили ли ВСЕМ текущим контактам? Если да — item можно дропать.
   try {
-    const contacts = await listContacts();
+    // v4.32.712: круг адресатов считается по владельцу записи, а не по профилю,
+    // открытому на экране. Владельца проверили при входе, но между той проверкой
+    // и этой строкой стоит рассылка по сети: сборка конверта, разбор вложений и
+    // отправка каждому контакту. Человек успевает переключить аккаунт. Дальше
+    // счёт шёл по чужому списку — а у нового аккаунта контактов может не быть
+    // вовсе, и тогда ветка «контактов нет → пост локальный» возвращала
+    // «доставлено всем» и запись удалялась из очереди, не дойдя ни до кого.
+    // Разбор ниже (v4.32.615) для того и написан, чтобы такой потери не было.
+    const ownerPid = ownerPidForPublicKey(pair.publicKey);
+    const contacts = await listContactsFor(ownerPid);
     const allContactDids = new Set<string>();
     for (const c of contacts) {
       // v4.32.427: try/catch здесь был мёртвым — Buffer.from не бросает, а

@@ -67,10 +67,25 @@ describe('сбой подсчёта контактов не теряет зап�
     // Именно поэтому оставить запись теперь дёшево: следующий повтор вычтет
     // уже получивших через skipDids и не разошлёт конверт им повторно.
     const acc = CODE.indexOf('item.deliveredTo = [...acc];');
-    const count = CODE.indexOf('const contacts = await listContacts();');
+    const count = CODE.indexOf('const contacts = await listContactsFor(ownerPid);');
     expect(acc).toBeGreaterThan(-1);
     expect(count).toBeGreaterThan(acc);
     expect(CODE).toContain('const skipDids = new Set(item.deliveredTo ?? []);');
+  });
+
+  test('v4.32.712: подсчёт спрашивает контакты владельца записи', () => {
+    // Тот же довод, что и у потери из-за сбоя справочника, только причина
+    // другая: список брался у профиля, открытого на экране. Владельца
+    // проверяют при входе, а до подсчёта успевает пройти рассылка по сети —
+    // человек за это время переключает аккаунт. У нового аккаунта контактов
+    // может не быть вовсе, и ветка «контактов нет → пост локальный» отдавала
+    // «доставлено всем»: запись снимали с очереди, не отдав никому.
+    const owner = CODE.indexOf('const ownerPid = ownerPidForPublicKey(pair.publicKey);');
+    const count = CODE.indexOf('const contacts = await listContactsFor(ownerPid);');
+    expect(owner).toBeGreaterThan(-1);
+    expect(count).toBeGreaterThan(owner);
+    // Голого вызова в теле функции не осталось ни одного.
+    expect(CODE).not.toMatch(/\blistContacts\(\)/);
   });
 });
 

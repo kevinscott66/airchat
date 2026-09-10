@@ -27,7 +27,13 @@ jest.mock('../../transport/ipfs/pubsub', () => ({
 jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn(async () => undefined) },
 }));
-jest.mock('../contacts', () => ({ listContacts: jest.fn(async () => []) }));
+// v4.32.712: очередь спрашивает контакты владельца записи (listContactsFor),
+// а не открытого профиля. Оба имени на месте, чтобы подмена не решала за
+// проверяемый код, каким из них он пользуется.
+jest.mock('../contacts', () => ({
+  listContacts: jest.fn(async () => []),
+  listContactsFor: jest.fn(async () => []),
+}));
 jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 
 type Row = { id: string; authorDid: string; text: string; timestamp: number };
