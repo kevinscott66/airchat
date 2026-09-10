@@ -6,7 +6,7 @@ import { randomBytes } from '@noble/hashes/utils.js';
 import * as SecureStore from './secureStoreQueued';
 import { log } from '../logger';
 import { makeInviteToken } from '../social/groupInviteToken';
-import { MEMBER_ROLE_ORDER_SQL } from '../social/groupRolePolicy';
+import { MEMBER_ROLE_ORDER_SQL, memberRoleRank } from '../social/groupRolePolicy';
 import { parseViewerList } from '../social/viewerList';
 import { mayOverwrite, cellTextOrNull, classifyAtRestCell, type AtRestCell } from './atRestCell';
 import { scheduledReadState, type ScheduledReadState } from '../social/scheduledDispatch';
@@ -6715,6 +6715,14 @@ async function readGroupMembers(
     // переписывать их миграцией незачем — достаточно не верить им на чтении.
     // Пересортировка здесь по той же причине: SQL отсортировал по сырой
     // колонке, то есть 1970-й всё ещё стоял бы первым.
+    //
+    // v4.32.677: старшинство берётся из memberRoleRank — той же таблицы, что и
+    // MEMBER_ROLE_ORDER_SQL выше. Здесь стояло `a.role.localeCompare(b.role)`,
+    // то есть ровно тот алфавитный порядок, который убрали из запроса в
+    // v4.32.468: admin, banned, member, owner, restricted. Пересортировка
+    // выполняется последней и отменяла работу запроса целиком — владелец снова
+    // оказывался ниже рядовых участников, а забаненный поднимался на второе
+    // место. Рэтчет проверял только текст SQL и этого не видел.
     return rows
       .map((r) => ({
         groupId: r.group_id,
@@ -6724,10 +6732,11 @@ async function readGroupMembers(
         joinedAt: clampJoinedAt(r.joined_at, now),
         ownerProfileId,
       }))
-      .sort((a, b) =>
-        a.role === b.role
-          ? a.joinedAt - b.joinedAt || a.peerPubB64.localeCompare(b.peerPubB64)
-          : a.role.localeCompare(b.role)
+      .sort(
+        (a, b) =>
+          memberRoleRank(a.role) - memberRoleRank(b.role) ||
+          a.joinedAt - b.joinedAt ||
+          a.peerPubB64.localeCompare(b.peerPubB64)
       );
   } catch {
     return null;
