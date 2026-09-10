@@ -16,6 +16,7 @@ import { setGroupPinnedMessage, listGroupMembers, getGroup, getGroupMessageTexts
 import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { canPinInGroup, type PinRole } from './groupPinPolicy';
+import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import type { GroupControlOutcome } from './groupControlOutcome';
 import { log } from '../logger';
 
@@ -104,8 +105,34 @@ export async function resolvePinned(groupId: string, ownerProfileId: number): Pr
   return out;
 }
 
+/**
+ * Дорожка записи закреплений (v4.32.675).
+ *
+ * Список читается перед КАЖДОЙ записью и пишется целиком. Пишущих же двое и
+ * они друг о друге не знают: своё нажатие «Закрепить» и входящий конверт `pin`
+ * от другого участника (groupMessaging). Между чтением списка и записью стоит
+ * await, и второй успевает прочитать тот же список до того, как первый его
+ * записал: одно из двух закреплений пропадает молча — ни ошибки, ни повтора,
+ * а у остальных участников оно есть, потому что конверт уже разошёлся.
+ *
+ * Правило то же, что у службы уведомлений (lifecycleQueue): следующая запись
+ * начинается только после того, как предыдущая закончилась. Дорожка одна на
+ * модуль, а не на группу: запись местная и короткая, а карта дорожек по id
+ * группы росла бы без потолка.
+ */
+const pinWrites = createSerialRunner();
+
 /** Пишет закрепление в kv + groups.pinned_message_id/text. */
 export async function applyLocalPin(params: {
+  groupId: string;
+  ownerProfileId: number;
+  msgId: string;
+  on: boolean;
+}): Promise<PinnedEntry[] | null> {
+  return pinWrites(() => applyLocalPinSerial(params));
+}
+
+async function applyLocalPinSerial(params: {
   groupId: string;
   ownerProfileId: number;
   msgId: string;
@@ -138,10 +165,17 @@ export async function applyLocalPin(params: {
   return entries;
 }
 
-/** Убирает из закреплённых всё (кнопка «Открепить все»). */
+/**
+ * Убирает из закреплённых всё (кнопка «Открепить все»).
+ *
+ * Тоже по очереди: иначе «открепить всё» и одновременное закрепление могли
+ * закончиться пустым списком в kv и живым id в groups.pinned_message_id.
+ */
 export async function clearPinned(groupId: string, ownerProfileId: number): Promise<void> {
-  await scopedKvSetFor(ownerProfileId, pinListKey(groupId), '[]');
-  await setGroupPinnedMessage(groupId, ownerProfileId, null, null);
+  await pinWrites(async () => {
+    await scopedKvSetFor(ownerProfileId, pinListKey(groupId), '[]');
+    await setGroupPinnedMessage(groupId, ownerProfileId, null, null);
+  });
 }
 
 /** Роль в группе по собственному публичному ключу. */

@@ -29,6 +29,7 @@ import {
 import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope } from './controlFanout';
+import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import { log } from '../logger';
 import { acceptControlTs } from './controlWatermark';
 import type { DmPinOp, DmPinOutcome } from './dmPinOutcome';
@@ -136,8 +137,25 @@ export async function resolveDmPinned(
   return out;
 }
 
+/**
+ * Дорожка записи закреплений (v4.32.675). То же, что в группе: список
+ * читается перед каждой записью и пишется целиком, а пишущих двое — своё
+ * нажатие и входящий конверт `pin` от собеседника. Между чтением и записью
+ * стоит await, и одно из двух закреплений терялось молча.
+ */
+const dmPinWrites = createSerialRunner();
+
 /** Пишет закрепление в kv + conversations.pinned_message_id. */
 export async function applyLocalDmPin(params: {
+  peerPubB64: string;
+  ownerProfileId: number;
+  msgId: string;
+  on: boolean;
+}): Promise<DmPinnedEntry[] | null> {
+  return dmPinWrites(() => applyLocalDmPinSerial(params));
+}
+
+async function applyLocalDmPinSerial(params: {
   peerPubB64: string;
   ownerProfileId: number;
   msgId: string;
@@ -160,10 +178,12 @@ export async function applyLocalDmPin(params: {
   return entries;
 }
 
-/** Убирает из закреплённых всё. */
+/** Убирает из закреплённых всё. По той же дорожке, что и запись. */
 export async function clearDmPinned(peerPubB64: string, ownerProfileId: number): Promise<void> {
-  await scopedKvSetFor(ownerProfileId, pinListKey(peerPubB64), '[]');
-  await setConversationPinnedMessage(peerPubB64, ownerProfileId, null);
+  await dmPinWrites(async () => {
+    await scopedKvSetFor(ownerProfileId, pinListKey(peerPubB64), '[]');
+    await setConversationPinnedMessage(peerPubB64, ownerProfileId, null);
+  });
 }
 
 /**
