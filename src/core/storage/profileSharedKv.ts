@@ -13,6 +13,8 @@
  * Пока profileManager не поднялся, не трогаем ничего: неизвестно, кому
  * копировать, а стереть — необратимо.
  */
+import { log } from '../logger';
+
 import { profileManager } from '../identity/profileManager';
 import { cellTextOrNull } from './atRestCell';
 import { profileScopedKey } from './kvKeys';
@@ -63,10 +65,26 @@ export async function readProfileSharedSecret(key: string): Promise<string | nul
   return (await tryReadProfileSharedSecret(key))?.value ?? null;
 }
 
+/**
+ * Разнести общую запись по профилям и убрать её, когда копия легла всем.
+ *
+ * v4.32.706: список номеров берётся со словом о полноте. Снимок профилей на
+ * диске умеет собраться не целиком — строку не приняли и отбросили, а бывает,
+ * что не разобрался и весь снимок, и тогда заводится один профиль по
+ * умолчанию. Прежде укороченный список принимался за весь: копия ложилась
+ * тем, кого видно, `copiedEverywhere` так и оставалось true, и общая запись
+ * УДАЛЯЛАСЬ. А она была последним местом, где настройка спрятанного профиля
+ * вообще существовала: его список заглушённых авторов и названия его папок
+ * исчезали безвозвратно, восстановить их изнутри нечем. Не зная всех, общую
+ * запись оставляем на месте — перенос повторится, когда снимок прочитается.
+ */
 async function copySharedToProfiles(key: string, value: string): Promise<void> {
-  const profileIds = profileManager.getProfileIds();
+  const { ids: profileIds, complete } = profileManager.getProfileIdsComplete();
   if (profileIds.length === 0) return;
-  let copiedEverywhere = true;
+  if (!complete) log.warn('shared_kv_copy_profiles_incomplete', { key });
+  // Копию тем, кого видно, несём и при неполном списке: она никогда не ложится
+  // поверх уже имеющейся, а необратим здесь только следующий за циклом kvDelete.
+  let copiedEverywhere = complete;
   for (const id of profileIds) {
     const scoped = profileScopedKey(id, key);
     // v4.32.699: kvTryGet, а не kvGet. Здесь спрашивают «есть ли уже копия у

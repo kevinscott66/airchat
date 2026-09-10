@@ -52,6 +52,11 @@ jest.mock('../../identity/profileManager', () => ({
     getActiveProfile: () => mockProfiles.find((p) => p.id === mockActiveId) ?? null,
     getAllProfiles: () => mockProfiles,
     getProfileIds: () => mockProfiles.map((p: { id: number }) => p.id),
+    // v4.32.706: перенос общих записей спрашивает список со словом о полноте.
+    getProfileIdsComplete: () => ({
+      ids: mockProfiles.map((p: { id: number }) => p.id),
+      complete: true,
+    }),
   },
 }));
 
