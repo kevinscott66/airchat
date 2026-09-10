@@ -78,7 +78,7 @@ import {
   sanitizeConversationMetaRows,
   type ConversationMetaRow,
 } from './conversationMeta';
-import { sanitizeRawChatMessageRows } from './chatMessageBackup';
+import { RAW_CHAT_MESSAGE_COLUMNS, sanitizeRawChatMessageRows } from './chatMessageBackup';
 import { AT_REST_COLUMNS } from './atRestColumns';
 import { rebuildColumns, type ColumnInfo } from './tableRebuild';
 import { classifyStorageError, type StoragePressureKind } from './storagePressure';
@@ -3267,6 +3267,11 @@ export async function countChatMessages(ownerProfileId?: number): Promise<number
  * переписку на других устройствах, а резервное копирование записывало пустой
  * файл поверх целой копии. Соседние выгрузки (exportSyncProfileSettings,
  * exportFeedSyncSnapshot, exportStoryAlbumSyncSnapshot) так и делали всегда.
+ *
+ * v4.32.692: перечислением столбцов вместо `SELECT *`. Возвращаемый тип уже
+ * описывал ровно эти одиннадцать — звёздочка отдавала на пять больше, и
+ * расхождение уходило в отпечаток синхронизации. Разбор — у
+ * RAW_CHAT_MESSAGE_COLUMNS.
  */
 export async function exportRawChatMessageRows(ownerProfileId: number): Promise<
   Array<{
@@ -3296,9 +3301,13 @@ export async function exportRawChatMessageRows(ownerProfileId: number): Promise<
     owner_profile_id: number;
     reply_to_id: string | null;
     reply_to_preview: string | null;
-  }>('SELECT * FROM chat_messages WHERE owner_profile_id = ? ORDER BY created_at ASC', [
-    ownerProfileId,
-  ]);
+  }>(
+    `SELECT ${RAW_CHAT_MESSAGE_COLUMNS.join(', ')}
+       FROM chat_messages
+      WHERE owner_profile_id = ?
+      ORDER BY created_at ASC`,
+    [ownerProfileId]
+  );
 }
 
 /**
