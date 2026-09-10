@@ -2975,6 +2975,15 @@ function GroupChatScreen({
     }
 
     const isMe = item.senderPubB64 === myPubB64;
+    // v4.32.683: в канале своя запись не отъезжает вправо.
+    // Канал — витрина: подписчик видит запись слева, серым пузырём и с шапкой
+    // автора. Автор же видел ту же запись справа и залитой `primary` — то
+    // есть ровно то оформление, которого не видит ни один читатель, и правил
+    // отступы, переносы и превью вслепую. `isMe` осталось за своим: галочка
+    // доставки, счётчик прочитавших, свой голосовой файл на диске, запрет
+    // открыть собственное одноразовое. За СТОРОНУ пузыря теперь отвечает
+    // `outgoing`, и в канале её нет ни у кого.
+    const outgoing = isMe && group.type !== 'channel';
     // Исходящий пузырь в группе залит `primary` — цветом из настроек, а не
     // `bubbleOut`, — поэтому и чернила в нём считаются от `primary`
     // (v4.32.398, см. primaryInk).
@@ -2984,7 +2993,7 @@ function GroupChatScreen({
     // на своём пузыре (#0068D6) это 1.33:1 — найденное слово подсвечивалось
     // цветом, которого не видно. `searchMark` сохраняет тон и поднимает
     // светлоту до 3:1 — 3.04 на своём пузыре, 3.36 на чужом.
-    const grpMark = searchMark(colors, isMe ? colors.primary : colors.surface);
+    const grpMark = searchMark(colors, outgoing ? colors.primary : colors.surface);
     // Плитка, вложенная в пузырь: плёнка «один просмотр», ячейка фотосетки,
     // разделитель. Сначала заливка от пузыря, потом чернила от заливки
     // (v4.32.395) — иначе на светлом акценте плитка сливается с пузырём.
@@ -3035,16 +3044,16 @@ function GroupChatScreen({
             lastTapMapRef.current.set(item.id, now);
           }
         }}
-        style={[gcStyles.msgWrap, isMe ? gcStyles.msgOut : gcStyles.msgIn, isConsecutive ? { paddingVertical: 1 } : null, isMentioned ? { borderLeftWidth: 3, borderLeftColor: colors.primary, paddingLeft: 6 } : null, isSelectedMsg ? { backgroundColor: activeTint.fill } : null]}
+        style={[gcStyles.msgWrap, outgoing ? gcStyles.msgOut : gcStyles.msgIn, isConsecutive ? { paddingVertical: 1 } : null, isMentioned ? { borderLeftWidth: 3, borderLeftColor: colors.primary, paddingLeft: 6 } : null, isSelectedMsg ? { backgroundColor: activeTint.fill } : null]}
       >
         {isGrpSelecting ? (
-          <View style={{ position: 'absolute', left: isMe ? undefined : -28, right: isMe ? -28 : undefined, top: '50%', marginTop: -11 }}>
+          <View style={{ position: 'absolute', left: outgoing ? undefined : -28, right: outgoing ? -28 : undefined, top: '50%', marginTop: -11 }}>
             <View style={[gcStyles.selCircle, isSelectedMsg ? { backgroundColor: colors.primary, borderColor: colors.primary } : { borderColor: colors.textMuted }]}>
               {isSelectedMsg ? <Ionicons name="checkmark" size={13} color={contrastingInk(colors.primary)} /> : null}
             </View>
           </View>
         ) : null}
-        {!isMe && !anonymousPosting && !isGroupSysMessage(item.text) && !isConsecutive ? (
+        {!outgoing && !anonymousPosting && !isGroupSysMessage(item.text) && !isConsecutive ? (
           <AppPressable onPress={() => {
             const member = allMembers.find((m) => m.peerPubB64 === item.senderPubB64);
             if (member) {
@@ -3091,7 +3100,7 @@ function GroupChatScreen({
         ) : null}
         {item.replyToId && (replyPreview !== null || replyQuote.unreadable) ? (
           <AppPressable
-            style={[gcStyles.quotedBlock, { alignSelf: isMe ? 'flex-end' : 'flex-start', backgroundColor: quoteFill }]}
+            style={[gcStyles.quotedBlock, { alignSelf: outgoing ? 'flex-end' : 'flex-start', backgroundColor: quoteFill }]}
             onPress={() => item.replyToId && scrollToReply(item.replyToId)}
             hitSlop={4}
           >
@@ -3118,7 +3127,7 @@ function GroupChatScreen({
             </Text>
           </AppPressable>
         ) : null}
-        <View style={[gcStyles.bubble, isMe ? gcStyles.bubbleAnchorOut : gcStyles.bubbleAnchorIn, { backgroundColor: (!item.mediaCids && !item.text.startsWith(POLL_PREFIX) && !isVoiceMessage(item.text) && !isDocMessage(item.text) && !isLocationMessage(item.text) && !item.replyToId && isGrpBigEmoji(item.text)) ? 'transparent' : (isMe ? colors.primary : colors.surface), padding: item.mediaCids ? 0 : undefined, overflow: 'hidden' }]}>
+        <View style={[gcStyles.bubble, outgoing ? gcStyles.bubbleAnchorOut : gcStyles.bubbleAnchorIn, { backgroundColor: (!item.mediaCids && !item.text.startsWith(POLL_PREFIX) && !isVoiceMessage(item.text) && !isDocMessage(item.text) && !isLocationMessage(item.text) && !item.replyToId && isGrpBigEmoji(item.text)) ? 'transparent' : (outgoing ? colors.primary : colors.surface), padding: item.mediaCids ? 0 : undefined, overflow: 'hidden' }]}>
           {/* v4.32.244: раньше здесь требовался ещё и адрес шлюза — без него
               пузырь с фотографией молча превращался в пустой текст. Снимок,
               приехавший зашифрованным вложением, шлюза не требует. */}
@@ -3132,11 +3141,11 @@ function GroupChatScreen({
           ) : item.mediaCids ? (
             item.text && item.text.startsWith('\x09vo:') ? (
               <AppPressable
-                style={{ alignItems: 'center', justifyContent: 'center', width: 220, height: 120, borderRadius: radius.lg, backgroundColor: isMe ? meTile : colors.surfaceHigh, margin: 4 }}
+                style={{ alignItems: 'center', justifyContent: 'center', width: 220, height: 120, borderRadius: radius.lg, backgroundColor: outgoing ? meTile : colors.surfaceHigh, margin: 4 }}
                 onPress={() => handleGrpViewOnceTap(item)}
               >
-                <Ionicons name="eye-outline" size={30} color={isMe ? meTileInk.muted : colors.textMuted} />
-                <Text style={{ color: isMe ? meTileInk.secondary : colors.textSecondary, fontSize: 13, marginTop: 6, fontWeight: '500' }}>
+                <Ionicons name="eye-outline" size={30} color={outgoing ? meTileInk.muted : colors.textMuted} />
+                <Text style={{ color: outgoing ? meTileInk.secondary : colors.textSecondary, fontSize: 13, marginTop: 6, fontWeight: '500' }}>
                   {isMe ? 'Один просмотр' : 'Нажмите, чтобы открыть'}
                 </Text>
               </AppPressable>
@@ -3153,23 +3162,23 @@ function GroupChatScreen({
                   mediaCids={item.mediaCids}
                   gateway={gateway}
                   onOpen={(urls, index) => grpMediaViewer.open(urls, index)}
-                  tileBackground={isMe ? meTile : colors.surfaceHigh}
-                  mutedColor={isMe ? meTileInk.muted : colors.textMuted}
+                  tileBackground={outgoing ? meTile : colors.surfaceHigh}
+                  mutedColor={outgoing ? meTileInk.muted : colors.textMuted}
                 />
                 {isUnreadableMessage(item) ? (
                   // v4.32.559: подпись к снимку не прочиталась — молчать об
                   // этом значит выдать её за ненаписанную. См. unreadableText.
-                  <Text style={{ fontSize: 13, color: isMe ? meInk.text : colors.textMuted, fontStyle: 'italic', paddingHorizontal: 12, paddingTop: 6 }}>{UNREADABLE_MESSAGE_TEXT}</Text>
+                  <Text style={{ fontSize: 13, color: outgoing ? meInk.text : colors.textMuted, fontStyle: 'italic', paddingHorizontal: 12, paddingTop: 6 }}>{UNREADABLE_MESSAGE_TEXT}</Text>
                 ) : item.text && item.text.trim() && item.text.trim() !== ' ' ? (
-                  <GrpMessageBlock text={item.text} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, paddingHorizontal: 12, paddingTop: 6, fontSize: msgFontSize }]} isMe={isMe} onMentionPress={handleMentionPress} />
+                  <GrpMessageBlock text={item.text} baseStyle={[gcStyles.bubbleText, { color: outgoing ? meInk.text : colors.text, paddingHorizontal: 12, paddingTop: 6, fontSize: msgFontSize }]} isMe={outgoing} onMentionPress={handleMentionPress} />
                 ) : null}
               </View>
             )
           ) : isUnreadableMessage(item) ? (
             // v4.32.559: см. ChatScreen — то же различие нужно и группам.
-            <Text style={{ fontSize: 13, color: isMe ? meInk.text : colors.textMuted, fontStyle: 'italic' }}>{UNREADABLE_MESSAGE_TEXT}</Text>
+            <Text style={{ fontSize: 13, color: outgoing ? meInk.text : colors.textMuted, fontStyle: 'italic' }}>{UNREADABLE_MESSAGE_TEXT}</Text>
           ) : item.text.startsWith(POLL_PREFIX) ? (
-            <PollBubble messageId={item.id} pollText={item.text} isMe={isMe} myPubB64={myPubB64} groupId={item.groupId} pid={pid} members={allMembers} />
+            <PollBubble messageId={item.id} pollText={item.text} isMe={outgoing} myPubB64={myPubB64} groupId={item.groupId} pid={pid} members={allMembers} />
           ) : isVoiceMessage(item.text) ? (() => {
             const meta = parseVoiceMeta(item.text);
             if (!meta) return null;
@@ -3180,20 +3189,20 @@ function GroupChatScreen({
             const voiceUri = voicePlaybackUri({ metaUri: meta.uri, isOutgoing: isMe, gateway });
             if (!voiceUri && !meta.blob) {
               return (
-                <Text style={[gcStyles.bubbleText, { color: isMe ? meInk.secondary : colors.textMuted, fontSize: msgFontSize }]}>
+                <Text style={[gcStyles.bubbleText, { color: outgoing ? meInk.secondary : colors.textMuted, fontSize: msgFontSize }]}>
                   🎤 Голосовое сообщение недоступно
                 </Text>
               );
             }
-            return <VoicePlayer uri={voiceUri} durationMs={meta.durationMs} isOutgoing={isMe} blob={meta.blob} />;
+            return <VoicePlayer uri={voiceUri} durationMs={meta.durationMs} isOutgoing={outgoing} blob={meta.blob} />;
           })() : isDocMessage(item.text) ? (
             // v4.32.245: тот же пузырь, что в личных чатах. Свой рендер знал
             // только адрес шлюза, поэтому документ и видео, приехавшие
             // зашифрованным вложением, не открывались вовсе — а без IPFS это
             // единственный способ их прислать.
-            <DocBubble text={item.text} isOutgoing={isMe} gateway={gateway} />
+            <DocBubble text={item.text} isOutgoing={outgoing} gateway={gateway} />
           ) : isGifMessage(item.text) ? (
-            <GifBubble url={parseGifUrl(item.text)} isMe={isMe} />
+            <GifBubble url={parseGifUrl(item.text)} isMe={outgoing} />
           ) : isLiveLocMessage(item.text) ? (
             // v4.32.563: был свой рендер, отставший от пузыря переписки. Он не
             // заводил таймера перерисовки — зелёная плашка LIVE не гасла сама
@@ -3202,21 +3211,21 @@ function GroupChatScreen({
             // А неразобранный конверт он выкладывал на экран как есть — со
             // служебным символом и JSON. Пузырь теперь общий, чернила берёт
             // от BubbleKindProvider группы.
-            <LiveLocationBubble text={item.text} isOutgoing={isMe} />
+            <LiveLocationBubble text={item.text} isOutgoing={outgoing} />
           ) : isLocationMessage(item.text) ? (() => {
             const meta = parseLocationMeta(item.text);
-            if (!meta) return <Text style={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, fontSize: msgFontSize }]}>{item.text}</Text>;
+            if (!meta) return <Text style={[gcStyles.bubbleText, { color: outgoing ? meInk.text : colors.text, fontSize: msgFontSize }]}>{item.text}</Text>;
             return (
               <AppPressable
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 180, paddingVertical: 4 }}
                 onPress={() => openMapAt(meta.lat, meta.lon)}
               >
-                <Ionicons name="location" size={28} color={isMe ? meInk.accent : colors.accent} />
+                <Ionicons name="location" size={28} color={outgoing ? meInk.accent : colors.accent} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: isMe ? meInk.text : colors.text, fontWeight: '600', fontSize: 13 }}>Геолокация</Text>
-                  <Text style={{ color: isMe ? meInk.secondary : colors.textMuted, fontSize: font.xs }}>{meta.label || `${meta.lat.toFixed(5)}, ${meta.lon.toFixed(5)}`}</Text>
+                  <Text style={{ color: outgoing ? meInk.text : colors.text, fontWeight: '600', fontSize: 13 }}>Геолокация</Text>
+                  <Text style={{ color: outgoing ? meInk.secondary : colors.textMuted, fontSize: font.xs }}>{meta.label || `${meta.lat.toFixed(5)}, ${meta.lon.toFixed(5)}`}</Text>
                 </View>
-                <Ionicons name="open-outline" size={16} color={isMe ? meInk.muted : colors.textMuted} />
+                <Ionicons name="open-outline" size={16} color={outgoing ? meInk.muted : colors.textMuted} />
               </AppPressable>
             );
           })() : isContactCard(item.text) ? (() => {
@@ -3227,9 +3236,9 @@ function GroupChatScreen({
             // группах — где карточку может прислать любой участник — так и
             // передавала Buffer.from(card.pub) в addContact как есть.
             if (!parseContactCard(item.text)) {
-              return <Text style={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, fontSize: msgFontSize }]}>{item.text}</Text>;
+              return <Text style={[gcStyles.bubbleText, { color: outgoing ? meInk.text : colors.text, fontSize: msgFontSize }]}>{item.text}</Text>;
             }
-            return <ContactCardBubble text={item.text} isOutgoing={isMe} pair={pair} />;
+            return <ContactCardBubble text={item.text} isOutgoing={outgoing} pair={pair} />;
           })() : (() => {
             const fwdInfo = isForwardedMessage(item.text) ? parseForwardedMessage(item.text) : null;
             const displayText = fwdInfo ? fwdInfo.originalText : item.text;
@@ -3237,19 +3246,19 @@ function GroupChatScreen({
             return (
               <>
                 {fwdLabel ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, paddingBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: isMe ? meTile : colors.border }}>
-                    <Ionicons name="arrow-redo-outline" size={12} color={isMe ? meInk.accent : colors.accent} />
-                    <Text style={{ fontSize: font.xs, color: isMe ? meInk.accent : colors.primary, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4, paddingBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: outgoing ? meTile : colors.border }}>
+                    <Ionicons name="arrow-redo-outline" size={12} color={outgoing ? meInk.accent : colors.accent} />
+                    <Text style={{ fontSize: font.xs, color: outgoing ? meInk.accent : colors.primary, marginLeft: 3, fontStyle: 'italic' }}>{fwdLabel}</Text>
                   </View>
                 ) : null}
                 {searchVisible && searchQuery.trim() ? (
-                  <Text style={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, fontSize: msgFontSize, flexWrap: 'wrap' }]}>
+                  <Text style={[gcStyles.bubbleText, { color: outgoing ? meInk.text : colors.text, fontSize: msgFontSize, flexWrap: 'wrap' }]}>
                     {highlightSegments(displayText, searchQuery).map((seg, si) => (
                       <Text key={si} style={seg.match ? { backgroundColor: grpMark.fill, color: grpMark.ink, borderRadius: radius.sm } : undefined}>{seg.text}</Text>
                     ))}
                   </Text>
                 ) : (
-                  <GrpCollapsibleBlock text={displayText} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.text : colors.text, fontSize: msgFontSize }]} isMe={isMe} onMentionPress={handleMentionPress} />
+                  <GrpCollapsibleBlock text={displayText} baseStyle={[gcStyles.bubbleText, { color: outgoing ? meInk.text : colors.text, fontSize: msgFontSize }]} isMe={outgoing} onMentionPress={handleMentionPress} />
                 )}
                 {(autoTranslate || grpManualTranslatedIds.has(item.id)) && !isMe && translationCache[item.id] ? (
                   <>
@@ -3259,19 +3268,19 @@ function GroupChatScreen({
                         colors.textSecondary подобран под фон страницы — на
                         синем он читался как грязное пятно. Приведено к тому же
                         приглушённому белому, что и в личных чатах. */}
-                    <GrpMessageBlock text={translationCache[item.id]!} baseStyle={[gcStyles.bubbleText, { color: isMe ? meInk.secondary : colors.textSecondary, fontSize: msgFontSize - 1 }]} isMe={isMe} onMentionPress={handleMentionPress} />
+                    <GrpMessageBlock text={translationCache[item.id]!} baseStyle={[gcStyles.bubbleText, { color: outgoing ? meInk.secondary : colors.textSecondary, fontSize: msgFontSize - 1 }]} isMe={outgoing} onMentionPress={handleMentionPress} />
                   </>
                 ) : null}
                 {(() => {
                   const u = extractFirstUrl(displayText);
-                  return u ? <LinkPreview url={u} isOutgoing={isMe} fromPeer={!isMe} /> : null;
+                  return u ? <LinkPreview url={u} isOutgoing={outgoing} fromPeer={!isMe} /> : null;
                 })()}
               </>
             );
           })()}
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: item.mediaCids ? 8 : 0, paddingBottom: item.mediaCids ? 6 : 0 }}>
-            {item.starred ? <Ionicons name="star" size={10} color={isMe ? meInk.star : colors.star} style={{ marginRight: 3 }} /> : null}
-            {disappearMs ? <Ionicons name="timer-outline" size={11} color={isMe ? meInk.muted : colors.textMuted} style={{ marginRight: 3 }} /> : null}
+            {item.starred ? <Ionicons name="star" size={10} color={outgoing ? meInk.star : colors.star} style={{ marginRight: 3 }} /> : null}
+            {disappearMs ? <Ionicons name="timer-outline" size={11} color={outgoing ? meInk.muted : colors.textMuted} style={{ marginRight: 3 }} /> : null}
             {item.seenUnreadable && (isMe || group.type === 'channel') ? (
               // v4.32.591: столбец с прочитавшими не открылся ключом данных.
               // «0» здесь было бы неправдой, а исправить её нельзя: писать в
@@ -3290,22 +3299,22 @@ function GroupChatScreen({
                 hitSlop={6}
                 style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}
               >
-                <Ionicons name="checkmark-done" size={13} color={meInk.muted} style={{ marginRight: 2 }} />
-                <Text style={{ fontSize: font.xs, color: meInk.secondary }}>{item.seenBy!.length}</Text>
+                <Ionicons name="checkmark-done" size={13} color={outgoing ? meInk.muted : colors.textMuted} style={{ marginRight: 2 }} />
+                <Text style={{ fontSize: font.xs, color: outgoing ? meInk.secondary : colors.textMuted }}>{item.seenBy!.length}</Text>
               </AppPressable>
             ) : (item.seenBy?.length ?? 0) > 0 && (isMe || group.type === 'channel') ? (
               // v4.32.226: REAL views — distinct readers from seen_by (read-receipt
               // backed), not the old blind per-open view_count counter (which inflated
               // to thousands on a 1-subscriber channel from the owner's own re-opens).
               <>
-                <Ionicons name="eye-outline" size={11} color={isMe ? meInk.muted : colors.textMuted} style={{ marginRight: 2 }} />
-                <Text style={{ fontSize: font.xs, color: isMe ? meInk.secondary : colors.textMuted, marginRight: 4 }}>
+                <Ionicons name="eye-outline" size={11} color={outgoing ? meInk.muted : colors.textMuted} style={{ marginRight: 2 }} />
+                <Text style={{ fontSize: font.xs, color: outgoing ? meInk.secondary : colors.textMuted, marginRight: 4 }}>
                   {(item.seenBy?.length ?? 0) >= 1000 ? `${((item.seenBy!.length) / 1000).toFixed(1)}K` : item.seenBy!.length}
                 </Text>
               </>
             ) : null}
             <AppPressable onLongPress={() => Alert.alert('', fullDateTime(item.createdAt))} hitSlop={6}>
-              <Text style={[gcStyles.timeText, { color: isMe ? meInk.secondary : colors.textMuted }]}>
+              <Text style={[gcStyles.timeText, { color: outgoing ? meInk.secondary : colors.textMuted }]}>
                 {item.editedAt ? 'изм. ' : ''}{formatTime(item.createdAt)}
               </Text>
             </AppPressable>
@@ -3313,7 +3322,7 @@ function GroupChatScreen({
               <Ionicons
                 name={item.id === lastSentMsgIdRef.current ? 'checkmark-outline' : 'checkmark-done-outline'}
                 size={13}
-                color={meInk.muted}
+                color={outgoing ? meInk.muted : colors.textMuted}
                 style={{ marginLeft: 2 }}
               />
             ) : null}

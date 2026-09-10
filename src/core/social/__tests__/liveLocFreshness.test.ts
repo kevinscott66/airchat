@@ -160,7 +160,11 @@ describe('форма исходников', () => {
   it('группа рисует общий пузырь, а не свою копию', () => {
     const g = GROUPS();
     expect(g).toContain("import { LiveLocationBubble } from './chat-components/LiveLocationBubble';");
-    expect(g).toContain('<LiveLocationBubble text={item.text} isOutgoing={isMe} />');
+    // v4.32.683: сторону пузыря в группе решает `outgoing`, а не «моё»: в
+    // канале своя запись стоит слева, как её видит подписчик. Проверка на
+    // общий пузырь от этого не слабеет — ниже она же запрещает старую форму.
+    expect(g).toContain('<LiveLocationBubble text={item.text} isOutgoing={outgoing} />');
+    expect(g).not.toContain('<LiveLocationBubble text={item.text} isOutgoing={isMe} />');
     expect(g).not.toContain('parseLiveLoc(item.text)');
     expect(g).not.toContain("import { isLiveLocMessage, parseLiveLoc }");
   });
