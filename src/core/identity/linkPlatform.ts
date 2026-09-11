@@ -83,6 +83,22 @@ export function profileUrl(platform: LinkPlatform, handle: string): string | nul
   return platform === 'github' ? `https://github.com/${h}` : `https://x.com/${h}`;
 }
 
+/**
+ * Куда отправлять человека публиковать подписанную строку.
+ *
+ * v4.32.718: у GitHub это форма СОЗДАНИЯ gist, а не голый `gist.github.com`.
+ * Голый адрес — витрина «Discover gists»: лента чужих публикаций. Человек,
+ * нажавший кнопку на шаге подтверждения, попадал к посторонним записям и
+ * справедливо считал, что приложение увело его не туда. Форма нового gist
+ * открывается сразу с полем ввода — ровно тем, куда нужно вставить строку.
+ *
+ * Адрес публикации НИКОГДА не должен разбираться как адрес доказательства:
+ * это разные вещи — куда идти писать и что потом вставить обратно.
+ */
+export function publishUrl(platform: LinkPlatform): string {
+  return platform === 'github' ? 'https://gist.github.com/new' : 'https://x.com/compose/post';
+}
+
 /** Идентификатор gist из адреса, который человек вставил. */
 export function parseGistId(url: unknown): string | null {
   if (typeof url !== 'string') return null;

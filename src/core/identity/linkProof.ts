@@ -45,11 +45,12 @@ import {
   normalizeHandle,
   normalizeProofUrl,
   profileUrl,
+  publishUrl,
   sameHandle,
   type LinkPlatform,
 } from './linkPlatform';
 
-export { PLATFORM_LABEL, normalizeHandle, normalizeProofUrl, profileUrl, sameHandle };
+export { PLATFORM_LABEL, normalizeHandle, normalizeProofUrl, profileUrl, publishUrl, sameHandle };
 export type { LinkPlatform };
 
 /** Что подписывается. Короткое: запись публикуют вручную, её будут видеть. */

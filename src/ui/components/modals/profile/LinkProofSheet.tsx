@@ -44,15 +44,22 @@ import {
   proofBodyFor,
   proofFailureText,
   proofStatementText,
+  publishUrl,
   type LinkPlatform,
   type LinkRecord,
 } from '../../../../core/identity/linkProof';
 import { checkLinkProof } from '../../../../core/identity/linkProofCheck';
 
-/** Куда человека отправляют публиковать строку. */
-const PUBLISH_URL: Record<LinkPlatform, string> = {
-  github: 'https://gist.github.com/',
-  x: 'https://x.com/compose/post',
+/**
+ * Что обещает кнопка.
+ *
+ * v4.32.718: «Открыть GitHub» — это ещё не «создать gist», и обещание было
+ * лишним поводом думать, что нажатие уводит куда попало. Сам адрес живёт в
+ * `linkPlatform.publishUrl`: там же, где остальные правила площадок.
+ */
+const PUBLISH_ACTION: Record<LinkPlatform, string> = {
+  github: 'Создать gist',
+  x: 'Написать запись',
 };
 
 const PUBLISH_HINT: Record<LinkPlatform, string> = {
@@ -240,12 +247,14 @@ export function LinkProofSheet({
               </AppPressable>
               <AppPressable
                 style={[styles.secondary, { borderColor: colors.border }]}
-                onPress={() => openExternal(PUBLISH_URL[platform], 'link_proof_publish')}
+                onPress={() => openExternal(publishUrl(platform), 'link_proof_publish')}
                 accessibilityRole="button"
                 testID="link_proof_open"
               >
                 <Ionicons name="open-outline" size={16} color={colors.text} />
-                <Text style={[styles.secondaryText, { color: colors.text }]}>Открыть {label}</Text>
+                <Text style={[styles.secondaryText, { color: colors.text }]}>
+                  {PUBLISH_ACTION[platform]}
+                </Text>
               </AppPressable>
             </View>
             <Text style={[styles.hint, { color: colors.textSecondary }]}>{PUBLISH_HINT[platform]}</Text>
