@@ -11,7 +11,10 @@
  * рассылаются циклом по отправителям последних сообщений, и следующий вызов,
  * добавленный где-нибудь ещё, про настройку бы не вспомнил.
  */
-const mockSendMessage = jest.fn(async (_peer: string, _text: string) => {});
+// v4.32.716: заглушка возвращает cid, как настоящая отправка при успехе.
+// Пока она отдавала undefined, отличить «ушло» от «отвергли» было нечем, и
+// проверки ниже прошли бы даже на коде, который ответ отправки выбрасывает.
+const mockSendMessage = jest.fn(async (_peer: string, _text: string): Promise<string | null> => 'cid-rr');
 // v4.32.465: разрешение спрашивают у того профиля, чьим ключом отметка будет
 // подписана, — служба переписки называет его сама.
 const MY_PID = 7;
@@ -55,9 +58,10 @@ beforeEach(() => {
 
 describe('отметки о прочтении в группе', () => {
   it('уходят, пока переключатель не тронут', async () => {
-    await sendGroupReadReceipt(GROUP, 'm1', SENDER, ME);
+    const outcome = await sendGroupReadReceipt(GROUP, 'm1', SENDER, ME);
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
     expect(mockSendMessage.mock.calls[0]?.[0]).toBe(SENDER);
+    expect(outcome).toBe('sent');
   });
 
   it('разрешение спрашивают у профиля, чьим ключом отметка уйдёт', async () => {
@@ -70,13 +74,16 @@ describe('отметки о прочтении в группе', () => {
     // Ровно то, чего не было до v4.32.312: выключатель молчал только про личные
     // переписки, а участники группы всё так же видели время прочтения.
     mockAllowed = false;
-    await sendGroupReadReceipt(GROUP, 'm1', SENDER, ME);
+    const outcome = await sendGroupReadReceipt(GROUP, 'm1', SENDER, ME);
     expect(mockSendMessage).not.toHaveBeenCalled();
+    // v4.32.716: «выключено» — не «не ушло»: повторять такую отметку нечего.
+    expect(outcome).toBe('off');
   });
 
   it('себе не отправляются', async () => {
-    await sendGroupReadReceipt(GROUP, 'm1', ME, ME);
+    const outcome = await sendGroupReadReceipt(GROUP, 'm1', ME, ME);
     expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(outcome).toBe('off');
   });
 
   it('в конверте только id последнего увиденного, без текста', async () => {

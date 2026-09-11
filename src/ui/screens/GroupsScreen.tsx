@@ -266,6 +266,12 @@ const DISAPPEAR_OPTIONS = [
  */
 const GRP_RECENTLY_DELETED_TTL_MS = 7 * 86_400_000;
 
+// v4.32.716: сколько раз повторять отметку о прочтении, которую отвергли.
+// Отказ бывает временным (исчерпан общий счёт служебных конвертов), но
+// бывает и постоянным (адресат заблокировал) — без потолка повтор шёл бы на
+// каждую запись в хранилище до самого выхода из группы.
+const GROUP_RECEIPT_MAX_TRIES = 3;
+
 // v4.32.227 (BUG-11): корректная русская плюрализация. Раньше всегда выводилось
 // «N участников» → «1 участников». Единый источник правды теперь в
 // ../utils/plural; реэкспортируем здесь для обратной совместимости.
@@ -997,6 +1003,10 @@ function GroupChatScreen({
   // v4.32.526: какие отметки о прочтении уже ушли за этот вход в группу.
   // Экран пересоздаётся по key={nav.group.id}, так что чистить набор не надо.
   const sentGroupReceiptsRef = useRef<Set<string>>(new Set());
+  // v4.32.716: сколько раз отметку по этой пометке уже отвергли. Нужен, чтобы
+  // повтор после отказа не стал вечным: заблокированный адресат отвергает
+  // конверт всегда, а loadMessages зовут на каждую запись в хранилище.
+  const refusedGroupReceiptsRef = useRef<Map<string, number>>(new Map());
 
   const loadMessages = useCallback(async () => {
     await loadTaskRef.current.run(async () => {
@@ -1049,8 +1059,23 @@ function GroupChatScreen({
       sentReceipts.add(msg.senderPubB64);
       const mark = `${msg.senderPubB64}|${msg.id}`;
       if (sentGroupReceiptsRef.current.has(mark)) continue;
+      // v4.32.716: пометку ставим до отправки — это защита от наложения
+      // вызовов, — но снимаем её обратно, если конверт не ушёл. Раньше отказ
+      // (исчерпан общий счёт служебных конвертов, нет защищённого канала,
+      // некуда доставить) записывался как отправленная отметка на всё время,
+      // что группа открыта: автор сообщения так и не узнавал, что его прочли.
       sentGroupReceiptsRef.current.add(mark);
-      void sendGroupReadReceipt(group.id, msg.id, msg.senderPubB64, myPubB64);
+      void sendGroupReadReceipt(group.id, msg.id, msg.senderPubB64, myPubB64)
+        .then((outcome) => {
+          if (outcome !== 'refused') return;
+          const tries = (refusedGroupReceiptsRef.current.get(mark) ?? 0) + 1;
+          refusedGroupReceiptsRef.current.set(mark, tries);
+          if (tries >= GROUP_RECEIPT_MAX_TRIES) return;
+          sentGroupReceiptsRef.current.delete(mark);
+        })
+        .catch(() => {
+          /* отметка о прочтении — не повод ронять загрузку сообщений */
+        });
     }
     });
   }, [group.id, group.unreadCount, pid, myPubB64]);

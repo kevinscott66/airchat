@@ -322,6 +322,19 @@ export type GroupReadReceiptEnvelope = {
 };
 
 /**
+ * Чем кончилась попытка отправить отметку о прочтении.
+ *
+ * v4.32.716: «не отправили» бывает двух разных сортов, и экрану они нужны
+ * порознь. 'off' — отправлять было нечего или не нужно (себе, отметки
+ * выключены): повторять бессмысленно. 'refused' — отправить хотели, но конверт
+ * не ушёл: стоит попробовать ещё раз. Простого булева тут мало: экран группы
+ * помечает отметку отправленной ещё до отправки, и снимать пометку на каждое
+ * «не ушло» значило бы перечитывать kv из SQLite до двадцати раз на каждую
+ * запись в хранилище.
+ */
+export type GroupReadReceiptOutcome = 'sent' | 'off' | 'refused';
+
+/**
  * Отметка о прочтении отправителю группового сообщения.
  *
  * v4.32.312: переключатель «не отправлять отметки о прочтении» здесь не
@@ -336,15 +349,15 @@ export async function sendGroupReadReceipt(
   lastSeenMsgId: string,
   senderPubB64: string,
   myPubB64: string
-): Promise<void> {
+): Promise<GroupReadReceiptOutcome> {
   const svc = getMessagingService();
-  if (!svc) return;
-  if (senderPubB64 === myPubB64) return; // don't send to self
+  if (!svc) return 'refused';
+  if (senderPubB64 === myPubB64) return 'off'; // don't send to self
   // v4.32.465: спрашиваем тот аккаунт, чьим ключом отметка будет подписана.
   // Экран группы выпускает до 20 таких вызовов разом, каждый ждёт чтения kv
   // из SQLite; переключись человек в это время — отметки уходили бы ключом
   // «Личного», но по разрешению «Рабочего», хотя в «Личном» он их запретил.
-  if (!(await readReceiptsAllowedFor((await svc.groupRecipient()).pid))) return;
+  if (!(await readReceiptsAllowedFor((await svc.groupRecipient()).pid))) return 'off';
 
   const envelope: GroupReadReceiptEnvelope = {
     groupId,
@@ -353,10 +366,26 @@ export async function sendGroupReadReceipt(
     ts: Date.now(),
   };
   try {
-    await svc.sendMessage(senderPubB64, GROUP_READ_RECEIPT_PREFIX + JSON.stringify(envelope));
+    // v4.32.716: ответ отправки здесь выбрасывали. `sendMessage` возвращает null,
+    // когда конверт не ушёл: общий на все служебные конверты лимит исчерпан
+    // (с ним делят счёт реакции, голоса в опросах и рассылка группы), контакт
+    // заблокирован, защищённого канала нет или нет ни одного маршрута. Отметка
+    // о прочтении — служебный конверт (\x03 в CONTROL_ONLY), поэтому строки в
+    // переписке после отказа не остаётся вовсе: ни экран, ни журнал не знали,
+    // что отметка не ушла. Автор сообщения не видел, что его прочли, а значок
+    // просмотров канала (он считает разных читателей по отметкам) занижал счёт.
+    const cid = await svc.sendMessage(senderPubB64, GROUP_READ_RECEIPT_PREFIX + JSON.stringify(envelope));
+    if (!cid) {
+      log.info('group_read_receipt_refused', {
+        groupId: groupId.slice(0, 8),
+        msgId: lastSeenMsgId.slice(0, 8),
+      });
+      return 'refused';
+    }
     log.debug('group_read_receipt_sent', { groupId: groupId.slice(0, 8), msgId: lastSeenMsgId.slice(0, 8) });
+    return 'sent';
   } catch {
-    // Non-critical
+    return 'refused';
   }
 }
 
@@ -943,7 +972,16 @@ export async function fanoutGroupControl(
     kind: 'group',
     recipients: [...recipients],
   });
-  log.info('group_ctl_fanout', { gid: groupId.slice(0, 8), op: ctl.op, to: recipients.size });
+  // v4.32.716: в журнал писали `recipients.size` — задуманное число адресатов,
+  // а не принятое. Воронка уже вернула, скольким конверт правда ушёл; сосед
+  // sendGroupControlTo пишет именно его. Строка «to: 12» при двенадцати отказах
+  // читалась как успешная рассылка.
+  log.info('group_ctl_fanout', {
+    gid: groupId.slice(0, 8),
+    op: ctl.op,
+    to: res.sent ? res.recipients : 0,
+    of: recipients.size,
+  });
   return res.sent
     ? { op: ctl.op, sent: true, recipients: res.recipients }
     : { op: ctl.op, sent: false, reason: res.reason };
