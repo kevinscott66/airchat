@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   deleteStoryAlbum as deleteStoryAlbumRows,
   deleteStoryAlbumItem,
+  suppressSyncEntityTombstones,
   insertStoryAlbum,
   insertStoryAlbumItem,
   listAllStoryAlbumItems,
@@ -34,6 +35,7 @@ import {
   type StoryAlbumItemRow,
   type StoryRow,
 } from '../storage/local';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import {
   copyIntoStoryAlbum,
   deleteStoryAlbumFiles,
@@ -205,6 +207,35 @@ export async function sweepOrphanAlbumFiles(): Promise<number> {
 }
 
 /**
+ * Где помнится, когда строку впервые увидели осиротевшей (v4.32.717).
+ *
+ * Ключ местный: в отборе dialogBackupKeySelectors его нет, и на второе
+ * устройство он не уезжает. Так и задумано — это показания ЗДЕШНИХ часов, и
+ * чужие показания в них смысла не имеют.
+ */
+const ORPHAN_SEEN_KEY = 'story:album_orphan_seen';
+
+/** Разобрать память; испорченная запись читается как пустая. */
+function parseOrphanSeen(raw: string | null): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!raw) return out;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+    for (const [id, at] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof at === 'number' && Number.isFinite(at)) out.set(id, at);
+    }
+  } catch {
+    log.warn('story_album_orphan_seen_corrupt');
+  }
+  return out;
+}
+
+function serializeOrphanSeen(seen: ReadonlyMap<string, number>): string {
+  return JSON.stringify(Object.fromEntries(seen));
+}
+
+/**
  * Убрать строки, потерявшие свой альбом.
  *
  * Зовётся после разбора очередного захода синхронизации — не в середине:
@@ -217,13 +248,37 @@ export async function sweepOrphanAlbumFiles(): Promise<number> {
  * удалении профиля.
  */
 export async function sweepOrphanAlbumItems(ownerProfileId: number): Promise<number> {
-  const [albums, items] = await Promise.all([
+  const [albums, items, seenRead] = await Promise.all([
     listStoryAlbums(ownerProfileId),
     listAllStoryAlbumItems(ownerProfileId),
+    scopedKvTryGetFor(ownerProfileId, ORPHAN_SEEN_KEY),
   ]);
-  const lost = orphanAlbumItems(items, albums.map((a) => a.id), Date.now());
+  if (seenRead === null) {
+    // Память не прочиталась — это не «памяти нет». Сносить по пустой памяти
+    // значит начать отсчёт заново, а записать её поверх — потерять настоящий
+    // отсчёт. Заход пропускаем целиком: строки никуда не денутся.
+    log.warn('story_album_orphan_seen_unreadable');
+    return 0;
+  }
+  const { lost, seen } = orphanAlbumItems(
+    items, albums.map((a) => a.id), Date.now(), parseOrphanSeen(seenRead.value),
+  );
+  const nextSeen = serializeOrphanSeen(seen);
+  if (nextSeen !== (seenRead.value ?? '{}')) {
+    // Память — это и есть часы отсрочки: не легла, значит отсчёт не пошёл, и
+    // в следующий заход всё начнётся сначала. Сторона безопасная (лишний раз
+    // подождём), но молчать о ней нельзя.
+    const written = await scopedKvSetCheckedFor(ownerProfileId, ORPHAN_SEEN_KEY, nextSeen);
+    if (!written) log.warn('story_album_orphan_seen_write_failed', { known: seen.size });
+  }
   if (lost.length === 0) return 0;
   for (const row of lost) await deleteStoryAlbumItem(row.id, ownerProfileId);
+  // v4.32.717: отметке синхронизации гасим признак «строка у нас есть». Иначе
+  // следующий сбор исходящего увидит отметку без строки и выпишет надгробие —
+  // и фотография пропадёт на втором устройстве, где альбом, возможно, цел.
+  // Номер версии при этом остаётся на месте: на нём держится защита от отката.
+  // Подробности — в suppressSyncEntityTombstones.
+  await suppressSyncEntityTombstones('story_album_item', lost.map((r) => r.id), ownerProfileId);
   const files = lost.map((i) => i.mediaFile).filter((n): n is string => !!n);
   if (files.length > 0) await deleteStoryAlbumFiles(files);
   log.info('story_album_orphan_items_swept', { removed: lost.length, files: files.length });

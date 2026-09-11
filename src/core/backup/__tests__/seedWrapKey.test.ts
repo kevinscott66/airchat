@@ -44,6 +44,7 @@ jest.mock('../../logger', () => ({
 }));
 
 import { generateMnemonic } from 'bip39';
+import { decideStoredPhraseState } from '../storedPhraseState';
 import {
   getStoredMnemonic,
   hasStoredMnemonic,
@@ -125,14 +126,40 @@ describe('ключ обёртки: чтение не заводит и не пе
     expect(mockWarn).toHaveBeenCalledWith('seed_local_wrap_key_unusable', { state: 'unreadable' });
   });
 
-  it('hasStoredMnemonic на испорченном ключе отвечает «нет», а не падает', async () => {
+  // v4.32.717: проверка перевёрнута — прежде она закрепляла сам дефект.
+  //
+  // Стояло `expect(await hasStoredMnemonic()).toBe(false)`: на испорченном
+  // ключе обёртки наличие записи докладывалось как её отсутствие. Отсутствие
+  // ведёт на обычный welcome, где «Создать новый аккаунт» пишет новую фразу
+  // поверх старой. Наличие — вопрос о записи, а не о том, открылась ли она;
+  // читаемость спрашивают отдельно, у getStoredMnemonic (см. соседние
+  // проверки в этом же describe и decideStoredPhraseState).
+  it('hasStoredMnemonic на испорченном ключе отвечает «запись есть»', async () => {
     await persistEncryptedMnemonic(generateMnemonic(256));
     mockStore.set(WRAP_KEY, 'AAAA');
     forgetCaches();
     mockWrites.length = 0;
 
-    expect(await hasStoredMnemonic()).toBe(false);
+    expect(await hasStoredMnemonic()).toBe(true);
+    // Хранилище от вопроса не меняется: ни ключ, ни payload не переписываются.
     expect(mockWrites).toEqual([]);
+  });
+
+  it('«запись есть» плюс «не открылась» — это unreadable, а не none', async () => {
+    await persistEncryptedMnemonic(generateMnemonic(256));
+    mockStore.set(WRAP_KEY, 'AAAA');
+    forgetCaches();
+
+    const present = await hasStoredMnemonic();
+    const phrase = await getStoredMnemonic();
+    expect(phrase).toBeNull();
+    expect(decideStoredPhraseState(present, phrase)).toBe('unreadable');
+  });
+
+  it('на чистом устройстве по-прежнему «нет»', async () => {
+    forgetCaches();
+    expect(await hasStoredMnemonic()).toBe(false);
+    expect(decideStoredPhraseState(false, null)).toBe('none');
   });
 });
 

@@ -32,26 +32,61 @@ export type AlbumOrphanCandidate = {
   mediaUnreadable?: boolean;
 };
 
+/** Сколько строк помним осиротевшими; дальше старые записи вытесняются. */
+export const ALBUM_ORPHAN_SEEN_MAX = 512;
+
 /**
  * Выбрать строки, потерявшие альбом.
  *
  * Не считаются потерянными: строка живого альбома; строка, чьё имя файла не
  * прочиталось (снести её — потерять единственный адрес копии на диске, ровно
- * та же цена, что у `sweepOrphanAlbumFiles` при неполном списке); строка со
- * временем из будущего или без времени вовсе — про её возраст мы ничего не
- * знаем, а гадать здесь нельзя.
+ * та же цена, что у `sweepOrphanAlbumFiles` при неполном списке); строка без
+ * времени вовсе — про неё мы ничего не знаем, а гадать здесь нельзя.
+ *
+ * v4.32.717: срок отсчитывается от того, когда строку увидели осиротевшей
+ * ЗДЕСЬ, а не от `addedAt`.
+ *
+ * `addedAt` — это время содержимого: когда историю положили в альбом, на любом
+ * из устройств. Оно приезжает вместе со строкой. Строка, приехавшая сегодня, но
+ * добавленная в альбом месяц назад, по старому правилу оказывалась просрочена
+ * в тот же миг — то есть отсрочки у неё не было вовсе, хотя ровно ради такой
+ * строки отсрочка и заведена. Своего альбома она при этом вполне могла ждать
+ * законно: сущности едут порознь. Поэтому часы местные: строку, впервые
+ * увиденную осиротевшей, в этот заход не трогают никогда — её только
+ * запоминают, и сутки идут с этого мгновения.
+ *
+ * @param firstSeen когда каждую строку впервые увидели осиротевшей
+ * @returns `lost` — что сносить сейчас; `seen` — обновлённая память (в ней
+ *   только те, кто осиротел прямо сейчас: вернувшийся в живой альбом забывается)
  */
 export function orphanAlbumItems<T extends AlbumOrphanCandidate>(
   items: readonly T[],
   albumIds: Iterable<string>,
   now: number,
+  firstSeen: ReadonlyMap<string, number>,
   graceMs: number = ALBUM_ORPHAN_GRACE_MS,
-): T[] {
+): { lost: T[]; seen: Map<string, number> } {
   const alive = new Set(albumIds);
-  return items.filter((item) => {
-    if (alive.has(item.albumId)) return false;
-    if (item.mediaUnreadable) return false;
-    if (!Number.isFinite(item.addedAt)) return false;
-    return now - item.addedAt >= graceMs;
-  });
+  const seen = new Map<string, number>();
+  const lost: T[] = [];
+  for (const item of items) {
+    if (alive.has(item.albumId)) continue;
+    if (item.mediaUnreadable) continue;
+    if (!Number.isFinite(item.addedAt)) continue;
+    const since = firstSeen.get(item.id);
+    if (since === undefined || !Number.isFinite(since) || since > now) {
+      // Впервые видим осиротевшей (или память испорчена) — часы начинаются
+      // сейчас. Снести в этот же заход было бы отсрочкой длиной в ноль.
+      seen.set(item.id, now);
+      continue;
+    }
+    seen.set(item.id, since);
+    if (now - since >= graceMs) lost.push(item);
+  }
+  // Память не растёт без предела: держим самые свежие наблюдения.
+  if (seen.size > ALBUM_ORPHAN_SEEN_MAX) {
+    const keep = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, ALBUM_ORPHAN_SEEN_MAX);
+    return { lost, seen: new Map(keep) };
+  }
+  return { lost, seen };
 }

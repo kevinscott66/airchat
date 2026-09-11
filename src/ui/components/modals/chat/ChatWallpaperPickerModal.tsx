@@ -8,7 +8,9 @@ import { contrastingInk, font, radius } from '../../../theme';
 import { WALLPAPER_MESHES, WALLPAPER_PRESETS, type Wallpaper } from '../../../wallpapers';
 import { WallpaperBackground } from '../../WallpaperBackground';
 import { chatBgKey } from '../../../../core/storage/kvKeys';
-import { scopedKvSet } from '../../../../core/storage/profileScopedKv';
+import { scopedKvSetChecked } from '../../../../core/storage/profileScopedKv';
+import { showError } from '../../userFeedback';
+import { userErrorText } from '../../userErrorText';
 
 // ─── Wallpaper Picker Modal ───────────────────────────────────────────────────
 export function WallpaperPickerModal({
@@ -28,7 +30,18 @@ export function WallpaperPickerModal({
   const save = async (wp: Wallpaper | null) => {
     // v4.32.487: фон — решение аккаунта, а не телефона: собеседник у двух
     // профилей может быть один и тот же.
-    await scopedKvSet(chatBgKey(peerB64), wp ? JSON.stringify(wp) : '');
+    //
+    // v4.32.717: ответ записи больше не выбрасывается. `scopedKvSet` отдаёт
+    // void: и «легло», и «база отказала» приходили одинаково, а окно всё равно
+    // закрывалось и фон всё равно применялся. Человек видел выбранный фон,
+    // выходил из чата и возвращался к прежнему — без единого слова о том, что
+    // выбор не сохранился. Отказ записи оставляем на экране: окно не
+    // закрываем, чтобы попытку можно было повторить.
+    const written = await scopedKvSetChecked(chatBgKey(peerB64), wp ? JSON.stringify(wp) : '');
+    if (!written) {
+      showError('Фон не сохранился. Попробуйте ещё раз.');
+      return;
+    }
     onApply(wp);
     onClose();
   };
@@ -95,6 +108,9 @@ export function WallpaperPickerModal({
           </View>
           <AppPressable
             onPress={() => {
+              // v4.32.717: у обещания не было ловца. Отказ в доступе к галерее
+              // и сбой самого выбора уходили в необработанный отказ обещания:
+              // окно просто ничего не делало в ответ на нажатие.
               void (async () => {
                 const ip = await import('expo-image-picker');
                 // v4.32.54: quality:1 + exif:false — избегает NoSuchMethodError CompressionImageExporter.
@@ -106,7 +122,9 @@ export function WallpaperPickerModal({
                   // свой, и рисуется он картинкой.
                   await save({ type: 'image', value: res.assets[0].uri });
                 }
-              })();
+              })().catch((e) => {
+                showError(userErrorText(e, 'Не удалось выбрать фото из галереи.'));
+              });
             }}
             accessibilityRole="button"
             style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center', marginBottom: 10 }}

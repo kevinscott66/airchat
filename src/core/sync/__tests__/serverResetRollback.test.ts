@@ -35,7 +35,7 @@ function statementIn(fn: string, verb: string): string {
   return LOCAL.slice(start + 1, end);
 }
 
-type Row = { entity_kind: string; entity_id: string; revision: number; fingerprint: string | null; deleted: number };
+type Row = { entity_kind: string; entity_id: string; revision: number; fingerprint: string | null; deleted: number; updated_at?: number };
 
 /** Схема из local.ts плюс две головы: живая запись и надгробие. */
 function freshDb(): DatabaseSync {
@@ -69,6 +69,9 @@ const rows = (d: DatabaseSync, pid: number): Row[] =>
 /** Правило отправки из collectPending: одинаковый отпечаток — не шлём. */
 const willPush = (row: Row | undefined, nextFingerprint: string): boolean =>
   !(row && row.deleted === 0 && row.fingerprint === nextFingerprint);
+
+/** Правило второй ветки collectPending: отметку с deleted = 1 не хоронят. */
+const willTombstone = (row: Row | undefined): boolean => !!row && row.deleted === 0;
 
 /** Правило приёма из applyMutation: не новее известного — не применяем. */
 const willApply = (row: Row | undefined, incomingRevision: number): boolean =>
@@ -124,9 +127,54 @@ describe('серверная копия заведена заново', () => {
   });
 });
 
+describe('местная уборка не выписывает надгробие (v4.32.717)', () => {
+  it('признак «строка есть» гаснет — сбор исходящего проходит мимо', () => {
+    const d = freshDb();
+    d.prepare(statementIn('suppressSyncEntityTombstones', 'UPDATE')).run(555, 1, 'message', 'm-live');
+    const live = rows(d, 1).find((r) => r.entity_id === 'm-live');
+    expect(live?.deleted).toBe(1);
+    // Обе ветки collectPending пропускают отметку с deleted = 1.
+    expect(willTombstone(live)).toBe(false);
+    d.close();
+  });
+
+  it('номер версии остаётся — откат по-прежнему отбивается', () => {
+    const d = freshDb();
+    d.prepare(statementIn('suppressSyncEntityTombstones', 'UPDATE')).run(555, 1, 'message', 'm-live');
+    const live = rows(d, 1).find((r) => r.entity_id === 'm-live');
+    expect(live?.revision).toBe(7);
+    expect(willApply(live, 6)).toBe(false);
+    expect(willApply(live, 7)).toBe(false);
+    // А честная новая версия с той стороны вернёт запись обратно.
+    expect(willApply(live, 8)).toBe(true);
+    d.close();
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: удаление отметки открывало бы откат', () => {
+    const d = freshDb();
+    d.prepare('DELETE FROM sync_entity_heads WHERE owner_profile_id = ? AND entity_kind = ? AND entity_id = ?')
+      .run(1, 'message', 'm-live');
+    expect(rows(d, 1).find((r) => r.entity_id === 'm-live')).toBeUndefined();
+    expect(willApply(undefined, 6)).toBe(true);
+    d.close();
+  });
+
+  it('соседний профиль и соседняя запись не затронуты', () => {
+    const d = freshDb();
+    d.prepare(statementIn('suppressSyncEntityTombstones', 'UPDATE')).run(555, 1, 'message', 'm-live');
+    expect(rows(d, 2)).toEqual([
+      { entity_kind: 'message', entity_id: 'm-live', revision: 9, fingerprint: 'fp-other', deleted: 0 },
+    ]);
+    const gone = rows(d, 1).find((r) => r.entity_id === 'm-gone');
+    expect(gone?.updated_at ?? 100).toBe(100);
+    d.close();
+  });
+});
+
 describe('вызов сброса стоит на месте', () => {
   it('local.ts не удаляет головы, а гасит отпечатки', () => {
     expect(code(LOCAL)).toContain("'UPDATE sync_entity_heads SET fingerprint = NULL WHERE owner_profile_id = ?'");
+    // Номер версии — единственная защита от отката, забывать его нельзя нигде.
     expect(code(LOCAL)).not.toContain('DELETE FROM sync_entity_heads');
   });
 

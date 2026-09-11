@@ -292,6 +292,17 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
   if (!expectedPub) return 0;
   const pid = activeProfileId();
   const existing = await countChatMessages(pid);
+  // v4.32.717: «база не ответила» больше не читается как «история пуста».
+  // Счётчик отдавал ноль и на отказ чтения, и на пустую базу, а импорт по
+  // этому нулю решал, что писать не поверх чего. Дальше он писал именно
+  // поверх: строки сообщений идут через ON CONFLICT DO UPDATE, снимок kv —
+  // через INSERT OR REPLACE, настройки переписок — безусловным UPDATE. То
+  // есть отказ чтения оборачивался потерей живой переписки. На неизвестном
+  // ответе держим импорт: лучше не восстановить, чем затереть.
+  if (existing === null) {
+    log.warn('dialog_backup_hold_unknown_db_size');
+    return 0;
+  }
   if (existing > 0) {
     log.debug('dialog_backup_skip_nonempty_db', { existing });
     return 0;
@@ -350,30 +361,55 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
     let restoredMessages = 0;
     let restoredKv = 0;
     let restoredGroups = { groups: 0, messages: 0, members: 0 };
-    try {
+    // v4.32.717: шаги идут порознь, а не одним `try` на всех.
+    //
+    // Каждый из пяти шагов фиксируется своей транзакцией, общей отмены у них
+    // нет. Пока они стояли под одним `try`, сбой второго уводил из функции
+    // мимо оставшихся трёх — при том, что строки первого уже лежали в базе.
+    // Возвращался при этом ноль, то есть «ничего не восстановлено», и повтор
+    // упирался в `existing > 0`: контакты, блок-лист, настройки переписок и
+    // ВСЕ группы становились невосстановимыми (локальный файл — единственное,
+    // чем группа восстанавливается вообще). Шаги независимы, поэтому сбой
+    // одного не повод не выполнять остальные; называем в журнале, какие
+    // именно не прошли.
+    const failed: string[] = [];
+    const step = async (name: string, run: () => Promise<void>): Promise<void> => {
+      try {
+        await run();
+      } catch (e) {
+        failed.push(name);
+        log.warn('dialog_backup_step_failed', { step: name, err: e instanceof Error ? e.message : String(e) });
+      }
+    };
+    await step('messages', async () => {
       restoredMessages = await importRawChatMessageRows(data.messages);
-      if (data.kv?.length) {
-        restoredKv = await importDialogKvSnapshot(data.kv, pid);
-        // v4.32.617: блок-лист лежит и в памяти rateLimiter. Восстановление
-        // писало только в базу, поэтому вернувшиеся из копии запреты не
-        // действовали, а следующая блокировка стирала их с диска.
-        if (dialogKvSnapshotHasBlockList(data.kv)) await rateLimiter.reloadBlocked();
-      }
-      // v4.32.280: список чатов строится по сообщениям, затем возвращаются
-      // настройки переписок, которые были сохранены в копии.
+    });
+    await step('kv', async () => {
+      if (!data.kv?.length) return;
+      restoredKv = await importDialogKvSnapshot(data.kv, pid);
+      // v4.32.617: блок-лист лежит и в памяти rateLimiter. Восстановление
+      // писало только в базу, поэтому вернувшиеся из копии запреты не
+      // действовали, а следующая блокировка стирала их с диска.
+      if (dialogKvSnapshotHasBlockList(data.kv)) await rateLimiter.reloadBlocked();
+    });
+    // v4.32.280: список чатов строится по сообщениям, затем возвращаются
+    // настройки переписок, которые были сохранены в копии.
+    await step('conversations', async () => {
       conversations = await rebuildConversationsFromMessages(pid);
-      if (data.conversations) {
-        restoredMeta = await importConversationMetaRows(data.conversations, pid);
-      }
-      if (data.groups) {
-        restoredGroups = await importGroupBackupRows(
-          { groups: data.groups, messages: data.groupMessages, members: data.groupMembers },
-          pid
-        );
-      }
-    } catch (e) {
-      log.warn('dialog_backup_import_failed', { err: e instanceof Error ? e.message : String(e) });
-      return 0;
+    });
+    await step('meta', async () => {
+      if (!data.conversations) return;
+      restoredMeta = await importConversationMetaRows(data.conversations, pid);
+    });
+    await step('groups', async () => {
+      if (!data.groups) return;
+      restoredGroups = await importGroupBackupRows(
+        { groups: data.groups, messages: data.groupMessages, members: data.groupMembers },
+        pid
+      );
+    });
+    if (failed.length) {
+      log.warn('dialog_backup_import_partial', { failed: failed.join(','), messages: restoredMessages });
     }
     log.info('dialog_backup_restored', {
       messages: restoredMessages,

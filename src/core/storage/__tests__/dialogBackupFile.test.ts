@@ -49,7 +49,8 @@ jest.mock('../../identity/profileManager', () => ({
 // а не предположение вызывающего, поэтому в тестах восстановления он задаётся.
 let mockImportedMessages = 0;
 let mockImportedKv = 0;
-let mockExistingMessages = 0;
+// v4.32.717: счёт сообщений тристороннен — `null` значит «база не ответила».
+let mockExistingMessages: number | null = 0;
 // v4.32.617: восстановление копии перечитывает блок-лист (rateLimiter), а он
 // тянет за собой SecureStore — в этом наборе его нет.
 jest.mock('../../security/rateLimiter', () => ({
@@ -207,6 +208,28 @@ describe('восстановление из файла (v4.32.370)', () => {
     mockExistingMessages = 1;
     mockImportedMessages = 1;
     expect(await tryRestoreDialogBackupFromFile()).toBe(0);
+  });
+
+  it('v4.32.717: неизвестный размер базы держит восстановление', async () => {
+    // Ноль на месте отказа чтения означал «история пуста», и импорт ложился
+    // поверх живой переписки: строки идут через ON CONFLICT DO UPDATE, снимок
+    // kv — через INSERT OR REPLACE, настройки переписок — безусловным UPDATE.
+    const imports = () => (jest.requireMock('../local') as {
+      importRawChatMessageRows: jest.Mock;
+    }).importRawChatMessageRows.mock.calls.length;
+    const before = imports();
+    put(P1, goodFile([{}]));
+    mockExistingMessages = null;
+    mockImportedMessages = 1;
+    expect(await tryRestoreDialogBackupFromFile()).toBe(0);
+    expect(imports()).toBe(before);
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: на честном нуле восстановление идёт', async () => {
+    put(P1, goodFile([{}]));
+    mockExistingMessages = 0;
+    mockImportedMessages = 1;
+    expect(await tryRestoreDialogBackupFromFile()).toBe(1);
   });
 
   it('messages не массивом — плохой формат, а не попытка разбора', async () => {

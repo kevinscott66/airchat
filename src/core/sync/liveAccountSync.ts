@@ -477,7 +477,14 @@ async function collectPending(
   return { mutations, pendingHeads };
 }
 
-async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Promise<void> {
+/**
+ * Применить пришедшую мутацию.
+ *
+ * @returns применена ли она. `false` — единственный случай: неподтверждённая
+ *   метка удаления. v4.32.717: раньше ответа не было вовсе, и отказ был виден
+ *   только в журнале — см. вызывающую сторону.
+ */
+async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Promise<boolean> {
   const rawEntityId = decodedEntityId(mutation.entityId);
   if (!rawEntityId) throw new Error('Некорректный идентификатор синхронизации.');
   if (mutation.deleted) {
@@ -493,7 +500,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
         ownerProfileId: mutation.ownerProfileId,
         revision: mutation.revision,
       });
-      return;
+      return false;
     }
     if (mutation.entityKind === 'feed_post') {
       await applyFeedSyncPostDelete(rawEntityId, mutation.ownerProfileId);
@@ -523,7 +530,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       deleted: true,
       updatedAt: mutation.updatedAt,
     }]);
-    return;
+    return true;
   }
 
   const entity = decryptEntity(mnemonic, mutation);
@@ -598,6 +605,7 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
     deleted: false,
     updatedAt: mutation.updatedAt,
   }]);
+  return true;
 }
 
 async function runLiveSync(
@@ -639,7 +647,18 @@ async function runLiveSync(
         // A local edit may have been created after the server cursor was read.
         // Never let an older replay overwrite that newer projection.
         if (current && current.revision >= mutation.revision) return;
-        await applyPulledMutation(mnemonic, mutation);
+        // v4.32.717: отметку ставим только про то, что применилось.
+        //
+        // Неподтверждённую метку удаления applyPulledMutation отклоняет — и
+        // правильно делает. Но отметка ниже писалась всё равно, и писалась она
+        // как «запись удалена, версия N». Дальше эта отметка работает потолком:
+        // всё, что приедет версией не выше N, отбрасывается строкой выше — то
+        // есть НАСТОЯЩИЕ правки той же записи не применятся уже никогда, а
+        // курсор захода тем временем уйдёт дальше и переиграть их будет нечем.
+        // Подделанная метка, таким образом, отклонялась по существу и
+        // срабатывала по последствиям.
+        const applied = await applyPulledMutation(mnemonic, mutation);
+        if (!applied) return;
         localHeads.set(key, {
           entityKind: mutation.entityKind,
           entityId: rawEntityId,

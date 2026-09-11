@@ -2080,6 +2080,47 @@ export async function forgetSyncEntityFingerprints(ownerProfileId: number): Prom
   );
 }
 
+/**
+ * Не выписывать надгробие тем, кого снёс местный уборщик (v4.32.717).
+ *
+ * Отметка (`sync_entity_heads`) — это «такая-то запись у нас была вот такой
+ * версии». Сборщик исходящего (collectPending) сравнивает отметки с тем, что
+ * лежит в базе сейчас, и на каждую отметку без строки выписывает надгробие —
+ * подписанное, законное, уезжающее на второе устройство. Ровно то, что нужно,
+ * когда человек удалил запись сам.
+ *
+ * Местная уборка — не то же самое. Строка, снесённая уборщиком (например,
+ * потерявшая свой альбом), уходит по местной причине: на втором устройстве
+ * альбом может быть цел. Оставить после такой уборки живую отметку — значит
+ * выписать надгробие и снести фотографию и там.
+ *
+ * Удалять отметку при этом НЕЛЬЗЯ: на номере версии держится единственная
+ * защита от отката (v4.32.615, forgetSyncEntityFingerprints). Забывший номер
+ * клиент принимает вчерашнюю мутацию как новую. Поэтому отметка остаётся на
+ * месте вместе с номером, а гасится только признак «строка у нас есть»:
+ * обе ветки collectPending пропускают отметку с `deleted = 1`, надгробия не
+ * будет, а любая мутация с номером не выше известного по-прежнему отбивается.
+ * Если запись жива на той стороне, она приедет обратно следующей версией.
+ */
+export async function suppressSyncEntityTombstones(
+  entityKind: string,
+  entityIds: readonly string[],
+  ownerProfileId: number,
+): Promise<void> {
+  if (!validSyncProfileId(ownerProfileId)) throw new Error('Invalid sync profile id');
+  if (!/^[a-z_]{1,32}$/.test(entityKind)) throw new Error('Invalid sync entity kind');
+  if (entityIds.length === 0) return;
+  const d = await db();
+  const now = Date.now();
+  for (const id of entityIds) {
+    if (typeof id !== 'string' || id.length < 1 || id.length > 256) continue;
+    await d.runAsync(
+      'UPDATE sync_entity_heads SET deleted = 1, fingerprint = NULL, updated_at = ? WHERE owner_profile_id = ? AND entity_kind = ? AND entity_id = ?',
+      [now, ownerProfileId, entityKind, id],
+    );
+  }
+}
+
 /** Persist only heads confirmed by a successful push or pull projection. */
 export async function saveSyncEntityHeads(heads: readonly SyncEntityHead[]): Promise<void> {
   if (heads.length === 0) return;
@@ -3252,8 +3293,21 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
   }
 }
 
-/** @param ownerProfileId — считать сообщения только этого профиля; без него — всей БД. */
-export async function countChatMessages(ownerProfileId?: number): Promise<number> {
+/**
+ * Сколько сообщений в базе; `null` — прочитать не удалось (v4.32.717).
+ *
+ * Раньше отказ чтения возвращался нулём, то есть «база не ответила» приходило
+ * тем же ответом, что и «сообщений нет». Единственный, кто этот счёт
+ * спрашивает, — импорт копии диалогов, и решает он по нему, пустая ли история.
+ * Ноль на месте отказа означал «история пуста», а дальше импорт писал поверх
+ * живой переписки: строки сообщений ложатся через ON CONFLICT DO UPDATE,
+ * снимок kv — через INSERT OR REPLACE, настройки переписок — безусловным
+ * UPDATE. Случай не выдуманный: chatRestore описывает ровно его — занятая
+ * SQLite сразу после смены ключа.
+ *
+ * @param ownerProfileId — считать сообщения только этого профиля; без него — всей БД.
+ */
+export async function countChatMessages(ownerProfileId?: number): Promise<number | null> {
   try {
     const d = await db();
     const r =
@@ -3266,7 +3320,7 @@ export async function countChatMessages(ownerProfileId?: number): Promise<number
     return r?.n ?? 0;
   } catch (e) {
     log.warn('chat_messages_count_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    return null;
   }
 }
 

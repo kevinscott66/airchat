@@ -467,7 +467,17 @@ const HAS_MNEMONIC_KV = 'kv_has_mnemonic_v1';
 
 async function hasStoredMnemonicUncached(): Promise<boolean> {
   const encRaw = await SecureStore.getItemAsync(MNEMONIC_ENC_PAYLOAD_KEY);
-  if (encRaw && (await tryDecryptLocalPayload(encRaw))) return true;
+  // v4.32.717: наличие записи больше не требует, чтобы она ещё и открылась.
+  //
+  // Прежде здесь стояло `encRaw && (await tryDecryptLocalPayload(encRaw))`, и
+  // негодный ключ обёртки (v4.32.615 такие байты намеренно не стирает) давал
+  // ответ «фразы нет». Тот же ответ даёт чистая установка, и экран приветствия
+  // на него показывает обычный welcome с живой кнопкой «Создать новый
+  // аккаунт», а та пишет новую фразу и новую пару ключей поверх старых.
+  // Прежний кошелёк после этого не вернуть ничем. Различать «нет» и «не
+  // открылась» умеет decideStoredPhraseState — но только если ему сюда честно
+  // ответят про наличие: читаемость спрашивают отдельно, у getStoredMnemonic.
+  if (encRaw) return true;
   const m = await SecureStore.getItemAsync(MNEMONIC_KEY);
   if (m?.trim()) return true;
   const leg = await SecureStore.getItemAsync(LEGACY_SEED_KEY);
