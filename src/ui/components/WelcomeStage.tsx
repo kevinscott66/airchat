@@ -14,7 +14,7 @@
  * Цвета — из палитры приложения (`welcomeStagePalette`), числа движения — из `welcomeStage`.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
@@ -422,6 +422,11 @@ function topHeight(t: Tier): number {
  * Если не помещается и самая мелкая, поле снизу ужимается, чтобы обе кнопки
  * остались на экране.
  *
+ * С ширины `centeredMinWidth` (веб, планшет) большого пальца внизу нет, и
+ * прижатая книзу карточка отрывается от сцены пустотой. Там верх и карточка
+ * собираются в один блок с зазором `groupGap`, а блок стоит чуть выше
+ * середины: свободное место делится 2 к 3.
+ *
  * `viewport` — высота прокручиваемой области, без неё раскладка не видна: иначе
  * первый кадр мелькнул бы не на своих местах.
  */
@@ -434,19 +439,22 @@ export function WelcomeLayout({
 }): React.ReactElement {
   const entrance = useEntrance(5);
   const [cardH, setCardH] = useState(0);
+  const centered = useWindowDimensions().width >= welcomeStage.centeredMinWidth;
   const avail = Math.max(0, viewport - 2 * spacing.lg);
   const smallest = TIERS[TIERS.length - 1];
-  const foot = Math.max(
-    0,
-    Math.min(avail * welcomeStage.footRatio, avail - cardH - topHeight(smallest)),
-  );
-  const room = avail - cardH - foot;
+  const foot = centered
+    ? 0
+    : Math.max(0, Math.min(avail * welcomeStage.footRatio, avail - cardH - topHeight(smallest)));
+  const extraGap = centered ? welcomeStage.groupGap - spacing.lg : 0;
+  const room = avail - cardH - foot - extraGap;
   const tier = TIERS.find((t) => topHeight(t) <= room) ?? smallest;
   const ready = viewport > 0 && cardH > 0;
+  const gap = centered ? welcomeStage.groupGap : tier.dense ? spacing.md : spacing.lg;
 
   return (
     <View style={[styles.layout, !ready && styles.pending]}>
-      <View style={[styles.top, { paddingBottom: tier.dense ? spacing.md : spacing.lg }]}>
+      {centered && <View style={styles.aboveGroup} />}
+      <View style={[styles.top, centered && styles.topInGroup, { paddingBottom: gap }]}>
         <Animated.View style={riseStyle(entrance[0])}>
           <WelcomeScene scale={tier.scale} />
         </Animated.View>
@@ -458,7 +466,7 @@ export function WelcomeLayout({
       >
         {children}
       </Animated.View>
-      <View style={{ height: foot }} />
+      {centered ? <View style={styles.belowGroup} /> : <View style={{ height: foot }} />}
     </View>
   );
 }
@@ -522,6 +530,9 @@ const styles = StyleSheet.create({
   pending: { opacity: 0 },
   layout: { flexGrow: 1 },
   top: { flexGrow: 1, justifyContent: 'center' },
+  topInGroup: { flexGrow: 0 },
+  aboveGroup: { flexGrow: 2 },
+  belowGroup: { flexGrow: 3 },
   heroSlot: {
     alignSelf: 'center',
     alignItems: 'center',

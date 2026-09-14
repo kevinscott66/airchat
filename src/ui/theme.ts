@@ -1429,6 +1429,10 @@ export const welcomeStage = {
   sheenGapMs: 3200,
   /** Доля высоты экрана под карточкой формы — остальное над ней отдаётся сцене. */
   footRatio: 0.12,
+  /** С этой ширины (веб, планшет) верх и карточка стоят одним блоком по центру, без `footRatio`. */
+  centeredMinWidth: 600,
+  /** Зазор между заголовком и карточкой в центрованном блоке. */
+  groupGap: 40,
 } as const;
 
 export interface WelcomeStagePalette {
