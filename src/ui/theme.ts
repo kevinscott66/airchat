@@ -1390,6 +1390,76 @@ export function authCardRim(c: AppColors): string {
   const ink = contrastingInk(c.surface);
   return withAlpha(ink, ink === '#ffffff' ? authWash.rimOnDark : authWash.rimOnLight);
 }
+
+/**
+ * Приветствие: живая сцена первого экрана (v4.32.719).
+ *
+ * Цвета — не свои, а палитры приложения: первый экран обязан выглядеть так же,
+ * как всё, что откроется после него, и следовать за светлой/тёмной темой и
+ * выбранным акцентом. Поэтому здесь только числа движения и типографика, а
+ * роли цветов выводятся из `AppColors` в `welcomeStagePalette`.
+ *
+ * Роли:
+ *   • `canvas`, `surface` — фон сцены и карточка формы;
+ *   • `hairline` — декоративная линия (орбита, маршрут, контур карточки). Не
+ *     граница органа управления;
+ *   • `rim` — кромка вторичной кнопки, та же, что у форм входа (`authCardRim`);
+ *   • `core` / `coreInk` — заливка главной кнопки и её подпись;
+ *   • `spark` — светящаяся точка сообщения на сцене, чистая графика;
+ *   • `ink`, `muted`, `accentText` — текст на `canvas` и `surface`.
+ */
+export const welcomeStage = {
+  /**
+   * Кегль заголовка сцены. Выше `font.xxl` намеренно и ровно в одном месте:
+   * это не заголовок экрана среди прочих, а первая фраза приложения.
+   */
+  displaySize: 34,
+  /** Блик на главной кнопке — доля непрозрачности белого. */
+  sheenAlpha: 0.28,
+  /** Подъём строк при входе, мс, и шаг между ними. */
+  riseMs: 720,
+  riseStepMs: 110,
+  /** Перелёт точки сообщения с устройства на устройство, мс. */
+  routeMs: 1500,
+  /** Пауза на приёме — пока расходится кольцо и видна двойная галочка. */
+  arriveMs: 700,
+  /** Полный оборот орбиты, мс. */
+  orbitMs: 48000,
+  /** Пауза между бликами на главной кнопке, мс. */
+  sheenGapMs: 3200,
+  /** Доля высоты экрана под карточкой формы — остальное над ней отдаётся сцене. */
+  footRatio: 0.12,
+} as const;
+
+export interface WelcomeStagePalette {
+  canvas: string;
+  surface: string;
+  hairline: string;
+  rim: string;
+  core: string;
+  coreInk: string;
+  spark: string;
+  ink: string;
+  muted: string;
+  accentText: string;
+  sheen: string;
+}
+
+export function welcomeStagePalette(c: AppColors): WelcomeStagePalette {
+  return {
+    canvas: c.background,
+    surface: c.surface,
+    hairline: c.border,
+    rim: authCardRim(c),
+    core: c.primary,
+    coreInk: primaryInk(c).text,
+    spark: c.accent,
+    ink: c.text,
+    muted: c.textSecondary,
+    accentText: c.accent,
+    sheen: '#ffffff',
+  };
+}
 /**
  * Слой поверх ЧУЖОГО кадра — видоискателя камеры, фотографии, видео.
  *

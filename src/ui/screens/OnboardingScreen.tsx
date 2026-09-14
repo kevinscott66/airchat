@@ -13,7 +13,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { authCardRim, formColumn, primaryInk, radius } from '../theme';
+import { authCardRim, formColumn, primaryInk, radius, spacing } from '../theme';
 import {
   generateMnemonicAndStore,
   getStoredMnemonic,
@@ -33,6 +33,7 @@ import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
 import { validateMnemonic } from 'bip39';
 import { PermissionsScreen } from './PermissionsScreen';
+import { WelcomeLayout, WelcomeSheen } from '../components/WelcomeStage';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { AirChatLockup } from '../components/AirChatLockup';
@@ -86,6 +87,14 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       padding: 20,
       borderRadius: radius.lg,
     },
+    welcomeContent: {
+      flexGrow: 1,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.lg,
+      justifyContent: 'center' as const,
+    },
+    /** Блик не должен выходить за скругление кнопки. */
+    btnSheenClip: { overflow: 'hidden' as const },
     flex: { flex: 1 },
     center: { flex: 1, padding: 24, justifyContent: 'center' as const },
     scroll: { flex: 1 },
@@ -183,6 +192,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   const [step, setStep] = useState<Step>(
     Platform.OS === 'android' ? 'permissions' : 'welcome'
   );
+  /** Высота прокрутки приветствия — по ней раскладывается сцена над карточкой. */
+  const [welcomeViewport, setWelcomeViewport] = useState(0);
   const [seedWords, setSeedWords] = useState<string[]>([]);
   const [pendingPair, setPendingPair] = useState<KeyPairBytes | null>(null);
   const [restoreText, setRestoreText] = useState('');
@@ -541,9 +552,19 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       <SafeScreen>
       <AuthBackdrop />
       <ThemeSwitchButton />
-      <View style={styles.center} testID="onboarding_welcome" collapsable={false}>
-        <LoadingOverlay visible={busy} message="Генерация ключей…" />
-        {/* Затемнение выше — на весь экран, форма ниже — в карточке. */}
+      <LoadingOverlay visible={busy} message="Генерация ключей…" />
+      {/* v4.32.719: карточка в нижней части экрана, над ней живая сцена
+          (см. WelcomeLayout). Прокрутка только страховка для крупного
+          шрифта: на телефоне сцена сжимается так, чтобы обе кнопки помещались
+          без неё. */}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.welcomeContent}
+        showsVerticalScrollIndicator={false}
+        testID="onboarding_welcome"
+        onLayout={(e) => setWelcomeViewport(e.nativeEvent.layout.height)}
+      >
+        <WelcomeLayout viewport={welcomeViewport}>
         <GlassSurface variant="prominent" style={styles.card}>
           <AirChatLockup height={34} style={styles.lockup} />
           {/* v4.32.594: первая фраза приложения должна называть то, чем оно
@@ -552,8 +573,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               важны: они здесь не «резервная копия на всякий случай», а сам
               ключ ко всему, что уехало на сервер. */}
           <Text style={styles.sub}>
-            Чат с защитой сообщений. Переписка синхронизируется через сервер в зашифрованном виде и открывается
-            на любом вашем устройстве. Ключ к ней — 24 секретных слова: без них доступ не восстановить.
+            Переписка синхронизируется через сервер в зашифрованном виде и открывается на любом вашем
+            устройстве. Ключ к ней — 24 секретных слова: без них доступ не восстановить.
           </Text>
           {phraseUnreadable ? (
             <Text style={styles.warn} testID="onboarding_phrase_unreadable">
@@ -562,11 +583,12 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             </Text>
           ) : null}
           <AppPressable
-            style={styles.btn}
+            style={[styles.btn, styles.btnSheenClip]}
             onPress={createNewBtn.onPress}
             disabled={createNewBtn.loading}
             testID="btn_create_new"
           >
+            <WelcomeSheen />
             <Text style={styles.btnText}>Создать новый аккаунт</Text>
           </AppPressable>
           <AppPressable
@@ -580,7 +602,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             <Text style={styles.btnTextDark}>Восстановить аккаунт</Text>
           </AppPressable>
         </GlassSurface>
-      </View>
+        </WelcomeLayout>
+      </ScrollView>
       </SafeScreen>
     );
   }

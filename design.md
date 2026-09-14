@@ -425,6 +425,22 @@ back and forth - which is precisely the case where animation stops being
 delightful and starts being an obstacle. Screen decorations and empty states
 remain static.
 
+**One exception: the welcome step of onboarding (4.32.719).** It is the only
+screen where the app introduces itself rather than works, and nobody returns to
+it. Its scene (`src/ui/components/WelcomeStage.tsx`) loops, but the loop is the
+message-state story above told without words: a dot leaves one device, reaches
+the other, the read ticks light up, the reply comes back. Its limits are what
+keep it from becoming the ornament section 1 rejects:
+- colour is the app palette (`welcomeStagePalette` derives every role from
+  `AppColors`, so theme and a chosen accent reach it); no own hues;
+- the page layers rise once on mount (`welcomeStage.riseMs`), the scene and the
+  sheen on the primary button are the only loops, and nothing on the form moves;
+- under Reduce Motion everything mounts final: no rise, no loops, the delivered
+  tick shown still;
+- the form card sits low, `welcomeStage.footRatio` of the height above the bottom edge, buttons under the thumb; the scene takes the largest size that fits above it (`WelcomeLayout`)
+  so both buttons stay on screen without scrolling on an iPhone SE.
+Do not copy the scene onto any other screen.
+
 `app-interface.csv` marks "Respect Reduced Motion" **Critical**. As of 4.32.532
 it is implemented: `useReducedMotion()` / `isReducedMotion()` in
 `src/ui/motionPrefs.ts`, consulted by `AppPressable` (no press scale) and by the

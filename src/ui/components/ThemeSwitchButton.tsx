@@ -29,9 +29,10 @@ import React, { useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppPressable } from './AppPressable';
 import { useColors, useTheme } from '../ThemeContext';
-import { authCardRim, radius, TOUCH_TARGET_MIN } from '../theme';
+import { authCardRim, radius, spacing, TOUCH_TARGET_MIN } from '../theme';
 
 /** Кегль значка внутри цели касания: цель 44, значок вдвое меньше. */
 const GLYPH = 20;
@@ -39,12 +40,16 @@ const GLYPH = 20;
 export function ThemeSwitchButton({ style }: { style?: StyleProp<ViewStyle> }): React.ReactElement {
   const colors = useColors();
   const { scheme, setMode } = useTheme();
+  const insets = useSafeAreaInsets();
   const toDark = scheme === 'light';
   const onPress = useCallback(() => {
     void setMode(toDark ? 'dark' : 'light');
   }, [setMode, toDark]);
   return (
-    <View style={[styles.slot, style]} pointerEvents="box-none">
+    <View
+      style={[styles.slot, { top: insets.top + spacing.sm, right: insets.right + spacing.sm }, style]}
+      pointerEvents="box-none"
+    >
       <AppPressable
         onPress={onPress}
         hitSlop={8}
@@ -66,13 +71,13 @@ export function ThemeSwitchButton({ style }: { style?: StyleProp<ViewStyle> }): 
 const styles = StyleSheet.create({
   /**
    * Гнездо абсолютом: кнопка стоит над содержимым экрана, а не в его потоке, —
-   * иначе она сдвигала бы карточку с середины. Абсолют внутри `SafeScreen`
-   * отсчитывается от его внутренней рамки, поэтому под вырез кнопка не уедет.
+   * иначе она сдвигала бы карточку с середины. Отступ от выреза считается
+   * здесь, а не берётся у `SafeScreen`: тот отступает паддингом, а абсолют
+   * (Yoga в RN 0.83, как и CSS) паддинг родителя не учитывает — с `top: 0`
+   * кнопка ложилась на статус-бар iOS.
    */
   slot: {
     position: 'absolute',
-    top: 0,
-    right: 0,
     zIndex: 1,
   },
   button: {
