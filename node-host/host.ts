@@ -25,12 +25,11 @@
  * мутаций. Headless-экземпляр, поднятый ради проверки, не должен появляться
  * в чужом списке устройств.
  */
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { setWorkdir, workdir } from './runtime/workdir';
+import { attachLogSink, detachLogSink } from './runtime/logBus';
 
-import { setFileSink } from '../src/core/logger';
 import { loadConfig, type AppConfig } from '../src/core/config';
 import type { KeyPairBytes } from '../src/core/crypto/keyManager';
 import { publicKeyToDidKey } from '../src/core/identity/did';
@@ -50,11 +49,15 @@ export type StartCoreOptions = {
   /** Корень, в котором этот экземпляр держит базу, файлы и secure-store. */
   workdir: string;
   /**
-   * Секретные слова аккаунта. Обязательны: ядро без личности не поднимается,
-   * а заводить её молча нельзя — новый аккаунт, созданный «на всякий случай»,
-   * ничем не отличается от потерянного.
+   * Секретные слова аккаунта.
+   *
+   * Нужны только при заведении каталога: дальше они лежат в secure-store, и
+   * запуск обходится без них — именно так и работает сервер, которому фразу
+   * не передают ни в окружении, ни в аргументах. Если в каталоге личности нет
+   * и слов не дали, запуск отказывает: завести новый аккаунт молча нельзя —
+   * он ничем не отличается от потерянного.
    */
-  mnemonic: string;
+  mnemonic?: string;
 };
 
 export type CoreHandle = {
@@ -77,24 +80,11 @@ let running: CoreHandle | null = null;
  * причина осталась бы внутри. На телефоне её потом читают из adb, здесь читать
  * нечего — поэтому сразу файл рядом с базой.
  *
- * Пишется синхронно и дописыванием: причина отказа нужна ровно в том порядке,
- * в каком она случилась, а процесс, который упал, не успеет слить буфер.
- * Права 0600 — в строках бывают DID и адреса пиров.
+ * Приёмник не ставится напрямую: место у логгера одно, а читателя стало два —
+ * файл и разбор причин отказа (см. `runtime/logBus`).
  */
 function installLogSink(): void {
-  const file = path.join(workdir(), 'core.log');
-  try {
-    fs.closeSync(fs.openSync(file, 'a', 0o600));
-  } catch {
-    /* не смогли создать — sink ниже просто не запишется, ядро от этого не падает */
-  }
-  setFileSink((line: string) => {
-    try {
-      fs.appendFileSync(file, `${line}\n`);
-    } catch {
-      /* логирование не имеет права ронять то, что логирует */
-    }
-  });
+  attachLogSink(path.join(workdir(), 'core.log'));
 }
 
 /** Уже поднятое ядро, или `null`. */
@@ -118,8 +108,15 @@ export async function startCore(options: StartCoreOptions): Promise<CoreHandle> 
   //    незачем — каждая перезапись это ещё один шанс её потерять.
   const stored = await getStoredMnemonic();
   if (stored === null) {
+    if (!options.mnemonic) {
+      // Отказ, а не молчаливое заведение нового аккаунта. Новый аккаунт здесь
+      // выглядел бы как рабочий — с DID, базой и сокетом, — но это была бы
+      // чужая личность, и первое же сообщение ушло бы не от того, от кого
+      // человек его ждёт. Заведение — отдельное действие с отдельной командой.
+      throw new Error('core_no_identity: в каталоге нет аккаунта, а слова не переданы');
+    }
     await restoreFromMnemonic(options.mnemonic);
-  } else if (stored !== options.mnemonic.trim().split(/\s+/).join(' ')) {
+  } else if (options.mnemonic && stored !== options.mnemonic.trim().split(/\s+/).join(' ')) {
     // Молча работать с чужой личностью нельзя: вызывающий назвал одни слова,
     // а в каталоге лежат другие — значит, каталог принадлежит другому
     // аккаунту. Перезаписывать его — потерять тот, что там был.
@@ -171,6 +168,6 @@ export async function stopCore(): Promise<void> {
   running = null;
   // Приёмник снимается последним: всё, что писали шаги выше, должно было
   // попасть в файл, включая их собственные жалобы на неудачное закрытие.
-  setFileSink(null);
+  detachLogSink();
   if (failures.length > 0) throw new Error(`core_stop_incomplete: ${failures.join('; ')}`);
 }

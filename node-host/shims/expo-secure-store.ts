@@ -93,6 +93,22 @@ function requirePaths(): { store: string; keyfile: string } {
 let cachedKey: Promise<CryptoKey> | null = null;
 
 /**
+ * Запрет на второй режим — ключ рядом с данными.
+ *
+ * Включается тем, кто поднимает долгоживущий сервер (см. `mcp/main.ts`).
+ * Разница с предупреждением, которое печатает `warnKeyfileMode`, не в
+ * громкости: предупреждение можно не заметить в потоке вывода systemd, а
+ * каталог с фразой кошелька и ключом к ней рядом уедет в первую же резервную
+ * копию. Для запуска «проверить руками» файл приемлем, для сервера — нет,
+ * и решает это вызывающий, а не шим: шим не знает, ради чего его завели.
+ */
+let envKeyRequired = false;
+
+export function requireEnvSecureStoreKey(): void {
+  envKeyRequired = true;
+}
+
+/**
  * Прочитать ключ из окружения или завести его в файле.
  *
  * Файл создаётся с `wx`: если между проверкой и записью его успел создать
@@ -113,6 +129,12 @@ async function loadRawKey(): Promise<Uint8Array<ArrayBuffer>> {
       throw new Error(`secure_store_env_key_bad_length: ${bytes.length}, ожидалось 32`);
     }
     return bytes;
+  }
+  if (envKeyRequired) {
+    throw new Error(
+      'secure_store_env_key_required: AIRCHAT_SECURE_STORE_KEY не задан, ' +
+        'а запасной ключ в файле для этого режима запрещён'
+    );
   }
   try {
     const existing = await fsp.readFile(keyfile);
