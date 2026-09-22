@@ -78,3 +78,7 @@ server/cloud-vault/data/
 # с каталогом говорит, что бинарники сюда не коммитятся, но правила не было —
 # и `git add -A` утащил бы их в публичный репозиторий.
 modules/*/android/src/main/jniLibs/*/*.so
+
+# Манифест локальной релизной сборки (scripts/build-release.sh).
+release/
+build/ios/

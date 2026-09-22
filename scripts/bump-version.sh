@@ -1,47 +1,59 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# bump-version.sh  —  единственный правильный способ обновить версию AirChat
+# bump-version.sh — единственный правильный способ обновить версию AirChat.
 #
-# Использование:
-#   ./scripts/bump-version.sh 4.32.0 165
+#   bash scripts/bump-version.sh 4.32.721          # versionCode = последнее число
+#   bash scripts/bump-version.sh 4.32.721 721      # явно
 #
-# Обновляет ВСЕ 4 места синхронно:
-#   1. worktree/package.json
-#   2. worktree/app.config.base.json (version + android.versionCode)
-#   3. airchat-v430/app.json      (Expo CLI читает отсюда)
-#   4. android/app/build.gradle   (versionCode + versionName для APK)
+# Источник правды — app.config.base.json (version, android.versionCode,
+# ios.buildNumber) и package.json/package-lock.json. Каталог android/ в git не
+# лежит (его пишет `expo prebuild`), поэтому build.gradle правится, только если
+# он есть: иначе релизный APK выходил с versionName старого prebuild (4.32.671
+# при коде 4.32.720 — так было с APK от 9 сентября).
 #
-# НЕ ТРОГАТЬ вручную — использовать только этот скрипт.
+# До v4.32.721 скрипт писал в несуществующий `~/airchat-v430` (тильда в кавычках
+# не раскрывается) и падал на первом же sed.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-NEW_VER="${1:?Укажи версию: ./scripts/bump-version.sh 4.32.0 165}"
-NEW_CODE="${2:?Укажи versionCode: ./scripts/bump-version.sh 4.32.0 165}"
+NEW_VER="${1:?Укажи версию: bash scripts/bump-version.sh 4.32.721 [versionCode]}"
+[[ "$NEW_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Версия должна быть вида X.Y.Z: $NEW_VER" >&2; exit 2; }
+NEW_CODE="${2:-${NEW_VER##*.}}"
+[[ "$NEW_CODE" =~ ^[0-9]+$ ]] || { echo "versionCode должен быть числом: $NEW_CODE" >&2; exit 2; }
 
-WORKTREE="$(cd "$(dirname "$0")/.." && pwd)"
-MAIN_DIR="~/airchat-v430"
-GRADLE="$MAIN_DIR/android/app/build.gradle"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
-echo "→ Обновляю версию: $NEW_VER (versionCode $NEW_CODE)"
+echo "→ Версия $NEW_VER (versionCode/buildNumber $NEW_CODE)"
 
-# 1. worktree/package.json
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$WORKTREE/package.json"
+node - "$NEW_VER" "$NEW_CODE" <<'NODE'
+const fs = require('fs');
+const [ver, code] = process.argv.slice(2);
+const write = (file, obj) => fs.writeFileSync(file, JSON.stringify(obj, null, 2) + '\n');
 
-# 2. worktree/app.config.base.json
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$WORKTREE/app.config.base.json"
-sed -i '' "s/\"versionCode\": [0-9]*/\"versionCode\": $NEW_CODE/" "$WORKTREE/app.config.base.json"
+const cfg = JSON.parse(fs.readFileSync('app.config.base.json', 'utf8'));
+cfg.expo.version = ver;
+cfg.expo.android = { ...cfg.expo.android, versionCode: Number(code) };
+cfg.expo.ios = { ...cfg.expo.ios, buildNumber: String(code) };
+write('app.config.base.json', cfg);
 
-# 3. main app.json (Expo CLI)
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VER\"/" "$MAIN_DIR/app.json"
-sed -i '' "s/\"versionCode\": [0-9]*/\"versionCode\": $NEW_CODE/" "$MAIN_DIR/app.json"
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+pkg.version = ver;
+write('package.json', pkg);
 
-# 4. build.gradle
-sed -i '' "s/versionCode [0-9]*/versionCode $NEW_CODE/" "$GRADLE"
-sed -i '' "s/versionName \"[^\"]*\"/versionName \"$NEW_VER\"/" "$GRADLE"
+const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+lock.version = ver;
+if (lock.packages && lock.packages['']) lock.packages[''].version = ver;
+write('package-lock.json', lock);
+NODE
 
-echo "✓ package.json:  $(grep '"version"' "$WORKTREE/package.json" | head -1 | xargs)"
-echo "✓ app config:    $(grep '"version"' "$WORKTREE/app.config.base.json" | head -1 | xargs)"
-echo "✓ build.gradle:  $(grep 'versionName\|versionCode' "$GRADLE" | tr '\n' ' ' | xargs)"
-echo ""
-echo "Следующий шаг — пересборка с --rerun-tasks:"
-echo "  cd $MAIN_DIR/android && ./gradlew assembleDebug -Pairchat.bundleInDebug=true -Pairchat.worktreeRoot=$WORKTREE --rerun-tasks"
+GRADLE="$ROOT/android/app/build.gradle"
+if [[ -f "$GRADLE" ]]; then
+  sed -i.bak -E "s/versionCode [0-9]+/versionCode $NEW_CODE/; s/versionName \"[^\"]*\"/versionName \"$NEW_VER\"/" "$GRADLE"
+  rm -f "$GRADLE.bak"
+  echo "✓ build.gradle:  $(grep -E 'versionCode|versionName' "$GRADLE" | tr -s ' ' | tr '\n' ' ')"
+else
+  echo "• android/ нет (prebuild ещё не делали) — build.gradle получит версию при prebuild"
+fi
+echo "✓ package.json:  $(node -p "require('./package.json').version")"
+echo "✓ app config:    $(node -p "const e=require('./app.config.base.json').expo; e.version+' / '+e.android.versionCode+' / '+e.ios.buildNumber")"

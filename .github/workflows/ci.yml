@@ -1,0 +1,81 @@
+name: CI
+
+# Обязательные проверки качества (AC-06). До v4.32.721 в CI были только
+# attribution и secret scanning: TypeScript, lint, 8500+ клиентских и ~150
+# серверных тестов запускались только руками, а сборка — никогда.
+# Статусы этих jobs включены как required в защите ветки main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    name: Client (typecheck, lint, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: package.json commands resolve their files
+        run: npm run check:scripts
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Jest
+        run: npx jest --ci --maxWorkers=2
+
+  servers:
+    name: Servers (signaling, cloud-vault)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [signaling-server, server/cloud-vault]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: ${{ matrix.dir }}
+      - run: npm test
+        working-directory: ${{ matrix.dir }}
+
+  web-build:
+    name: Web smoke build + budget + E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: expo export (web)
+        run: npx expo export --platform web --output-dir dist
+      - name: Load budget
+        run: npm run web:budget
+      - name: Web E2E (headless Chrome)
+        run: npm run e2e:web
