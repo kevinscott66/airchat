@@ -5,6 +5,12 @@
 import * as ExpoSecureStore from 'expo-secure-store';
 import type { SecureStoreOptions } from 'expo-secure-store';
 
+// AC-03: тот же тип ошибки, что бросает веб-реализация на нечитаемой записи.
+// Нативный expo-secure-store бросает свои исключения (сброс Keystore, запертый
+// Keychain) и в эту обёртку не заворачивается: контракт общий — «нет записи»
+// это `null`, «не читается» — исключение, а какое именно, разбирает keychainLocked.
+export { SecureStoreUnreadableError, isSecureStoreUnreadable } from './secureStoreErrors';
+
 let chain: Promise<unknown> = Promise.resolve();
 
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
