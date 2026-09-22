@@ -83,7 +83,7 @@ STAGE="$(mktemp -d)"
 mkdir -p "$STAGE/pkg"
 for f in "${FILES[@]}"; do cp -R "$SRC/$f" "$STAGE/pkg/"; done
 printf '{"version":"%s","commit":"%s","builtAt":"%s"}\n' "$VER" "$SHORT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAGE/pkg/release.json"
-tar -C "$STAGE/pkg" -czf "$STAGE/release.tgz" .
+COPYFILE_DISABLE=1 tar --no-xattrs -C "$STAGE/pkg" -czf "$STAGE/release.tgz" .
 
 echo "→ сравнение с $HOST_ALIAS:$DEST"
 ssh_run true || { echo "Нет SSH-доступа к $HOST_ALIAS — выкладка остановлена." >&2; exit 1; }
