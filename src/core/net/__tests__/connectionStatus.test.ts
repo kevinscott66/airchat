@@ -117,12 +117,17 @@ describe('проводка', () => {
     expect(decl).toBeGreaterThan(queue);
   });
 
-  it('полоска стоит над очередью отправки', () => {
+  it('капсула лежит поверх экрана, а не сдвигает его', () => {
+    // В общем потоке полоска ложилась на часы и «остров» и толкала экран вниз.
     const app = read('App.tsx');
+    const children = app.indexOf('{children}', app.indexOf('function AppShell('));
     const connection = app.indexOf('<ConnectionStatus />');
-    const offline = app.indexOf('<OfflineStatus />');
-    expect(connection).toBeGreaterThan(0);
-    expect(offline).toBeGreaterThan(connection);
+    expect(children).toBeGreaterThan(0);
+    expect(connection).toBeGreaterThan(children);
+    const own = read('ui/components/ConnectionStatus.tsx');
+    expect(own).toContain("position: 'absolute'");
+    expect(own).toContain('top: insets.top + 4');
+    expect(own).toContain('pointerEvents="none"');
   });
 
   it('обещанная задержка показа совпадает с той, что даёт опрос', () => {

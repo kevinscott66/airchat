@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
-import { StatusBanner } from './StatusBanner';
+import { AppState, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { bannerColors } from './StatusBanner';
+import { useTheme } from '../ThemeContext';
+import { font, radius } from '../theme';
 import {
   isAccountSyncActive,
   rawStatus,
@@ -23,13 +27,21 @@ import {
 const POLL_MS = 1_000;
 
 /**
- * Полоска «Соединение…» / «Обновление…» (v4.32.610).
+ * Капсула «Соединение…» / «Обновление…» (v4.32.610).
  *
- * Стоит рядом с очередью отправки и по той же причине: она объясняет, почему
- * очередь не убывает. Правило показа целиком лежит в connectionStatus.ts и
- * проверяется тестом; здесь только опрос и подписка.
+ * Объясняет, почему очередь отправки не убывает. Правило показа целиком лежит
+ * в connectionStatus.ts и проверяется тестом; здесь опрос, подписка и место.
+ *
+ * Место — поверх экрана, сразу под строкой состояния. Раньше это была полоска
+ * в общем потоке над экраном: безопасную зону сверху она не учитывала и
+ * ложилась на часы и «остров», а своей высотой сдвигала вниз весь экран —
+ * вместе со штампом, который из-за этого выезжал из-под «острова». Капсула не
+ * занимает места в раскладке и не перехватывает касаний: состояние короткое,
+ * и шапка под ним должна нажиматься как обычно.
  */
 export function ConnectionStatus(): React.ReactElement | null {
+  const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const [status, setStatus] = useState<LiveStatus>('idle');
   /** Что происходит и с какого момента — без этого задержка показа неоткуда взяться. */
   const heldRef = useRef<{ raw: LiveStatus; since: number }>({ raw: 'idle', since: Date.now() });
@@ -71,12 +83,35 @@ export function ConnectionStatus(): React.ReactElement | null {
   if (status === 'idle') return null;
 
   const connecting = status === 'connecting';
+  const { ink, fill, border } = bannerColors('neutral', colors);
   return (
-    <StatusBanner
-      tone="neutral"
-      icon={connecting ? 'cloud-outline' : 'sync-outline'}
-      liveRegion="polite"
-      text={connecting ? 'Соединение…' : 'Обновление…'}
-    />
+    <View pointerEvents="none" style={[styles.layer, { top: insets.top + 4 }]}>
+      <View style={[styles.capsule, { backgroundColor: fill, borderColor: border }]}>
+        <Ionicons name={connecting ? 'cloud-outline' : 'sync-outline'} size={12} color={ink} />
+        <Text style={[styles.text, { color: ink }]} accessibilityLiveRegion="polite">
+          {connecting ? 'Соединение…' : 'Обновление…'}
+        </Text>
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  layer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 1000,
+    elevation: 1000,
+  },
+  capsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  text: { fontSize: font.xs, marginLeft: 5 },
+});
