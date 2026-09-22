@@ -34,6 +34,11 @@ export class OpportunisticSync {
     await this.exchangeRelayMessages(device.did);
   };
 
+  /** Сколько кадров ждёт отправки соседу (для диагностики и тестов). */
+  pendingCountFor(peerDid: string): number {
+    return this.pendingForPeer.get(peerDid)?.length ?? 0;
+  }
+
   /** Вызывается при входящем BLE/Wi‑Fi кадре с топологией. */
   async ingestTopologyFrame(peerDid: string, frame: Uint8Array): Promise<void> {
     try {
@@ -74,33 +79,40 @@ export class OpportunisticSync {
 
   private async exchangeTopology(device: { did: string; transports: string[] }): Promise<void> {
     const router = this.deps.geographicRouter;
+    const deliver = this.deps.deliverPayload;
+    if (!router || !deliver) return;
     const myDid = (await this.deps.getMyDid?.()) ?? 'did:unknown:local';
-    if (!router) return;
     const payload: TopologyExchangePayload = {
       senderDid: myDid,
       relays: router.getRelays(),
     };
     const bytes = new TextEncoder().encode(JSON.stringify(payload));
-    await this.deps.deliverPayload?.(device.did, 'topology', bytes);
+    await deliver(device.did, 'topology', bytes);
     void device.transports;
   }
 
+  // Без доставщика очереди не трогаем: раньше `deliverPayload?.()` молча
+  // ничего не делал, а очередь после этого удалялась — данные терялись.
   private async fetchMessagesForMe(peerDid: string): Promise<void> {
+    const deliver = this.deps.deliverPayload;
+    if (!deliver) return;
     const myDid = await this.deps.getMyDid?.();
     if (!myDid) return;
     const q = this.pendingForPeer.get(myDid);
     if (!q?.length) return;
     for (const chunk of q) {
-      await this.deps.deliverPayload?.(peerDid, 'sync', chunk);
+      await deliver(peerDid, 'sync', chunk);
     }
     this.pendingForPeer.delete(myDid);
   }
 
   private async exchangeRelayMessages(peerDid: string): Promise<void> {
+    const deliver = this.deps.deliverPayload;
+    if (!deliver) return;
     const q = this.pendingForPeer.get(peerDid);
     if (!q?.length) return;
     for (const chunk of q) {
-      await this.deps.deliverPayload?.(peerDid, 'relay', chunk);
+      await deliver(peerDid, 'relay', chunk);
     }
     this.pendingForPeer.delete(peerDid);
   }

@@ -27,7 +27,17 @@ export type WiFiMeshNode = {
   hops: number;
 };
 
-type MeshPacket = { targetDid: string; payload: Uint8Array };
+/**
+ * Итог отправки. «Отправлено» — только когда нативный `sendMessageTo`
+ * вернулся без ошибки; локальная очередь или известный узел доставку не
+ * доказывают.
+ */
+export type WiFiMeshSendOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'inactive' | 'module_unavailable' | 'no_address' | 'native_failed' | 'stopped';
+    };
 
 type WifiP2pModule = typeof import('react-native-wifi-p2p');
 
@@ -48,35 +58,22 @@ async function loadWifiP2p(): Promise<WifiP2pModule | null> {
  */
 export class WiFiMeshTransport {
   private readonly nodes = new Map<string, WiFiMeshNode>();
-  private readonly rxByDid = new Map<string, MeshPacket[]>();
-  private isApMode = false;
   private isActive = false;
   private p2pInitialized = false;
   private p2pGroupCreated = false;
+  private p2pDiscovering = false;
+  /**
+   * Поколение цикла жизни. `stop()` его увеличивает, и всё, что было начато
+   * до остановки (скан, подъём группы), по возвращении из await видит чужое
+   * поколение и не пишет в уже очищенное состояние: иначе узлы прошлой
+   * личности всплыли бы в следующем цикле.
+   */
+  private epoch = 0;
   private readonly isSupported = isWifiDirectSupported;
   private onDeviceFoundCb?: (device: { did: string; transports: string[] }) => void;
-  /** Общая шина для эмуляции нескольких экземпляров в одном процессе (тесты). */
-  private static sharedBus: MeshPacket[] | null = null;
-
-  static attachSharedBus(bus: MeshPacket[]): void {
-    WiFiMeshTransport.sharedBus = bus;
-  }
-
-  static detachSharedBus(): void {
-    WiFiMeshTransport.sharedBus = null;
-  }
 
   onDeviceFound(cb: (device: { did: string; transports: string[] }) => void): void {
     this.onDeviceFoundCb = cb;
-  }
-
-  /**
-   * v4.32.501: снять обработчик найденных устройств. Транспорт — синглтон на
-   * процесс, поэтому обработчик, поставленный прошлым циклом жизни long-range,
-   * иначе продолжал кормить уже разобранную синхронизацию.
-   */
-  clearDeviceFoundHandler(): void {
-    this.onDeviceFoundCb = undefined;
   }
 
   async startAccessPoint(): Promise<boolean> {
@@ -89,15 +86,24 @@ export class WiFiMeshTransport {
       return false;
     }
 
+    const epoch = this.epoch;
     const P2p = await loadWifiP2p();
     if (P2p) {
       try {
-        await P2p.initialize();
-        this.p2pInitialized = true;
+        if (!this.p2pInitialized) {
+          await P2p.initialize();
+          this.p2pInitialized = true;
+        }
         await P2p.createGroup();
+        // Группа создана в эфире — помечаем сразу, даже если остановка уже
+        // случилась: removeGroup в stop() обязан её снять.
         this.p2pGroupCreated = true;
         const info = await P2p.getGroupInfo();
-        this.isApMode = true;
+        if (epoch !== this.epoch) {
+          // Пока поднимали, транспорт остановили — группа осиротела.
+          await this.removeGroupQuietly(P2p);
+          return false;
+        }
         this.isActive = true;
         log.info('[WiFiMesh] P2P group owner active', {
           networkName: info.networkName,
@@ -113,21 +119,16 @@ export class WiFiMeshTransport {
       log.warn('[WiFiMesh] react-native-wifi-p2p unavailable');
     }
 
-    /** Только для unit-тестов в одном процессе — не маскируем отсутствие P2P как «успех». */
-    if (WiFiMeshTransport.sharedBus) {
-      this.isApMode = true;
-      this.isActive = true;
-      log.info('[WiFiMesh] active (in-process test bus only)');
-      return true;
-    }
-
-    this.isApMode = false;
     this.isActive = false;
     return false;
   }
 
   async scanAndConnect(): Promise<void> {
+    const epoch = this.epoch;
     const P2p = await loadWifiP2p();
+    if (epoch !== this.epoch) return;
+    /** Кому уже сообщили в этом вызове — чтобы свежий узел не пришёл дважды. */
+    const notified = new Set<string>();
     if (P2p) {
       try {
         if (!this.p2pInitialized) {
@@ -135,7 +136,14 @@ export class WiFiMeshTransport {
           this.p2pInitialized = true;
         }
         await P2p.startDiscoveringPeers();
+        this.p2pDiscovering = true;
         const peers = await P2p.getAvailablePeers();
+        if (epoch !== this.epoch) {
+          // Остановили посреди скана: обнаружение, запущенное этим вызовом,
+          // уже никому не нужно, а найденные узлы принадлежат прошлому циклу.
+          await this.stopDiscoveryQuietly(P2p);
+          return;
+        }
         const list = peers.devices ?? [];
         log.info('[WiFiMesh] P2P scan', { peerCount: list.length });
         for (const d of list) {
@@ -149,6 +157,7 @@ export class WiFiMeshTransport {
             lastSeen: Date.now(),
             hops: 1,
           });
+          notified.add(syntheticDid);
           this.onDeviceFoundCb?.({
             did: syntheticDid,
             transports: ['wifi', 'wifi-direct'],
@@ -160,7 +169,8 @@ export class WiFiMeshTransport {
     }
 
     log.debug('[WiFiMesh] notify registered peers', { count: this.nodes.size });
-    for (const peer of this.nodes.values()) {
+    for (const peer of [...this.nodes.values()]) {
+      if (notified.has(peer.did)) continue;
       this.onDeviceFoundCb?.({
         did: peer.did,
         transports: ['wifi'],
@@ -184,36 +194,94 @@ export class WiFiMeshTransport {
   }
 
   async send(data: Uint8Array, targetDid: string): Promise<boolean> {
-    if (!this.isActive) return false;
-    const pkt: MeshPacket = { targetDid, payload: new Uint8Array(data) };
-    const q = this.rxByDid.get(targetDid);
-    if (q) q.push(pkt);
-    if (WiFiMeshTransport.sharedBus) WiFiMeshTransport.sharedBus.push(pkt);
+    return (await this.sendDetailed(data, targetDid)).ok;
+  }
 
+  /**
+   * Отправка с разобранным итогом. Успех — только ответ нативного
+   * `sendMessageTo` без исключения. Раньше после ошибки нативной отправки
+   * код проваливался в «групповой» возврат и отвечал true, если группа
+   * поднята и узел известен, — отправитель считал пакет ушедшим, хотя в
+   * эфир ничего не вышло.
+   */
+  async sendDetailed(data: Uint8Array, targetDid: string): Promise<WiFiMeshSendOutcome> {
+    if (!this.isActive) return { ok: false, reason: 'inactive' };
+    const epoch = this.epoch;
     const P2p = await loadWifiP2p();
+    if (!P2p) return { ok: false, reason: 'module_unavailable' };
     const addr = this.resolveP2pDeviceAddress(targetDid);
-    if (P2p && addr) {
-        try {
-          if (!this.p2pInitialized) {
-            await P2p.initialize();
-            this.p2pInitialized = true;
-          }
-          await P2p.connect(addr);
-          const b64 = Buffer.from(data).toString('base64');
-          await P2p.sendMessageTo(b64, addr);
-          log.info('[WiFiMesh] sendMessageTo ok', { targetDid: targetDid.slice(0, 24), len: data.length });
-          return true;
-        } catch (e) {
-          log.warn('[WiFiMesh] P2P send failed', { err: e instanceof Error ? e.message : String(e) });
-        }
+    if (!addr) {
+      log.debug('[WiFiMesh] no P2P address for target', { targetDid: targetDid.slice(0, 24) });
+      return { ok: false, reason: 'no_address' };
     }
+    try {
+      if (!this.p2pInitialized) {
+        await P2p.initialize();
+        this.p2pInitialized = true;
+      }
+      await P2p.connect(addr);
+      if (epoch !== this.epoch) return { ok: false, reason: 'stopped' };
+      const b64 = Buffer.from(data).toString('base64');
+      await P2p.sendMessageTo(b64, addr);
+      log.info('[WiFiMesh] sendMessageTo ok', { targetDid: targetDid.slice(0, 24), len: data.length });
+      return { ok: true };
+    } catch (e) {
+      log.warn('[WiFiMesh] P2P send failed', { err: e instanceof Error ? e.message : String(e) });
+      return { ok: false, reason: 'native_failed' };
+    }
+  }
 
-    log.debug('[WiFiMesh] local queue only (no P2P send)', {
-      targetDid,
-      len: data.length,
-      p2pGroup: this.p2pGroupCreated,
-    });
-    return this.isApMode && (this.nodes.has(targetDid) || WiFiMeshTransport.sharedBus !== null);
+  /**
+   * Остановить транспорт: снять обнаружение и группу в эфире, забыть узлы и
+   * обработчик. Идемпотентна: повторный вызов не трогает нативный модуль.
+   * Ошибки нативной остановки только логируются — разбор обязан доехать до
+   * конца, иначе следующий цикл получит полуразобранный синглтон.
+   */
+  async stop(): Promise<void> {
+    this.epoch += 1;
+    this.isActive = false;
+    this.nodes.clear();
+    this.onDeviceFoundCb = undefined;
+    if (!this.p2pDiscovering && !this.p2pGroupCreated) return;
+    const P2p = await loadWifiP2p();
+    if (!P2p) {
+      this.p2pDiscovering = false;
+      this.p2pGroupCreated = false;
+      return;
+    }
+    await this.releaseNative(P2p);
+  }
+
+  /** Снять нативные обнаружение и группу, если они подняты. Не бросает. */
+  private async releaseNative(P2p: WifiP2pModule): Promise<void> {
+    await this.stopDiscoveryQuietly(P2p);
+    await this.removeGroupQuietly(P2p);
+  }
+
+  private async stopDiscoveryQuietly(P2p: WifiP2pModule): Promise<void> {
+    if (this.p2pDiscovering) {
+      this.p2pDiscovering = false;
+      try {
+        await P2p.stopDiscoveringPeers();
+      } catch (e) {
+        log.warn('[WiFiMesh] stopDiscoveringPeers failed', {
+          err: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+
+  private async removeGroupQuietly(P2p: WifiP2pModule): Promise<void> {
+    if (this.p2pGroupCreated) {
+      this.p2pGroupCreated = false;
+      try {
+        await P2p.removeGroup();
+      } catch (e) {
+        log.warn('[WiFiMesh] removeGroup failed', {
+          err: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
   }
 
   /** did:p2p:<mac> или узел из скана с deviceAddress */
@@ -227,17 +295,7 @@ export class WiFiMeshTransport {
 
   async canReach(targetDid: string): Promise<boolean> {
     if (!this.isActive) return false;
-    if (WiFiMeshTransport.sharedBus !== null) return true;
-    if (this.nodes.has(targetDid)) return true;
-    if (targetDid.startsWith('did:p2p:')) {
-      return this.nodes.has(targetDid);
-    }
-    return false;
-  }
-
-  receiveFor(localDid: string): MeshPacket | undefined {
-    const q = this.rxByDid.get(localDid);
-    return q?.shift();
+    return this.nodes.has(targetDid);
   }
 
   getPeers(): WiFiMeshNode[] {

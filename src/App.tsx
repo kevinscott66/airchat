@@ -83,7 +83,11 @@ import {
   reconcileOrphanInlineMedia,
   setFeedNotifyCallback,
 } from './core/social/feedService';
-import { initLongRangeTransport, shutdownLongRangeTransport } from './core/transport/longrange';
+import {
+  initLongRangeTransport,
+  isLongRangePipelineEnabled,
+  shutdownLongRangeTransport,
+} from './core/transport/longrange';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeScreen } from './ui/components/SafeScreen';
 import { VpnStatusBanner } from './ui/components/VpnStatusBanner';
@@ -2481,6 +2485,10 @@ export default function App(): React.ReactElement {
    */
   useEffect(() => {
     if (gate !== 'ready' || !pair) return;
+    // Конвейер не доведён (нет доставки, приёма и координат) — не поднимаем
+    // группу Wi-Fi Direct и обнаружение впустую. Что нужно для включения —
+    // в core/transport/longrange/pipelineFlag.ts. LAN-путь это не трогает.
+    if (!isLongRangePipelineEnabled()) return;
     log.debug('[AirChat] starting longrange after gate ready');
     void initLongRangeTransport();
     // v4.32.501: смена личности и выход обязаны разобрать ретрансляцию.

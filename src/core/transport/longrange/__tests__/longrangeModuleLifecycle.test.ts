@@ -18,13 +18,22 @@ type Handler = ((d: { did: string; transports: string[] }) => void) | undefined;
 let mockStarts = 0;
 let mockDisposes = 0;
 let mockHandler: Handler;
-let mockHandlerClears = 0;
+let mockStops = 0;
+/** Что видела синхронизация: найденные устройства и её зависимости. */
+const mockDetected: string[] = [];
+let mockSyncDeps: Record<string, unknown> | null = null;
+/** Какие вызовы транспорта были и в каком порядке. */
+const mockCalls: string[] = [];
+/** Устройство, о котором скан сообщит синхронно, прямо изнутри scanAndConnect. */
+let mockScanFinds: string | null = null;
+const mockFlag = { enabled: true };
 /** Задвижка, на которой можно подвесить подъём посреди startAccessPoint. */
 const mockGate: { wanted: boolean; release: (() => void) | null } = { wanted: false, release: null };
 let mockFailStart = false;
 
 const mockWifi = {
   startAccessPoint: async () => {
+    mockCalls.push('startAccessPoint');
     mockStarts += 1;
     if (mockFailStart) throw new Error('нет Wi-Fi Direct');
     if (mockGate.wanted) {
@@ -34,15 +43,26 @@ const mockWifi = {
     }
     return true;
   },
-  scanAndConnect: async () => undefined,
+  scanAndConnect: async () => {
+    mockCalls.push('scanAndConnect');
+    // Как настоящий транспорт: о найденном узле сообщает по ходу скана.
+    if (mockScanFinds) mockHandler?.({ did: mockScanFinds, transports: ['wifi'] });
+  },
   onDeviceFound: (cb: (d: { did: string; transports: string[] }) => void) => {
+    mockCalls.push('onDeviceFound');
     mockHandler = cb;
   },
-  clearDeviceFoundHandler: () => {
-    mockHandlerClears += 1;
+  stop: async () => {
+    mockCalls.push('stop');
+    mockStops += 1;
     mockHandler = undefined;
   },
 };
+
+jest.mock('../pipelineFlag', () => ({
+  isLongRangePipelineEnabled: () => mockFlag.enabled,
+  LONG_RANGE_PIPELINE_ENABLED: false,
+}));
 
 const mockRelayInstances: Array<{ disposed: boolean }> = [];
 
@@ -63,7 +83,12 @@ jest.mock('../geographicRouter', () => ({
 
 jest.mock('../opportunisticSync', () => ({
   OpportunisticSync: class {
-    async onDeviceDetected(): Promise<void> {}
+    constructor(deps: Record<string, unknown>) {
+      mockSyncDeps = deps;
+    }
+    async onDeviceDetected(d: { did: string }): Promise<void> {
+      mockDetected.push(d.did);
+    }
   },
 }));
 
@@ -107,7 +132,12 @@ beforeEach(() => {
   mockStarts = 0;
   mockDisposes = 0;
   mockHandler = undefined;
-  mockHandlerClears = 0;
+  mockStops = 0;
+  mockDetected.length = 0;
+  mockSyncDeps = null;
+  mockCalls.length = 0;
+  mockScanFinds = null;
+  mockFlag.enabled = true;
   mockGate.wanted = false;
   mockGate.release = null;
   mockFailStart = false;
@@ -148,12 +178,69 @@ describe('подъём', () => {
   });
 });
 
+describe('выключатель конвейера', () => {
+  it('при выключенном флаге подъём — no-op: транспорт не трогается', async () => {
+    mockFlag.enabled = false;
+    const m = freshModule();
+    await expect(m.initLongRangeTransport()).resolves.toBeUndefined();
+    expect(mockCalls).toEqual([]);
+    expect(mockRelayInstances).toHaveLength(0);
+    // И разбор при этом ничего не разбирает.
+    await m.shutdownLongRangeTransport();
+    expect(mockStops).toBe(0);
+    expect(mockDisposes).toBe(0);
+  });
+
+  it('в проде флаг выключен', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const real = jest.requireActual('../pipelineFlag') as typeof import('../pipelineFlag');
+    expect(real.LONG_RANGE_PIPELINE_ENABLED).toBe(false);
+    expect(real.isLongRangePipelineEnabled()).toBe(false);
+  });
+});
+
+describe('порядок подъёма', () => {
+  it('обработчик устройств ставится до обнаружения', async () => {
+    const m = freshModule();
+    await m.initLongRangeTransport();
+    const handlerAt = mockCalls.indexOf('onDeviceFound');
+    expect(handlerAt).toBeGreaterThan(-1);
+    expect(handlerAt).toBeLessThan(mockCalls.indexOf('startAccessPoint'));
+    expect(handlerAt).toBeLessThan(mockCalls.indexOf('scanAndConnect'));
+  });
+
+  it('устройство, найденное синхронно во время скана, доходит до синхронизации', async () => {
+    mockScanFinds = 'did:p2p:aa:bb';
+    const m = freshModule();
+    await m.initLongRangeTransport();
+    expect(mockDetected).toEqual(['did:p2p:aa:bb']);
+  });
+
+  it('синхронизация получает DID текущей личности', async () => {
+    const m = freshModule();
+    await m.initLongRangeTransport();
+    const getMyDid = mockSyncDeps?.getMyDid as (() => Promise<string>) | undefined;
+    expect(typeof getMyDid).toBe('function');
+    await expect(getMyDid!()).resolves.toBe('did:key:test');
+  });
+
+  it('сорвавшийся посреди подъёма транспорт разбирается, а не висит в эфире', async () => {
+    mockFailStart = true;
+    const m = freshModule();
+    await m.initLongRangeTransport();
+    expect(mockStops).toBe(1);
+    expect(mockRelayInstances[0].disposed).toBe(true);
+    expect(mockHandler).toBeUndefined();
+  });
+});
+
 describe('разбор', () => {
-  it('снимает обработчик и разбирает ретрансляцию', async () => {
+  it('снимает обработчик, останавливает Wi-Fi Direct и разбирает ретрансляцию', async () => {
     const m = freshModule();
     await m.initLongRangeTransport();
     await m.shutdownLongRangeTransport();
     expect(mockDisposes).toBe(1);
+    expect(mockStops).toBe(1);
     expect(mockHandler).toBeUndefined();
     expect(mockRelayInstances[0].disposed).toBe(true);
   });
@@ -174,7 +261,7 @@ describe('разбор', () => {
     await m.shutdownLongRangeTransport();
     await m.shutdownLongRangeTransport();
     expect(mockDisposes).toBe(0);
-    expect(mockHandlerClears).toBe(0);
+    expect(mockStops).toBe(0);
   });
 
   it('двойной разбор разбирает один раз', async () => {
