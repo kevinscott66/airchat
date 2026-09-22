@@ -41,8 +41,12 @@ Pod::Spec.new do |s|
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
-  # React-Core нужен ради RCTHTTPRequestHandler.h: второй слой перехвата
-  # ставится через RCTSetCustomNSURLSessionConfigurationProvider.
+  # React-Core нужен ради двух заголовков: RCTHTTPRequestHandler.h (слой 2,
+  # RCTSetCustomNSURLSessionConfigurationProvider) и RCTWebSocketModule.h
+  # (слой 3, RCTSetCustomSRWebSocketProvider). Он же приносит в пути поиска
+  # заголовки ReactNativeDependencies, откуда берётся SocketRocket/SRWebSocket.h:
+  # наследовать от SRWebSocket приходится потому, что провайдер веб-сокетов
+  # объявлен через конкретный класс, а не через протокол.
   s.dependency 'React-Core'
 
   # Network.framework — первый слой (nw_privacy_context / nw_proxy_config).

@@ -19,6 +19,13 @@ import Network
  * это надо измерять, а не предполагать. Слой 2 же покрывает ровно то, что
  * известно: fetch/XHR из JS.
  *
+ * Слой 3 — веб-сокеты, RCTSetCustomSRWebSocketProvider (OpenFluxWebSocketRouting).
+ * Он появился по итогам измерения: слои 1 и 2 действительно уводят HTTP в
+ * туннель, а веб-сокет ntfy шёл мимо обоих — SocketRocket ведёт соединение
+ * своим CFStream, который не наследует ни прокси сессии, ни системный
+ * privacy-context. Почему именно так и что ещё пробовали — в заголовке
+ * OpenFluxWebSocketRouting.h.
+ *
  * ── Чего здесь намеренно НЕТ ────────────────────────────────────────────────
  *
  * • connectionProxyDictionary с ключами kCFStreamPropertySOCKSProxy*.
@@ -36,19 +43,22 @@ import Network
  *   entitlement незачем.
  *
  * • Подмена методов (swizzling) NSURLSession или SocketRocket.
- *   Не нужна: обе точки подключения, которыми мы пользуемся, — публичные
+ *   Не нужна: все три точки подключения, которыми мы пользуемся, — публичные
  *   функции. Swizzling здесь добавил бы только хрупкости при обновлении RN.
  *
  * ── Что честно НЕ покрыто ───────────────────────────────────────────────────
  *
- * Веб-сокеты React Native на iOS идут не через URLSession, а через SocketRocket
- * поверх CFStream (RCTWebSocketModule.mm импортирует SocketRocket/SRWebSocket.h
- * и создаёт сокет напрямую). Слой 2 их не касается — он про URLSession.
- * Покрывает ли их слой 1 — неизвестно, и именно это надо измерить счётчиком
- * соединений (OpenFluxTunnelLog): ntfy, главный канал AirChat, держится как
- * раз на веб-сокете. Если окажется, что не покрывает, в RN есть третья точка —
- * RCTSetCustomSRWebSocketProvider (RCTWebSocketModule.mm), но писать её вслепую
- * мы не стали: она дороже двух первых, и без измерения неизвестно, нужна ли.
+ * Подпротоколы веб-сокета. Провайдер React Native получает только NSURLRequest,
+ * без списка protocols (RCTWebSocketModule.mm отдаёт его лишь запасному
+ * конструктору SRWebSocket), поэтому при поднятом туннеле сокет, которому JS
+ * заказал подпротокол, откроется без него. Для AirChat это безразлично —
+ * единственный веб-сокет приложения, ntfy, подпротоколов не просит, — но если
+ * появится второй, сюда надо будет вернуться.
+ *
+ * Отладочные каналы самого React Native (Metro, инспектор) идут мимо всех трёх
+ * слоёв: RCTReconnectingWebSocket создаёт SRWebSocket напрямую, провайдера не
+ * спрашивая. В релизной сборке их нет, а в dev-сборке это скорее удача — Metro
+ * живёт на LAN-адресе Mac'а, которого нет в исключениях.
  */
 final class OpenFluxRouting {
   static let shared = OpenFluxRouting()
@@ -88,6 +98,15 @@ final class OpenFluxRouting {
   private var hookInstalled = false
   private var systemProxyActive = false
 
+  /// Где ядро слушает прямо сейчас, "host:port", или nil — туннель опущен.
+  ///
+  /// Это не то же самое, что reservedPort. Слой 2 обязан знать адрес заранее и
+  /// навсегда, поэтому живёт на зарезервированном порту и мирится с тем, что
+  /// при опущенном туннеле соединение на петлю отлетает. Слой 3 спрашивают на
+  /// каждое открытие сокета — значит он может знать правду: поднят туннель или
+  /// нет и на каком порту ядро оказалось на самом деле.
+  private var activeSocksEndpoint: String?
+
   /// Правда ли трафик HTTP сейчас может пойти в туннель: слой 2 поставлен и
   /// ядро слушает именно тот порт, который в него зашит.
   private var httpRoutedToReservedPort = false
@@ -118,6 +137,7 @@ final class OpenFluxRouting {
 
     guard !alreadyInstalled else { return }
     installHTTPProvider()
+    installWebSocketProvider()
   }
 
   /// Адрес, который отдаём ядру при старте. Порт 0 — «выбери сам»: так ядро
@@ -140,6 +160,7 @@ final class OpenFluxRouting {
   func activate(host: String, port: UInt16) {
     lock.lock()
     httpRoutedToReservedPort = (reservedPort == port)
+    activeSocksEndpoint = "\(host):\(port)"
     lock.unlock()
 
     guard #available(iOS 17, *) else { return }
@@ -149,6 +170,7 @@ final class OpenFluxRouting {
   func deactivate() {
     lock.lock()
     httpRoutedToReservedPort = false
+    activeSocksEndpoint = nil
     lock.unlock()
 
     guard #available(iOS 17, *) else { return }
@@ -203,6 +225,20 @@ final class OpenFluxRouting {
     lock.lock()
     defer { lock.unlock() }
     return reservedPort
+  }
+
+  // MARK: - слой 3: веб-сокеты через React Native
+
+  private func installWebSocketProvider() {
+    AirChatOpenFluxInstallWebSocketProvider { [weak self] in
+      self?.currentSocksEndpoint
+    }
+  }
+
+  private var currentSocksEndpoint: String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return activeSocksEndpoint
   }
 
   private static func makeSessionConfiguration(port: UInt16?) -> URLSessionConfiguration {
