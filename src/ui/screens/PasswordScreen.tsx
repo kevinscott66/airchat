@@ -21,7 +21,7 @@ import { showError } from '../components/userFeedback';
 import { userErrorText } from '../components/userErrorText';
 import { useColors, useThemedStyles } from '../ThemeContext';
 import { AirChatLockup } from '../components/AirChatLockup';
-import { font, primaryInk, radius, spacing } from '../theme';
+import { font, formColumn, primaryInk, radius, spacing } from '../theme';
 import {
   PIN_LENGTH,
   applyPinKey,
@@ -87,10 +87,16 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
     flex: { flex: 1 },
+    // Колонка та же, что у знакомства, входа и сброса пароля: во всю ширину
+    // на телефоне, но не шире `formColumn` и по центру — на планшете и в окне
+    // браузера поле пароля и кнопка иначе тянулись от края до края.
     container: {
       flex: 1,
       justifyContent: 'center' as const,
       padding: spacing.lg,
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
     },
     /** Знак стоит вместо заголовка, поэтому и отступ снизу у него заголовочный. */
     lockup: {
