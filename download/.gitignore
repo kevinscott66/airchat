@@ -1,0 +1,9 @@
+# APK в этой ветке — только релизные, подписанные ключом вне репозитория
+# (~/.airchat-release/keystore.properties, см. scripts/post-prebuild-android-patches.sh,
+# правка 8). Отладочный ключ лежит в каждом checkout'е, поэтому подписанную им
+# сборку может подделать кто угодно, — такие APK сюда класть нельзя.
+#
+# Перед добавлением файла:
+#   apksigner verify --print-certs <apk>   → CN=AirChat, а не CN=Android Debug
+#   shasum -a 256 <apk>                    → сумма на странице download/index.html
+*-debug.apk
