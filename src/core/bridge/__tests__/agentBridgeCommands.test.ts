@@ -15,12 +15,12 @@ jest.mock('../../../ui/platformCapabilities', () => ({
 }));
 
 let mockRunning = false;
-const mockRetry = jest.fn(async () => 'on');
+const mockRetry = jest.fn(async (_cfg: unknown) => 'on');
 const mockStop = jest.fn(async () => {});
 jest.mock('../../vpn/openFluxController', () => ({
   getOpenFluxRunning: jest.fn(async () => mockRunning),
   getOpenFluxSocksAddr: jest.fn(async () => (mockRunning ? '127.0.0.1:10808' : null)),
-  retryOpenFlux: (c: unknown) => mockRetry(c as never),
+  retryOpenFlux: (c: unknown) => mockRetry(c),
   stopOpenFlux: () => mockStop(),
 }));
 
@@ -108,7 +108,7 @@ describe('мост: «недоступно» против «выключено»
 
 describe('мост: переключение туннеля', () => {
   it('включение пишет флаг до попытки и перезапускает транспорт', async () => {
-    mockRetry.mockImplementationOnce(async () => {
+    mockRetry.mockImplementationOnce(async (_cfg: unknown) => {
       mockRunning = true;
       return 'on';
     });
