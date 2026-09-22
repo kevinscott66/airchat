@@ -16,9 +16,10 @@ const path = require('path');
 const zlib = require('zlib');
 
 // Байты. Меняются вместе с комментарием о причине.
+// 4.32.721: 4,86 МиБ (gzip 1,27) после ленивых вкладок и Sentry; было 6,62 (1,70).
 const BUDGET = {
-  initialRaw: 7.0 * 1024 * 1024,
-  initialGzip: 1.9 * 1024 * 1024,
+  initialRaw: 5.25 * 1024 * 1024,
+  initialGzip: 1.4 * 1024 * 1024,
 };
 
 function measure(dist) {
