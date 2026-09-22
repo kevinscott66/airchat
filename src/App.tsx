@@ -51,15 +51,19 @@ import { AppPressable } from './ui/components/AppPressable';
 import { membersLabel } from './ui/utils/plural';
 import { AppNotifyHost } from './ui/components/AppNotifyHost';
 import { LoginScreen } from './ui/screens/LoginScreen';
-import { FeedScreen } from './ui/screens/FeedScreen';
-import { ChatScreen } from './ui/screens/ChatScreen';
-import { ProfileScreen } from './ui/screens/ProfileScreen';
-import { SettingsScreen } from './ui/screens/SettingsScreen';
-import { GroupsScreen } from './ui/screens/GroupsScreen';
 import { ProfileSelector } from './ui/components/ProfileSelector';
 import { OnboardingScreen } from './ui/screens/OnboardingScreen';
 import { LoadingScreen } from './ui/screens/LoadingScreen';
 import { BackupWarningScreen } from './ui/screens/BackupWarningScreen';
+
+// AC-22: вкладки грузятся отдельными чанками, когда их впервые открывают
+// (mountedTabs). Экран приветствия и вход их не ждут: на вебе это ~1 МБ
+// исходника из стартового бандла. На native Metro всё равно кладёт их в бандл.
+const FeedScreen = React.lazy(() => import('./ui/screens/FeedScreen').then((m) => ({ default: m.FeedScreen })));
+const ChatScreen = React.lazy(() => import('./ui/screens/ChatScreen').then((m) => ({ default: m.ChatScreen })));
+const GroupsScreen = React.lazy(() => import('./ui/screens/GroupsScreen').then((m) => ({ default: m.GroupsScreen })));
+const ProfileScreen = React.lazy(() => import('./ui/screens/ProfileScreen').then((m) => ({ default: m.ProfileScreen })));
+const SettingsScreen = React.lazy(() => import('./ui/screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen })));
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { nativeSplashPreventReady } from './splashGate';
 import { getMessagingService, initMessagingService } from './core/social/messaging';

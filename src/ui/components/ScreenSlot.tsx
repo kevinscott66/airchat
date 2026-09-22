@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Platform, StyleSheet } from 'react-native';
 import { motion } from '../theme';
+import { LoadingScreen } from '../screens/LoadingScreen';
 import { isReducedMotion } from '../motionPrefs';
 
 /**
@@ -61,7 +62,11 @@ export function ScreenSlot({
         },
       ]}
     >
-      {children}
+      {/* Вкладки в App.tsx — React.lazy (AC-22). Граница у каждой своя: пока
+          грузится новая вкладка, уже открытая не прячется за заглушку. */}
+      <React.Suspense fallback={<LoadingScreen message="Открываем раздел…" testID="tab_mount_lazy" />}>
+        {children}
+      </React.Suspense>
     </Animated.View>
   );
 }
