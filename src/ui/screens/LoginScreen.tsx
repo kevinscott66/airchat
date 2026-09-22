@@ -21,7 +21,7 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { showError } from '../components/userFeedback';
 import { SafeScreen } from '../components/SafeScreen';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { font, primaryInk, radius } from '../theme';
+import { font, formColumn, primaryInk, radius } from '../theme';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText } from '../components/userErrorText';
 
@@ -145,8 +145,15 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
     // v4.32.41: у карточки нет своего фона — она не должна отличаться по оттенку
     // от фона экрана. Раньше #212d3b рисовал видимый прямоугольник на тёмно-синем
     // фоне — пользователь жаловался: «прямоугольник отличается по оттенку».
+    //
+    // Колонка та же, что у знакомства и сброса пароля: во всю ширину на
+    // телефоне, но не шире `formColumn` и по центру — на планшете и в окне
+    // браузера поле и кнопка иначе тянулись от края до края.
     inner: {
       // прозрачный — наследует фон SafeScreen
+      width: '100%' as const,
+      maxWidth: formColumn.maxWidth,
+      alignSelf: 'center' as const,
     },
     title: { fontSize: 28, fontWeight: '700' as const, color: c.text, marginBottom: 8 },
     sub: { color: c.textSecondary, marginBottom: 16 },

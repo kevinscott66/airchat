@@ -35,6 +35,7 @@ describe('потолок ширины колонки', () => {
 describe.each([
   ['знакомство и восстановление', 'ui/screens/OnboardingScreen.tsx'],
   ['сброс пароля', 'ui/screens/ForgotPasswordScreen.tsx'],
+  ['вход по имени', 'ui/screens/LoginScreen.tsx'],
 ])('%s', (_name, rel) => {
   it('берёт потолок из токена, а не вписывает число', () => {
     const src = read(rel);
