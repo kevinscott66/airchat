@@ -826,3 +826,36 @@ test('старая сборка без расписки журнал всё же
   assert.equal(secondDelivery, null);
 });
 
+
+test('за nginx на той же машине разные клиенты не делят предел (v4.32.721)', async (t) => {
+  const server = createSignalingServer({ port: 0, host: '127.0.0.1', maxConnectionsPerIp: 1, trustProxy: 'loopback' });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+
+  const open = (headers) => new Promise((resolve) => {
+    const socket = connect(`http://127.0.0.1:${port}`, { transports: ['polling'], extraHeaders: headers });
+    socket.on('connect', () => resolve({ socket, ok: true }));
+    socket.on('connect_error', () => resolve({ socket, ok: false }));
+  });
+
+  // Как nginx: $proxy_add_x_forwarded_for дописывает настоящий адрес справа.
+  const clients = [];
+  for (let i = 1; i <= 20; i += 1) clients.push(await open({ 'x-forwarded-for': `198.51.100.${i}` }));
+  t.after(() => clients.forEach((c) => c.socket.close()));
+  assert.equal(clients.every((c) => c.ok), true);
+
+  // Подделанный Fly-Client-IP не выдаёт второй сокет того же клиента за нового.
+  const dup = await open({ 'x-forwarded-for': '198.51.100.1', 'fly-client-ip': '203.0.113.77' });
+  t.after(() => dup.socket.close());
+  assert.equal(dup.ok, false);
+});
+
+test('/health называет выложенный релиз (v4.32.721)', async (t) => {
+  const release = { version: '4.32.721', commit: 'abc1234', builtAt: '2026-09-22T00:00:00Z' };
+  const server = createSignalingServer({ port: 0, release });
+  const port = await server.listen();
+  t.after(async () => { await server.close(); });
+  const body = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+  assert.deepEqual(body.release, release);
+  assert.equal(body.ok, true);
+});

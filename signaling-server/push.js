@@ -28,7 +28,7 @@ const {
   isPeerId,
   isSignature,
   verifyEd25519,
-  trustProxyEnabled,
+  trustProxyMode,
   clientAddressFrom,
 } = require('./wire');
 const { createWebPushClient, parseSubscription } = require('./webpush');
@@ -406,7 +406,7 @@ function createPushRoutes(options = {}) {
     ?? createSendLimiter({ now, limit: SEND_TARGET_RATE_LIMIT });
   const allowRegister = options.registerLimiter
     ?? createSendLimiter({ now, windowMs: REGISTER_RATE_WINDOW_MS, limit: REGISTER_RATE_LIMIT });
-  const trustProxy = options.trustProxy ?? trustProxyEnabled(options.env ?? process.env);
+  const trustProxy = options.trustProxy ?? trustProxyMode(options.env ?? process.env);
 
   function addressOf(request) {
     return clientAddressFrom(request.headers, request.socket?.remoteAddress, trustProxy);

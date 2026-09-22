@@ -22,31 +22,57 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const CLIENT_ADDRESS_RE = /^[0-9A-Fa-f.:%_-]{3,64}$/;
 
 /**
- * Доверяем ли заголовкам обратного прокси (v4.32.617).
+ * Доверяем ли заголовкам обратного прокси (v4.32.617) и какому именно.
  *
  * По умолчанию — нет, и это правильный по умолчанию ответ: если сервер стоит
  * голым портом наружу, `X-Forwarded-For` присылает сам клиент, и предел
  * подключений с одного адреса обходится одной строкой заголовка. Включать
  * разрешено только там, где прокси заведомо переписывает заголовок сам.
+ *
+ * Режимов два (v4.32.721). `fly` — прокси Fly: он сам ставит `Fly-Client-IP`.
+ * `loopback` — свой nginx на той же машине (так работает production на VPS):
+ * заголовкам верим, только если соединение пришло с 127.0.0.1/::1, и берём
+ * лишь последний участок `X-Forwarded-For`. `Fly-Client-IP` в этом режиме
+ * не читается: nginx его не переписывает, и клиент подставил бы любой адрес.
  */
+function trustProxyMode(env = process.env) {
+  const raw = String(env?.TRUST_PROXY ?? '').trim().toLowerCase();
+  if (raw === 'fly') return 'fly';
+  if (raw === 'loopback' || raw === 'nginx') return 'loopback';
+  if (/^(1|true|yes)$/.test(raw)) return env?.FLY_APP_NAME ? 'fly' : 'loopback';
+  return 'off';
+}
+
 function trustProxyEnabled(env = process.env) {
-  return /^(1|true|yes)$/i.test(String(env?.TRUST_PROXY ?? ''));
+  return trustProxyMode(env) !== 'off';
+}
+
+const LOOPBACK_RE = /^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
+
+function isLoopbackAddress(address) {
+  return typeof address === 'string' && LOOPBACK_RE.test(address);
 }
 
 /**
  * Адрес клиента с учётом прокси.
  *
- * Без доверия — адрес сокета, как и было. С доверием берётся `Fly-Client-IP`
- * (его прокси ставит сам и целиком), а если его нет — ПОСЛЕДНИЙ элемент
- * `X-Forwarded-For`. Именно последний: всё, что клиент прислал сам, прокси
- * оставляет слева и дописывает настоящий адрес справа. Взять первый —
- * значит снова поверить клиенту.
+ * Без доверия — адрес сокета, как и было. В режиме `fly` берётся
+ * `Fly-Client-IP` (его прокси ставит сам и целиком), а если его нет —
+ * ПОСЛЕДНИЙ элемент `X-Forwarded-For`. Именно последний: всё, что клиент
+ * прислал сам, прокси оставляет слева и дописывает настоящий адрес справа.
+ * Взять первый — значит снова поверить клиенту. В режиме `loopback` —
+ * только последний элемент цепочки и только от локального прокси.
+ * `true` — старая форма вызова, равная `fly`.
  */
 function clientAddressFrom(headers, fallback, trustProxy) {
   const plain = typeof fallback === 'string' && fallback.length > 0 ? fallback : 'unknown';
-  if (!trustProxy || !headers) return plain;
-  const direct = headers['fly-client-ip'];
-  if (typeof direct === 'string' && CLIENT_ADDRESS_RE.test(direct.trim())) return direct.trim();
+  const mode = trustProxy === true ? 'fly' : trustProxy;
+  if (!headers || (mode !== 'fly' && mode !== 'loopback')) return plain;
+  if (mode === 'loopback' && !isLoopbackAddress(plain)) return plain;
+  if (mode === 'fly') {
+    const direct = headers['fly-client-ip'];
+    if (typeof direct === 'string' && CLIENT_ADDRESS_RE.test(direct.trim())) return direct.trim();
+  }
   const forwarded = headers['x-forwarded-for'];
   const chain = Array.isArray(forwarded) ? forwarded[forwarded.length - 1] : forwarded;
   if (typeof chain !== 'string') return plain;
@@ -120,6 +146,8 @@ module.exports = {
   isPeerId,
   isSignature,
   verifyEd25519,
+  trustProxyMode,
   trustProxyEnabled,
+  isLoopbackAddress,
   clientAddressFrom,
 };

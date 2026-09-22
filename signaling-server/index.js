@@ -12,7 +12,7 @@ const {
   isPeerId,
   isSignature,
   verifyEd25519,
-  trustProxyEnabled,
+  trustProxyMode,
   clientAddressFrom,
 } = require('./wire');
 const { createPushRoutes } = require('./push');
@@ -156,9 +156,27 @@ function logEvent(event, fields) {
   console.log(JSON.stringify({ event, ...fields }));
 }
 
+/**
+ * Что именно выложено (v4.32.721). Деплой кладёт рядом release.json с версией
+ * и commit SHA; без него /health честно отвечает null, а не выдумывает.
+ */
+function readReleaseInfo(dir = __dirname) {
+  try {
+    const raw = JSON.parse(require('fs').readFileSync(require('path').join(dir, 'release.json'), 'utf8'));
+    const pick = (value) => (typeof value === 'string' && value.length > 0 && value.length <= 64 ? value : null);
+    return { version: pick(raw.version), commit: pick(raw.commit), builtAt: pick(raw.builtAt) };
+  } catch {
+    return null;
+  }
+}
+
 function createSignalingServer(options = {}) {
   const configuredPort = options.port ?? process.env.PORT;
   const port = configuredPort === undefined ? 3001 : Number(configuredPort);
+  // За nginx порт наружу не нужен: HOST=127.0.0.1 закрывает обход прокси
+  // даже при ошибке в правилах firewall (v4.32.721).
+  const host = options.host ?? (process.env.HOST || undefined);
+  const release = options.release ?? readReleaseInfo();
   const rateWindowMs = options.rateWindowMs ?? RATE_WINDOW_MS;
   const rateLimit = options.rateLimit ?? RATE_LIMIT;
   const maxConnections = options.maxConnections ?? MAX_CONNECTIONS;
@@ -198,7 +216,7 @@ function createSignalingServer(options = {}) {
     if (push.handle(request, response)) return;
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ ok: true, service: 'airchat-signaling-example' }));
+      response.end(JSON.stringify({ ok: true, service: 'airchat-signaling-example', release }));
       return;
     }
     response.writeHead(404, { 'content-type': 'application/json' });
@@ -219,7 +237,7 @@ function createSignalingServer(options = {}) {
   const missedCallReceiptBytesMax = options.missedCallReceiptBytes ?? MISSED_CALL_RECEIPT_BYTES;
   let missedCallEntries = 0;
   let missedCallReceiptBytes = 0;
-  const trustProxy = options.trustProxy ?? trustProxyEnabled(options.env ?? process.env);
+  const trustProxy = options.trustProxy ?? trustProxyMode(options.env ?? process.env);
 
   /**
    * Порядок вставки в Map — он же порядок давности (v4.32.615).
@@ -630,7 +648,8 @@ function createSignalingServer(options = {}) {
         };
         httpServer.once('error', onError);
         httpServer.once('listening', onListening);
-        httpServer.listen(port);
+        if (host) httpServer.listen(port, host);
+        else httpServer.listen(port);
       });
     },
     close() {
@@ -665,6 +684,7 @@ if (require.main === module) {
 
 module.exports = {
   createSignalingServer,
+  readReleaseInfo,
   constants: {
     MAX_PAYLOAD_BYTES,
     MAX_ROOM_ID_LENGTH,

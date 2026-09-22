@@ -765,8 +765,20 @@ function authenticateDeviceEnrollment(req, accountId) {
   return { payload: checked, accountId: effectiveAccountId };
 }
 
+// Что именно выложено (v4.32.721): деплой кладёт рядом release.json с версией
+// и commit SHA. Без файла — null, а не выдуманная версия.
+const RELEASE_INFO = (() => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'release.json'), 'utf8'));
+    const pick = (value) => (typeof value === 'string' && value.length > 0 && value.length <= 64 ? value : null);
+    return { version: pick(raw.version), commit: pick(raw.commit), builtAt: pick(raw.builtAt) };
+  } catch {
+    return null;
+  }
+})();
+
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'airchat-cloud-vault-example' });
+  res.json({ ok: true, service: 'airchat-cloud-vault-example', release: RELEASE_INFO });
 });
 
 app.get('/v1/cloud-vault/:accountId', (_req, res) => {

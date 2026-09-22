@@ -11,12 +11,29 @@ npm install
 PORT=3001 npm start
 ```
 
-`GET /health` returns a small readiness response. Deploy behind HTTPS/WSS in
-production. The server accepts `CORS_ORIGIN` (default `*`). `TRUST_PROXY`
-remains off by default: set it only behind a proxy that overwrites
-`Fly-Client-IP` or the last `X-Forwarded-For` hop. The included Fly deployment
-enables it, so connection and registration limits apply to each client rather
-than to Fly's shared proxy.
+`GET /health` returns a small readiness response with the deployed release
+(`version`, `commit` from `release.json`, written by the deploy script). Deploy
+behind HTTPS/WSS in production. The server accepts `CORS_ORIGIN` (default `*`)
+and `HOST` (bind address; production uses `127.0.0.1` so the port is reachable
+only through nginx).
+
+`TRUST_PROXY` is off by default. Modes:
+
+- `TRUST_PROXY=1` (or `nginx` / `loopback`) — a reverse proxy on the same
+  machine. Headers are believed only when the connection comes from loopback,
+  and only the last `X-Forwarded-For` hop is used (nginx appends the real
+  address with `$proxy_add_x_forwarded_for`). `Fly-Client-IP` is ignored: nginx
+  does not overwrite it, so a client could name any address.
+- `TRUST_PROXY=fly` (or `1` with `FLY_APP_NAME` set, as on Fly) — trust
+  `Fly-Client-IP`, which Fly's proxy overwrites.
+
+Without it every client behind nginx shares the proxy's `127.0.0.1`, and the
+17th connection service-wide gets `connection_limit_per_ip`.
+
+**Production** is systemd on the VPS behind nginx (`TRUST_PROXY=1`,
+`HOST=127.0.0.1`). Deploy and roll back from the repository root with
+`bash scripts/deploy-server.sh signaling` (`--dry-run`, `--rollback`).
+`fly.toml` is a fallback manifest, not production.
 
 ## Client contract
 

@@ -1,7 +1,10 @@
 # AirChat cloud vault
 
 This is a blind storage service for the optional AirChat cloud backup and live
-account synchronization. The mobile app encrypts the whole seed-bound vault
+account synchronization. Two things it holds are public by design and are NOT
+encrypted: posts the author explicitly published by link (`/v1/post/:postId`)
+and the username → profile key directory (`/v1/username/:name`); see
+SECURITY.md, «What servers do see». The mobile app encrypts the whole seed-bound vault
 with a key derived from the seed phrase and the cloud password. Live sync
 mutations are encrypted on the device before upload. Every request is signed
 with the Ed25519 identity derived from the seed phrase.
@@ -20,10 +23,10 @@ npm ci
 CLOUD_VAULT_DIR=/var/lib/airchat-cloud-vault-example PORT=3010 npm start
 ```
 
-For the production VPS, use the included systemd unit and Nginx location
-snippet in `deploy/`. The current deployment keeps Node on localhost and
-publishes the service through the existing Cloudflare-proxied
-`agents.example.com:8443` origin at `/cloud-vault/`.
+Production runs under systemd on the VPS, with Node on localhost behind nginx.
+Deploy and roll back with `bash scripts/deploy-server.sh cloud-vault`
+(`--dry-run`, `--rollback`) from the repository root; `/health` reports the
+deployed version and commit.
 
 `fly.toml` remains an optional fallback deployment manifest and is not the
 production endpoint.
@@ -54,8 +57,10 @@ from one seed isolated while sharing one account cursor namespace on the server.
 - `POST /v1/sync/:accountId/devices/revoke` revokes another device.
 - `POST /v1/sync/:accountId/username/claim` takes `@name` for `ownerProfileId`,
   `.../username/release` gives it back, and the unsigned
-  `GET /v1/username/:name` answers only `taken` — never the owner, because the
-  account id is the address of that account's storage.
+  `GET /v1/username/:name` answers `taken` and, for names claimed by current
+  clients, the owner's profile public key `pub` (so a person can be reached by
+  name). It never returns the account id: that is the address of the account's
+  storage.
 
 Username rules are enforced here, not only on the screen: a rebuilt client must
 not be able to take `support`. Names reserved for the app (`reserved-usernames.js`,
