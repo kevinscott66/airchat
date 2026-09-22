@@ -48,7 +48,7 @@ esac
 
 # Одно SSH-соединение на весь прогон: сервер ограничивает частоту подключений
 # к 22-му порту, и десяток отдельных ssh подряд упирается в блокировку.
-CTL_DIR="$(mktemp -d)"
+CTL_DIR="$(mktemp -d /tmp/acd.XXXXXX)"  # короткий путь: у unix-сокета лимит 104 байта
 SSH_OPTS=(-o ConnectTimeout=15 -o ControlMaster=auto -o "ControlPath=$CTL_DIR/%C" -o ControlPersist=120)
 cleanup() { ssh "${SSH_OPTS[@]}" -O exit "$HOST_ALIAS" 2>/dev/null || true; rm -rf "$CTL_DIR" "${STAGE:-}"; }
 trap cleanup EXIT
@@ -86,6 +86,7 @@ printf '{"version":"%s","commit":"%s","builtAt":"%s"}\n' "$VER" "$SHORT" "$(date
 tar -C "$STAGE/pkg" -czf "$STAGE/release.tgz" .
 
 echo "→ сравнение с $HOST_ALIAS:$DEST"
+ssh_run true || { echo "Нет SSH-доступа к $HOST_ALIAS — выкладка остановлена." >&2; exit 1; }
 REMOTE_HASHES="$(ssh_run "cd $DEST 2>/dev/null && sha256sum ${FILES[*]} 2>/dev/null" || true)"
 for f in "${FILES[@]}"; do
   [[ -f "$SRC/$f" ]] || continue
