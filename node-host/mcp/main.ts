@@ -78,9 +78,18 @@ requireEnvSecureStoreKey();
 setWorkdir(dir);
 
 const { run } = await import('./run');
-await run({
-  mode,
-  workdir: dir,
-  host: arg('host') ?? process.env.AIRCHAT_MCP_HOST ?? '127.0.0.1',
-  port: Number(arg('port') ?? process.env.AIRCHAT_MCP_PORT ?? 8787),
-});
+try {
+  await run({
+    mode,
+    workdir: dir,
+    host: arg('host') ?? process.env.AIRCHAT_MCP_HOST ?? '127.0.0.1',
+    port: Number(arg('port') ?? process.env.AIRCHAT_MCP_PORT ?? 8787),
+  });
+} catch (e) {
+  // Всё, что не дало начать работу, — один и тот же случай: условия запуска не
+  // те. Код возврата тот же, что у проверок выше, чтобы надзиратель отличал
+  // «неправильно позвали» (2) от «работало и упало» (70) без разбора текста.
+  // Стек печатается только вместе с сообщением: без него отказ вроде
+  // `core_no_identity` выглядел бы поломкой, а это законный ответ.
+  die(`запуск не состоялся: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+}

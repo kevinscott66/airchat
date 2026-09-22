@@ -182,6 +182,10 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
             `localhost:${options.port}`,
             `127.0.0.1:${options.port}`,
           ],
+          // Заголовок Origin проверяется только когда он есть: браузер его
+          // ставит всегда, обычный клиент — никогда. Поэтому список отсекает
+          // чужую страницу, не мешая тому, кто пришёл не из браузера.
+          allowedOrigins: [`http://${options.host}:${options.port}`, `http://127.0.0.1:${options.port}`],
           onsessioninitialized: (id) => {
             options.log(`http_session_open ${id}`);
           },
