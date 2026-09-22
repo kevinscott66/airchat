@@ -299,3 +299,47 @@ describe('адрес облачной копии из переменной сб�
     expect(cfg.cloudBackup).toEqual({ enabled: false, baseUrl: '' });
   });
 });
+
+describe('ссылка на документ OpenFlux из переменной сборки', () => {
+  // v4.32.723. Ссылка даёт право писать в документ, то есть это ключ: в git
+  // её нет, и приходит она переменной сборки. Отсюда два требования, которые
+  // легко нарушить незаметно: без переменной docUrl обязан остаться пустым
+  // (иначе туннель бесконечно ломится в никуда и выглядит как «нет сети»), а
+  // с переменной — доехать до эффективного конфига на обоих путях.
+  const ENV = 'EXPO_PUBLIC_OPENFLUX_DOC_URL';
+  const DOC = 'https://disk.yandex.example/i/token';
+  afterEach(() => {
+    delete process.env[ENV];
+  });
+
+  it('без переменной ссылки нет, и туннель это увидит', async () => {
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.openflux?.docUrl).toBe('');
+  });
+
+  it('переменная доезжает до конфига', async () => {
+    process.env[ENV] = DOC;
+    const cfg = await freshConfig().loadConfig();
+    expect(cfg.openflux?.docUrl).toBe(DOC);
+  });
+
+  it('на синхронном пути тоже: конфиг читают и до loadConfig', () => {
+    process.env[ENV] = DOC;
+    expect(freshConfig().getConfigSync().openflux?.docUrl).toBe(DOC);
+  });
+
+  it('туннель включён по умолчанию — ради сетей, где иначе ничего не работает', async () => {
+    process.env[ENV] = DOC;
+    const cfg = await freshConfig().loadConfig();
+    expect([cfg.openflux?.enabled, cfg.openflux?.autoStart]).toEqual([true, true]);
+  });
+
+  it('переменная отвечает «через какой документ», а не «включать ли»', async () => {
+    // Выключенный человеком туннель не должен воскресать от переменной
+    // сборки: иначе выключатель в настройках переживал бы только до
+    // перезапуска, а это худший вид неработающей настройки.
+    process.env[ENV] = DOC;
+    const cfg = await loadWithOverride({ openflux: { enabled: false } as never });
+    expect([cfg.openflux?.enabled, cfg.openflux?.docUrl]).toEqual([false, DOC]);
+  });
+});

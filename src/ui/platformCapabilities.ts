@@ -31,3 +31,17 @@ export const LOCAL_RADIO_TRANSPORTS_AVAILABLE = Platform.OS !== 'web';
  * подменён на `null` (см. web/shims/airchat-vpn.ts).
  */
 export const EMBEDDED_VPN_AVAILABLE = Platform.OS === 'android';
+
+/**
+ * Туннель OpenFlux: ядро на Go в нативном процессе и локальный SOCKS5.
+ *
+ * Та же граница и по той же причине, что у встроенного VPN выше: ядро собрано
+ * только под Android (см. modules/airchat-openflux), на web модуль подменён на
+ * `null` (web/shims/airchat-openflux.ts), а на iOS его просто нет.
+ *
+ * Отдельная константа, а не переиспользование EMBEDDED_VPN_AVAILABLE: это
+ * разные реализации с разной судьбой — у OpenFlux уже есть рабочая сборка под
+ * iOS в соседнем проекте, и когда её принесут сюда, поменяется ровно одна из
+ * двух строк. Общая константа превратила бы этот перенос в поиск по коду.
+ */
+export const OPENFLUX_AVAILABLE = Platform.OS === 'android';

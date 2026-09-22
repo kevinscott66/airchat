@@ -49,7 +49,8 @@ import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../c
 import { Ionicons } from '@expo/vector-icons';
 import { BlockedContactsList } from '../components/BlockedContactsList';
 import { VpnSettingsSection } from '../components/VpnSettingsSection';
-import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
+import { OpenFluxSettingsSection } from '../components/OpenFluxSettingsSection';
+import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAILABLE } from '../platformCapabilities';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
 import { HelpScreen } from './HelpScreen';
@@ -1356,13 +1357,13 @@ function SettingsScreenImpl({
           label="Безопасность"
           onPress={() => setSubScreen('security')}
         />
-        {EMBEDDED_VPN_AVAILABLE && (
+        {(EMBEDDED_VPN_AVAILABLE || OPENFLUX_AVAILABLE) && (
           <>
             <View style={styles.menuDivider} />
             <MenuRow
               iconName="lock-closed-outline"
               hue="teal"
-              label="VPN (обход блокировок)"
+              label="Обход блокировок"
               onPress={() => setSubScreen('vpn')}
               testID="settings_vpn_row"
             />
@@ -2165,8 +2166,13 @@ function SettingsScreenImpl({
 
   const renderVpn = () => (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
-      <SubHeader title="VPN" />
-      <VpnSettingsSection />
+      <SubHeader title="Обход блокировок" />
+      {/* OpenFlux выше своего соседа нарочно: он включается одним движением и
+          рассчитан на сеть с белым списком, где приложение уже не работает.
+          Секция VPN ниже требует данных своего сервера — в этот момент их
+          обычно взять неоткуда. */}
+      {OPENFLUX_AVAILABLE && <OpenFluxSettingsSection />}
+      {EMBEDDED_VPN_AVAILABLE && <VpnSettingsSection />}
     </ScrollView>
   );
 

@@ -77,7 +77,12 @@ server/cloud-vault/data/
 # Скомпилированный Xray-core для модуля VPN (~73 МБ на две ABI). README рядом
 # с каталогом говорит, что бинарники сюда не коммитятся, но правила не было —
 # и `git add -A` утащил бы их в публичный репозиторий.
+# Тем же правилом ловится ядро OpenFlux (12 МБ) — его собирает
+# scripts/build-openflux-android.sh.
 modules/*/android/src/main/jniLibs/*/*.so
+# Заголовок C-API ядра OpenFlux: генерируется тем же скриптом из исходников
+# ядра, то есть такой же результат сборки, как и .so рядом.
+modules/airchat-openflux/android/src/main/cpp/include/libopenflux.h
 
 # Манифест локальной релизной сборки (scripts/build-release.sh).
 release/

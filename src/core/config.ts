@@ -175,6 +175,43 @@ export type AppConfig = {
     startRetries?: number;
     retryDelayMs?: number;
   };
+  /**
+   * OpenFlux: туннель через документ Яндекса (v4.32.723).
+   *
+   * Зачем отдельно от `vpn`. Секция `vpn` — это Xray с VLESS+Reality к своему
+   * VPS: канал быстрый, но заметный. Он поднимает соединение на чужой адрес и
+   * порт, и там, где оператор пускает только «белый список» (Яндекс, ВК,
+   * госуслуги), это соединение просто не открывается — приложению нечем
+   * дышать. OpenFlux ходит иначе: он пишет и читает курсорные сообщения в
+   * живом документе Яндекса, то есть снаружи выглядит как человек, открывший
+   * документ. Адрес назначения — сам Яндекс, и в белый список он уже входит.
+   *
+   * Поэтому эти две секции не заменяют друг друга и не спорят: Xray — когда
+   * сеть обычная, OpenFlux — когда сеть обрезана до белого списка. Обе кладут
+   * локальный SOCKS5 на loopback, и наружу через него ходит один и тот же код.
+   *
+   * `docUrl` здесь пустой нарочно: ссылка на документ даёт право писать в него
+   * всякому, у кого она есть, то есть это ключ, а не настройка. В публичный
+   * репозиторий она не кладётся — приходит из `EXPO_PUBLIC_OPENFLUX_DOC_URL`
+   * тем же способом, что адрес облачной копии и адрес relay.
+   */
+  openflux?: {
+    /** Есть ли туннель в этой сборке вообще. */
+    enabled: boolean;
+    /** Поднимать при запуске. По умолчанию да — ради сетей с белым списком. */
+    autoStart: boolean;
+    /** Транспорт ядра OpenFlux. Пока поддержан только документ Яндекса. */
+    transport: 'yandex';
+    /** Ссылка на документ. Пустая — туннеля в сборке нет (см. выше). */
+    docUrl: string;
+    /** Локальный SOCKS5. 0 — пусть ядро само займёт свободный порт. */
+    localSocksPort: number;
+    /** DNS, которым ядро резолвит имена уже внутри туннеля. */
+    dns: string;
+    /** Повторы при неудачном старте (кнопка «Повторить»). */
+    startRetries?: number;
+    retryDelayMs?: number;
+  };
   /** Образовательные модули (сеть/API — только при явных флагах) */
   educational?: {
     description?: string;
@@ -258,6 +295,22 @@ const DEFAULT_CONFIG: AppConfig = {
     mtproto: { enabled: false },
     sniPool: ['microsoft.com'],
     rotateSniPerStart: false,
+    startRetries: 3,
+    retryDelayMs: 2000,
+  },
+  openflux: {
+    // Включён и поднимается сам: сеть с белым списком не спрашивает разрешения,
+    // а выключить туннель можно одним переключателем в настройках. Сборка без
+    // EXPO_PUBLIC_OPENFLUX_DOC_URL останется с пустым docUrl и просто не
+    // стартует — см. openFluxController.
+    enabled: true,
+    autoStart: true,
+    transport: 'yandex',
+    docUrl: '',
+    // 0, а не фиксированный порт: два туннеля на одном устройстве (Xray уже
+    // занимает 10809) не должны драться за номер, а адрес ядро сообщает само.
+    localSocksPort: 0,
+    dns: '1.1.1.1:53',
     startRetries: 3,
     retryDelayMs: 2000,
   },
@@ -548,7 +601,7 @@ function bundledConfig(): AppConfig {
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_RELAY_URL
       ? process.env.EXPO_PUBLIC_RELAY_URL
       : '';
-  const bundled: AppConfig = relayFromEnv
+  const withRelay: AppConfig = relayFromEnv
     ? {
         ...raw,
         internet: {
@@ -559,6 +612,28 @@ function bundledConfig(): AppConfig {
         },
       }
     : raw;
+  // v4.32.723. Ссылка на документ OpenFlux приходит переменной сборки по той
+  // же причине, что адрес relay: у всякого, кто её получил, появляется право
+  // писать в документ, то есть это ключ. В git её нет и быть не должно.
+  //
+  // Переменная отвечает на вопрос «через какой документ», а не «включать ли».
+  // Флаг `enabled` остаётся из конфига: сборка с выключенным туннелем не
+  // включится от одной переменной. Обратное тоже верно и важнее — сборка без
+  // переменной оставляет docUrl пустым, и контроллер честно скажет «туннеля в
+  // этой сборке нет» вместо бесконечных попыток открыть пустую ссылку.
+  const docFromEnv =
+    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_OPENFLUX_DOC_URL
+      ? process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL
+      : '';
+  const bundled: AppConfig = docFromEnv
+    ? {
+        ...withRelay,
+        openflux: {
+          ...(withRelay.openflux ?? DEFAULT_CONFIG.openflux!),
+          docUrl: docFromEnv,
+        },
+      }
+    : withRelay;
   const fromEnv =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_CLOUD_VAULT_URL
       ? process.env.EXPO_PUBLIC_CLOUD_VAULT_URL

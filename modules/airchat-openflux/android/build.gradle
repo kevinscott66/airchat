@@ -1,0 +1,68 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.airchatopenflux'
+version = '1.0.0'
+
+// Ядро OpenFlux (Go) собирается вне Gradle — scripts/build-openflux-android.sh.
+// Здесь только JNI-обёртка над его C-API: CMake компилирует openflux_jni.c и
+// линкует его с уже готовым libopenflux.so из jniLibs.
+def openFluxCore = file("${projectDir}/src/main/jniLibs/arm64-v8a/libopenflux.so")
+def openFluxHeader = file("${projectDir}/src/main/cpp/include/libopenflux.h")
+
+android {
+  namespace "expo.modules.airchatopenflux"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+    // Только arm64: ядро собирается под одну ABI, а x86_64-эмулятор туннель
+    // всё равно не проверяет — там сеть не обрезана. Лишние ABI без .so дали бы
+    // приложение, которое падает на System.loadLibrary вместо честного
+    // isSupported() == false.
+    ndk {
+      abiFilters 'arm64-v8a'
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path "src/main/cpp/CMakeLists.txt"
+    }
+  }
+}
+
+dependencies {
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}
+
+// В отличие от airchat-vpn, который тянет Xray из релизов GitHub, здесь из сети
+// не качается ничего: публичной сборки OpenFlux нет, а подсовывать в туннель
+// чужой бинарник — ровно то, от чего туннель и защищает. Поэтому задача только
+// проверяет, что ядро собрали локально, и говорит, чем именно.
+tasks.register('checkOpenFluxCore') {
+  group = 'airchat'
+  description = 'Проверяет, что ядро OpenFlux собрано в jniLibs'
+  doLast {
+    if (!openFluxCore.exists()) {
+      throw new GradleException(
+        "Нет ядра OpenFlux: ${openFluxCore}\n" +
+        "Собери его один раз локально: bash scripts/build-openflux-android.sh"
+      )
+    }
+    if (openFluxCore.length() < 1_000_000L) {
+      throw new GradleException(
+        "Ядро OpenFlux подозрительно маленькое (${openFluxCore.length()} байт): ${openFluxCore}\n" +
+        "Похоже на оборванную сборку — пересобери: bash scripts/build-openflux-android.sh"
+      )
+    }
+    if (!openFluxHeader.exists()) {
+      throw new GradleException(
+        "Нет заголовка C-API: ${openFluxHeader}\n" +
+        "Он кладётся рядом с ядром той же командой: bash scripts/build-openflux-android.sh"
+      )
+    }
+  }
+}
+
+tasks.preBuild.dependsOn('checkOpenFluxCore')

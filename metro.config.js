@@ -61,6 +61,7 @@ config.resolver.extraNodeModules = {
   'expo-constants': path.join(NODE_MODULES_DIR, 'expo-constants'),
   '@expo/vector-icons': path.join(NODE_MODULES_DIR, '@expo/vector-icons'),
   'airchat-vpn': path.join(MODULES_DIR, 'airchat-vpn'),
+  'airchat-openflux': path.join(MODULES_DIR, 'airchat-openflux'),
 };
 
 const nodePolyfills = {
@@ -94,6 +95,9 @@ const WEB_SHIMS = {
   // проверяют `if (!mod)`. Шим отдаёт тот же null, а не кидающий Proxy: Proxy
   // истинен и проскочил бы мимо этих проверок.
   'airchat-vpn': 'web/shims/airchat-vpn.ts',
+  // то же и по той же причине для туннеля OpenFlux: ядро под Android, на
+  // странице его нет, а контракт модуля уже описывает отсутствие как null.
+  'airchat-openflux': 'web/shims/airchat-openflux.ts',
   // граница платформы
   'react-native-tcp-socket': 'web/shims/unavailable-native-module.ts',
   'react-native-zeroconf': 'web/shims/unavailable-native-module.ts',

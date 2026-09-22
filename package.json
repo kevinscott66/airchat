@@ -1,6 +1,6 @@
 {
   "name": "airchat",
-  "version": "4.32.721",
+  "version": "4.32.723",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --dev-client",
@@ -55,6 +55,7 @@
     "@react-navigation/native-stack": "^7.14.6",
     "@sentry/react-native": "~7.11.0",
     "@shopify/flash-list": "^2.3.0",
+    "airchat-openflux": "file:./modules/airchat-openflux",
     "airchat-vpn": "file:./modules/airchat-vpn",
     "babel-preset-expo": "~55.0.8",
     "bip39": "^3.1.0",
@@ -153,6 +154,7 @@
       "reactNativeDirectoryCheck": {
         "exclude": [
           "@notifee/react-native",
+          "airchat-openflux",
           "airchat-screen-guard",
           "airchat-vpn",
           "react-native-tcp-socket",

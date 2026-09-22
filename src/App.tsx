@@ -103,6 +103,7 @@ import {
   retryEmbeddedVpn,
   type AirChatVpnUiStatus,
 } from './core/vpn/airChatVpnController';
+import { maybeStartOpenFlux } from './core/vpn/openFluxController';
 import { authGuard } from './core/security/authGuard';
 import { PasswordScreen } from './ui/screens/PasswordScreen';
 import { ForgotPasswordScreen } from './ui/screens/ForgotPasswordScreen';
@@ -2157,6 +2158,20 @@ export default function App(): React.ReactElement {
             setVpnStatus(s === 'off' ? 'off' : s);
           } else {
             setVpnStatus('off');
+          }
+        })();
+        // OpenFlux поднимаем отдельной задачей, а не следом за VPN: это два
+        // независимых канала, и ожидание одного задержало бы другой. Здесь
+        // намеренно нет ни setState, ни баннера — туннель включён по умолчанию
+        // и в обычной сети просто работает; его состояние живёт в настройках
+        // («Обход блокировок»), а сообщать о нём на главном экране значило бы
+        // тревожить человека тем, чего он не просил.
+        void (async () => {
+          try {
+            const s = await maybeStartOpenFlux(cfg);
+            log.info('openflux_boot_status', { status: s });
+          } catch (e) {
+            log.warn('openflux_boot_failed', { err: e instanceof Error ? e.message : String(e) });
           }
         })();
         log.info('boot_timing_ms', { phase: 'config_and_sqlite', ms: Date.now() - bootT0 });

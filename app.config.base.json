@@ -3,7 +3,7 @@
     "name": "airchat",
     "slug": "airchat",
     "owner": "dobropalm",
-    "version": "4.32.721",
+    "version": "4.32.723",
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders",
@@ -54,7 +54,7 @@
         "android.permission.USE_FULL_SCREEN_INTENT"
       ],
       "googleServicesFile": "./google-services.json",
-      "versionCode": 721,
+      "versionCode": 723,
       "adaptiveIcon": {
         "backgroundColor": "#0B0B12",
         "foregroundImage": "./assets/android-icon-foreground.png",
