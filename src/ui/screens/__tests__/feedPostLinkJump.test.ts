@@ -63,54 +63,40 @@ describe('переход по ссылке на публикацию', () => {
 });
 
 /**
- * Отказ «копию выложить не удалось» больше не начинается со слов «Ссылка
- * скопирована» (v4.32.614).
+ * Копирование ссылки и «поделиться» (v4.32.614 → AC-04/AC-17).
  *
- * Та же функция зовётся из «поделиться», где в буфер обмена ничего не клали, —
- * половину времени зачин был просто неправдой. А в «скопировать ссылку» он
- * дословно повторял тост, показанный секундой раньше, и человек получал два
- * сообщения об одном действии, спорящих друг с другом.
+ * Поведение — подтверждение перед публикацией, отдача ссылки только после
+ * ответа сервера, один запрос на двойное нажатие, отзыв — проверяется
+ * поведенческими тестами потока (core/social/__tests__/postLinkFlow.test.ts) и
+ * хука (ui/hooks/__tests__/usePostLinkSharing.test.tsx). Здесь остаётся одно:
+ * экран не обходит поток — ни прямой записи ссылки в буфер рядом с
+ * публикацией, ни своей выкладки копии мимо диалога.
  */
-describe('копирование ссылки на публикацию', () => {
-  it('отказ не повторяет и не подменяет тост об удавшемся копировании', () => {
-    expect(SCREEN).toContain("showError(t('feed.linkPublishFailed'));");
-    expect(SCREEN).not.toContain('${COPIED_LINK}, но');
-    expect(RU.feed.linkPublishFailed).not.toContain('копирован');
+describe('экран отдаёт ссылку только через поток публикации', () => {
+  it('«Копировать ссылку» и «Поделиться» идут через usePostLinkSharing', () => {
+    expect(SCREEN).toContain('const postLinks = usePostLinkSharing(pair, did);');
+    expect(SCREEN).toContain('void postLinks.copyLink(p);');
+    expect(SCREEN).toContain('void sharePostLink(item, message);');
   });
 
-  it('на чужой записи не обещает, что ссылка откроется у кого угодно', () => {
-    expect(SCREEN).toContain("showSuccess(isSelfP ? COPIED_LINK : t('feed.linkCopiedForeign'))");
+  it('экран сам не выкладывает копию и не кладёт ссылку в буфер', () => {
+    expect(SCREEN).not.toContain('publishPostLinkCopy');
+    expect(SCREEN).not.toContain('Clipboard.setStringAsync(buildPostLink(');
+    expect(SCREEN).not.toContain('Share.share(');
+  });
+
+  it('публикация по ссылке и отзыв — отдельные пункты меню', () => {
+    expect(SCREEN).toContain("t('feed.menuPublishByLink')");
+    expect(SCREEN).toContain("t('feed.menuRevokeLink')");
+  });
+
+  it('отказ не обещает, что ссылка скопирована', () => {
+    expect(RU.feed.linkPublishFailed).not.toContain('скопирован');
     expect(typeof RU.feed.linkCopiedForeign).toBe('string');
   });
-});
 
-/**
- * Лист «поделиться» открывается после того, как копия легла на сервер
- * (v4.32.614).
- *
- * До этой версии выкладка копии запускалась и тут же бросалась, а лист
- * открывался в ту же миллисекунду. Отправка ссылки из листа — один жест: пока
- * конверт с фотографиями (до двух мегабайт) летел на сервер, ссылка уже была у
- * получателя, и он видел «публикация не найдена». Это и есть та жалоба, с
- * которой началась вся починка ссылок.
- *
- * Второе: на выкладку не было замка. Пока первое нажатие ничем себя не
- * проявляло, второе шло следом и слало те же мегабайты заново.
- */
-describe('выкладка копии перед отдачей ссылки', () => {
-  it('лист открывается после выкладки, а не рядом с ней', () => {
-    expect(SCREEN).toContain('void shareLinkCopy(item).then(() => { void Share.share({ message }); });');
-    expect(SCREEN).not.toContain('    shareLinkCopy(item);\n    void Share.share({ message });');
-  });
-
-  it('второе нажатие не шлёт те же вложения заново', () => {
-    expect(SCREEN).toContain('const linkCopyBusyRef = useRef(false);');
-    expect(SCREEN).toContain('if (linkCopyBusyRef.current) return false;');
-    expect(SCREEN).toContain('linkCopyBusyRef.current = true;');
-    expect(SCREEN).toContain('linkCopyBusyRef.current = false;');
-  });
-
-  it('выкладка отвечает вызывающему, чем кончилась', () => {
-    expect(SCREEN).toContain('const shareLinkCopy = useCallback(async (item: FeedPostRow): Promise<boolean> => {');
+  it('диалог называет аудиторию и то, что сервер видит запись открытой', () => {
+    expect(RU.feed.linkPublishConfirmMsg).toContain('любого, у кого есть ссылка');
+    expect(RU.feed.linkPublishConfirmMsg).toContain('без шифрования');
   });
 });

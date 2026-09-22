@@ -220,6 +220,21 @@ export function feedViewSentKey(postId: string): string {
   return `${FEED_VIEW_SENT_PREFIX}${postId}`;
 }
 
+/**
+ * «Эта своя запись опубликована по ссылке» (AC-04).
+ *
+ * Копия по ссылке лежит на сервере в открытом виде, и человек обязан видеть,
+ * какие из его записей отданы наружу, — и уметь это отозвать. Сервер на вопрос
+ * «чья это копия» не отвечает (см. POST /v1/post/:id/delete), так что помнит об
+ * этом само устройство. Ключ живёт в namespace профиля: у двух аккаунтов на
+ * одном телефоне свои публикации.
+ */
+export const FEED_LINK_PUBLISHED_PREFIX = 'feed_link_published:';
+
+export function feedLinkPublishedKey(postId: string): string {
+  return `${FEED_LINK_PUBLISHED_PREFIX}${postId}`;
+}
+
 /** Список заблокированных пиров (см. rateLimiter.ts). */
 export const BLOCKED_KEY_BASE = 'airchat_blocked_peer_pub_b64';
 

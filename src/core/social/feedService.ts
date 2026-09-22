@@ -106,6 +106,7 @@ import {
   publicPostStoreAvailable,
   isPublicPostId,
 } from './publicPost';
+import { setLinkPublished } from './postLinkState';
 
 import {
   mergeQueue,
@@ -2345,6 +2346,7 @@ async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<b
   const s = await ensureStorage();
   if (await s.getPost(postId)) return false;
   log.warn('public_post_copy_outlived_post', { postId: postId.slice(0, 24) });
+  await setLinkPublished(postId, false);
   const myDid = publicKeyToDidKey(pair.publicKey);
   if (!(await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId)))) {
     await queueLinkCopyDelete(pair, postId);
@@ -2354,7 +2356,8 @@ async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<b
 
 /**
  * Выложить копию своей публикации, чтобы ссылка на неё открывалась у того, у
- * кого записи нет. Зовётся при «скопировать ссылку» и «поделиться».
+ * кого записи нет. Зовётся только из потока postLinkFlow и только после того,
+ * как человек подтвердил «Опубликовать по ссылке» (AC-04).
  *
  * Молча ничего не делает, если облако не настроено или публикация чужая:
  * ссылка в этом случае остаётся такой же, какой была до v4.32.612, —
@@ -2368,9 +2371,40 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
     const ok = await putPublicPostCopy(pair, payload);
     // Пока копия шла на сервер, публикацию могли удалить — тогда она не «выложена».
     if (ok && await dropCopyIfPostGone(pair, postId)) return false;
+    // AC-04: отметка «опубликовано по ссылке» — только после ответа сервера.
+    // Не легла — публикация от этого не отменяется, об этом говорит журнал.
+    if (ok) await setLinkPublished(postId, true);
     return ok;
   } catch (e) {
     log.warn('public_post_share_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
+/**
+ * Отозвать ссылку: снять копию своей записи с сервера (AC-04).
+ *
+ * Сама запись остаётся у автора и у контактов — уходит только открытая копия,
+ * по которой ссылку мог открыть кто угодно. Сервер принимает для этого тот же
+ * подписанный `feed_delete`, что и при удалении записи; контактам он не
+ * рассылается.
+ *
+ * `true` — копии на сервере больше нет, отметка снята. `false` — сервер
+ * недоступен или отказал; отметка остаётся, и человек видит, что ссылка всё ещё
+ * открыта. В очередь повторов отзыв не ставится: сказать «отозвано», пока
+ * копия лежит, было бы неправдой, а повторить можно тем же пунктом меню.
+ */
+export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  if (!publicPostStoreAvailable() || !isPublicPostId(postId)) return false;
+  try {
+    const myDid = publicKeyToDidKey(pair.publicKey);
+    const gone = await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId));
+    if (!gone) return false;
+    await setLinkPublished(postId, false);
+    log.info('public_post_revoked', { postId: postId.slice(0, 24) });
+    return true;
+  } catch (e) {
+    log.warn('public_post_revoke_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
     return false;
   }
 }
@@ -2392,6 +2426,10 @@ export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string):
   if (!publicPostStoreAvailable()) return true;
   try {
     if (!(await publicPostCopyExists(postId))) return true;
+    // AC-04: копия на сервере есть — значит, запись опубликована по ссылке,
+    // даже если отметку ставила версия, которая отметок ещё не вела. Без этого
+    // отозвать такую ссылку было бы не из чего.
+    await setLinkPublished(postId, true);
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
     const ok = await putPublicPostCopy(pair, payload);
@@ -4383,6 +4421,8 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
     signAndBroadcastFeedEnvelope(pair, payload),
   ]);
   if (!copyGone) await queueLinkCopyDelete(pair, postId);
+  // AC-04: записи больше нет — нет и отметки. Недоснятую копию добирает очередь.
+  await setLinkPublished(postId, false);
   return {
     total: res?.delivered.total ?? 0,
     success: res?.delivered.success ?? 0,

@@ -150,6 +150,19 @@ test('публичная копия публикации кладётся, чи�
   assert.equal(authorDelete.status, 200);
   assert.equal((await authorDelete.json()).removed, true);
   assert.equal((await fetch(`${base}/v1/post/${postId}`)).status, 404);
+
+  // AC-04: тот же подписанный feed_delete служит «Отозвать ссылку» — сама
+  // запись у автора остаётся. Отзыв не навсегда: опубликовать по ссылке снова
+  // можно, и копия снова открывается.
+  assert.equal((await put(base, postId, post(author, postId, 'снова по ссылке'), author)).status, 200);
+  assert.equal(JSON.parse((await (await fetch(`${base}/v1/post/${postId}`)).json()).payload).data.text, 'снова по ссылке');
+  const revokeAgain = await send(
+    base,
+    `/v1/post/${postId}/delete`,
+    withIntent(deleteBody(author), author, postId, 'del'),
+  );
+  assert.equal((await revokeAgain.json()).removed, true);
+  assert.equal((await fetch(`${base}/v1/post/${postId}`)).status, 404);
 });
 
 test('намерение записи: без него нельзя, дважды нельзя, за автора нельзя', async (t) => {

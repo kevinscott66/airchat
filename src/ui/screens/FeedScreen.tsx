@@ -14,7 +14,6 @@ import {
   Image,
   ScrollView,
   Alert,
-  Share,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -76,7 +75,6 @@ import {
   editFeedPost,
   getFeedPost,
   fetchPostByLink,
-  publishPostLinkCopy,
   toggleCommentReaction,
   notifyFeedPostViewed,
   getFeedPostViewCountsMap,
@@ -97,7 +95,7 @@ import { SafeScreen } from '../components/SafeScreen';
 import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
 import { buildPostLink } from '../../core/net/appLink';
-import { COPIED_LINK } from '../clipboardText';
+import { usePostLinkSharing } from '../hooks/usePostLinkSharing';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { readPlaceOnce } from '../../core/social/deviceLocation';
 import { locationFailureText } from '../../core/social/locationFailure';
@@ -472,6 +470,10 @@ interface FeedPostItemProps {
   commentCount: number;
   viewCount: number;
   translatedText: string | undefined;
+  /** AC-04: своя запись опубликована по ссылке — копия на сервере открыта. */
+  linkPublished: boolean;
+  /** AC-17: идёт публикация или отзыв ссылки — «поделиться» погашено. */
+  linkBusy: boolean;
   feedSearch: string;
   pair: KeyPairBytes;
   myPubB64: string;
@@ -501,7 +503,7 @@ interface FeedPostItemProps {
 function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
   const {
     item, isSelf, styles, colors,
-    mediaUrls, commentCount, viewCount, translatedText, feedSearch,
+    mediaUrls, commentCount, viewCount, translatedText, linkPublished, linkBusy, feedSearch,
     pair, myPubB64, feedTick,
     onMarkRead, onLongPressPost, onPeekAuthor, onHashtagPress, onMentionPress,
     onMediaPress, onDocumentPress, onReactionPress, onReactionLongPress,
@@ -762,11 +764,28 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
             >
               <Ionicons name="paper-plane-outline" size={15} color={colors.textSecondary} />
             </AppPressable>
+            {isSelf && (linkPublished || linkBusy) ? (
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, gap: 4 }}
+                accessible
+                accessibilityLabel={linkBusy ? t('feed.linkPublishingBadge') : t('feed.a11yLinkPublished')}
+                testID={`feed_link_status_${item.id}`}
+              >
+                {linkBusy
+                  ? <ActivityIndicator size="small" color={colors.textSecondary} />
+                  : <Ionicons name="globe-outline" size={14} color={colors.accent} />}
+                <Text style={{ color: linkBusy ? colors.textSecondary : colors.accent, fontSize: font.xs, fontWeight: '600' }}>
+                  {linkBusy ? t('feed.linkPublishingBadge') : t('feed.linkPublishedBadge')}
+                </Text>
+              </View>
+            ) : null}
             <AppPressable
-              style={styles.reactionAddBtn}
+              style={[styles.reactionAddBtn, linkBusy ? { opacity: 0.5 } : null]}
               onPress={() => onNativeShare(item)}
+              disabled={linkBusy}
               hitSlop={8}
               accessibilityLabel={t('feed.a11yShare')}
+              accessibilityState={linkBusy ? { disabled: true } : undefined}
             >
               <Ionicons name="share-outline" size={15} color={colors.textSecondary} />
             </AppPressable>
@@ -890,8 +909,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // v4.32.612: публикацию по ссылке может понадобиться сначала забрать с
   // сервера. Это сеть, и молчать всё это время нельзя.
   const [linkLoading, setLinkLoading] = useState(false);
-  /** Идёт ли выкладка копии прямо сейчас — второе нажатие слало бы её заново. */
-  const linkCopyBusyRef = useRef(false);
+  // AC-04/AC-17: публикация по ссылке, копирование, «поделиться» и отзыв —
+  // в отдельном потоке (core/social/postLinkFlow): только после явного
+  // подтверждения и ссылка отдаётся только после ответа сервера.
+  const postLinks = usePostLinkSharing(pair, did);
   /** Token последнего отработанного перехода по ссылке — чтобы не повторять его. */
   const handledJumpTokenRef = useRef<number | null>(null);
   const [queueLen, setQueueLen] = useState(0);
@@ -3005,42 +3026,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       .finally(() => { bookmarkLocksRef.current.delete(item.id); });
   }, [bookmarkFilter, loadFeed, t]);
 
-  /**
-   * Открыть публикацию по ссылке для тех, у кого её нет (v4.32.612).
-   *
-   * Зовётся ровно в двух местах — «скопировать ссылку» и «поделиться», — и
-   * только для своих записей: подписать чужую нечем, да и права такого нет.
-   * Копия на сервере не зашифрована (у ссылки нет получателя, чьим ключом её
-   * можно было бы закрыть), поэтому она и уходит именно здесь: человек в этот
-   * момент и так отдаёт запись наружу.
-   */
-  const shareLinkCopy = useCallback(async (item: FeedPostRow): Promise<boolean> => {
-    if (item.authorDid !== did) return false;
-    // v4.32.614: второе нажатие не шлёт те же вложения заново. Конверт с
-    // фотографиями доходит до двух мегабайт, и два нажатия подряд — обычное
-    // дело, пока первое ничем себя не проявляет.
-    if (linkCopyBusyRef.current) return false;
-    linkCopyBusyRef.current = true;
-    try {
-      const ok = await publishPostLinkCopy(pair, item.id);
-      // Молчать нельзя: со стороны автора ссылка выглядит готовой, а у
-      // получателя не откроется — ровно та жалоба, с которой всё началось.
-      //
-      // v4.32.614: отсюда убран зачин «Ссылка скопирована». Эта же функция
-      // зовётся из «поделиться», где в буфер обмена ничего не клали, — то
-      // есть половину времени зачин был неправдой; а в «скопировать ссылку»
-      // он просто повторял тост, показанный секундой раньше, и выходило два
-      // сообщения, спорящих друг с другом.
-      if (!ok) showError(t('feed.linkPublishFailed'));
-      return ok;
-    } catch {
-      showError(t('feed.linkPublishFailed'));
-      return false;
-    } finally {
-      linkCopyBusyRef.current = false;
-    }
-  }, [pair, did, t]);
-
+  const { shareLink: sharePostLink, isPublished: isLinkPublished, isBusy: isLinkBusy } = postLinks;
   const handleNativeShare = useCallback((item: FeedPostRow) => {
     if (!mayRepublishFeedPost(item)) {
       showError(UNREADABLE_POST_ACTION_TEXT);
@@ -3051,15 +3037,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     // было, вернуться к оригиналу — нет.
     const shareText = item.text ? item.text.slice(0, 200) : t('feed.mediaFallback');
     const message = `${outwardName(item.authorName, item.nameUnreadable, 'AirChat')}: ${shareText}\n${buildPostLink(item.id).web}`;
-    // v4.32.614: лист «поделиться» открывается ПОСЛЕ того, как копия легла на
-    // сервер. Раньше он открывался сразу, а копия в это время ещё летела:
-    // человек успевал отправить ссылку в один жест, и получатель видел
-    // «публикация не найдена» — ровно та жалоба, с которой всё началось.
-    // Если выложить не вышло, лист всё равно открывается: ссылка работает у
-    // тех, у кого запись уже есть, а о том, что остальным она не откроется,
-    // сказано отдельным сообщением.
-    void shareLinkCopy(item).then(() => { void Share.share({ message }); });
-  }, [t, shareLinkCopy]);
+    // AC-04/AC-17: своя неопубликованная запись сначала проходит диалог
+    // «Опубликовать по ссылке?», и лист открывается только после того, как
+    // сервер принял копию. Отмена диалога или отказ сервера — лист не
+    // открывается вовсе: отдать ссылку, которая не откроется, хуже, чем не
+    // отдать никакой.
+    void sharePostLink(item, message);
+  }, [t, sharePostLink]);
 
   // v4.32.92: стабилизация handlers через ref — renderItem теперь не пересоздаётся
   // при каждом изменении любого колбэка. FeedPostItem.memo реально держит строки:
@@ -3134,6 +3118,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         commentCount={commentCounts[item.id] ?? 0}
         viewCount={viewCounts[item.id] ?? 0}
         translatedText={translatedPosts[item.id]}
+        linkPublished={item.authorDid === did && isLinkPublished(item.id)}
+        linkBusy={isLinkBusy(item.id)}
         feedSearch={feedSearch}
         pair={pair}
         myPubB64={myPubB64}
@@ -3143,6 +3129,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     ),
     [
       did, styles, colors, mediaUrlsMap, commentCounts, viewCounts, translatedPosts,
+      isLinkPublished, isLinkBusy,
       feedSearch, pair, myPubB64, feedTick, stableHandlers,
     ]
   );
@@ -4417,17 +4404,21 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             // v4.32.587: у непрочитанной записи текста нет — есть пустая
             // строка, и копировать, переводить или править её нечего.
             const hasText = mayReuseFeedText(p) && !!p.text && !p.text.startsWith('\x04');
+            const linkPublishedP = isSelfP && postLinks.isPublished(p.id);
+            const linkBusyP = postLinks.isBusy(p.id);
             const close = () => setActionSheetPost(null);
             const row = (
               icon: string,
               label: string,
               onPress: () => void,
-              opts?: { destructive?: boolean; iconColor?: string }
+              opts?: { destructive?: boolean; iconColor?: string; disabled?: boolean }
             ) => (
               <AppPressable
                 key={label}
                 onPress={() => { close(); onPress(); }}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 18 }}
+                disabled={opts?.disabled}
+                accessibilityState={opts?.disabled ? { disabled: true } : undefined}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 18, opacity: opts?.disabled ? 0.5 : 1 }}
               >
                 <Ionicons name={icon as never} size={22} color={opts?.destructive ? colors.error : (opts?.iconColor ?? colors.accent)} style={{ marginRight: 16, width: 24 }} />
                 <Text style={{ fontSize: 16, color: opts?.destructive ? colors.error : colors.text, flex: 1 }}>{label}</Text>
@@ -4451,11 +4442,18 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       запись подписать нечем. Значит, ссылка на чужую запись
                       откроется лишь у тех, у кого она и так есть, и обещать
                       человеку большее нельзя. */}
-                  {row('link-outline', t('feed.menuCopyLink'), () => {
-                    void shareLinkCopy(p);
-                    void Clipboard.setStringAsync(buildPostLink(p.id).web)
-                      .then(() => showSuccess(isSelfP ? COPIED_LINK : t('feed.linkCopiedForeign')));
-                  })}
+                  {/* AC-17: ссылка ложится в буфер только после того, как копию
+                      приняли, а у своей неопубликованной записи — ещё и после
+                      явного подтверждения (AC-04). Отказ — ничего не скопировано. */}
+                  {row('link-outline', t('feed.menuCopyLink'), () => { void postLinks.copyLink(p); }, { disabled: linkBusyP })}
+                  {/* AC-04: публикация по ссылке — отдельное явное действие, и её
+                      можно отозвать. Копия на сервере не зашифрована. */}
+                  {isSelfP && !linkPublishedP && postLinks.mayPublish(p)
+                    ? row('globe-outline', t('feed.menuPublishByLink'), () => { void postLinks.publish(p); }, { disabled: linkBusyP })
+                    : null}
+                  {isSelfP && linkPublishedP
+                    ? row('close-circle-outline', t('feed.menuRevokeLink'), () => { void postLinks.revoke(p); }, { destructive: true, disabled: linkBusyP })
+                    : null}
                   {hasText ? (
                     isTranslatedP
                       ? row('language-outline', t('feed.menuHideTranslation'), () => setTranslatedPosts((prev) => { const next = { ...prev }; delete next[p.id]; return next; }))
