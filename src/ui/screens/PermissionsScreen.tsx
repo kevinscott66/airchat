@@ -1,18 +1,15 @@
 /**
- * PermissionsScreen — shown on first launch.
- * Explains and requests required permissions:
- *   - Notifications (optional, for message alerts)
- *   - Microphone (voice messages and calls)
- *   - Camera (take photos to send)
- *   - Media Library / Gallery (send photos from gallery)
- *   - Location (send location in messages)
+ * PermissionsScreen — сводка разрешений: уведомления, микрофон, камера,
+ * галерея, геолокация.
+ *
+ * При входе и при возвращении в приложение состояние только читается —
+ * диалоги показываются лишь по нажатию. Очередь запросов, замок и отмена
+ * живут в usePermissionsController; список разрешений — в permissionDefs.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import {
   ActivityIndicator,
-  Linking,
-  Platform,
   ScrollView,
   Text,
   View,
@@ -21,111 +18,24 @@ import { AppPressable } from '../components/AppPressable';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { font, primaryInk, radius, spacing } from '../theme';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import {
-  mapAndroidPermission,
-  mapExpoPermission,
-  permissionTapAction,
-  type PermissionStatus,
-} from './permissionStatus';
-
-interface PermItem {
-  id: string;
-  icon: string;
-  title: string;
-  description: string;
-  status: PermissionStatus;
-  required: boolean;
-  request: () => Promise<PermissionStatus>;
-}
-
-async function requestNotificationPermission(): Promise<PermissionStatus> {
-  const androidVersion =
-    typeof Platform.Version === 'string'
-      ? parseInt(Platform.Version, 10)
-      : (Platform.Version as number);
-  if (Platform.OS === 'android' && androidVersion >= 33) {
-    try {
-      const { PermissionsAndroid } = await import('react-native');
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
-      );
-      return mapAndroidPermission(result);
-    } catch {
-      return 'unknown';
-    }
-  }
-  return 'granted';
-}
-
-async function requestRecordAudioPermission(): Promise<PermissionStatus> {
-  if (Platform.OS !== 'android') return 'granted';
-  try {
-    const { PermissionsAndroid } = await import('react-native');
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-      {
-        title: 'Микрофон',
-        message: 'Для голосовых сообщений и звонков.',
-        buttonPositive: 'Разрешить',
-        buttonNegative: 'Пропустить',
-      }
-    );
-    return mapAndroidPermission(result);
-  } catch {
-    return 'unknown';
-  }
-}
-
-async function requestCameraPermission(): Promise<PermissionStatus> {
-  try {
-    const ImagePicker = await import('expo-image-picker');
-    return mapExpoPermission(await ImagePicker.requestCameraPermissionsAsync());
-  } catch {
-    return 'unknown';
-  }
-}
-
-async function requestMediaLibraryPermission(): Promise<PermissionStatus> {
-  try {
-    const ImagePicker = await import('expo-image-picker');
-    return mapExpoPermission(await ImagePicker.requestMediaLibraryPermissionsAsync());
-  } catch {
-    return 'unknown';
-  }
-}
-
-async function requestLocationPermission(): Promise<PermissionStatus> {
-  try {
-    const Location = await import('expo-location');
-    return mapExpoPermission(await Location.requestForegroundPermissionsAsync());
-  } catch {
-    // Fallback for Android < 23
-    if (Platform.OS !== 'android') return 'granted';
-    try {
-      const { PermissionsAndroid } = await import('react-native');
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        {
-          title: 'Геолокация',
-          message: 'Для отправки местоположения в сообщениях.',
-          buttonPositive: 'Разрешить',
-          buttonNegative: 'Пропустить',
-        }
-      );
-      return mapAndroidPermission(result);
-    } catch {
-      return 'unknown';
-    }
-  }
-}
+import type { PermissionStatus } from './permissionStatus';
+import { PERMISSION_DEFS, type PermissionDef } from './permissionDefs';
+import { usePermissionsController } from '../hooks/usePermissionsController';
 
 interface Props {
   onDone: () => void;
+  /**
+   * Список разрешений. По умолчанию — PERMISSION_DEFS; подменяется в тестах.
+   * Должен быть стабильным (константа), иначе при каждой отрисовке
+   * заново читались бы все статусы.
+   */
+  defs?: readonly PermissionDef[];
 }
 
 const STATUS_LABEL: Record<PermissionStatus, string> = {
   unknown: 'Не запрошено',
   granted: 'Разрешено ✓',
+  limited: 'Частично',
   denied:  'Отказано',
   // «Отклонено» и «Отказано» на слух одно и то же, а состояния разные:
   // первое чинится нажатием, второе — только настройками системы.
@@ -134,11 +44,12 @@ const STATUS_LABEL: Record<PermissionStatus, string> = {
 
 /** Подсказка под карточкой — только там, где без неё непонятно, что делать. */
 const STATUS_HINT: Partial<Record<PermissionStatus, string>> = {
+  limited: 'Доступ только к выбранным фото. Расширить — в настройках системы, нажмите, чтобы открыть их.',
   denied: 'Нажмите, чтобы спросить ещё раз.',
   blocked: 'Выдать можно только в настройках системы — нажмите, чтобы открыть их.',
 };
 
-export function PermissionsScreen({ onDone }: Props): React.ReactElement {
+export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS }: Props): React.ReactElement {
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
     safe:    { flex: 1 as const, backgroundColor: c.background },
@@ -188,6 +99,9 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
       height: 50, alignItems: 'center' as const, justifyContent: 'center' as const,
       borderWidth: 1, borderColor: c.border,
     },
+    // «Пропустить» не выключается никогда: уйти можно и посреди диалогов —
+    // очередь при этом отменяется (см. leave).
+    btnDisabled: { opacity: 0.5 },
     secondaryBtnText: { color: c.textSecondary, fontSize: font.md, fontWeight: '600' as const },
 
     note: { fontSize: 12, color: c.textMuted, textAlign: 'center' as const, lineHeight: 18 },
@@ -195,92 +109,21 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
   const statusColor: Record<PermissionStatus, string> = {
     unknown: colors.textMuted,
     granted: colors.success,
+    limited: colors.warning,
     denied:  colors.warning,
     blocked: colors.error,
   };
-  const [items, setItems] = useState<PermItem[]>([
-    {
-      id: 'notifications',
-      icon: '🔔',
-      title: 'Уведомления',
-      description: 'Оповещения о новых сообщениях, когда приложение свёрнуто.',
-      status: 'unknown',
-      required: false,
-      request: requestNotificationPermission,
-    },
-    {
-      id: 'microphone',
-      icon: '🎙️',
-      title: 'Микрофон',
-      description: 'Для голосовых сообщений и звонков.',
-      status: 'unknown',
-      required: true,
-      request: requestRecordAudioPermission,
-    },
-    {
-      id: 'camera',
-      icon: '📷',
-      title: 'Камера',
-      description: 'Для съёмки и отправки фото прямо из чата.',
-      status: 'unknown',
-      required: false,
-      request: requestCameraPermission,
-    },
-    {
-      id: 'gallery',
-      icon: '🖼️',
-      title: 'Галерея',
-      description: 'Для прикрепления фото и видео из вашей галереи.',
-      status: 'unknown',
-      required: false,
-      request: requestMediaLibraryPermission,
-    },
-    {
-      id: 'location',
-      icon: '📍',
-      title: 'Геолокация',
-      description: 'Для отправки вашего местоположения в сообщениях.',
-      status: 'unknown',
-      required: false,
-      request: requestLocationPermission,
-    },
-  ]);
-  const [requesting, setRequesting] = useState<string | null>(null);
+  const { statuses, requesting, busy, requestOne, requestAll, cancel } =
+    usePermissionsController(defs);
 
-  const allDone = items.every((i) => i.status !== 'unknown');
+  const allDone = defs.every((d) => statuses[d.id] !== 'unknown');
 
-  const requestPerm = useCallback(
-    async (id: string) => {
-      const item = items.find((i) => i.id === id);
-      if (!item) return;
-      const action = permissionTapAction(item.status);
-      if (action === 'none') return;
-      if (action === 'open_settings') {
-        void Linking.openSettings();
-        return;
-      }
-
-      setRequesting(id);
-      try {
-        const status = await item.request();
-        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status } : i)));
-      } finally {
-        // Без finally сорвавшийся запрос оставлял бы вечный спиннер на карточке.
-        setRequesting(null);
-      }
-    },
-    [items]
-  );
-
-  const requestAll = async (): Promise<void> => {
-    // Только те, у которых есть что спрашивать. Иначе «Разрешить всё» посреди
-    // прохода выкидывало человека в настройки системы из-за одного отклонённого.
-    for (const item of items) {
-      if (permissionTapAction(item.status) === 'request') {
-        await requestPerm(item.id);
-      }
-    }
-  };
+  // Уход с экрана отменяет очередь: иначе диалоги продолжали бы всплывать
+  // поверх следующего экрана.
+  const leave = useCallback(() => {
+    cancel();
+    onDone();
+  }, [cancel, onDone]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -293,15 +136,20 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
           </Text>
         </View>
 
-        {items.map((item) => (
+        {defs.map((item) => {
+          const status = statuses[item.id];
+          return (
           <AppPressable
             key={item.id}
-            style={[styles.permCard, item.status === 'granted' && styles.permCardGranted]}
-            onPress={() => void requestPerm(item.id)}
+            style={[styles.permCard, status === 'granted' && styles.permCardGranted]}
+            onPress={() => void requestOne(item.id)}
+            disabled={busy}
             android_ripple={{ color: colors.ripple }}
             accessibilityRole="button"
-            accessibilityLabel={`${item.title}: ${STATUS_LABEL[item.status]}`}
-            accessibilityHint={STATUS_HINT[item.status]}
+            accessibilityLabel={`${item.title}: ${STATUS_LABEL[status]}`}
+            accessibilityHint={STATUS_HINT[status]}
+            accessibilityState={{ disabled: busy, busy: requesting === item.id }}
+            testID={`perm_${item.id}`}
           >
             <Text style={styles.permIcon}>{item.icon}</Text>
             <View style={styles.permInfo}>
@@ -312,8 +160,8 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
                 )}
               </View>
               <Text style={styles.permDesc}>{item.description}</Text>
-              {STATUS_HINT[item.status] ? (
-                <Text style={styles.permHint}>{STATUS_HINT[item.status]}</Text>
+              {STATUS_HINT[status] ? (
+                <Text style={styles.permHint}>{STATUS_HINT[status]}</Text>
               ) : null}
             </View>
             <View style={styles.permStatusWrap}>
@@ -323,34 +171,39 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
                 <View
                   style={[
                     styles.statusBadge,
-                    { backgroundColor: `${statusColor[item.status]}22` },
+                    { backgroundColor: `${statusColor[status]}22` },
                   ]}
                 >
-                  <Text style={[styles.statusText, { color: statusColor[item.status] }]}>
-                    {STATUS_LABEL[item.status]}
+                  <Text style={[styles.statusText, { color: statusColor[status] }]}>
+                    {STATUS_LABEL[status]}
                   </Text>
                 </View>
               )}
             </View>
           </AppPressable>
-        ))}
+          );
+        })}
 
         <View style={styles.btnRow}>
           {!allDone ? (
             <AppPressable
-              style={styles.primaryBtn}
+              style={[styles.primaryBtn, busy && styles.btnDisabled]}
               onPress={() => void requestAll()}
+              disabled={busy}
               accessibilityRole="button"
               accessibilityLabel="Разрешить всё"
+              accessibilityState={{ disabled: busy, busy }}
+              testID="perm_request_all"
             >
               <Text style={styles.primaryBtnText}>Разрешить всё</Text>
             </AppPressable>
           ) : null}
           <AppPressable
             style={[styles.secondaryBtn, allDone && styles.primaryBtn]}
-            onPress={onDone}
+            onPress={leave}
             accessibilityRole="button"
             accessibilityLabel={allDone ? 'Готово' : 'Пропустить'}
+            testID="perm_skip"
           >
             <Text style={[styles.secondaryBtnText, allDone && styles.primaryBtnText]}>
               {allDone ? 'Готово →' : 'Пропустить'}

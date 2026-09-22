@@ -1,12 +1,18 @@
 import {
   mapAndroidPermission,
   mapExpoPermission,
+  mergeAndroidCheck,
   permissionTapAction,
 } from '../permissionStatus';
 
 describe('mapExpoPermission', () => {
   it('выданное разрешение', () => {
     expect(mapExpoPermission({ status: 'granted', canAskAgain: true })).toBe('granted');
+  });
+
+  it('галерея «только выбранные фото» — частичный доступ, а не «всё выдано»', () => {
+    expect(mapExpoPermission({ status: 'granted', accessPrivileges: 'limited' })).toBe('limited');
+    expect(mapExpoPermission({ status: 'granted', accessPrivileges: 'all' })).toBe('granted');
   });
 
   it('отказ, который можно переспросить — не тупик', () => {
@@ -69,5 +75,28 @@ describe('permissionTapAction', () => {
 
   it('заблокированное — настройки системы', () => {
     expect(permissionTapAction('blocked')).toBe('open_settings');
+  });
+
+  it('частичное — тоже настройки: повторный запрос вернул бы тот же ответ молча', () => {
+    expect(permissionTapAction('limited')).toBe('open_settings');
+  });
+});
+
+describe('mergeAndroidCheck', () => {
+  it('выдано — выдано, что бы ни было известно раньше', () => {
+    expect(mergeAndroidCheck(true, 'unknown')).toBe('granted');
+    expect(mergeAndroidCheck(true, 'blocked')).toBe('granted');
+  });
+
+  it('«не выдано» не стирает известный отказ или запрет', () => {
+    // check не отличает отказ от «не спрашивали»: без этого после «Запретить»
+    // карточка при каждом входе снова звала бы «Не запрошено».
+    expect(mergeAndroidCheck(false, 'denied')).toBe('denied');
+    expect(mergeAndroidCheck(false, 'blocked')).toBe('blocked');
+    expect(mergeAndroidCheck(false, 'unknown')).toBe('unknown');
+  });
+
+  it('отозванное в настройках снова можно спросить', () => {
+    expect(mergeAndroidCheck(false, 'granted')).toBe('unknown');
   });
 });
