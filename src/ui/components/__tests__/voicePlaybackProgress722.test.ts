@@ -52,3 +52,15 @@ test('отправка голосового и GIF прокручивает ле
   const group = between(code('screens/GroupsScreen.tsx'), 'announceGroupSend(fanoutGroupMessage(group.id, voiceText', 'catch (e)');
   expect(group).toContain('scrollToOffset({ offset: 0');
 });
+
+test('перемотка до первого «играть» не теряется, а после конца голосовое играет снова', () => {
+  const src = code('components/VoiceMessage.tsx');
+  const seek = between(src, 'const seekTo = useCallback(', '}, [sound, totalMs]);');
+  expect(seek).toContain('pendingSeekMsRef.current = seekMs;');
+  const toggle = between(src, 'const togglePlayback = useCallback(', 'const seekTo = useCallback(');
+  const applied = toggle.indexOf('snd.seekTo(startMs / 1000)');
+  expect(applied).toBeGreaterThan(-1);
+  expect(applied).toBeLessThan(toggle.indexOf('snd.play();'));
+  const finish = between(src, 'if (status.didJustFinish) {', '}, []);');
+  expect(finish).toContain('snd.seekTo(0)');
+});

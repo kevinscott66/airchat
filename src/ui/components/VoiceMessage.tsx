@@ -416,6 +416,12 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
   const subRef = useRef<{ remove: () => void } | null>(null);
   const progressWidth = useRef(0);
   /**
+   * v4.32.722: место, куда перемотали ДО первого «играть». Проигрывателя тогда
+   * ещё нет — он создаётся по нажатию, — и перемотка двигала только цифры:
+   * звук потом всё равно начинался с нуля, а время прыгало обратно.
+   */
+  const pendingSeekMsRef = useRef(0);
+  /**
    * v4.32.620: между скачиванием вложения и созданием проигрывателя стоит сеть,
    * и за это время экран успевает закрыться. Уборка ниже завязана на [sound] и
    * снимает только тот проигрыватель, что уже лежит в состоянии, — созданный
@@ -451,6 +457,9 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
       if (status.didJustFinish) {
         setPlaying(false);
         setPositionMs(0);
+        // Проигрыватель остаётся стоять в конце, и следующее «играть» не
+        // давало ни звука, ни движения времени. Возвращаем его к началу.
+        void snd.seekTo(0).catch(() => {});
         if (activeVoicePlayer?.player === snd) activeVoicePlayer = null;
       }
     });
@@ -523,6 +532,9 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
       if (speed !== 1) {
         snd.setPlaybackRate(speed);
       }
+      const startMs = pendingSeekMsRef.current;
+      pendingSeekMsRef.current = 0;
+      if (startMs > 0) await snd.seekTo(startMs / 1000).catch(() => {});
       setSound(snd);
       activeVoicePlayer = { player: snd, stop: () => setPlaying(false) };
       setPlaying(true);
@@ -547,6 +559,8 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
     setPositionMs(seekMs);
     if (sound) {
       await sound.seekTo(seekMs / 1000).catch(() => {});
+    } else {
+      pendingSeekMsRef.current = seekMs;
     }
   }, [sound, totalMs]);
 
