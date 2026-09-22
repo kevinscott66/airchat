@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { generateMnemonic } from 'bip39';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const HOST_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp.mjs');
 
@@ -418,6 +419,23 @@ async function main(): Promise<void> {
       body: initBody,
     });
     check(inUrl.status === 401, 'пропуск в адресе не считается пропуском', `${inUrl.status}`);
+
+    // И полный разговор поверх HTTP: 200 на initialize сам по себе доказывает
+    // только проверку пропуска, а не то, что инструменты по этому транспорту
+    // действительно работают.
+    const httpClient = new Client({ name: 'airchat-mcp-scenario-http', version: '1' });
+    const httpTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${token}` } },
+    });
+    await httpClient.connect(httpTransport);
+    const httpTools = await httpClient.listTools();
+    const httpStatus = await call(httpClient, 'status');
+    check(
+      httpTools.tools.length === 10 && !httpStatus.isError,
+      'инструменты работают и поверх HTTP',
+      `${httpTools.tools.length} шт., did=${String(httpStatus.data.did).slice(0, 24)}…`
+    );
+    await httpClient.close();
   }
 
   const stopped = await new Promise<{ code: number | null; ms: number }>((resolve) => {
