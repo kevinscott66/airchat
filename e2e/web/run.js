@@ -95,9 +95,15 @@ async function launchChrome(chromePath) {
   });
   return {
     wsUrl,
-    close() {
+    async close() {
+      const exited = new Promise((r) => proc.once('exit', r));
       proc.kill('SIGKILL');
-      fs.rmSync(profile, { recursive: true, force: true });
+      await Promise.race([exited, sleep(5000)]);
+      try {
+        fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch {
+        /* временный профиль; ОС подчистит */
+      }
     },
   };
 }
@@ -239,7 +245,7 @@ async function main() {
     if (writes.length) fail(`unexpected writes to external servers: ${writes.join(', ')}`);
   } finally {
     cdp.close();
-    chrome.close();
+    await chrome.close();
     server.close();
   }
 
