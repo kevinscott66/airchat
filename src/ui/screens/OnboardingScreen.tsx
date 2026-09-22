@@ -13,7 +13,7 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { useThemedStyles, useColors } from '../ThemeContext';
-import { authCardRim, formColumn, primaryInk, radius, spacing } from '../theme';
+import { authCardRim, font, formColumn, primaryInk, radius, spacing } from '../theme';
 import {
   generateMnemonicAndStore,
   getStoredMnemonic,
@@ -167,6 +167,17 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     linkText: { color: c.accent, fontWeight: '600' as const },
     btnText: { color: primaryInk(c).text, fontWeight: '600' as const },
     btnTextDark: { color: c.text, fontWeight: '600' as const },
+    /**
+     * Постоянная подпись над полем. Плейсхолдер подписью не считается: он
+     * пропадает с первой буквой, а экранный диктор на вебе без неё зачитывал
+     * поле со словами как безымянное «поле ввода».
+     */
+    fieldLabel: {
+      fontSize: font.sm,
+      fontWeight: '600' as const,
+      color: c.textSecondary,
+      marginBottom: 6,
+    },
     textarea: {
       minHeight: 120,
       borderWidth: 1,
@@ -587,6 +598,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             onPress={createNewBtn.onPress}
             disabled={createNewBtn.loading}
             testID="btn_create_new"
+            accessibilityRole="button"
+            accessibilityLabel="Создать новый аккаунт"
           >
             <WelcomeSheen />
             <Text style={styles.btnText}>Создать новый аккаунт</Text>
@@ -596,6 +609,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
             onPress={handleWelcomeRestore}
             disabled={busy}
             testID="btn_restore"
+            accessibilityRole="button"
+            accessibilityLabel="Восстановить аккаунт"
           >
             {/* v4.32.376: копия — второй способ, и до этой версии её было некуда
                 загрузить. Кнопка не должна обещать только один из двух. */}
@@ -668,6 +683,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   disabled={busy}
                   testID="btn_restore_manual"
                   accessibilityRole="button"
+                  accessibilityLabel="Ввести слова вручную"
                 >
                   <Text style={styles.linkText}>Ввести слова вручную</Text>
                 </AppPressable>
@@ -676,6 +692,10 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   заведении аккаунта: снимок или запись экрана здесь уводит
                   аккаунт целиком. Тот же щит (v4.32.581). */}
               {appleBinding ? null : (
+              <>
+              <Text style={styles.fieldLabel} nativeID="onboarding_seed_label">
+                Секретные слова или резервная копия
+              </Text>
               <SecretScreenGuard>
                 <TextInput
                   style={styles.textarea}
@@ -699,10 +719,17 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   textContentType="none"
                   textAlignVertical="top"
                   testID="seed_input"
+                  accessibilityLabel="Секретные слова или резервная копия"
+                  accessibilityLabelledBy="onboarding_seed_label"
                 />
               </SecretScreenGuard>
+              </>
               )}
       {isBackupPaste ? (
+                <>
+                <Text style={styles.fieldLabel} nativeID="onboarding_backup_pwd_label">
+                  Пароль резервной копии
+                </Text>
                 <TextInput
                   style={styles.pwdInput}
                   value={restorePwd}
@@ -719,7 +746,10 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   spellCheck={false}
                   textContentType="none"
                   testID="backup_password_input"
+                  accessibilityLabel="Пароль резервной копии"
+                  accessibilityLabelledBy="onboarding_backup_pwd_label"
                 />
+                </>
               ) : null}
               {!isBackupPaste && !cloudReady ? (
                 <Text style={styles.encHint}>
@@ -735,6 +765,9 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                       ? 'Пароль приложения с прежнего устройства: им зашифрованы и привязанные слова, и облачная копия.'
                       : 'Если у вас есть облачная копия, введите пароль приложения с прежнего устройства — копия зашифрована им вместе с 24 словами.'}
                   </Text>
+                  <Text style={styles.fieldLabel} nativeID="onboarding_cloud_pwd_label">
+                    Пароль приложения
+                  </Text>
                   <TextInput
                     style={styles.pwdInput}
                     value={cloudPwd}
@@ -749,6 +782,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                     spellCheck={false}
                     textContentType="none"
                     testID="cloud_password_input"
+                    accessibilityLabel="Пароль приложения"
+                    accessibilityLabelledBy="onboarding_cloud_pwd_label"
                   />
                 </>
               ) : null}
@@ -757,6 +792,8 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                 onPress={restoreBtn.onPress}
                 disabled={restoreBtn.loading}
                 testID="btn_restore_confirm"
+                accessibilityRole="button"
+                accessibilityLabel="Восстановить"
               >
                 <Text style={styles.btnText}>Восстановить</Text>
               </AppPressable>

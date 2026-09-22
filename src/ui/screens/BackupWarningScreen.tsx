@@ -68,6 +68,8 @@ export function BackupWarningScreen({ onContinue }: Props): React.ReactElement {
         onPress={acknowledgeBtn.onPress}
         disabled={acknowledgeBtn.loading}
         testID="btn_backup_continue"
+        accessibilityRole="button"
+        accessibilityLabel="Понятно, продолжить"
       >
         {acknowledgeBtn.loading ? <ActivityIndicator color={primaryInk(colors).text} /> : <Text style={styles.btnText}>Понятно, продолжить</Text>}
       </AppPressable>

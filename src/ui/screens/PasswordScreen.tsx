@@ -356,7 +356,12 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
             Слишком много неудачных попыток. Попробуйте через {lockoutMinutesLeft(lockoutMs)} мин.
             или восстановите доступ.
           </Text>
-          <AppPressable style={styles.button} onPress={onForgot} accessibilityRole="button">
+          <AppPressable
+            style={styles.button}
+            onPress={onForgot}
+            accessibilityRole="button"
+            accessibilityLabel="Восстановить по секретным словам"
+          >
             <Text style={styles.buttonText}>Восстановить по секретным словам</Text>
           </AppPressable>
         </View>
@@ -383,7 +388,9 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
             <ActivityIndicator style={styles.spinner} color={colors.accent} />
           ) : (
             <>
-              <Text style={styles.hint}>{hint}</Text>
+              {/* Подсказка над полем служит ему постоянной подписью: на
+                  вебе поле пароля без неё зачитывалось безымянным. */}
+              <Text style={styles.hint} nativeID="app_password_hint">{hint}</Text>
 
               <Animated.View style={[styles.shakeWrap, { transform: [{ translateX: shakeAnim }] }]}>
                 {unlockBy === 'face' ? (
@@ -432,12 +439,15 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
                       autoCapitalize="none"
                       autoCorrect={false}
                       testID="app_password_input"
+                      accessibilityLabel="Пароль приложения"
+                      accessibilityLabelledBy="app_password_hint"
                     />
                     <AppPressable
                       style={[styles.button, loading && styles.buttonDisabled]}
                       onPress={() => void submitValue(password)}
                       disabled={loading}
                       accessibilityRole="button"
+                      accessibilityLabel="Войти"
                       testID="app_password_submit"
                     >
                       {loading ? (
@@ -455,6 +465,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
                   onPress={() => setUnlockBy('pin')}
                   style={styles.forgotWrap}
                   accessibilityRole="button"
+                  accessibilityLabel="Ввести код"
                   testID="app_password_use_pin"
                 >
                   <Text style={styles.forgotLink}>Ввести код</Text>
@@ -464,6 +475,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
                   onPress={() => setUsePinMode((v) => !v)}
                   style={styles.forgotWrap}
                   accessibilityRole="button"
+                  accessibilityLabel={usePinMode ? 'Ввести текстовый пароль' : 'Ввести PIN-код'}
                 >
                   <Text style={styles.forgotLink}>
                     {usePinMode ? 'Ввести текстовый пароль' : 'Ввести PIN-код'}
@@ -474,6 +486,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
                 onPress={onForgot}
                 style={styles.forgotWrap}
                 accessibilityRole="button"
+                accessibilityLabel="Забыли пароль?"
                 testID="app_password_forgot"
               >
                 <Text style={styles.forgotLinkSmall}>Забыли пароль?</Text>

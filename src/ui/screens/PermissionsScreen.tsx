@@ -337,13 +337,20 @@ export function PermissionsScreen({ onDone }: Props): React.ReactElement {
 
         <View style={styles.btnRow}>
           {!allDone ? (
-            <AppPressable style={styles.primaryBtn} onPress={() => void requestAll()}>
+            <AppPressable
+              style={styles.primaryBtn}
+              onPress={() => void requestAll()}
+              accessibilityRole="button"
+              accessibilityLabel="Разрешить всё"
+            >
               <Text style={styles.primaryBtnText}>Разрешить всё</Text>
             </AppPressable>
           ) : null}
           <AppPressable
             style={[styles.secondaryBtn, allDone && styles.primaryBtn]}
             onPress={onDone}
+            accessibilityRole="button"
+            accessibilityLabel={allDone ? 'Готово' : 'Пропустить'}
           >
             <Text style={[styles.secondaryBtnText, allDone && styles.primaryBtnText]}>
               {allDone ? 'Готово →' : 'Пропустить'}

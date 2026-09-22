@@ -122,6 +122,9 @@ export function PasswordField({
           editable={!disabled}
           autoFocus={autoFocus}
           testID={testID}
+          // Плейсхолдер — единственная подпись этого поля, а он исчезает с
+          // первой буквой; озвучке нужно имя, которое остаётся.
+          accessibilityLabel={placeholder}
         />
       )}
       <AppPressable onPress={toggle} style={styles.toggle} accessibilityRole="button">

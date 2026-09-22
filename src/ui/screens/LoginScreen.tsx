@@ -21,7 +21,7 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { showError } from '../components/userFeedback';
 import { SafeScreen } from '../components/SafeScreen';
 import { useColors, useThemedStyles } from '../ThemeContext';
-import { primaryInk, radius } from '../theme';
+import { font, primaryInk, radius } from '../theme';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText } from '../components/userErrorText';
 
@@ -151,6 +151,13 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
     title: { fontSize: 28, fontWeight: '700' as const, color: c.text, marginBottom: 8 },
     sub: { color: c.textSecondary, marginBottom: 16 },
     did: { color: c.accent, fontSize: 12, marginBottom: 12 },
+    /** Подпись поля видна всегда: плейсхолдер исчезает с первой буквой. */
+    fieldLabel: {
+      fontSize: font.sm,
+      fontWeight: '600' as const,
+      color: c.textSecondary,
+      marginBottom: 6,
+    },
     input: {
       borderWidth: 1,
       borderColor: c.border,
@@ -196,6 +203,9 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
                 Ваш адрес: {shortIdentity(did, 20)}
               </Text>
             ) : null}
+            <Text style={styles.fieldLabel} nativeID="login_username_label">
+              Имя
+            </Text>
             <TextInput
               placeholder="Имя"
               placeholderTextColor={colors.textMuted}
@@ -204,12 +214,16 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
               style={styles.input}
               autoCapitalize="none"
               testID="login_username_input"
+              accessibilityLabel="Имя"
+              accessibilityLabelledBy="login_username_label"
             />
             <AppPressable
               style={[styles.btn, (!username.trim() || initBtn.loading) ? styles.btnDisabled : null]}
               onPress={initBtn.onPress}
               disabled={initBtn.loading || !username.trim()}
               testID="btn_login"
+              accessibilityRole="button"
+              accessibilityLabel="Создать / войти"
             >
               <Text style={styles.btnText}>Создать / войти</Text>
             </AppPressable>

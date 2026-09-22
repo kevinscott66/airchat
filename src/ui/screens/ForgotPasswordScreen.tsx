@@ -163,7 +163,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
             приложения.
           </Text>
 
-          <Text style={styles.label}>Секретные слова</Text>
+          <Text style={styles.label} nativeID="forgot_seed_label">Секретные слова</Text>
           {/* Введённые слова так же дороги, как показанные при заведении
               аккаунта, — тот же щит (v4.32.581). `textContentType`/
               `autoComplete` тут не для удобства: без них слова из этого поля
@@ -182,10 +182,12 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
               autoComplete="off"
               textContentType="none"
               testID="forgot_seed_input"
+              accessibilityLabel="Секретные слова"
+              accessibilityLabelledBy="forgot_seed_label"
             />
           </SecretScreenGuard>
 
-          <Text style={styles.label}>Новый пароль</Text>
+          <Text style={styles.label} nativeID="forgot_new_pwd_label">Новый пароль</Text>
           <TextInput
             style={styles.input}
             placeholder={`Минимум ${PASSWORD_MIN_LENGTH} символов`}
@@ -195,9 +197,11 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
             onChangeText={setNewPassword}
             autoCapitalize="none"
             testID="forgot_new_pwd"
+            accessibilityLabel="Новый пароль"
+            accessibilityLabelledBy="forgot_new_pwd_label"
           />
 
-          <Text style={styles.label}>Повтор пароля</Text>
+          <Text style={styles.label} nativeID="forgot_confirm_pwd_label">Повтор пароля</Text>
           <TextInput
             style={styles.input}
             placeholder="Ещё раз"
@@ -207,6 +211,8 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
             onChangeText={setConfirm}
             autoCapitalize="none"
             testID="forgot_confirm_pwd"
+            accessibilityLabel="Повтор пароля"
+            accessibilityLabelledBy="forgot_confirm_pwd_label"
           />
 
           <AppPressable
@@ -214,11 +220,19 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
             onPress={() => void submit()}
             disabled={busy}
             testID="forgot_submit"
+            accessibilityRole="button"
+            accessibilityLabel="Сохранить"
           >
             {busy ? <ActivityIndicator color={primaryInk(colors).text} /> : <Text style={styles.buttonText}>Сохранить</Text>}
           </AppPressable>
 
-          <AppPressable onPress={onCancel} style={styles.cancelWrap} testID="forgot_cancel">
+          <AppPressable
+            onPress={onCancel}
+            style={styles.cancelWrap}
+            testID="forgot_cancel"
+            accessibilityRole="button"
+            accessibilityLabel="Назад к вводу пароля"
+          >
             <Text style={styles.cancelText}>Назад к вводу пароля</Text>
           </AppPressable>
           </GlassSurface>
