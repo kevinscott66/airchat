@@ -1,6 +1,6 @@
 import React, { memo, useCallback } from 'react';
 import { View, Text, Clipboard } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
+import { BrandedQr } from '../../BrandedQr';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
@@ -34,7 +34,7 @@ function GroupQrModalImpl({ visible, onClose, groupName, inviteLinkQr }: GroupQr
             <>
               <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>{groupName}</Text>
               <View style={{ padding: QR_CODE.quietZone, backgroundColor: QR_CODE.fill, borderRadius: radius.lg }}>
-                <QRCode value={inviteLinkQr} size={180} color={QR_CODE.ink} backgroundColor={QR_CODE.fill} />
+                <BrandedQr value={inviteLinkQr} size={180} />
               </View>
               <Text style={{ fontSize: 12, color: colors.textMuted, textAlign: 'center' }}>Отсканируйте для вступления в группу</Text>
               <AppPressable

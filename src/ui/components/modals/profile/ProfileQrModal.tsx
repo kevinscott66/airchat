@@ -15,7 +15,7 @@
  */
 import React, { memo, useCallback } from 'react';
 import { View, Text } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
+import { BrandedQr } from '../../BrandedQr';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
@@ -69,7 +69,7 @@ function ProfileQrModalImpl({ visible, onClose, title, value }: ProfileQrModalPr
                   камерой только при светлом фоне вокруг модулей, и в тёмной
                   теме подложка обязана остаться светлой. */}
               <View style={{ padding: QR_CODE.quietZone, backgroundColor: QR_CODE.fill, borderRadius: radius.lg }}>
-                <QRCode value={value} size={200} color={QR_CODE.ink} backgroundColor={QR_CODE.fill} />
+                <BrandedQr value={value} size={200} />
               </View>
               <Text style={{ fontSize: font.xs, color: colors.textMuted, textAlign: 'center' }}>
                 Наведите камеру, чтобы добавить контакт

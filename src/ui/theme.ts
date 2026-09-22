@@ -332,6 +332,14 @@ export const STORY_TEXT_VIEWER_BG = '#1a1f3a';
 export const QR_CODE = { fill: '#ffffff', ink: '#000000', quietZone: 12 } as const;
 
 /**
+ * Фирменные краски знака AirChat — те же, что в `assets/logo/airchat-mark.svg`.
+ *
+ * Не от темы по той же причине, что `QR_CODE`: знак в середине кода лежит на
+ * белой плашке всегда, и светлый акцент тёмной темы на ней бы пропал.
+ */
+export const BRAND_MARK = { from: '#A594FF', to: '#6A56EE' } as const;
+
+/**
  * Бумага под тайлами карты — пока они грузятся и там, где их нет.
  *
  * v4.32.419. Тоже не элемент оформления: это фон самих тайлов CARTO, и он

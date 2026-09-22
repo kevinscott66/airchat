@@ -18,7 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
-import QRCode from 'react-native-qrcode-svg';
+import { BrandedQr } from '../components/BrandedQr';
 import { runSyncIfOnline } from '../../core/storage/sync';
 import { ipfsId } from '../../core/transport/ipfs/node';
 import { deleteContact, listContacts, subscribeContactsChanged } from '../../core/social/contacts';
@@ -787,7 +787,7 @@ function ProfileScreenImpl({
             <View style={styles.modalBox}>
               <Text style={styles.modalTitle}>Ваш QR-код</Text>
               <View style={styles.qrWrap}>
-                <QRCode value={buildContactLink(did).web} size={200} color={QR_CODE.ink} backgroundColor={QR_CODE.fill} />
+                <BrandedQr value={buildContactLink(did).web} size={200} />
               </View>
               <Text style={styles.modalHint}>Друг может отсканировать код — или открыть вашу ссылку. Её же можно вставить у себя: «Профиль» → «Контакты» → «Новый контакт»</Text>
               {/* v4.32.31: прямая кнопка «копировать DID» — чтобы пользователь мог скинуть его в мессенджер/чат, а получатель вставил в Контакты → + */}
