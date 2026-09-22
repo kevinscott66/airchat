@@ -9,6 +9,7 @@ import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 import * as SecureStore from '../storage/secureStoreQueued';
+import { isSecureStoreUnreadable } from '../storage/secureStoreErrors';
 import { BACKUP_TEXT_MAX } from './backupFormat';
 import { generateMnemonic, validateMnemonic } from 'bip39';
 import type { KeyPairBytes } from '../crypto/keyManager';
@@ -177,6 +178,32 @@ export function deriveKeyPairFromMnemonic(mnemonic: string): KeyPairBytes {
   return deriveKeyPairFromMnemonicForProfile(mnemonic, 0);
 }
 
+/**
+ * Запись фразы / ключа обёртки: есть ли она и что в ней прочиталось.
+ *
+ * AC-03. Веб-хранилище на записи, которую не смогло расшифровать, больше не
+ * отвечает `null`, а бросает `SecureStoreUnreadableError`. Здесь это
+ * приводится к той модели, на которой уже построен весь модуль: запись ЕСТЬ
+ * (`present`), но строки из неё нет (`value: null`) — ровно как у нативной
+ * фразы, чей ключ обёртки не подошёл. Дальше её разбирают те же проверки:
+ * `hasStoredMnemonic` отвечает «есть», `getStoredMnemonic` — `null`, а
+ * `decideStoredPhraseState` называет это `unreadable`, и экран приветствия не
+ * даёт молча создать кошелёк поверх.
+ *
+ * Прочие отказы хранилища (Keystore заперт, IndexedDB недоступен) пролетают
+ * как есть: это не «запись испорчена», а «сейчас не ответили».
+ */
+async function readSeedRecord(key: string): Promise<{ present: boolean; value: string | null }> {
+  try {
+    const value = await SecureStore.getItemAsync(key);
+    return { present: value !== null, value };
+  } catch (e) {
+    if (!isSecureStoreUnreadable(e)) throw e;
+    log.warn('seed_record_unreadable', { key: e.key, reason: e.reason });
+    return { present: true, value: null };
+  }
+}
+
 type LocalWrapKeyState =
   | { state: 'ok'; key: Uint8Array }
   | { state: 'absent' }
@@ -203,8 +230,9 @@ type LocalWrapKeyState =
  * пишет payload следом за ним, терять там нечего.
  */
 async function readLocalWrapKey(): Promise<LocalWrapKeyState> {
-  const existing = await SecureStore.getItemAsync(LOCAL_WRAP_KEY_KEY);
-  if (!existing) return { state: 'absent' };
+  const { present, value: existing } = await readSeedRecord(LOCAL_WRAP_KEY_KEY);
+  if (!present) return { state: 'absent' };
+  if (!existing) return { state: 'unreadable' };
   try {
     const buf = Buffer.from(existing, 'base64');
     if (buf.length === SYMMETRIC_KEY_BYTES) return { state: 'ok', key: new Uint8Array(buf) };
@@ -331,7 +359,7 @@ export async function wipeMnemonicAndSessionFlags(): Promise<void> {
  * Reads mnemonic: v2 encrypted blob, or migrates from legacy plaintext keys once.
  */
 async function readOrMigrateMnemonic(): Promise<string | null> {
-  const encRaw = await SecureStore.getItemAsync(MNEMONIC_ENC_PAYLOAD_KEY);
+  const { value: encRaw } = await readSeedRecord(MNEMONIC_ENC_PAYLOAD_KEY);
   if (encRaw) {
     const fromEnc = await tryDecryptLocalPayload(encRaw);
     if (fromEnc?.trim()) {
@@ -348,14 +376,14 @@ async function readOrMigrateMnemonic(): Promise<string | null> {
     }
   }
 
-  const plain = await SecureStore.getItemAsync(MNEMONIC_KEY);
+  const { value: plain } = await readSeedRecord(MNEMONIC_KEY);
   if (plain?.trim()) {
     const normalized = plain.trim().split(/\s+/).join(' ');
     await persistEncryptedMnemonic(normalized);
     return normalized;
   }
 
-  const legacy = await SecureStore.getItemAsync(LEGACY_SEED_KEY);
+  const { value: legacy } = await readSeedRecord(LEGACY_SEED_KEY);
   if (legacy?.trim()) {
     const normalized = legacy.trim().split(/\s+/).join(' ');
     await persistEncryptedMnemonic(normalized);
@@ -409,8 +437,8 @@ export async function generateMnemonicAndStore(): Promise<{ mnemonic: string; pa
  * ради того, чтобы ЧУЖОЙ seed не подобрал чужие профили, а здесь seed тот же.
  */
 async function sameWalletBehindUnreadablePhrase(pair: KeyPairBytes): Promise<boolean> {
-  const stored = await SecureStore.getItemAsync(MNEMONIC_ENC_PAYLOAD_KEY);
-  if (!stored) return false;
+  const { present } = await readSeedRecord(MNEMONIC_ENC_PAYLOAD_KEY);
+  if (!present) return false;
   const record = await readKeyRecord();
   if (record.pair && bytesEqualConstTime(record.pair.publicKey, pair.publicKey)) {
     log.warn('seed_restore_over_unreadable_phrase_same_identity');
@@ -466,7 +494,8 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
 const HAS_MNEMONIC_KV = 'kv_has_mnemonic_v1';
 
 async function hasStoredMnemonicUncached(): Promise<boolean> {
-  const encRaw = await SecureStore.getItemAsync(MNEMONIC_ENC_PAYLOAD_KEY);
+  // AC-03: нечитаемая запись — тоже «есть», см. readSeedRecord.
+  const { present: encPresent } = await readSeedRecord(MNEMONIC_ENC_PAYLOAD_KEY);
   // v4.32.717: наличие записи больше не требует, чтобы она ещё и открылась.
   //
   // Прежде здесь стояло `encRaw && (await tryDecryptLocalPayload(encRaw))`, и
@@ -477,11 +506,11 @@ async function hasStoredMnemonicUncached(): Promise<boolean> {
   // Прежний кошелёк после этого не вернуть ничем. Различать «нет» и «не
   // открылась» умеет decideStoredPhraseState — но только если ему сюда честно
   // ответят про наличие: читаемость спрашивают отдельно, у getStoredMnemonic.
-  if (encRaw) return true;
-  const m = await SecureStore.getItemAsync(MNEMONIC_KEY);
-  if (m?.trim()) return true;
-  const leg = await SecureStore.getItemAsync(LEGACY_SEED_KEY);
-  return !!leg?.trim();
+  if (encPresent) return true;
+  const m = await readSeedRecord(MNEMONIC_KEY);
+  if (m.value?.trim() || (m.present && m.value === null)) return true;
+  const leg = await readSeedRecord(LEGACY_SEED_KEY);
+  return !!leg.value?.trim() || (leg.present && leg.value === null);
 }
 
 export async function hasStoredMnemonic(): Promise<boolean> {

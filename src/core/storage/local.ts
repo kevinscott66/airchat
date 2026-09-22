@@ -4,6 +4,7 @@ import { openLeasedDatabase } from './dbLease';
 import * as FileSystem from 'expo-file-system/legacy';
 import { randomBytes } from '@noble/hashes/utils.js';
 import * as SecureStore from './secureStoreQueued';
+import { isSecureStoreUnreadable } from './secureStoreErrors';
 import { log } from '../logger';
 import { makeInviteToken } from '../social/groupInviteToken';
 import { MEMBER_ROLE_ORDER_SQL, memberRoleRank } from '../social/groupRolePolicy';
@@ -1708,11 +1709,24 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
     // wallet. Besides keeping boot cheap, this lets the migration remain a
     // no-op in runtimes where dynamic imports are unavailable during tests.
     // A SecureStore read failure still propagates to the fail-closed handler.
-    const hasMnemonicPayload = Boolean(
-      (await SecureStore.getItemAsync('airchat_seed_mnemonic_enc_v2'))
-      || (await SecureStore.getItemAsync('airchat_seed_mnemonic_v1'))
-      || (await SecureStore.getItemAsync('airchat_seed'))
-    );
+    //
+    // AC-03: запись, которая есть, но не расшифровалась (веб бросает на ней
+    // SecureStoreUnreadableError), — это «фраза есть», а не отказ хранилища.
+    // Дальше её честно не откроет getStoredMnemonic (`null`), и миграция
+    // выйдет, не ставя отметку, — так же, как на телефоне с негодным ключом
+    // обёртки. Иначе порча одной записи не давала бы открыть базу вовсе.
+    const seedRecordPresent = async (key: string): Promise<boolean> => {
+      try {
+        return !!(await SecureStore.getItemAsync(key));
+      } catch (e) {
+        if (isSecureStoreUnreadable(e)) return true;
+        throw e;
+      }
+    };
+    const hasMnemonicPayload =
+      (await seedRecordPresent('airchat_seed_mnemonic_enc_v2'))
+      || (await seedRecordPresent('airchat_seed_mnemonic_v1'))
+      || (await seedRecordPresent('airchat_seed'));
     if (!hasMnemonicPayload) return;
 
     const { getStoredMnemonic } = await import('../backup/seedPhrase');

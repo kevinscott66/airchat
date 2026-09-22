@@ -104,7 +104,8 @@ describe('наличие сид-фразы (Backup HIGH #1)', () => {
     const body = SEED.slice(from, SEED.indexOf('\n}', from));
     // ПРОВЕРКА НЕ ПУСТАЯ: срез захватил тело функции.
     expect(body.length).toBeGreaterThan(150);
-    expect(body).toContain('if (encRaw) return true;');
+    // AC-03: наличие — через readSeedRecord, где нечитаемая запись тоже «есть».
+    expect(body).toContain('if (encPresent) return true;');
     // ПОВОД ДЛЯ ПРАВКИ ЖИВ: расшифровка сюда не вернулась. Негодный ключ обёртки
     // давал «фразы нет» — тот же ответ, что и чистая установка, а на него экран
     // приветствия показывает живую кнопку «Создать новый аккаунт».

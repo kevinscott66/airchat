@@ -1,5 +1,6 @@
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import * as SecureStore from '../storage/secureStoreQueued';
+import { isSecureStoreUnreadable } from '../storage/secureStoreErrors';
 import { log } from '../logger';
 import { encryptSymmetric, decryptSymmetric } from './encrypt';
 import { getOrCreateDataEncryptionKey } from '../storage/localEncryption';
@@ -185,7 +186,15 @@ export async function readKeyRecord(): Promise<KeyRecordRead> {
   } catch (e) {
     // Хранилище ключей отказало — это не «ключей нет». На Android Keystore
     // так отвечает, пока устройство не разблокировали после перезагрузки.
-    log.warn('key_load_failed', { err: e instanceof Error ? e.message : String(e) });
+    //
+    // AC-03: на вебе сюда же приходит SecureStoreUnreadableError — запись
+    // есть, но не расшифровалась. Прежде веб отвечал на это `null`, и запись
+    // считалась отсутствующей: ensureKeyPair заводил новую личность поверх.
+    if (isSecureStoreUnreadable(e)) {
+      log.warn('key_load_record_unreadable', { key: e.key, reason: e.reason });
+    } else {
+      log.warn('key_load_failed', { err: e instanceof Error ? e.message : String(e) });
+    }
     return { state: 'unreadable', pair: null };
   }
 

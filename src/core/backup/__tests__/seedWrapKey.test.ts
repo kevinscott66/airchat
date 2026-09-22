@@ -216,8 +216,13 @@ describe('храповик: чтение payload не зовёт ensureLocalWrap
 
   it('readLocalWrapKey ничего не пишет в хранилище', () => {
     const body = bodyOf('async function readLocalWrapKey(');
-    expect(body).toContain('getItemAsync');
+    expect(body).toContain('await readSeedRecord(LOCAL_WRAP_KEY_KEY)');
     expect(body).not.toContain('setItemAsync');
+    // И сама обёртка чтения — только читает.
+    const reader = bodyOf('async function readSeedRecord(');
+    expect(reader).toContain('SecureStore.getItemAsync(key)');
+    expect(reader).not.toContain('setItemAsync');
+    expect(reader).not.toContain('deleteItemAsync');
   });
 
   it('persistEncryptedMnemonic ключ по-прежнему заводит', () => {

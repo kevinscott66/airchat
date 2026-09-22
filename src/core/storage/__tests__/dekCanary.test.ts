@@ -344,7 +344,8 @@ describe('источник: миграция ключа не запирает с
 
   it('три чтения SecureStore на запуск снимает дешёвый признак в kv', () => {
     const cheap = MIG.indexOf('HAS_MNEMONIC_KV');
-    const slow = MIG.indexOf("SecureStore.getItemAsync('airchat_seed_mnemonic_enc_v2')");
+    // Чтения идут через seedRecordPresent: нечитаемая запись — «есть», а не «нет».
+    const slow = MIG.indexOf("seedRecordPresent('airchat_seed_mnemonic_enc_v2')");
     expect(cheap).toBeGreaterThan(-1);
     expect(slow).toBeGreaterThan(cheap);
   });
