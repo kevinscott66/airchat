@@ -1,0 +1,13 @@
+[Unit]
+Description=AirChat: копия SQLite и медиа в /var/backups/airchat
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node --no-warnings /opt/airchat-ops/airchat-backup.js
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/airchat
