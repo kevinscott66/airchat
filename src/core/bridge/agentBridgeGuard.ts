@@ -92,25 +92,46 @@ export class BridgeGuard {
   }
 
   /**
-   * Пропустить кадр или отказать.
+   * Пропустить кадр или отказать. Ничего не меняет.
    *
    * Порядок проверок не случаен: сначала дешёвые и безусловные (давность,
    * повтор), потом предел частоты. Обратный порядок означал бы, что
    * переигранная история расходует квоту живого агента.
    *
-   * При отказе по частоте номер НЕ продвигается: команда не исполнена, и
-   * агент вправе повторить её тем же номером, когда квота освободится.
+   * ПРОВЕРКА И ПРИЁМ РАЗДЕЛЕНЫ НАРОЧНО. Заголовок кадра лежит открытым, и
+   * посмотреть на номер можно до расшифровки — это и нужно, чтобы не считать
+   * криптографию на тридцати сутках переигранной истории. Но продвигать
+   * счётчик по непроверенному номеру нельзя: тема выведена из секрета и
+   * угадать её нельзя, а вот если она всё-таки утекла, достаточно было бы
+   * одного кадра с `seq = 2^53`, чтобы настоящий агент навсегда получал
+   * «уже исполнялось» на любую свою команду. Поэтому `accept` вызывают
+   * только после того, как кадр расшифровался: AEAD связывает номер с телом,
+   * и подменить его в заголовке, не имея ключа, невозможно.
    */
   admit(seq: number, at: number, now: number): GuardVerdict {
     if (now - at > FRESHNESS_WINDOW_MS) return { ok: false, reason: 'stale' };
     if (at - now > FRESHNESS_WINDOW_MS) return { ok: false, reason: 'from_future' };
     if (seq <= this.acceptedSeq) return { ok: false, reason: 'replayed' };
-
-    this.recent = this.recent.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-    if (this.recent.length >= RATE_LIMIT_MAX) return { ok: false, reason: 'rate_limited' };
-
-    this.recent.push(now);
-    this.acceptedSeq = seq;
+    if (this.freshRecent(now).length >= RATE_LIMIT_MAX) {
+      return { ok: false, reason: 'rate_limited' };
+    }
     return { ok: true };
+  }
+
+  /**
+   * Запомнить исполненную команду.
+   *
+   * Вызывается только для расшифрованного кадра. При отказе по частоте номер
+   * НЕ продвигается: команда не исполнена, и агент вправе повторить её тем же
+   * номером, когда квота освободится.
+   */
+  accept(seq: number, now: number): void {
+    this.recent = this.freshRecent(now);
+    this.recent.push(now);
+    if (seq > this.acceptedSeq) this.acceptedSeq = seq;
+  }
+
+  private freshRecent(now: number): number[] {
+    return this.recent.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
   }
 }
