@@ -20,8 +20,15 @@ import { Buffer } from 'buffer';
 import { listContacts, subscribeContactsChanged } from './contacts';
 import { ownAvatarUri } from '../identity/ownAvatar';
 import { loadKeyPair } from '../crypto/keyManager';
-import { didFromPubB64 } from '../identity/did';
+import { didFromPubB64, parseDidKey } from '../identity/did';
+import { publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { log } from '../logger';
+import {
+  publicAvatarUri,
+  requestPublicAvatar,
+  resetPublicAvatars,
+  subscribePublicAvatars,
+} from './publicAvatar';
 
 export type PersonAvatarSource = {
   /**
@@ -49,7 +56,49 @@ let restale = false;
 /** Подписаться на обновление таблицы. Возвращает отписку. */
 export function subscribeAvatarsChanged(cb: () => void): () => void {
   subs.add(cb);
-  return () => { subs.delete(cb); };
+  const unsubPublic = subscribePublicAvatars(cb);
+  return () => { subs.delete(cb); unsubPublic(); };
+}
+
+/**
+ * Ответ сервера по одному адресу — один и тот же объект. Отрисовка читает
+ * реестр через useSyncExternalStore, и новый объект на каждый вызов заставлял
+ * бы её перерисовываться без конца.
+ */
+const publicSources = new Map<string, PersonAvatarSource>();
+/** did → ключ base64: разбор did не бесплатный, а спрашивают на каждой отрисовке. */
+const didToPub = new Map<string, string | null>();
+
+function pubOf(key: string): string | null {
+  if (!key.startsWith('did:')) return key;
+  let pub = didToPub.get(key);
+  if (pub === undefined) {
+    const bytes = parseDidKey(key);
+    pub = bytes ? publicKeyToB64(bytes) : null;
+    didToPub.set(key, pub);
+  }
+  return pub;
+}
+
+/**
+ * Фото, которое владелец выставил «для всех» (см. publicAvatar). Спрашивается
+ * только для тех, чьего фото нет в таблице: снимок из конверта контакта
+ * главнее — его владелец прислал именно этому человеку.
+ */
+function publicSourceFor(key: string): PersonAvatarSource | null {
+  const pub = pubOf(key);
+  if (!pub) return null;
+  const uri = publicAvatarUri(pub);
+  if (!uri) {
+    requestPublicAvatar(pub);
+    return null;
+  }
+  let src = publicSources.get(uri);
+  if (!src) {
+    src = { cid: null, uri };
+    publicSources.set(uri, src);
+  }
+  return src;
 }
 
 /**
@@ -59,7 +108,7 @@ export function subscribeAvatarsChanged(cb: () => void): () => void {
  */
 export function avatarSourceFor(key: string | null | undefined): PersonAvatarSource | null {
   if (!key) return null;
-  return table.get(key) ?? null;
+  return table.get(key) ?? publicSourceFor(key);
 }
 
 /** Только для тестов и диагностики: сколько лиц знает таблица. */
@@ -142,6 +191,8 @@ export function stopAvatarRegistry(): void {
   unsubContacts?.();
   unsubContacts = null;
   table = new Map();
+  resetPublicAvatars();
+  publicSources.clear();
   for (const cb of subs) {
     try { cb(); } catch { /* см. refreshAvatarTable */ }
   }

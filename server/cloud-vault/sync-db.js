@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { createHmac, randomBytes } = require('crypto');
+const { createHash, createHmac, randomBytes } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 // Хранилище слепое: вид сущности нужен ему только чтобы отличать строки друг
@@ -251,6 +251,20 @@ class SyncDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
         ON sync_usernames (account_id, profile_id);
+
+      -- v4.32.722: фото профиля, которое владелец разрешил показывать всем
+      -- («Кто видит фото: все»). Ключ — открытый ключ профиля: по нему лицо
+      -- ищут лента, группы и карточка незнакомца. Запись кладёт только
+      -- подпись этим же ключом (см. /v1/avatar в index.js); ts — отметка
+      -- подписанного запроса, старый запрос не ложится поверх нового.
+      CREATE TABLE IF NOT EXISTS public_avatars (
+        public_key TEXT PRIMARY KEY NOT NULL,
+        mime TEXT NOT NULL,
+        bytes BLOB NOT NULL,
+        hash TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
 
       -- v4.32.557: журнал подключений устройств. Нужен для двух вещей сразу.
       -- Во-первых, по нему считается окно частоты: без него подключения
@@ -664,6 +678,67 @@ class SyncDatabase {
        FROM sync_usernames WHERE username_key = ?`,
     ).get(this.usernameKey(username));
     return row || null;
+  }
+
+  /**
+   * Положить фото профиля (v4.32.722). Отказ `stale` — на месте уже лежит
+   * запись из более позднего запроса; `full` — исчерпан общий потолок байт.
+   */
+  putPublicAvatar(publicKeyB64, mime, bytes, ts, { maxTotalBytes }) {
+    const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const prev = this.db.prepare(
+        'SELECT size, updated_at AS updatedAt FROM public_avatars WHERE public_key = ?',
+      ).get(publicKeyB64);
+      if (prev && prev.updatedAt > ts) {
+        this.db.exec('ROLLBACK');
+        return { ok: false, reason: 'stale' };
+      }
+      const total = this.db.prepare('SELECT COALESCE(SUM(size), 0) AS total FROM public_avatars').get().total;
+      if (total - (prev ? prev.size : 0) + bytes.length > maxTotalBytes) {
+        this.db.exec('ROLLBACK');
+        return { ok: false, reason: 'full' };
+      }
+      this.db.prepare(`
+        INSERT INTO public_avatars (public_key, mime, bytes, hash, size, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(public_key) DO UPDATE SET
+          mime = excluded.mime, bytes = excluded.bytes, hash = excluded.hash,
+          size = excluded.size, updated_at = excluded.updated_at
+      `).run(publicKeyB64, mime, bytes, hash, bytes.length, ts);
+      this.db.exec('COMMIT');
+      return { ok: true, hash };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Снять фото. Запись новее запроса не трогается — как и при записи. */
+  deletePublicAvatar(publicKeyB64, ts) {
+    const result = this.db.prepare(
+      'DELETE FROM public_avatars WHERE public_key = ? AND updated_at <= ?',
+    ).run(publicKeyB64, ts);
+    return (result.changes || 0) > 0;
+  }
+
+  /** Фото целиком — для раздачи. */
+  getPublicAvatar(publicKeyB64) {
+    return this.db.prepare(
+      'SELECT mime, bytes, hash FROM public_avatars WHERE public_key = ?',
+    ).get(publicKeyB64) || null;
+  }
+
+  /** Метки версий для пачки ключей: { ключ: hash } только для тех, у кого фото есть. */
+  lookupPublicAvatars(publicKeysB64) {
+    const out = {};
+    const stmt = this.db.prepare('SELECT hash FROM public_avatars WHERE public_key = ?');
+    for (const key of publicKeysB64) {
+      const row = stmt.get(key);
+      if (row) out[key] = row.hash;
+    }
+    return out;
   }
 
   /**

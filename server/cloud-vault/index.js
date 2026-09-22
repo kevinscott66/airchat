@@ -230,9 +230,19 @@ app.disable('x-powered-by');
 // Cloudflare client as 127.0.0.1.
 app.set('trust proxy', 'loopback');
 app.use(cors({ origin: '*' }));
+/**
+ * Раздача фото профиля считается отдельно от остального (v4.32.722): лента и
+ * список участников группы тянут десятки лиц разом, и общие 30 запросов в
+ * минуту съедались бы картинками — вместе с синхронизацией того же адреса.
+ */
+const AVATAR_IMG_PATH_RE = /^\/v1\/avatar\/[A-Za-z0-9_-]{43}\/img$/;
+const AVATAR_IMG_RATE_LIMIT = 600;
+
 app.use((req, res, next) => {
   const now = Date.now();
-  const key = rateLimitKey(req);
+  const image = req.method === 'GET' && AVATAR_IMG_PATH_RE.test(req.path);
+  const key = image ? `img:${rateLimitKey(req)}` : rateLimitKey(req);
+  const limit = image ? AVATAR_IMG_RATE_LIMIT : RATE_LIMIT;
   const bucket = rateBuckets.get(key);
   if (!bucket || now - bucket.startedAt >= RATE_WINDOW_MS) {
     if (rateBuckets.size >= MAX_RATE_BUCKETS) {
@@ -243,7 +253,7 @@ app.use((req, res, next) => {
     return next();
   }
   bucket.count += 1;
-  if (bucket.count > RATE_LIMIT) return res.status(429).json({ error: 'rate_limited' });
+  if (bucket.count > limit) return res.status(429).json({ error: 'rate_limited' });
   return next();
 });
 /**
@@ -1406,6 +1416,153 @@ app.get('/v1/username/:username', (req, res) => {
     });
   } catch {
     return res.status(500).json({ error: 'username_lookup_failed' });
+  }
+});
+
+/**
+ * Фото профиля «для всех» (v4.32.722).
+ *
+ * До этой версии фотография ездила только конвертом профиля — тем, с кем
+ * идёт переписка. Незнакомец по @имени, автор в ленте, участник группы, с
+ * которым не переписывались, оставались буквой в кружке, даже если владелец
+ * разрешил показывать фото всем. Вложение ntfy на эту роль не годится: оно
+ * живёт около трёх часов.
+ *
+ * Запись — только подписью ключом профиля, под которым фото и ищут: сервер
+ * не знает, чей это ключ, но знает, что пишет его владелец. Подписанное
+ * «что делаем, когда, разовое число» закрывает повтор старого запроса: снятое
+ * фото нельзя воскресить, прежнее — положить поверх нового.
+ *
+ * Тип картинки берётся по первым байтам, а не со слов клиента: отдаётся она
+ * с нашего адреса, и под видом JPEG не должно уехать ничего другого.
+ */
+const AVATAR_MAX_BYTES = 400 * 1024;
+const AVATAR_MAX_TOTAL_BYTES = (() => {
+  const configured = Number(process.env.PUBLIC_AVATAR_MAX_TOTAL_BYTES);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : 1024 * 1024 * 1024;
+})();
+const AVATAR_LOOKUP_MAX_KEYS = 64;
+const AVATAR_KEY_URL_RE = /^[A-Za-z0-9_-]{43}$/;
+
+function avatarMimeOf(bytes) {
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (bytes.length > 12 && bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** Ключ профиля из адреса (base64url, 43 знака) → обычный base64. */
+function avatarKeyFromUrl(raw) {
+  if (typeof raw !== 'string' || !AVATAR_KEY_URL_RE.test(raw)) return null;
+  const bytes = Buffer.from(raw, 'base64url');
+  if (bytes.length !== 32 || bytes.toString('base64url') !== raw) return null;
+  return bytes.toString('base64');
+}
+
+function verifyAvatarRequest(body) {
+  const payload = body && typeof body === 'object' ? body.payload : null;
+  const signature = body && typeof body === 'object' ? body.signature : null;
+  if (typeof payload !== 'string' || payload.length === 0 || payload.length > AVATAR_MAX_BYTES * 2) return null;
+  if (typeof signature !== 'string' || !SIGNATURE_RE.test(signature)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (safeStableStringify(parsed) !== payload) return null;
+  if (parsed.v !== 1 || (parsed.act !== 'put' && parsed.act !== 'del')) return null;
+  const publicKey = decodeBase64(parsed.publicKeyB64, 32);
+  const sig = decodeBase64(signature, 64);
+  if (!publicKey || publicKey.length !== 32 || !sig || sig.length !== 64) return null;
+  let ok = false;
+  try {
+    ok = ed25519.verify(sig, Buffer.from(payload, 'utf8'), publicKey);
+  } catch { ok = false; }
+  if (!ok) return null;
+  if (typeof parsed.ts !== 'number' || !Number.isSafeInteger(parsed.ts)) return null;
+  if (Math.abs(Date.now() - parsed.ts) > MAX_CLOCK_SKEW_MS) return null;
+  if (typeof parsed.nonce !== 'string' || !NONCE_RE.test(parsed.nonce)) return null;
+  let image = null;
+  let mime = null;
+  if (parsed.act === 'put') {
+    image = decodeBase64(parsed.imageB64, AVATAR_MAX_BYTES);
+    mime = image ? avatarMimeOf(image) : null;
+    if (!image || !mime) return null;
+  }
+  return { act: parsed.act, publicKeyB64: parsed.publicKeyB64, ts: parsed.ts, nonce: parsed.nonce, image, mime };
+}
+
+app.post('/v1/avatar', (req, res) => {
+  noStore(res);
+  const request = verifyAvatarRequest(req.body);
+  if (!request) return res.status(400).json({ error: 'invalid_avatar_request' });
+  try {
+    if (!syncDb.consumeNonce(`avatar:${request.publicKeyB64}`, request.nonce)) {
+      return res.status(409).json({ error: 'replayed_avatar_request' });
+    }
+    if (request.act === 'del') {
+      return res.json({ ok: true, removed: syncDb.deletePublicAvatar(request.publicKeyB64, request.ts) });
+    }
+    const result = syncDb.putPublicAvatar(request.publicKeyB64, request.mime, request.image, request.ts, {
+      maxTotalBytes: AVATAR_MAX_TOTAL_BYTES,
+    });
+    if (!result.ok) return res.status(result.reason === 'full' ? 507 : 409).json({ error: result.reason });
+    return res.json({ ok: true, v: result.hash });
+  } catch {
+    return res.status(500).json({ error: 'avatar_write_failed' });
+  }
+});
+
+/**
+ * Какие из этих людей выставили фото: { ключ: версия }. Пачкой — чтобы экран
+ * с десятком лиц стоил одного запроса, а не десяти.
+ */
+app.post('/v1/avatars/lookup', (req, res) => {
+  noStore(res);
+  const keys = req.body && Array.isArray(req.body.keys) ? req.body.keys : null;
+  if (!keys || keys.length === 0 || keys.length > AVATAR_LOOKUP_MAX_KEYS) {
+    return res.status(400).json({ error: 'invalid_avatar_lookup' });
+  }
+  const valid = [];
+  for (const raw of keys) {
+    const key = avatarKeyFromUrl(raw);
+    if (!key) return res.status(400).json({ error: 'invalid_avatar_lookup' });
+    valid.push(key);
+  }
+  try {
+    const found = syncDb.lookupPublicAvatars(valid);
+    const out = {};
+    for (const [key, hash] of Object.entries(found)) out[Buffer.from(key, 'base64').toString('base64url')] = hash;
+    return res.json({ found: out });
+  } catch {
+    return res.status(500).json({ error: 'avatar_lookup_failed' });
+  }
+});
+
+app.get('/v1/avatar/:key/img', (req, res) => {
+  const key = avatarKeyFromUrl(req.params.key);
+  if (!key) return res.status(400).json({ error: 'invalid_avatar_key' });
+  try {
+    const row = syncDb.getPublicAvatar(key);
+    if (!row) {
+      noStore(res);
+      return res.status(404).json({ error: 'avatar_not_found' });
+    }
+    res.set('content-type', row.mime);
+    res.set('x-content-type-options', 'nosniff');
+    res.set('content-security-policy', "default-src 'none'; sandbox");
+    res.set('cross-origin-resource-policy', 'cross-origin');
+    res.set('etag', `"${row.hash}"`);
+    // Адрес на клиенте несёт версию (?v=), поэтому кешу можно верить долго;
+    // без версии — коротко, чтобы снятое фото не висело сутки.
+    res.set('cache-control', req.query.v === row.hash ? 'public, max-age=86400' : 'public, max-age=300');
+    if (req.get('if-none-match') === `"${row.hash}"`) return res.status(304).end();
+    return res.send(Buffer.from(row.bytes));
+  } catch {
+    noStore(res);
+    return res.status(500).json({ error: 'avatar_read_failed' });
   }
 });
 

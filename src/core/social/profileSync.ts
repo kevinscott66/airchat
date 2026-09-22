@@ -43,6 +43,7 @@ import { profileLinksKey, type ProfileLink } from '../identity/profileLinks';
 import { badgeFor } from '../identity/verification';
 import { didFromPubB64 } from '../identity/did';
 import { log } from '../logger';
+import { publishOwnAvatarToDirectory } from './publicAvatar';
 
 export { PROFILE_PREFIX, PROFILE_REQ_PREFIX };
 
@@ -337,6 +338,9 @@ export async function broadcastMyProfile(): Promise<void> {
   // ждёт сеть на каждом собеседнике, и «активный» к её концу может означать
   // уже другой аккаунт.
   const pid = activeProfileId();
+  // v4.32.722: фото «для всех» — ещё и на сервер, иначе его увидят только
+  // те, кому доехал конверт. Не ждём: рассылке контактам это не нужно.
+  void publishOwnAvatarToDirectory(pid);
   // v4.32.707: рассылка идёт по списку контактов, поэтому аудитория здесь
   // всегда «contacts»; переключатель читается один раз на всю рассылку.
   const built = await buildEnvelope(pid, 'contacts', await avatarVisibilityTryFor(pid));
