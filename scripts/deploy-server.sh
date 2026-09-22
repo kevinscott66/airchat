@@ -46,7 +46,13 @@ case "$SVC" in
   *) echo "Неизвестный сервис: $SVC" >&2; exit 2 ;;
 esac
 
-ssh_run() { ssh -o ConnectTimeout=15 "$HOST_ALIAS" "$@"; }
+# Одно SSH-соединение на весь прогон: сервер ограничивает частоту подключений
+# к 22-му порту, и десяток отдельных ssh подряд упирается в блокировку.
+CTL_DIR="$(mktemp -d)"
+SSH_OPTS=(-o ConnectTimeout=15 -o ControlMaster=auto -o "ControlPath=$CTL_DIR/%C" -o ControlPersist=120)
+cleanup() { ssh "${SSH_OPTS[@]}" -O exit "$HOST_ALIAS" 2>/dev/null || true; rm -rf "$CTL_DIR" "${STAGE:-}"; }
+trap cleanup EXIT
+ssh_run() { ssh "${SSH_OPTS[@]}" "$HOST_ALIAS" "$@"; }
 
 health() {
   ssh_run "curl -fsS --max-time 5 http://127.0.0.1:$PORT/health" 2>/dev/null || true
@@ -74,17 +80,17 @@ echo "→ тесты $SRC"
 (cd "$SRC" && { [[ -d node_modules ]] || npm ci --silent; } && npm test --silent >/dev/null) || { echo "Тесты $SRC не прошли — выкладка остановлена." >&2; exit 1; }
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/pkg"
 for f in "${FILES[@]}"; do cp -R "$SRC/$f" "$STAGE/pkg/"; done
 printf '{"version":"%s","commit":"%s","builtAt":"%s"}\n' "$VER" "$SHORT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAGE/pkg/release.json"
 tar -C "$STAGE/pkg" -czf "$STAGE/release.tgz" .
 
 echo "→ сравнение с $HOST_ALIAS:$DEST"
+REMOTE_HASHES="$(ssh_run "cd $DEST 2>/dev/null && sha256sum ${FILES[*]} 2>/dev/null" || true)"
 for f in "${FILES[@]}"; do
   [[ -f "$SRC/$f" ]] || continue
   local_hash="$(shasum -a 256 "$SRC/$f" | cut -d' ' -f1)"
-  remote_hash="$(ssh_run "sha256sum $DEST/$f 2>/dev/null | cut -d' ' -f1")"
+  remote_hash="$(awk -v f="$f" '$2==f {print $1}' <<<"$REMOTE_HASHES")"
   [[ "$local_hash" == "$remote_hash" ]] && echo "   = $f" || echo "   ≠ $f"
 done
 echo "   сейчас: $(health)"
@@ -96,7 +102,7 @@ fi
 
 TS="$(date -u +%Y%m%d-%H%M%S)"
 echo "→ выкладка $SVC $VER @ $SHORT"
-scp -q "$STAGE/release.tgz" "$HOST_ALIAS:/tmp/airchat-$SVC-$TS.tgz"
+scp -q "${SSH_OPTS[@]}" "$STAGE/release.tgz" "$HOST_ALIAS:/tmp/airchat-$SVC-$TS.tgz"
 ssh_run "set -euo pipefail
   sudo rm -rf ${DEST}.new && sudo mkdir -p ${DEST}.new
   sudo tar -C ${DEST}.new -xzf /tmp/airchat-$SVC-$TS.tgz && rm -f /tmp/airchat-$SVC-$TS.tgz
