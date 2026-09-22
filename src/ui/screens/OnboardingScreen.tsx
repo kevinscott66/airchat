@@ -26,13 +26,13 @@ import {
   wipeMnemonicAndSessionFlags,
 } from '../../core/backup/seedPhrase';
 import { looksLikeEncryptedBackup } from '../../core/backup/backupFormat';
+import { log } from '../../core/logger';
 import { deleteKeyPairFromStore, loadKeyPair } from '../../core/crypto/keyManager';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
 import { validateMnemonic } from 'bip39';
-import { PermissionsScreen } from './PermissionsScreen';
 import { WelcomeLayout, WelcomeSheen } from '../components/WelcomeStage';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
@@ -51,7 +51,7 @@ import {
 } from '../../core/backup/seedBinding';
 import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 
-type Step = 'permissions' | 'welcome' | 'restore' | 'showSeed';
+type Step = 'welcome' | 'restore' | 'showSeed';
 
 type Props = {
   onComplete: (pair: KeyPairBytes) => void | Promise<void>;
@@ -199,10 +199,14 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       marginBottom: 16,
     },
   }));
-  // Show permissions screen first on Android, skip on iOS (handled by OS)
-  const [step, setStep] = useState<Step>(
-    Platform.OS === 'android' ? 'permissions' : 'welcome'
-  );
+  // AC-20: экрана «Разрешения» в обязательном пути больше нет. Пять
+  // системных диалогов подряд до того, как человек увидел приложение, —
+  // это просьба без причины, и половину из них отклоняли «на всякий случай».
+  // Каждое разрешение спрашивается там, где оно нужно: уведомления — после
+  // входа (pushNotificationService.init), микрофон и камера — в звонке и
+  // голосовом, галерея, камера и геолокация — при вложении. Сводка всех
+  // разрешений осталась в «Настройки → Разрешения».
+  const [step, setStep] = useState<Step>('welcome');
   /** Высота прокрутки приветствия — по ней раскладывается сцена над карточкой. */
   const [welcomeViewport, setWelcomeViewport] = useState(0);
   const [seedWords, setSeedWords] = useState<string[]>([]);
@@ -303,6 +307,10 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       setPendingPair(pair);
       setSeedWords(mnemonic.trim().split(/\s+/));
       setStep('showSeed');
+      // Шаги онбординга пишутся в тот же журнал, что и app_boot_set_gate, —
+      // отдельной аналитики в приложении нет. Только факт шага: ни слов, ни
+      // ключей, ни идентификатора.
+      log.info('onboarding_account_created', {});
     } catch (e) {
       Alert.alert('AirChat', userErrorText(e, 'Не удалось создать ключи. Попробуйте ещё раз.'));
     } finally {
@@ -553,10 +561,6 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   const createNewBtn = useAsyncButton(handleCreateNew, { throttleMs: 300 });
   const restoreBtn = useAsyncButton(handleRestore, { throttleMs: 300 });
   const seedConfirmedBtn = useAsyncButton(handleSeedConfirmed, { throttleMs: 300 });
-
-  if (step === 'permissions') {
-    return <PermissionsScreen onDone={() => setStep('welcome')} />;
-  }
 
   if (step === 'welcome') {
     return (

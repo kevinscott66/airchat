@@ -52,6 +52,7 @@ import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../pla
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
 import { HelpScreen } from './HelpScreen';
+import { PermissionsScreen } from './PermissionsScreen';
 import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 import { DiagnosticScreen } from './DiagnosticScreen';
 import { ProfileSelector } from '../components/ProfileSelector';
@@ -142,7 +143,15 @@ type SubScreen =
   | 'diagnostics'
   | 'vpn'
   | 'relay'
-  | 'profiles';
+  | 'profiles'
+  | 'permissions';
+
+/**
+ * AC-20: сводка разрешений живёт в Настройках, а не в онбординге. Только
+ * Android: там у каждого разрешения есть честное «прочитать без запроса»;
+ * на iOS микрофон и уведомления так не читаются, и карточки врали бы.
+ */
+const PERMISSIONS_MENU_AVAILABLE = Platform.OS === 'android';
 
 type Props = {
   profilesEnabled?: boolean;
@@ -1263,6 +1272,18 @@ function SettingsScreenImpl({
           label="Данные и хранилище"
           onPress={() => setSubScreen('data')}
         />
+        {PERMISSIONS_MENU_AVAILABLE && (
+          <>
+            <View style={styles.menuDivider} />
+            <MenuRow
+              iconName="key-outline"
+              hue="teal"
+              label="Разрешения"
+              onPress={() => setSubScreen('permissions')}
+              testID="settings_permissions_row"
+            />
+          </>
+        )}
       </View>
 
       <Text style={styles.sectionTitle}>БЕЗОПАСНОСТЬ</Text>
@@ -2877,6 +2898,9 @@ function SettingsScreenImpl({
       {subScreen === 'about' && <HelpScreen onClose={() => setSubScreen(null)} />}
       {subScreen === 'privacy-policy' && <PrivacyPolicyScreen onBack={() => setSubScreen(null)} />}
       {subScreen === 'diagnostics' && <DiagnosticScreen onClose={() => setSubScreen(null)} />}
+      {subScreen === 'permissions' && (
+        <PermissionsScreen embedded onDone={() => setSubScreen(null)} />
+      )}
       {subScreen === 'profiles' && (
         <ProfileSelector
           embedded

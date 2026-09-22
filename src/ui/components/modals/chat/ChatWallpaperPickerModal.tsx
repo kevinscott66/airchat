@@ -113,6 +113,15 @@ export function WallpaperPickerModal({
               // окно просто ничего не делало в ответ на нажатие.
               void (async () => {
                 const ip = await import('expo-image-picker');
+                // AC-20: разрешение спрашивается здесь, в момент выбора, как у
+                // аватара и вложений, — общий экран разрешений из онбординга
+                // убран. Без запроса отказ приходил из самого выбора, общей
+                // ошибкой, без объяснения, зачем нужен доступ.
+                const perm = await ip.requestMediaLibraryPermissionsAsync();
+                if (!perm.granted) {
+                  showError('Нужен доступ к галерее, чтобы выбрать фото для фона чата.');
+                  return;
+                }
                 // v4.32.54: quality:1 + exif:false — избегает NoSuchMethodError CompressionImageExporter.
                 const res = await ip.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1, exif: false });
                 if (!res.canceled && res.assets[0]?.uri) {

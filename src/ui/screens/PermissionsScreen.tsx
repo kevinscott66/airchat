@@ -30,6 +30,11 @@ interface Props {
    * заново читались бы все статусы.
    */
   defs?: readonly PermissionDef[];
+  /**
+   * Экран открыт внутри другого, который уже отбил верхний отступ (Настройки):
+   * тогда свой SafeArea — только снизу, а выход подписан «Назад».
+   */
+  embedded?: boolean;
 }
 
 const STATUS_LABEL: Record<PermissionStatus, string> = {
@@ -49,7 +54,7 @@ const STATUS_HINT: Partial<Record<PermissionStatus, string>> = {
   blocked: 'Выдать можно только в настройках системы — нажмите, чтобы открыть их.',
 };
 
-export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS }: Props): React.ReactElement {
+export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS, embedded = false }: Props): React.ReactElement {
   const colors = useColors();
   const styles = useThemedStyles((c) => ({
     safe:    { flex: 1 as const, backgroundColor: c.background },
@@ -117,6 +122,7 @@ export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS }: Props): Re
     usePermissionsController(defs);
 
   const allDone = defs.every((d) => statuses[d.id] !== 'unknown');
+  const exitLabel = allDone ? 'Готово' : embedded ? 'Назад' : 'Пропустить';
 
   // Уход с экрана отменяет очередь: иначе диалоги продолжали бы всплывать
   // поверх следующего экрана.
@@ -126,7 +132,7 @@ export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS }: Props): Re
   }, [cancel, onDone]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={embedded ? ['bottom'] : ['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.logoEmoji}>✈</Text>
@@ -202,11 +208,11 @@ export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS }: Props): Re
             style={[styles.secondaryBtn, allDone && styles.primaryBtn]}
             onPress={leave}
             accessibilityRole="button"
-            accessibilityLabel={allDone ? 'Готово' : 'Пропустить'}
+            accessibilityLabel={exitLabel}
             testID="perm_skip"
           >
             <Text style={[styles.secondaryBtnText, allDone && styles.primaryBtnText]}>
-              {allDone ? 'Готово →' : 'Пропустить'}
+              {allDone ? 'Готово →' : exitLabel}
             </Text>
           </AppPressable>
         </View>
