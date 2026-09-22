@@ -87,3 +87,7 @@ modules/airchat-openflux/android/src/main/cpp/include/libopenflux.h
 # Манифест локальной релизной сборки (scripts/build-release.sh).
 release/
 build/ios/
+
+# Бандл headless-ядра (node-host/build.mjs): 40+ МБ склеенных зависимостей,
+# пересобирается одной командой.
+node-host/dist/
