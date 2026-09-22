@@ -428,6 +428,11 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
 
   useEffect(() => {
     return () => {
+      // v4.32.722: уборка прежнего значения `null` срабатывает ровно тогда,
+      // когда в состояние лёг НОВЫЙ плеер, — а его подписка на статус к этому
+      // моменту уже в subRef. Снимать её здесь значило снимать чужую: таймер и
+      // дорожка стояли на месте с первого нажатия, конец записи не ловился.
+      if (!sound) return;
       if (subRef.current) { subRef.current.remove(); subRef.current = null; }
       if (sound && activeVoicePlayer?.player === sound) activeVoicePlayer = null;
       sound?.remove();

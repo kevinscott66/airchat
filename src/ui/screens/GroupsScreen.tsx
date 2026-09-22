@@ -4510,6 +4510,10 @@ function GroupChatScreen({
                       await touchGroupConversation(group.id, pid, '🎤 Голосовое сообщение', false, myDisplayName, false, myPubB64);
                       announceGroupSend(fanoutGroupMessage(group.id, voiceText, myDisplayName, myPubB64, row.id));
                       await loadMessages();
+                      // v4.32.722: своё голосовое — всегда к нему, как и свой текст.
+                      requestAnimationFrame(() => {
+                        groupFlashRef.current?.scrollToOffset({ offset: 0, animated: true });
+                      });
                     } catch (e) {
                       await deleteCachedFileUris([r.uri]).catch(() => {});
                       showError(userErrorText(e, 'Не удалось отправить голосовое'));

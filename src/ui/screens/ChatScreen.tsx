@@ -2169,6 +2169,16 @@ function ChatThreadView({
     });
   };
 
+  // v4.32.228 (IB-03): после отправки прокручиваем перевёрнутый список к самому
+  // новому сообщению (offset 0 = низ), иначе исходящий пузырь не появлялся в
+  // зоне видимости, если пользователь был прокручен вверх. RAF — чтобы скролл
+  // выполнился после рендера нового (оптимистичного/локального) элемента.
+  const scrollToNewest = useCallback(() => {
+    requestAnimationFrame(() => {
+      flashListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    });
+  }, []);
+
   const sendVoice = useCallback(
     async (result: VoiceRecordingResult) => {
       if (!peerB64 || sending) return;
@@ -2195,6 +2205,7 @@ function ChatThreadView({
           });
           void touchConversation(peerB64, activeProfileId, '🎤 Голосовое сообщение', 'out', false);
           void appendNewMessages();
+          scrollToNewest();
         } else {
           const svc = getMessagingService();
           if (!svc) throw new Error('Сервис не готов. Подождите и повторите.');
@@ -2233,6 +2244,9 @@ function ChatThreadView({
             createdAt: Date.now(),
             ownerProfileId: activeProfileId,
           });
+          // v4.32.722: как и у текста — к своему пузырю. Без этого голосовое,
+          // отправленное из прокрученной вверх переписки, уезжало за экран.
+          scrollToNewest();
           const blob = await uploadEncryptedBlob(result.uri, 'audio/m4a', peerDid);
           if (!blob) throw new Error('Голосовое не загрузилось. Проверьте соединение и повторите.');
           const voiceText = makeVoiceText(result.uri, result.durationMs, blob);
@@ -2253,7 +2267,7 @@ function ChatThreadView({
         setSending(false);
       }
     },
-    [peerB64, sending, isBlocked, isSavedMessages, activeProfileId, clearDraft, appendNewMessages]
+    [peerB64, sending, isBlocked, isSavedMessages, activeProfileId, clearDraft, appendNewMessages, scrollToNewest]
   );
 
   const sendGif = useCallback(async (gifText: string) => {
@@ -2278,18 +2292,20 @@ function ChatThreadView({
         });
         void touchConversation(peerB64, activeProfileId, '🎞 GIF', 'out', false);
         void appendNewMessages();
+        scrollToNewest();
       } else {
         const svc = getMessagingService();
         if (!svc) { showError('Сервис не готов'); return; }
         await svc.sendMessage(peerB64, gifText);
         void appendNewMessages();
+        scrollToNewest();
       }
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить GIF'));
     } finally {
       setSending(false);
     }
-  }, [peerB64, sending, isBlocked, isSavedMessages, activeProfileId, appendNewMessages]);
+  }, [peerB64, sending, isBlocked, isSavedMessages, activeProfileId, appendNewMessages, scrollToNewest]);
 
   // ─── Slash command suggestions ───────────────────────────────────────────────
   const CHAT_CMDS = useMemo(() => [
@@ -2302,16 +2318,6 @@ function ChatThreadView({
     if (chatCmdFilter === null) return [];
     return CHAT_CMDS.filter((c) => c.cmd.slice(1).startsWith(chatCmdFilter) || chatCmdFilter === '');
   }, [chatCmdFilter, CHAT_CMDS]);
-
-  // v4.32.228 (IB-03): после отправки прокручиваем перевёрнутый список к самому
-  // новому сообщению (offset 0 = низ), иначе исходящий пузырь не появлялся в
-  // зоне видимости, если пользователь был прокручен вверх. RAF — чтобы скролл
-  // выполнился после рендера нового (оптимистичного/локального) элемента.
-  const scrollToNewest = useCallback(() => {
-    requestAnimationFrame(() => {
-      flashListRef.current?.scrollToOffset({ offset: 0, animated: true });
-    });
-  }, []);
 
   const send = useCallback(() => {
     if (editTarget) {
