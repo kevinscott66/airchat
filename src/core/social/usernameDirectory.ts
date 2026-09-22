@@ -42,7 +42,13 @@ export type MentionTarget =
   | { status: 'unclaimed' }
   /** Имя занято, но владелец не назвал ключ: перейти некуда. */
   | { status: 'unlisted' }
-  /** Проверить не вышло: реестр не настроен или не ответил. */
+  /**
+   * Реестра в этой сборке нет: адрес сервера не задан. Отдельно от `unknown`,
+   * потому что «нет связи» здесь неправда — сеть в порядке, спрашивать некого,
+   * и повтор не поможет.
+   */
+  | { status: 'unconfigured' }
+  /** Проверить не вышло: реестр не ответил. */
   | { status: 'unknown' };
 
 export async function resolveMentionTarget(raw: string, ownerProfileId: number): Promise<MentionTarget> {
@@ -56,6 +62,7 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
   if (!username) return { status: 'unclaimed' };
 
   const answer = await lookupSyncUsername(username);
+  if (answer.status === 'unconfigured') return { status: 'unconfigured' };
   if (answer.status === 'unknown') return { status: 'unknown' };
   if (answer.status === 'free') return { status: 'unclaimed' };
   if (!answer.peerPubB64) return { status: 'unlisted' };
@@ -63,7 +70,10 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
 }
 
 /** Что показать человеку, когда переходить некуда. */
-export function mentionMissText(status: 'ambiguous' | 'unclaimed' | 'unlisted' | 'unknown', name: string): string {
+export function mentionMissText(
+  status: 'ambiguous' | 'unclaimed' | 'unlisted' | 'unconfigured' | 'unknown',
+  name: string,
+): string {
   switch (status) {
     case 'ambiguous':
       return `Имя «${name}» носят несколько контактов — откройте нужного в списке`;
@@ -71,6 +81,8 @@ export function mentionMissText(status: 'ambiguous' | 'unclaimed' | 'unlisted' |
       return `Юзернейма @${name} не существует`;
     case 'unlisted':
       return `@${name} занят, но владелец не открыл переход по имени`;
+    case 'unconfigured':
+      return `Не найти @${name}: поиск по имени в этой сборке не настроен`;
     default:
       return `Не удалось проверить @${name} — нет связи с сервером`;
   }

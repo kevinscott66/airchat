@@ -56,6 +56,15 @@ describe('resolveMentionTarget', () => {
     expect(mentionMissText('unknown', 'founder')).toContain('Не удалось проверить');
   });
 
+  it('сборка без реестра не выдаётся за обрыв связи', async () => {
+    local.mockResolvedValue({ status: 'none' });
+    remote.mockResolvedValue({ status: 'unconfigured' });
+    await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({ status: 'unconfigured' });
+    const text = mentionMissText('unconfigured', 'margarita');
+    expect(text).not.toContain('связи');
+    expect(text).toContain('не настроен');
+  });
+
   it('занятое имя без опубликованного ключа — отдельный исход', async () => {
     local.mockResolvedValue({ status: 'none' });
     remote.mockResolvedValue({ status: 'taken', peerPubB64: null });
@@ -77,7 +86,7 @@ describe('resolveMentionTarget', () => {
 
 describe('mentionMissText', () => {
   it('ни один исход не сваливает вину на адресную книгу', () => {
-    for (const status of ['ambiguous', 'unclaimed', 'unlisted', 'unknown'] as const) {
+    for (const status of ['ambiguous', 'unclaimed', 'unlisted', 'unconfigured', 'unknown'] as const) {
       if (status === 'ambiguous') continue;
       expect(mentionMissText(status, 'x')).not.toContain('контакт');
     }

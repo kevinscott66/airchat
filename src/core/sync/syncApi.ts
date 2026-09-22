@@ -587,11 +587,14 @@ async function usernameDirectoryProof(
 export type UsernameDirectoryAnswer =
   | { status: 'free' }
   | { status: 'taken'; peerPubB64: string | null }
+  /** Сервер в сборке не задан — спрашивать некого. */
+  | { status: 'unconfigured' }
+  /** Сервер задан, но не ответил. */
   | { status: 'unknown' };
 
 export async function lookupSyncUsername(username: string): Promise<UsernameDirectoryAnswer> {
   const base = syncBaseUrl();
-  if (!base) return { status: 'unknown' };
+  if (!base) return { status: 'unconfigured' };
   try {
     // v4.32.623: срок на весь обмен. Это единственный запрос модуля мимо
     // fetchSigned, и срока у него не было вовсе: сервер, принявший соединение
