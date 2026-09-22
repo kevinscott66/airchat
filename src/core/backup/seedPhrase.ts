@@ -108,11 +108,18 @@ type LocalMnemonicPayloadV3 = {
 const FIRST_LAUNCH_KEY = 'airchat_first_launch_done_v1';
 const SEED_SHOWN_KEY = 'airchat_seed_shown_v1';
 const BACKUP_WARN_ACK_KEY = 'airchat_backup_warn_ack_v1';
+/**
+ * Человек нажал «Сделаю позже» на проверке записанных слов: запись не
+ * подтверждена, и приложение напоминает о ней. Хранится только признак —
+ * ни слов, ни номеров проверки.
+ */
+const SEED_BACKUP_PENDING_KEY = 'airchat_seed_backup_pending_v1';
 /** Session markers removed together with the wallet, and verified by the wipe. */
 export const SESSION_SECURE_KEYS = [
   FIRST_LAUNCH_KEY,
   SEED_SHOWN_KEY,
   BACKUP_WARN_ACK_KEY,
+  SEED_BACKUP_PENDING_KEY,
 ] as const;
 const BACKUP_KDF_ITERS = 120_000;
 /** HKDF info для первого (основного) профиля — не менять, иначе сломаются существующие ключи. */
@@ -140,6 +147,18 @@ export async function setBackupWarnAck(): Promise<void> {
 
 export async function hasBackupWarnAck(): Promise<boolean> {
   return (await SecureStore.getItemAsync(BACKUP_WARN_ACK_KEY)) === 'true';
+}
+
+export async function setSeedBackupPending(): Promise<void> {
+  await SecureStore.setItemAsync(SEED_BACKUP_PENDING_KEY, 'true');
+}
+
+export async function hasSeedBackupPending(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(SEED_BACKUP_PENDING_KEY)) === 'true';
+}
+
+export async function clearSeedBackupPending(): Promise<void> {
+  await SecureStore.deleteItemAsync(SEED_BACKUP_PENDING_KEY);
 }
 
 /**

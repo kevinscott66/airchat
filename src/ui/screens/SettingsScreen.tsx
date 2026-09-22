@@ -4,6 +4,7 @@ import { runWithConcurrency } from '../../core/utils/runWithConcurrency';
 import { useTabRef } from '../TabRefContext';
 import { devicesLabel } from '../utils/plural';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
+import { SeedVerifyForm } from '../components/SeedVerifyForm';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import Constants from 'expo-constants';
 import {
@@ -82,7 +83,12 @@ import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs
 // v4.32.486: облачный перевод — решение о приватности, и до этой версии
 // переключателя к нему не было вовсе (см. social/translateConsent).
 import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
-import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../../core/backup/seedPhrase';
+import {
+  clearSeedBackupPending,
+  deriveKeyPairFromMnemonic,
+  getStoredMnemonic,
+  hasSeedBackupPending,
+} from '../../core/backup/seedPhrase';
 import { isCloudVaultConfigured, uploadCloudVault } from '../../core/backup/cloudVault';
 // v4.32.595: привязка секретных слов к Apple ID — второй путь домой, когда
 // слова потеряны. Сервер хранит только шифртекст, ключ выводится из пароля
@@ -329,6 +335,13 @@ function SettingsScreenImpl({
   const [seedPwdInput, setSeedPwdInput] = useState('');
   const [seedPhrase, setSeedPhrase] = useState<string | null>(null);
   const [seedBusy, setSeedBusy] = useState(false);
+  /**
+   * AC-21: при заведении аккаунта выбрано «Сделаю позже» — запись слов не
+   * проверена. Пока флаг стоит, в меню висит напоминание, а в окне слов есть
+   * «Проверить запись».
+   */
+  const [seedBackupPending, setSeedBackupPendingState] = useState(false);
+  const [seedVerifyMode, setSeedVerifyMode] = useState(false);
   const [cloudPasswordModal, setCloudPasswordModal] = useState(false);
   const [cloudPasswordInput, setCloudPasswordInput] = useState('');
   const [cloudBusy, setCloudBusy] = useState(false);
@@ -407,6 +420,9 @@ function SettingsScreenImpl({
     void authGuard.hasPassword().then(setHasAppPassword).catch(() => setHasAppPassword(true));
   }, []);
   useEffect(() => { void isInternalDiagnosticsEnabled().then(setDiagUnlocked); }, []);
+  useEffect(() => {
+    void hasSeedBackupPending().then(setSeedBackupPendingState).catch(() => setSeedBackupPendingState(false));
+  }, []);
 
   useEffect(() => {
     /**
@@ -1122,6 +1138,32 @@ function SettingsScreenImpl({
   // ── Async button wrappers (only for heavy async operations) ────────────────
   const exportBackupBtn = useAsyncButton(handleExportBackup, { throttleMs: 300 });
   const showSeedBtn = useAsyncButton(handleShowSeed, { throttleMs: 300 });
+
+  const openSeedModal = useCallback(() => {
+    setSeedPhrase(null);
+    setSeedPwdInput('');
+    setSeedVerifyMode(false);
+    setSeedModal(true);
+  }, []);
+  const closeSeedModal = useCallback(() => {
+    setSeedModal(false);
+    setSeedPhrase(null);
+    setSeedPwdInput('');
+    setSeedVerifyMode(false);
+  }, []);
+  /** Запись проверена — напоминание снимается. В журнал — только событие. */
+  const handleSeedVerified = useCallback(async () => {
+    try {
+      await clearSeedBackupPending();
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось сохранить отметку о проверке. Попробуйте ещё раз.'));
+      return;
+    }
+    log.info('settings_seed_verified', {});
+    setSeedBackupPendingState(false);
+    closeSeedModal();
+    showSuccess('Запись секретных слов проверена');
+  }, [closeSeedModal]);
   const openBackupBtn = useAsyncButton(openBackupSection, { throttleMs: 300 });
   const versionPressBtn = useAsyncButton(
     useCallback(async () => { onVersionPress(); }, [onVersionPress]),
@@ -1224,6 +1266,26 @@ function SettingsScreenImpl({
       testID="settings_screen"
     >
       <Text style={styles.h1}>Ещё</Text>
+
+      {seedBackupPending ? (
+        <AppPressable
+          style={({ pressed }) => [styles.linkRow, styles.seedReminder, pressed && styles.pressed]}
+          onPress={openSeedModal}
+          android_ripple={{ color: colors.ripple }}
+          testID="settings_seed_backup_reminder"
+          accessibilityRole="button"
+          accessibilityLabel="Секретные слова не проверены. Проверить запись"
+        >
+          <Ionicons name="alert-circle-outline" size={22} color={colors.warning} />
+          <View style={styles.rowBody}>
+            <Text style={styles.label}>Секретные слова не проверены</Text>
+            <Text style={styles.desc}>
+              Вы отложили проверку записи. Без записанных слов аккаунт не восстановить.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+        </AppPressable>
+      ) : null}
 
       {profilesEnabled ? (
         <>
@@ -2278,7 +2340,7 @@ function SettingsScreenImpl({
       <AppPressable
         style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
         android_ripple={{ color: colors.ripple }}
-        onPress={() => { setSeedPhrase(null); setSeedPwdInput(''); setSeedModal(true); }}
+        onPress={openSeedModal}
       >
         <Ionicons name="key-outline" size={22} color={colors.text} />
         <View style={styles.rowBody}>
@@ -2811,6 +2873,15 @@ function SettingsScreenImpl({
                       Безопасность → Показать», без единого предупреждения о
                       записи экрана. На Android их снимало любое приложение с
                       выданным разрешением на запись, на iOS — обычный снимок. */}
+                  {seedVerifyMode ? (
+                    <SeedVerifyForm
+                      words={seedPhrase.trim().split(/\s+/)}
+                      onVerified={handleSeedVerified}
+                      onMismatch={() => log.info('settings_seed_verify_failed', {})}
+                      onBack={() => setSeedVerifyMode(false)}
+                    />
+                  ) : (
+                  <>
                   <SecretScreenGuard style={styles.seedBox} testID="settings_seed_words">
                     <Text style={styles.seedText}>{seedPhrase}</Text>
                   </SecretScreenGuard>
@@ -2820,6 +2891,19 @@ function SettingsScreenImpl({
                   <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 12 }]} onPress={() => { void copySecretToClipboard(seedPhrase).then(() => showSuccess(`${COPIED_TEXT} — буфер очистится через минуту`)); }}>
                     <Text style={styles.pwdPrimaryBtnText}>{COPY_ACTION}</Text>
                   </AppPressable>
+                  {seedBackupPending ? (
+                    <AppPressable
+                      style={[styles.pwdPrimaryBtn, { marginTop: 8 }]}
+                      onPress={() => setSeedVerifyMode(true)}
+                      testID="settings_seed_verify_start"
+                      accessibilityRole="button"
+                      accessibilityLabel="Проверить запись"
+                    >
+                      <Text style={styles.pwdPrimaryBtnText}>Проверить запись</Text>
+                    </AppPressable>
+                  ) : null}
+                  </>
+                  )}
                 </>
               ) : (
                 <>
@@ -2837,7 +2921,7 @@ function SettingsScreenImpl({
                   </AppPressable>
                 </>
               )}
-              <AppPressable onPress={() => { setSeedModal(false); setSeedPhrase(null); setSeedPwdInput(''); }}>
+              <AppPressable onPress={closeSeedModal}>
                 <Text style={styles.pwdCancel}>Закрыть</Text>
               </AppPressable>
             </View>
@@ -2966,6 +3050,9 @@ function makeStyles(c: AppColors, sf: (base: number) => number) {
       gap: 10,
       marginBottom: 8,
     },
+
+    /** Напоминание о непроверенной записи слов: кромка цвета предупреждения. */
+    seedReminder: { borderColor: c.warning },
 
     // Press feedback
     pressed: { opacity: 0.7 },

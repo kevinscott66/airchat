@@ -20,8 +20,10 @@ import {
   hasSeedShown,
   hasStoredMnemonic,
   importEncryptedBackup,
+  clearSeedBackupPending,
   restoreFromMnemonic,
   setFirstLaunchDone,
+  setSeedBackupPending,
   setSeedShown,
   wipeMnemonicAndSessionFlags,
 } from '../../core/backup/seedPhrase';
@@ -39,6 +41,7 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { AirChatLockup } from '../components/AirChatLockup';
 import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
+import { SeedVerifyForm } from '../components/SeedVerifyForm';
 import { authGuard } from '../../core/security/authGuard';
 import { describeRestoreLock } from '../../core/security/restoreLockOutcome';
 import { decideStoredPhraseState } from '../../core/backup/storedPhraseState';
@@ -51,7 +54,7 @@ import {
 } from '../../core/backup/seedBinding';
 import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 
-type Step = 'welcome' | 'restore' | 'showSeed';
+type Step = 'welcome' | 'restore' | 'showSeed' | 'verifySeed';
 
 type Props = {
   onComplete: (pair: KeyPairBytes) => void | Promise<void>;
@@ -487,7 +490,25 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     }
   };
 
-  const handleSeedConfirmed = async (): Promise<void> => {
+  /**
+   * AC-21: «Я сохранил секретные слова» больше не пускает сразу — сначала
+   * проверка трёх слов по номеру (SeedVerifyForm). Слова остаются в
+   * `seedWords`: вернуться к ним можно, не заводя аккаунт заново.
+   */
+  const handleSeedConfirmed = (): void => {
+    if (!pendingPair) {
+      Alert.alert('AirChat', 'Внутренняя ошибка: нет ключей.');
+      return;
+    }
+    setStep('verifySeed');
+  };
+
+  /**
+   * Завершить заведение аккаунта. `deferred` — человек выбрал «Сделаю позже»:
+   * запись не подтверждена, и приложение будет об этом напоминать.
+   * В журнал идут только названия шагов — ни слов, ни номеров.
+   */
+  const finishOnboarding = async (deferred: boolean): Promise<void> => {
     if (!pendingPair) {
       Alert.alert('AirChat', 'Внутренняя ошибка: нет ключей.');
       return;
@@ -496,6 +517,9 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     try {
       await setFirstLaunchDone();
       await setSeedShown();
+      if (deferred) await setSeedBackupPending();
+      else await clearSeedBackupPending();
+      log.info(deferred ? 'onboarding_seed_backup_deferred' : 'onboarding_seed_verified', {});
       await onComplete(pendingPair);
     } catch (e) {
       Alert.alert('AirChat', userErrorText(e, 'Не удалось завершить настройку. Попробуйте ещё раз.'));
@@ -531,6 +555,11 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   }, []);
 
   const handleBack = useCallback((): void => {
+    // С проверки — к словам, а не к сбросу аккаунта: слова ещё на экране нужны.
+    if (step === 'verifySeed') {
+      setStep('showSeed');
+      return;
+    }
     if (step === 'showSeed') {
       Alert.alert(
         'Отменить создание аккаунта?',
@@ -555,12 +584,12 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
   // Аппаратная «назад» на Android вела себя как выход из приложения: на экране
   // восстановления это теряло уже набранные слова, а на экране сидки — уводило
   // из приложения на полушаге, минуя вопрос о сбросе.
-  useBackHandler(step === 'restore' || step === 'showSeed', handleBack);
+  useBackHandler(step === 'restore' || step === 'showSeed' || step === 'verifySeed', handleBack);
 
   // ── useAsyncButton wrappers ──────────────────────────────────────────────────
   const createNewBtn = useAsyncButton(handleCreateNew, { throttleMs: 300 });
   const restoreBtn = useAsyncButton(handleRestore, { throttleMs: 300 });
-  const seedConfirmedBtn = useAsyncButton(handleSeedConfirmed, { throttleMs: 300 });
+  const seedConfirmedBtn = useAsyncButton(async () => handleSeedConfirmed(), { throttleMs: 300 });
 
   if (step === 'welcome') {
     return (
@@ -861,6 +890,39 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
           </GlassSurface>
         </ScrollView>
       </View>
+      </SafeScreen>
+    );
+  }
+
+  if (step === 'verifySeed') {
+    return (
+      <SafeScreen>
+      <AuthBackdrop />
+        <KeyboardAvoidingView
+          style={styles.kav}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <ScrollView
+            contentContainerStyle={styles.restoreScrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            testID="seed_verify_screen"
+          >
+            <GlassSurface variant="prominent" style={styles.card}>
+              <LoadingOverlay visible={busy} message="Сохранение…" />
+              <Text style={styles.title}>Проверка записи</Text>
+              <SeedVerifyForm
+                words={seedWords}
+                busy={busy}
+                onVerified={() => finishOnboarding(false)}
+                onMismatch={() => log.info('onboarding_seed_verify_failed', {})}
+                onBack={handleBack}
+                onDefer={() => finishOnboarding(true)}
+              />
+            </GlassSurface>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeScreen>
     );
   }
