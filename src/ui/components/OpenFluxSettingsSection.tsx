@@ -24,11 +24,7 @@ import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
 import { userErrorText } from './userErrorText';
 import { getConfigSync, loadConfig, saveConfigOverride, type AppConfig } from '../../core/config';
-import { loadKeyPair } from '../../core/crypto/keyManager';
-import {
-  startInternetTransportIfEnabled,
-  stopInternetTransportStack,
-} from '../../core/transport/internet/internetCoordinator';
+import { restartInternetTransport } from '../../core/transport/internet/restartInternetTransport';
 import {
   getOpenFluxRunning,
   getOpenFluxSocksAddr,
@@ -84,24 +80,15 @@ export function OpenFluxSettingsSection(): React.ReactElement {
   /**
    * Переподнять интернет-транспорт после переключения туннеля.
    *
-   * Подмена маршрута (ProxySelector на стороне Android) действует только на
-   * НОВЫЕ соединения. Веб-сокет ntfy — главный канал приложения — к этому
-   * моменту уже открыт и продолжит идти прежним путём, пока его не закроют.
-   * Без перезапуска включение туннеля выглядело бы как «нажал, и ничего не
-   * изменилось», а выключение оставляло бы трафик в уже погашенном SOCKS5.
-   *
-   * Тот же приём, что и при смене адреса relay (см. RelaySettingsSection):
-   * сначала остановить, потом поднять заново — иначе координатор помнит, что
-   * уже запущен, и старт молча выходит.
+   * Сама процедура переехала в core (`restartInternetTransport`): ровно то же
+   * самое понадобилось мосту внешнего агента, который переключает туннель без
+   * участия этого экрана. Почему без перезапуска «нажал, и ничего не
+   * изменилось» — см. шапку того модуля.
    */
-  const restartTransport = useCallback(async (cfg: AppConfig): Promise<void> => {
-    stopInternetTransportStack();
-    if (cfg.internet?.enabled === false) return;
-    const pair = await loadKeyPair();
-    // Ключей ещё нет — значит, транспорт и не стартовал: поднимать нечего.
-    if (!pair) return;
-    await startInternetTransportIfEnabled(pair, cfg);
-  }, []);
+  const restartTransport = useCallback(
+    async (cfg: AppConfig): Promise<void> => restartInternetTransport(cfg),
+    [],
+  );
 
   const onToggle = useCallback(
     async (on: boolean) => {

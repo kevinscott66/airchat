@@ -50,6 +50,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlockedContactsList } from '../components/BlockedContactsList';
 import { VpnSettingsSection } from '../components/VpnSettingsSection';
 import { OpenFluxSettingsSection } from '../components/OpenFluxSettingsSection';
+import { AgentBridgeSettingsSection } from '../components/AgentBridgeSettingsSection';
 import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAILABLE } from '../platformCapabilities';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
@@ -2173,6 +2174,11 @@ function SettingsScreenImpl({
           обычно взять неоткуда. */}
       {OPENFLUX_AVAILABLE && <OpenFluxSettingsSection />}
       {EMBEDDED_VPN_AVAILABLE && <VpnSettingsSection />}
+      {/* Мост показывается на любой платформе, в том числе там, где ядра
+          OpenFlux нет: настройки и состояние туннеля он отдаёт и оттуда, а
+          «недоступно на этой платформе» — такой же осмысленный ответ, как
+          «выключено». */}
+      <AgentBridgeSettingsSection />
     </ScrollView>
   );
 

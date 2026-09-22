@@ -912,6 +912,17 @@ function MainTabs({
               err: e instanceof Error ? e.message : String(e),
             });
           }
+          // Мост внешнего агента поднимается сам, если его включали: иначе
+          // человеку пришлось бы заново щёлкать переключатель после каждого
+          // перезапуска, а агент всё это время получал бы молчание. Выключенный
+          // мост не делает здесь ничего и не открывает сокета.
+          try {
+            await import('./core/bridge/agentBridge').then((m) => m.startAgentBridgeIfEnabled());
+          } catch (e) {
+            log.warn('init_agent_bridge_failed', {
+              err: e instanceof Error ? e.message : String(e),
+            });
+          }
           if (!alive) return;
           let peerKeys: string[] = [];
           // v4.32.711: список собеседников — того аккаунта, чьей парой ключей
