@@ -17,29 +17,44 @@ export interface AppError {
   retryable: boolean;
 }
 
+type SentryModule = typeof import('@sentry/react-native');
+
+/**
+ * Sentry грузится отдельным чанком и только когда DSN задан. Статический
+ * require тянул ~1,9 МБ исходника в стартовый веб-бандл даже без DSN, то есть
+ * почти всегда впустую (AC-22). Пока модуль не загрузился, отчёты не уходят —
+ * как и раньше до init.
+ */
+let sentry: SentryModule | null = null;
 let sentryInit = false;
+let sentryLoading = false;
 
 /** Call once at startup (after loadConfig). DSN: override → EXPO_PUBLIC_SENTRY_DSN → config.sentry.dsn */
 export function initSentryFromEnv(overrideDsn?: string): void {
-  if (sentryInit || (typeof __DEV__ !== 'undefined' && __DEV__)) return;
+  if (sentryInit || sentryLoading || (typeof __DEV__ !== 'undefined' && __DEV__)) return;
   const fromEnv =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SENTRY_DSN
       ? process.env.EXPO_PUBLIC_SENTRY_DSN
       : '';
   const dsn = (overrideDsn && overrideDsn.trim()) || fromEnv || '';
   if (!dsn) return;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Sentry = require('@sentry/react-native') as typeof import('@sentry/react-native');
-    Sentry.init({
-      dsn,
-      enabled: true,
-      enableAutoSessionTracking: true,
+  sentryLoading = true;
+  import('@sentry/react-native')
+    .then((Sentry) => {
+      Sentry.init({
+        dsn,
+        enabled: true,
+        enableAutoSessionTracking: true,
+      });
+      sentry = Sentry;
+      sentryInit = true;
+    })
+    .catch((e: unknown) => {
+      log.warn('sentry_init_failed', { err: e instanceof Error ? e.message : String(e) });
+    })
+    .finally(() => {
+      sentryLoading = false;
     });
-    sentryInit = true;
-  } catch (e) {
-    log.warn('sentry_init_failed', { err: e instanceof Error ? e.message : String(e) });
-  }
 }
 
 export class ErrorHandler {
@@ -85,9 +100,8 @@ export class ErrorHandler {
 
     if (typeof __DEV__ === 'undefined' || !__DEV__) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Sentry = require('@sentry/react-native') as typeof import('@sentry/react-native');
-        if (sentryInit) {
+        const Sentry = sentry;
+        if (sentryInit && Sentry) {
           // v4.32.614: отчёт уходит на чужой сервер, и правило «ключи и DID
           // сюда не кладём» до сих пор держалось на комментариях у трёх
           // вызовов. Теперь оно выполняется само, см. errorScrub.
