@@ -136,7 +136,10 @@ async function publishReply(s: BridgeState, seq: number, reply: BridgeReply): Pr
     // половина доступа. По той же причине здесь нет ни ключа, ни тела ответа.
     if (!res.ok) log.warn('agent_bridge_reply_http_err', { status: res.status });
   } catch (e) {
-    log.warn('agent_bridge_reply_failed', { err: e instanceof Error ? e.message : String(e) });
+    // Текста ошибки здесь нет намеренно: сообщения сетевых библиотек часто
+    // содержат сам адрес запроса, а в адресе — тема ответов. Журнал уезжает в
+    // отчёт о неполадке целиком, и тема моста в нём оказаться не должна.
+    log.warn('agent_bridge_reply_failed', { kind: e instanceof Error ? e.name : 'unknown' });
   }
 }
 
@@ -224,7 +227,8 @@ function openWs(s: BridgeState): void {
   try {
     ws = new WebSocket(url);
   } catch (e) {
-    log.warn('agent_bridge_ws_ctor_failed', { err: e instanceof Error ? e.message : String(e) });
+    // Без текста ошибки — по той же причине: в нём бывает адрес с темой.
+    log.warn('agent_bridge_ws_ctor_failed', { kind: e instanceof Error ? e.name : 'unknown' });
     scheduleReconnect(s);
     return;
   }
