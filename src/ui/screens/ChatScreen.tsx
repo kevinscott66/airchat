@@ -1058,12 +1058,13 @@ function ChatThreadView({
       }
       if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       if (hit.peerPubB64 === peerB64) { setContactInfoVisible(true); return; }
-      // v4.32.616: у незнакомца из реестра имени нет — есть юзернейм. Он
-      // едет отдельным полем и остаётся адресом: подставлять его в имя значит
-      // называть человека не так, как он назвал себя сам.
+      // v4.32.616: юзернейм незнакомца едет отдельным полем и остаётся
+      // адресом: подставлять его в имя значит называть человека не так, как
+      // он назвал себя сам. v4.32.722: имя — то, что владелец опубликовал в
+      // реестре; своя подпись из адресной книги карточка всё равно ставит выше.
       setMentionPeek(hit.status === 'contact'
         ? { pub: hit.peerPubB64, name: hit.displayName, username: null }
-        : { pub: hit.peerPubB64, name: '', username: hit.username });
+        : { pub: hit.peerPubB64, name: hit.peerName ?? '', username: hit.username });
     })();
   }, [myPubB64, peerB64, onOpenOwnProfile]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);

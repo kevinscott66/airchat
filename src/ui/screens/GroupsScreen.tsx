@@ -1625,7 +1625,7 @@ function GroupChatScreen({
         // v4.32.616: см. ChatScreen — юзернейм не имя.
         setMentionPeek(hit.status === 'contact'
           ? { pub: hit.peerPubB64, name: hit.displayName, username: null }
-          : { pub: hit.peerPubB64, name: '', username: hit.username });
+          : { pub: hit.peerPubB64, name: hit.peerName ?? '', username: hit.username });
         return;
       }
       // v4.32.609: своё упоминание ведёт в собственный профиль. Раньше здесь

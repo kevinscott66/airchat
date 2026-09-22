@@ -57,7 +57,7 @@ import {
   type OwnProfileKey,
 } from '../../../../core/identity/ownProfile';
 import { checkUsernameClaim } from '../../../../core/identity/reservedUsernames';
-import { saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
+import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
 import { applyOwnBadgeGrant, ownBadgeClaim } from '../../../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../../../core/identity/verification';
 import { ownAvatarUri, saveOwnAvatar } from '../../../../core/identity/ownAvatar';
@@ -384,6 +384,10 @@ export function ProfileEditModal({
         showSuccess(usernameSavedText(done.scope));
       }
 
+      // v4.32.722: новое имя уходит и в реестр юзернеймов — его видит тот,
+      // кто откроет нас по @имени, ещё не переписываясь. Новый юзернейм выше
+      // уже занят вместе с именем, повторять не нужно.
+      if (name !== saved.name && handle === saved.handle) void republishOwnUsernameToDirectory();
       const next: Loaded = { name, handle, pronouns, status, bio, website, twitter, github };
       setSaved(next);
       setDraft(next);

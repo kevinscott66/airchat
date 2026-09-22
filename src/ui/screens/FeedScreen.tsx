@@ -2786,7 +2786,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       // контакты» и «Написать» самому себе. Своё место — профиль.
       if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
       setPeekAuthorDid(null);
-      setPeekAuthorName(hit.status === 'contact' ? hit.displayName : null);
+      setPeekAuthorName(hit.status === 'contact' ? hit.displayName : hit.peerName);
       setPeekAuthorUsername(hit.status === 'stranger' ? hit.username : null);
       setPeekAuthorPub(hit.peerPubB64);
     })();

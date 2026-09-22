@@ -14,6 +14,8 @@ jest.mock('../../sync/syncApi', () => ({
   releaseSyncUsername: jest.fn(),
 }));
 jest.mock('../ownProfile', () => ({
+  getOwnDisplayNameFor: jest.fn(),
+  getOwnUsernameFor: jest.fn(),
   isUsernameTakenByAnotherProfile: jest.fn(),
   setOwnUsername: jest.fn(),
 }));
@@ -31,15 +33,17 @@ jest.mock('../ownBadge', () => ({
 import { getStoredMnemonic } from '../../backup/seedPhrase';
 import { claimSyncUsername } from '../../sync/syncApi';
 import { ownBadgeGrantFor } from '../ownBadge';
-import { isUsernameTakenByAnotherProfile, setOwnUsername } from '../ownProfile';
+import { getOwnDisplayNameFor, getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from '../ownProfile';
 import { profileManager } from '../profileManager';
-import { saveOwnUsernameGlobally } from '../usernameRegistry';
+import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../usernameRegistry';
 
 const mnemonic = getStoredMnemonic as jest.MockedFunction<typeof getStoredMnemonic>;
 const claim = claimSyncUsername as jest.MockedFunction<typeof claimSyncUsername>;
 const localTaken = isUsernameTakenByAnotherProfile as jest.MockedFunction<typeof isUsernameTakenByAnotherProfile>;
 const saveLocal = setOwnUsername as jest.MockedFunction<typeof setOwnUsername>;
 const badge = ownBadgeGrantFor as jest.MockedFunction<typeof ownBadgeGrantFor>;
+const ownName = getOwnDisplayNameFor as jest.MockedFunction<typeof getOwnDisplayNameFor>;
+const ownUsername = getOwnUsernameFor as jest.MockedFunction<typeof getOwnUsernameFor>;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -48,11 +52,13 @@ beforeEach(() => {
   saveLocal.mockResolvedValue(true);
   claim.mockResolvedValue({ ok: true, username: 'kevin_s' });
   badge.mockResolvedValue(null);
+  ownName.mockResolvedValue('Рита');
+  ownUsername.mockResolvedValue('margarita');
 });
 
 test('занимает имя в реестре и только потом пишет его локально', async () => {
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
-  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, mockProfilePair);
+  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, mockProfilePair, 'Рита');
   expect(saveLocal).toHaveBeenCalledWith('kevin_s');
 });
 
@@ -64,7 +70,7 @@ test('бумага на галочку уезжает вместе с заявк
   claim.mockResolvedValue({ ok: true, username: 'founder' });
   await expect(saveOwnUsernameGlobally('founder')).resolves.toEqual({ ok: true, scope: 'global' });
   expect(claim).toHaveBeenCalledWith(
-    expect.any(String), expect.anything(), 'founder', 0, '{"payload":"…","signature":"…"}', mockProfilePair,
+    expect.any(String), expect.anything(), 'founder', 0, '{"payload":"…","signature":"…"}', mockProfilePair, 'Рита',
   );
 });
 
@@ -75,7 +81,7 @@ test('ключ профиля уезжает в справочник вмест�
   const getPair = profileManager.getActiveKeyPair as jest.MockedFunction<typeof profileManager.getActiveKeyPair>;
   getPair.mockImplementationOnce(() => { throw new Error('профили не подняты'); });
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
-  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, null);
+  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, null, 'Рита');
 });
 
 test('занятое чужим аккаунтом имя не пишется даже локально', async () => {
@@ -106,4 +112,30 @@ test('локальный дубликат отсекается до сетево
   localTaken.mockResolvedValue(true);
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: false, reason: 'local' });
   expect(claim).not.toHaveBeenCalled();
+});
+
+// v4.32.722: имя, которым профиль назвался, живёт в реестре рядом с
+// юзернеймом — его видит тот, кто пришёл по @имени до переписки. Уходит оно
+// заново после переименования, но не на каждое открытие экрана профиля.
+test('имя профиля переиздаётся в реестре при смене и только при смене', async () => {
+  await republishOwnUsernameToDirectory();
+  expect(claim).toHaveBeenLastCalledWith(
+    expect.any(String), expect.anything(), 'margarita', 0, null, mockProfilePair, 'Рита',
+  );
+  await republishOwnUsernameToDirectory();
+  expect(claim).toHaveBeenCalledTimes(1);
+  ownName.mockResolvedValue('Маргарита');
+  await republishOwnUsernameToDirectory();
+  expect(claim).toHaveBeenCalledTimes(2);
+  expect(claim).toHaveBeenLastCalledWith(
+    expect.any(String), expect.anything(), 'margarita', 0, null, mockProfilePair, 'Маргарита',
+  );
+});
+
+test('недоступный реестр не засчитывается как отправка имени', async () => {
+  ownName.mockResolvedValue('Рита офлайн');
+  claim.mockResolvedValueOnce({ ok: false, reason: 'offline' });
+  await republishOwnUsernameToDirectory();
+  await republishOwnUsernameToDirectory();
+  expect(claim).toHaveBeenCalledTimes(2);
 });

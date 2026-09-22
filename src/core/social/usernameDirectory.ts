@@ -34,8 +34,12 @@ export type MentionTarget =
    * назвавшийся у себя «Ритой», открывался как «margarita». Юзернейм — адрес,
    * а не имя, и показывать его надо там, где показывают адрес. Настоящее имя
    * приезжает конвертом профиля при первой же переписке.
+   *
+   * v4.32.722: а до переписки — из реестра: владелец публикует там имя,
+   * которым назвался (`peerName`). `null` — не опубликовал; тогда карточка
+   * честно «Без имени», но юзернейм в имя по-прежнему не идёт.
    */
-  | { status: 'stranger'; peerPubB64: string; username: string }
+  | { status: 'stranger'; peerPubB64: string; username: string; peerName: string | null }
   /** Имя носят несколько контактов — открывать наугад нельзя. */
   | { status: 'ambiguous' }
   /** Такого имени нет ни у кого. */
@@ -66,7 +70,7 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
   if (answer.status === 'unknown') return { status: 'unknown' };
   if (answer.status === 'free') return { status: 'unclaimed' };
   if (!answer.peerPubB64) return { status: 'unlisted' };
-  return { status: 'stranger', peerPubB64: answer.peerPubB64, username };
+  return { status: 'stranger', peerPubB64: answer.peerPubB64, username, peerName: answer.peerName };
 }
 
 /** Что показать человеку, когда переходить некуда. */

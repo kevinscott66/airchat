@@ -101,6 +101,19 @@ describe('поиск юзернейма', () => {
     const out = await settleWithin(lookupSyncUsername('vasya'));
     expect(out).toEqual({ status: 'free' });
   });
+
+  // v4.32.722: имя, которым владелец назвался, едет из справочника в карточку.
+  // Пришло оно по сети — метки направления письма вырезаются и здесь; без
+  // ключа имя не нужно никому и не отдаётся.
+  it('имя владельца приходит очищенным и только вместе с ключом', async () => {
+    const pub = Buffer.alloc(32, 1).toString('base64');
+    serveJson({ taken: true, pub, name: '\u202EРита' });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: pub, peerName: 'Рита' });
+    serveJson({ taken: true, pub: null, name: 'Рита' });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: null, peerName: null });
+    serveJson({ taken: true, pub });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: pub, peerName: null });
+  });
 });
 
 describe('список входов для привязки слов', () => {

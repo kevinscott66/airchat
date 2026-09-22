@@ -85,7 +85,7 @@ test('username registry claims globally and refuses a name held by another accou
 
   const free = await fetch(`${base}/v1/username/kevin_s`);
   assert.equal(free.status, 200);
-  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false, pub: null });
+  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false, pub: null, name: null });
 
   const claim = await post(alice, signed(alice, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
   assert.equal(claim.status, 200);
@@ -93,7 +93,7 @@ test('username registry claims globally and refuses a name held by another accou
 
   const taken = await fetch(`${base}/v1/username/KEVIN_S`);
   // Имя занято, но ключа при захвате не предъявляли — владелец не назван.
-  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true, pub: null });
+  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true, pub: null, name: null });
 
   // Чужой аккаунт то же имя не получает.
   const conflict = await post(bob, signed(bob, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
@@ -195,8 +195,24 @@ test('username registry claims globally and refuses a name held by another accou
   }));
   assert.equal(published.status, 200);
   assert.deepEqual(await (await lookupDir('ALICE_DIR')).json(), {
-    username: 'alice_dir', taken: true, pub: profilePublicKeyB64,
+    username: 'alice_dir', taken: true, pub: profilePublicKeyB64, name: null,
   });
+
+  // v4.32.722: имя владельца. Приходит очищенным от меток направления письма
+  // и управляющих символов; повтор захвата старым клиентом (без имени) его не
+  // стирает; не-строка — отказ.
+  const claimAs = (extra) => postDir(signed(alice, 'claim_username', {
+    username: 'alice_dir', ownerProfileId: 0,
+    profilePublicKeyB64, profileProof: proofBy(profileSecret, binding('alice_dir', 0)),
+    ...extra,
+  }));
+  assert.equal((await claimAs({ displayName: '  \u202EРита\u0000 ' })).status, 200);
+  assert.equal((await (await lookupDir('alice_dir')).json()).name, 'Рита');
+  assert.equal((await claimAs({})).status, 200);
+  assert.equal((await (await lookupDir('alice_dir')).json()).name, 'Рита');
+  assert.equal((await claimAs({ displayName: 'М'.repeat(60) })).status, 200);
+  assert.equal((await (await lookupDir('alice_dir')).json()).name, 'М'.repeat(40));
+  assert.equal((await claimAs({ displayName: 42 })).status, 401);
 
   const malformed = await fetch(`${base}/v1/username/${encodeURIComponent('нет')}`);
   assert.equal(malformed.status, 400);

@@ -31,15 +31,23 @@ describe('resolveMentionTarget', () => {
 
   it('незнакомец из реестра открывается без добавления в контакты', async () => {
     local.mockResolvedValue({ status: 'none' });
-    remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB });
+    remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: null });
     // v4.32.616: юзернейм едет юзернеймом. Раньше он же уезжал в displayName,
     // и карточка выдавала адрес за имя: человек, назвавшийся у себя «Ритой»,
     // открывался как «margarita». toEqual сверяет объект целиком, значит
     // вернувшийся displayName провалит проверку — что и требуется.
     const hit = await resolveMentionTarget('@Founder', 1);
-    expect(hit).toEqual({ status: 'stranger', peerPubB64: PUB, username: 'founder' });
+    expect(hit).toEqual({ status: 'stranger', peerPubB64: PUB, username: 'founder', peerName: null });
     expect(hit).not.toHaveProperty('displayName');
     expect(remote).toHaveBeenCalledWith('founder');
+  });
+
+  it('имя, опубликованное владельцем в реестре, едет в карточку незнакомца', async () => {
+    local.mockResolvedValue({ status: 'none' });
+    remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: 'Рита' });
+    await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
+      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита',
+    });
   });
 
   it('свободное имя — «не существует», а не «нет в контактах»', async () => {
@@ -67,7 +75,7 @@ describe('resolveMentionTarget', () => {
 
   it('занятое имя без опубликованного ключа — отдельный исход', async () => {
     local.mockResolvedValue({ status: 'none' });
-    remote.mockResolvedValue({ status: 'taken', peerPubB64: null });
+    remote.mockResolvedValue({ status: 'taken', peerPubB64: null, peerName: null });
     await expect(resolveMentionTarget('oldtimer', 1)).resolves.toEqual({ status: 'unlisted' });
   });
 

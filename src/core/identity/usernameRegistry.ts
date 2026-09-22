@@ -35,7 +35,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
 import { ownBadgeGrantFor } from './ownBadge';
-import { getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
+import { getOwnDisplayNameFor, getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
 import { profileManager } from './profileManager';
 
 /**
@@ -80,6 +80,7 @@ export async function saveOwnUsernameGlobally(username: string): Promise<Usernam
       ownerProfileId(),
       await ownBadgeGrantFor(ownerProfileId()),
       activeProfilePair(),
+      await getOwnDisplayNameFor(ownerProfileId()),
     );
     if (!claim.ok && claim.reason !== 'offline') return { ok: false, reason: claim.reason };
     if (claim.ok) scope = 'global';
@@ -105,40 +106,49 @@ function activeProfilePair(): KeyPairBytes | null {
 }
 
 /**
- * Подтвердить уже занятое имя, чтобы в справочник попал ключ профиля.
+ * Подтвердить уже занятое имя, чтобы в справочник попали ключ и имя профиля.
  *
- * Нужно ровно один раз для каждого, кто занял имя до v4.32.607: их записи
- * лежат без ключа, и по такому имени никуда не перейти. Захват своего же
- * имени идемпотентен, поэтому повтор безвреден; сбой глотается — это фоновая
- * работа, из-за которой нельзя ни падать, ни задерживать экран.
+ * Нужно каждому, кто занял имя до v4.32.607 (записи без ключа — по ним никуда
+ * не перейти) или до v4.32.722 (без имени — незнакомец видит «Без имени»), и
+ * после каждого переименования. Захват своего же имени идемпотентен, поэтому
+ * повтор безвреден; сбой глотается — это фоновая работа, из-за которой нельзя
+ * ни падать, ни задерживать экран.
  *
- * Раз за запуск на профиль: вызывается с экрана профиля, а тот перечитывается
- * после каждого сохранения — сетевой запрос на каждое открытие вкладки тут ни
- * к чему.
+ * Раз за запуск на пару «юзернейм + имя» профиля: вызывается с экрана профиля
+ * и после сохранения имени — сетевой запрос на каждое открытие вкладки тут ни
+ * к чему, а вот новое имя уйти обязано.
  */
-const republished = new Set<number>();
+const republished = new Map<number, string>();
 
 export async function republishOwnUsernameToDirectory(): Promise<void> {
   const pid = ownerProfileId();
-  if (republished.has(pid)) return;
-  republished.add(pid);
+  let sent: string | null = null;
   try {
     const username = await getOwnUsernameFor(pid);
     if (!username) return;
+    const displayName = await getOwnDisplayNameFor(pid);
+    sent = `${username}\n${displayName ?? ''}`;
+    if (republished.get(pid) === sent) return;
+    republished.set(pid, sent);
     const pair = activeProfilePair();
     if (!pair) return;
     const mnemonic = await getStoredMnemonic();
     if (!mnemonic) return;
-    await claimSyncUsername(
+    const claim = await claimSyncUsername(
       mnemonic,
       deriveKeyPairFromMnemonic(mnemonic),
       username,
       pid,
       await ownBadgeGrantFor(pid),
       pair,
+      displayName,
     );
+    // Недоступный сервер не бросает, а отвечает `offline` — и тоже значит
+    // «повторить в следующий раз», а не «отправлено».
+    if (!claim.ok && claim.reason === 'offline' && republished.get(pid) === sent) republished.delete(pid);
   } catch (error) {
-    republished.delete(pid); // не вышло — пусть следующий запуск попробует снова
+    // Не вышло — пусть следующий вызов попробует снова.
+    if (sent !== null && republished.get(pid) === sent) republished.delete(pid);
     log.info('username_directory_republish_skipped', {
       err: error instanceof Error ? error.message : String(error),
     });

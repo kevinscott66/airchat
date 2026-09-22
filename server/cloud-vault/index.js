@@ -442,6 +442,24 @@ function usernameDirectoryBinding(username, accountId, ownerProfileId) {
   return `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
 }
 
+/** Предел имени в справочнике — тот же, что у имени в приложении. */
+const DIRECTORY_DISPLAY_NAME_MAX = 40;
+
+/**
+ * Имя владельца для справочника (v4.32.722): без управляющих символов и меток
+ * направления письма (U+202E разворачивал бы имя на чужом экране), не длиннее
+ * предела. Пустое и невидимое — `null`: «имени нет», а не пустая строка.
+ */
+function cleanDirectoryDisplayName(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw
+    // eslint-disable-next-line no-control-regex -- вырезание control-символов из недоверенного ввода и есть цель
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF\u115F\u1160\u2800\u3164\uFFA0]/g, '')
+    .trim();
+  const cut = Array.from(cleaned).slice(0, DIRECTORY_DISPLAY_NAME_MAX).join('').trim();
+  return cut || null;
+}
+
 function verifySignedPayload(rawPayload, signature) {
   if (typeof rawPayload !== 'string' || rawPayload.length > MAX_BODY_BYTES) return null;
   if (typeof signature !== 'string' || !SIGNATURE_RE.test(signature)) return null;
@@ -609,10 +627,18 @@ function validateSyncRequest(payload, accountId, op) {
         if (!ok) return null;
         profilePublicKeyB64 = payload.profilePublicKeyB64;
       }
+      // v4.32.722: имя, которым владелец назвался, — для карточки, открытой
+      // по @имени незнакомцем. Накрыто подписью запроса, как и всё в payload.
+      // Необязательно; не-строка — отказ, а не молчаливый пропуск: так
+      // сломанный клиент виден сразу. Чистится здесь же, потому что уходит
+      // оно любому, кто спросит имя.
+      if (payload.displayName != null && (typeof payload.displayName !== 'string' || payload.displayName.length > 400)) return null;
+      const displayName = cleanDirectoryDisplayName(payload.displayName);
       return {
         ...payload,
         username,
         profilePublicKeyB64,
+        displayName,
         accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64,
         deviceInfo,
       };
@@ -1146,6 +1172,7 @@ app.post('/v1/sync/:accountId/username/claim', (req, res) => {
       auth.payload.ownerProfileId,
       auth.payload.username,
       auth.payload.profilePublicKeyB64 || null,
+      auth.payload.displayName || null,
     );
     if (!result.ok) return res.status(409).json({ error: result.reason });
     return res.json({ ok: true, username: result.username });
@@ -1369,7 +1396,14 @@ app.get('/v1/username/:username', (req, res) => {
   if (!username) return res.status(400).json({ error: 'invalid_username' });
   try {
     const row = syncDb.lookupUsername(username);
-    return res.json({ username, taken: row !== null, pub: row?.profilePublicKeyB64 || null });
+    return res.json({
+      username,
+      taken: row !== null,
+      pub: row?.profilePublicKeyB64 || null,
+      // Имя без ключа не отдаётся: карточка открывается по ключу, и имя,
+      // которому не к кому прилагаться, только путало бы вызывающего.
+      name: row?.profilePublicKeyB64 ? row.displayName || null : null,
+    });
   } catch {
     return res.status(500).json({ error: 'username_lookup_failed' });
   }

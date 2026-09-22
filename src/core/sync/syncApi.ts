@@ -12,6 +12,7 @@ import { fetchWithDeadline } from '../net/timedFetch';
 import { MAX_DOWNLOAD_B64_CHARS } from '../media/blobRef';
 import { signBytes, signJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
+import { sanitizeDisplayName } from '../social/sysLineGuard';
 import { bytesToBase64Url } from '../utils/base64url';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import * as SecureStore from '../storage/secureStoreQueued';
@@ -513,6 +514,11 @@ export async function claimSyncUsername(
    * отвечает по нему «занято, владелец не назван».
    */
   profilePair?: KeyPairBytes | null,
+  /**
+   * v4.32.722: имя, которым профиль назвался. Справочник отдаёт его тому, кто
+   * пришёл по `@имени`, — иначе незнакомец до первой переписки был «Без имени».
+   */
+  displayName?: string | null,
 ): Promise<UsernameClaimResult> {
   try {
     const directory = profilePair ? await usernameDirectoryProof(mnemonic, username, ownerProfileId, profilePair) : null;
@@ -525,7 +531,13 @@ export async function claimSyncUsername(
       // отвергается там же, где и у постороннего. Проверяет её сервер сам:
       // подпись накрывает весь payload, значит подменить бумагу по дороге
       // нельзя, а поверить клиенту на слово было бы то же, что снять список.
-      { username, ownerProfileId, ...(badge ? { badge } : {}), ...(directory || {}) },
+      {
+        username,
+        ownerProfileId,
+        ...(badge ? { badge } : {}),
+        ...(directory || {}),
+        ...(displayName ? { displayName } : {}),
+      },
       'username/claim',
     );
     return response.ok ? { ok: true, username: response.username } : { ok: false, reason: 'rejected' };
@@ -586,7 +598,11 @@ async function usernameDirectoryProof(
  */
 export type UsernameDirectoryAnswer =
   | { status: 'free' }
-  | { status: 'taken'; peerPubB64: string | null }
+  /**
+   * `peerName` — имя, которым владелец назвался сам (v4.32.722). `null` —
+   * не опубликовано: запись старше или владелец не назван вовсе.
+   */
+  | { status: 'taken'; peerPubB64: string | null; peerName: string | null }
   /** Сервер в сборке не задан — спрашивать некого. */
   | { status: 'unconfigured' }
   /** Сервер задан, но не ответил. */
@@ -617,14 +633,18 @@ export async function lookupSyncUsername(username: string): Promise<UsernameDire
           return null;
         }
         return response.ok
-          ? (await response.json()) as { taken?: unknown; pub?: unknown }
+          ? (await response.json()) as { taken?: unknown; pub?: unknown; name?: unknown }
           : null;
       },
     );
     if (!body || typeof body.taken !== 'boolean') return { status: 'unknown' };
     if (!body.taken) return { status: 'free' };
     // Ключ проверяется на форму здесь: дальше он уходит адресом собеседника.
-    return { status: 'taken', peerPubB64: isPubKeyB64(body.pub) ? body.pub : null };
+    const peerPubB64 = isPubKeyB64(body.pub) ? body.pub : null;
+    // Имя чистится и здесь: сервер его чистит сам, но пришло оно по сети, и
+    // метка направления письма в нём развернула бы строку на экране.
+    const peerName = peerPubB64 ? sanitizeDisplayName(body.name, 40) || null : null;
+    return { status: 'taken', peerPubB64, peerName };
   } catch {
     return { status: 'unknown' };
   }

@@ -246,6 +246,7 @@ class SyncDatabase {
         profile_id INTEGER NOT NULL,
         claimed_at INTEGER NOT NULL,
         profile_public_key TEXT,
+        display_name TEXT,
         FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
@@ -438,6 +439,12 @@ class SyncDatabase {
     if (!columns.has('profile_public_key')) {
       this.db.exec('ALTER TABLE sync_usernames ADD COLUMN profile_public_key TEXT');
     }
+    // v4.32.722: имя, которым владелец назвался сам. Без него незнакомец,
+    // найденный по @имени, открывался «Без имени»: конверт профиля приходит
+    // только при переписке, а до неё показать было нечего.
+    if (!columns.has('display_name')) {
+      this.db.exec('ALTER TABLE sync_usernames ADD COLUMN display_name TEXT');
+    }
   }
 
   ensureDeviceMetadataColumns() {
@@ -589,7 +596,7 @@ class SyncDatabase {
    * Прежнее имя того же профиля освобождается здесь же — иначе брошенные
    * имена копились бы за каждым, кто хоть раз переименовался.
    */
-  claimUsername(accountId, profileId, username, profilePublicKeyB64 = null) {
+  claimUsername(accountId, profileId, username, profilePublicKeyB64 = null, displayName = null) {
     const now = Date.now();
     const key = this.usernameKey(username);
     this.db.exec('BEGIN IMMEDIATE');
@@ -615,14 +622,17 @@ class SyncDatabase {
         this.db.prepare('DELETE FROM sync_usernames WHERE username_key = ?').run(held[i].usernameKey);
       }
       this.db.prepare(`
-        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at, profile_public_key)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at, profile_public_key, display_name)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (username_key) DO UPDATE SET
           claimed_at = excluded.claimed_at,
           -- Ключ переписывается только когда он предъявлен: повтор захвата без
           -- подписи не должен стирать уже опубликованный.
-          profile_public_key = COALESCE(excluded.profile_public_key, sync_usernames.profile_public_key)
-      `).run(key, accountId, profileId, now, profilePublicKeyB64);
+          profile_public_key = COALESCE(excluded.profile_public_key, sync_usernames.profile_public_key),
+          -- Так же и имя: клиент старше v4.32.722 его не шлёт, и его повтор
+          -- захвата не должен стирать имя, опубликованное новым.
+          display_name = COALESCE(excluded.display_name, sync_usernames.display_name)
+      `).run(key, accountId, profileId, now, profilePublicKeyB64, displayName);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -649,7 +659,8 @@ class SyncDatabase {
   lookupUsername(username) {
     const row = this.db.prepare(
       `SELECT account_id AS accountId, profile_id AS profileId,
-              profile_public_key AS profilePublicKeyB64
+              profile_public_key AS profilePublicKeyB64,
+              display_name AS displayName
        FROM sync_usernames WHERE username_key = ?`,
     ).get(this.usernameKey(username));
     return row || null;
