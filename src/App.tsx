@@ -104,6 +104,10 @@ import {
   type AirChatVpnUiStatus,
 } from './core/vpn/airChatVpnController';
 import { maybeStartOpenFlux } from './core/vpn/openFluxController';
+import {
+  startOpenFluxNetworkGuard,
+  stopOpenFluxNetworkGuard,
+} from './core/vpn/openFluxNetworkGuard';
 import { authGuard } from './core/security/authGuard';
 import { PasswordScreen } from './ui/screens/PasswordScreen';
 import { ForgotPasswordScreen } from './ui/screens/ForgotPasswordScreen';
@@ -878,6 +882,11 @@ function MainTabs({
             void syncActiveAccount(syncMnemonic, pair, pid);
           };
           startNetworkReconnectWatcher(pair, runLiveSync);
+          // Сразу за наблюдателем, на том же его сигнале: туннель OpenFlux не
+          // переживает переезд с Wi-Fi на мобильный и включение чужого VPN, а
+          // человек в этот момент видит лишь молчащее приложение — см.
+          // openFluxNetworkGuard.
+          startOpenFluxNetworkGuard();
           void getStoredMnemonic().then((storedMnemonic) => {
             if (!alive || !storedMnemonic) return;
             syncMnemonic = storedMnemonic;
@@ -989,6 +998,7 @@ function MainTabs({
       stopLanTransportStack();
       stopInternetTransportStack();
       stopNetworkReconnectWatcher();
+      stopOpenFluxNetworkGuard();
       getMessagingService()?.dispose();
       // Таблица лиц привязана к аккаунту: при смене профиля чужие снимки
       // не должны пережить того, кому они принадлежали.

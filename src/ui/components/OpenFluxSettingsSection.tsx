@@ -32,6 +32,7 @@ import {
   stopOpenFlux,
   type OpenFluxUiStatus,
 } from '../../core/vpn/openFluxController';
+import { addOpenFluxReviveListener } from '../../core/vpn/openFluxNetworkGuard';
 
 const STATUS_LABEL: Record<OpenFluxUiStatus, string> = {
   off: 'Выключен',
@@ -68,6 +69,19 @@ export function OpenFluxSettingsSection(): React.ReactElement {
       alive = false;
     };
   }, []);
+
+  // Экран читает состояние один раз, при открытии, а туннель за его спиной
+  // переподнимается сам при смене сети — и порт у ядра каждый раз новый. Без
+  // этой подписки открытый экран показывал бы номер, которого уже нет, и
+  // «Работает» в ту самую секунду, когда ядро как раз не поднялось.
+  useEffect(
+    () =>
+      addOpenFluxReviveListener(({ status: s, socks: addr }) => {
+        setStatus(s);
+        setSocks(addr);
+      }),
+    [],
+  );
 
   /** Записать решение пользователя в override и вернуть свежий конфиг. */
   const persist = useCallback(async (on: boolean): Promise<AppConfig> => {
