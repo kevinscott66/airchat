@@ -72,6 +72,8 @@ jest.mock('../../storage/local', () => ({
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async (row: { groupId: string; text: string }) => { mockInserted.push(row); return true; }),
+  // v4.32.765: приём группового сообщения пишет различающей формой.
+  insertGroupMessageChecked: jest.fn(async (row: { groupId: string; text: string }) => { mockInserted.push(row); return 'inserted'; }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   insertGroupJoinRequest: jest.fn(async (...a: unknown[]) => {

@@ -52,6 +52,12 @@ jest.mock('../../storage/local', () => ({
     mockInserted.push(row);
     return true;
   }),
+  // v4.32.765: приём группового сообщения пишет различающей формой. Цитата
+  // складывается до записи, поэтому смотреть надо на ту форму, которую зовут.
+  insertGroupMessageChecked: jest.fn(async (row: { replyToId: string | null; replyToPreview: string | null }) => {
+    mockInserted.push(row);
+    return 'inserted';
+  }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   insertGroupJoinRequest: jest.fn(async () => ({ created: true })),

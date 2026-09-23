@@ -7055,6 +7055,30 @@ export async function updateGroupMemberRole(
  * ДО записи, и счётчик трогается только на новом сообщении.
  */
 export async function insertGroupMessage(msg: GroupMessageRow): Promise<boolean> {
+  return (await insertGroupMessageChecked(msg)) === 'inserted';
+}
+
+/**
+ * Исход записи группового сообщения: записалось, повтор, не вышло.
+ *
+ * v4.32.765. До этого круга функция отвечала одним `boolean`, и `false` значил
+ * сразу две разные вещи: `INSERT OR IGNORE` не изменил ни строки (настоящий
+ * повтор конверта по `msgId`) и любой отказ SQLite из `catch` — занятая база,
+ * переполненный диск, неоткрывшийся ключ шифрования. Приёмник группы трактовал
+ * `false` как повтор: писал `group_msg_duplicate_skip` и отвечал `'consumed'`,
+ * то есть двигал метку «докуда прочитано» у ретранслятора. Сообщение при этом
+ * не записалось нигде и второй раз не придёт — ретранслятор отдаёт накопленное
+ * только по метке. Кадр терялся безвозвратно, и в журнале он значился
+ * дубликатом, так что и по логу разобраться было нельзя.
+ *
+ * Третий исход теперь в типе — как у чтений в `lookupResult.ts`. Отличать его
+ * нужно ровно там, где от ответа зависит судьба кадра; остальным вызывающим
+ * (экранам, которые пишут СВОЁ только что составленное сообщение) хватает
+ * прежнего `boolean`, и они остались на нём.
+ */
+export type GroupMessageWrite = 'inserted' | 'duplicate' | 'failed';
+
+export async function insertGroupMessageChecked(msg: GroupMessageRow): Promise<GroupMessageWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -7081,11 +7105,11 @@ export async function insertGroupMessage(msg: GroupMessageRow): Promise<boolean>
     emitChatWrites();
     // `changes === 0` — сработало OR IGNORE, то есть строка с таким id уже
     // лежит: это повтор конверта, а не новое сообщение.
-    return (res.changes ?? 0) > 0;
+    return (res.changes ?? 0) > 0 ? 'inserted' : 'duplicate';
   } catch (e) {
     log.warn('insert_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
     notifyIfStoragePressure(e, 'group_message_save');
-    return false;
+    return 'failed';
   }
 }
 

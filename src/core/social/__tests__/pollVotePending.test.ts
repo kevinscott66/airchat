@@ -224,9 +224,14 @@ describe('приём сообщения разгружает полку', () => 
 
   it('групповой приём зовёт снятие после записи строки', () => {
     const s = GRP();
-    const at = s.indexOf('await insertGroupMessage(row);');
+    // v4.32.765: запись идёт различающей формой — отказ базы больше не
+    // выдаётся за повтор.
+    const at = s.indexOf('await insertGroupMessageChecked(row);');
     expect(at).toBeGreaterThan(0);
-    const after = s.slice(at, at + 700);
+    // Окно с запасом: между записью и снятием полки встал разбор трёх исходов
+    // записи (v4.32.765). Смысл проверки — снятие стоит ПОСЛЕ записи строки, а
+    // не точное число символов между ними.
+    const after = s.slice(at, at + 1400);
     expect(after).toContain('isPollMessage(env.text)');
     expect(after).toContain('flushPendingPollEnvelopes(env.msgId, pid)');
   });

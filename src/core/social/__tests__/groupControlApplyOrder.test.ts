@@ -93,6 +93,9 @@ jest.mock('../../storage/local', () => ({
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async () => true),
+  // v4.32.765: приёмник группы пишет различающей формой — она отличает
+  // настоящий повтор от отказа базы. Предмет этого набора другой.
+  insertGroupMessageChecked: jest.fn(async () => 'inserted'),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   insertGroupJoinRequest: jest.fn(async (...a: unknown[]) => {

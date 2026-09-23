@@ -21,6 +21,7 @@ import {
   getGroupMessageTexts,
   getGroupMessageTarget,
   insertGroupMessage,
+  insertGroupMessageChecked,
   updateGroupMessageText,
   deleteGroupMessage,
   touchGroupConversation,
@@ -671,8 +672,18 @@ export async function handleIncomingGroupEnvelope(
     // постоянного списка разобранных идентификаторов у групп нет (в памяти
     // `seenMessageIds` живёт до перезапуска). Раньше повтор давал «5 новых»
     // на группе со вчерашним текстом и заново будил экран блокировки.
-    const stored = await insertGroupMessage(row);
-    if (!stored) {
+    // v4.32.765: исход записи — слово, а не «да». Прежний `false` значил и
+    // повтор, и отказ базы, и отказ уходил в `'consumed'`: метка «докуда
+    // прочитано» двигалась, ретранслятор больше этот кадр не отдавал, а строки
+    // в базе не появлялось. Сообщение пропадало навсегда и числилось в журнале
+    // дубликатом. Отказ записи — заминка временная, ей нужна вторая попытка;
+    // ориентир в этом же файле — handleIncomingGroupReadReceipt.
+    const stored = await insertGroupMessageChecked(row);
+    if (stored === 'failed') {
+      log.warn('group_msg_save_failed_defer', { msgId: env.msgId.slice(0, 8), gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
+    if (stored === 'duplicate') {
       log.debug('group_msg_duplicate_skip', { msgId: env.msgId.slice(0, 8) });
       return 'consumed';
     }
@@ -724,11 +735,16 @@ export async function handleIncomingGroupEnvelope(
       }
     }
   } catch (e) {
-    // v4.32.620: повтор разбирается ВЫШЕ, по ответу insertGroupMessage
-    // (`stored === false`), и до этого места не доходит. Значит сюда попадает
+    // v4.32.620: повтор разбирается ВЫШЕ, по ответу insertGroupMessageChecked
+    // (`'duplicate'`), и до этого места не доходит. Значит сюда попадает
     // настоящий сбой — нечитаемый ключ данных, переполненный диск, занятая
     // база, — и записывать его уровнем debug под подписью «похоже, дубль»
     // означало прятать потерю сообщения от самого себя.
+    //
+    // v4.32.765: отказ САМОЙ записи сюда тоже не доходит — он разбирается выше
+    // и откладывает кадр. Всё, что осталось в этом теле, идёт после успешной
+    // записи строки, поэтому кадр здесь разобран: повторять его значило бы
+    // получить настоящий дубликат.
     log.error('group_msg_apply_failed', { gid: env.groupId.slice(0, 8), err: e instanceof Error ? e.message : String(e) });
   }
 

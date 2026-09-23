@@ -54,6 +54,9 @@ jest.mock('../../storage/local', () => ({
   listGroupMembersRead: jest.fn(async () => mockMembers),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async (...a: unknown[]) => { mockInserted.push(a); return true; }),
+  // v4.32.765: приём группового сообщения пишет различающей формой. Запись
+  // считаем по ней — предмет этого набора в том, дошло ли дело до записи.
+  insertGroupMessageChecked: jest.fn(async (...a: unknown[]) => { mockInserted.push(a); return 'inserted'; }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   insertGroupJoinRequest: jest.fn(async (...a: unknown[]) => {
