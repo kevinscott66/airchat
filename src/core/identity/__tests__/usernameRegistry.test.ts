@@ -34,6 +34,8 @@ jest.mock('../../storage/local', () => {
   return {
     __kv: kv,
     kvSet: jest.fn(async (k: string, v: string) => { kv[k] = v; }),
+    // v4.32.785: заметка об освобождении имени пишется проверяемой формой.
+    kvSetChecked: jest.fn(async (k: string, v: string) => { kv[k] = v; return true; }),
     kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
     kvTryListKeysByPrefix: jest.fn(async (p: string) => Object.keys(kv).filter((k) => k.startsWith(p))),
   };

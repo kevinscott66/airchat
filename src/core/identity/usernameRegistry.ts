@@ -33,7 +33,7 @@
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../backup/seedPhrase';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
-import { kvDelete, kvSet, kvTryListKeysByPrefix } from '../storage/local';
+import { kvDelete, kvSetChecked, kvTryListKeysByPrefix } from '../storage/local';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
 import { ownBadgeGrantFor } from './ownBadge';
 import { getOwnDisplayNameFor, getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
@@ -174,6 +174,18 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
 const RELEASE_PENDING_PREFIX = 'airchat_username_release_pending:';
 
 /**
+ * Профили, чья заметка об освобождении имени на диск не легла (v4.32.785).
+ *
+ * Заметка — единственный список, который разбирает `retryPendingUsernameReleases`:
+ * не легла она, и повторять будет нечего. Цена та же, что у самой заметки:
+ * имя остаётся в реестре навсегда, указывая на ключ, которым больше никто не
+ * пользуется. Память процесса — не замена диску, она не переживёт перезапуск,
+ * но заминка базы длится секунды, а экран профиля человек откроет ещё сегодня.
+ * При каждом заходе туда заметку пробуют записать снова.
+ */
+const releaseNoteless = new Set<number>();
+
+/**
  * Одна попытка отпустить имя. `true` — заявка дошла до сервера: либо запись
  * удалена, либо её там и не было (обе — «больше не занято»). `false` — до
  * сервера не добрались, и заметка остаётся на месте.
@@ -193,6 +205,7 @@ async function tryReleaseUsernameOnce(profileId: number): Promise<boolean> {
     return false;
   }
   await kvDelete(`${RELEASE_PENDING_PREFIX}${profileId}`);
+  releaseNoteless.delete(profileId);
   return true;
 }
 
@@ -220,7 +233,14 @@ export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): 
   // то есть заявку в реестр не отправлял вовсе. Имя на сервере при этом было
   // отпущено: `@имя` не вело никуда, а приложение считало его опубликованным.
   republished.delete(profileId);
-  await kvSet(`${RELEASE_PENDING_PREFIX}${profileId}`, String(Date.now()));
+  // v4.32.785: гасящая `kvSet` отвечала `void`, и отказ базы здесь пропадал
+  // вместе с единственной заметкой о недоотпущенном имени. Профиль при этом
+  // удалялся, повторять было некому и нечего — имя оставалось занятым
+  // навсегда. Теперь отказ виден, и профиль попадает в список памяти процесса.
+  if (!(await kvSetChecked(`${RELEASE_PENDING_PREFIX}${profileId}`, String(Date.now())))) {
+    releaseNoteless.add(profileId);
+    log.warn('username_release_note_unsaved', { profileId });
+  }
   await tryReleaseUsernameOnce(profileId);
 }
 
@@ -231,6 +251,17 @@ export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): 
  * повторим в следующий раз. Заметка снимается только после ответа сервера.
  */
 export async function retryPendingUsernameReleases(): Promise<void> {
+  // v4.32.785: сперва те, чья заметка не легла на диск. Заметку пробуем
+  // записать заново — база могла освободиться, и тогда попытка переживёт
+  // перезапуск; не вышло — идём на сервер всё равно, память процесса пока
+  // держит.
+  for (const profileId of [...releaseNoteless]) {
+    if (await kvSetChecked(`${RELEASE_PENDING_PREFIX}${profileId}`, String(Date.now()))) {
+      releaseNoteless.delete(profileId);
+    }
+    // Первый же отказ — связи нет; остальные в этот раз не тревожим.
+    if (!(await tryReleaseUsernameOnce(profileId))) return;
+  }
   const keys = await kvTryListKeysByPrefix(RELEASE_PENDING_PREFIX);
   if (keys === null || keys.length === 0) return;
   for (const key of keys) {
