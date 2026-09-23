@@ -1246,12 +1246,12 @@ export class MessagingService {
     // v4.32.246: сторис контакта. Раньше ездила через IPFS pubsub, который на
     // телефоне выключен, — то есть не доезжала никогда. В переписке конверт не
     // показывается: это не сообщение, а обновление ленты сторис.
+    // v4.32.760: ответ обработчика — наш ответ. Занятая база стоила сторис
+    // навсегда: повтора у неё нет, а «разобрано» двигает метку релея.
     if (textPayload.text?.startsWith(STORY_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingStory } = await import('./storyService');
-        await handleIncomingStory(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingStory } = await import('./storyService');
+      return await handleIncomingStory(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.232: реакция на сообщение — обновляет существующую строку, своего

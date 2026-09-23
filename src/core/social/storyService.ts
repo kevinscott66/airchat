@@ -46,6 +46,7 @@ import { uploadMediaToCid } from '../media/mediaUpload';
 import { IPFS_VIDEO_MAX_BYTES } from '../media/uploadRoute';
 import type { StoryMediaFailure, StoryPublishOutcome } from './storyPublishOutcome';
 import { rateLimiter } from '../security/rateLimiter';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 
 /**
@@ -243,8 +244,15 @@ export async function resolveStoryMedia(mediaCid: string, mediaType: 'image' | '
 /**
  * Общая часть приёма: проверка автора, скачивание медиа, запись в базу.
  * Конверт к этому моменту уже разобран и проверен по форме.
+ *
+ * v4.32.760: отвечает словом, а не `void`. Отказы здесь двух разных пород, и
+ * раньше они были неразличимы — оба означали «дальше не идём», а кадр при этом
+ * объявлялся разобранным. Не в контактах и «у автора уже полсотни» — решения
+ * окончательные, повтор их не изменит. А вот «список контактов не прочитался»
+ * и «счётчик не прочитался» — это занятая на секунду база, и она стоила
+ * сторис целиком: второй раз её не пришлют.
  */
-async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise<void> {
+async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise<EnvelopeIntake> {
   // Автор обязан быть в контактах: свои сторис пишутся напрямую в publishStory,
   // поэтому здесь остаются только чужие, и незнакомец ничего не подсунет.
   //
@@ -260,11 +268,13 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
     const contacts = await listContactsFor(pid);
     if (!contacts.some((c) => c.peerPublicKey === envelope.authorPubB64)) {
       log.debug('story_author_not_in_contacts_drop', { author: envelope.authorPubB64.slice(0, 8) });
-      return;
+      return 'consumed';
     }
   } catch (e) {
-    log.warn('story_contacts_unreadable_drop', { err: e instanceof Error ? e.message : String(e) });
-    return;
+    // v4.32.760: «не прочиталось» — не «не в контактах». Ленту это по-прежнему
+    // не открывает: пока список недоступен, ничего не пишется.
+    log.warn('story_contacts_unreadable_defer', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
 
   // Потолок проверяется ДО скачивания медиа: именно загрузка вложения, а не
@@ -276,11 +286,11 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
         author: envelope.authorPubB64.slice(0, 8),
         active: already,
       });
-      return;
+      return 'consumed';
     }
   } catch (e) {
-    log.warn('story_count_unreadable_drop', { err: e instanceof Error ? e.message : String(e) });
-    return;
+    log.warn('story_count_unreadable_defer', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
 
   // Медиа скачивается СРАЗУ, а не при открытии сторис, и это не оплошность:
@@ -295,46 +305,75 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
     }
   }
 
-  await insertStory({
-    id: localStoryId(envelope.authorPubB64, envelope.id),
-    authorPubB64: envelope.authorPubB64,
-    mediaUri,
-    mediaType: envelope.mediaType,
-    text: envelope.text,
-    expiresAt: envelope.expiresAt,
-    viewedBy: null,
-    ownerProfileId: pid,
-    createdAt: envelope.createdAt,
-  });
+  try {
+    // Запись идёт по имени, собранному из ключа автора и номера конверта, а
+    // сама строка — INSERT OR IGNORE: повторное применение того же конверта
+    // второй сторис не заводит.
+    await insertStory({
+      id: localStoryId(envelope.authorPubB64, envelope.id),
+      authorPubB64: envelope.authorPubB64,
+      mediaUri,
+      mediaType: envelope.mediaType,
+      text: envelope.text,
+      expiresAt: envelope.expiresAt,
+      viewedBy: null,
+      ownerProfileId: pid,
+      createdAt: envelope.createdAt,
+    });
+  } catch (e) {
+    log.warn('story_insert_failed_defer', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
+  }
 
-  await deleteExpiredStories(pid);
+  // Уборка просроченных и оповещение экрана к самой сторис не относятся: она
+  // уже записана, и откладывать кадр из-за них значило бы скачивать медиа
+  // второй раз ради того, что произойдёт при следующем приёме само.
+  try {
+    await deleteExpiredStories(pid);
+  } catch (e) {
+    log.warn('story_expire_sweep_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
   notifyStoryListeners();
   log.info('story_received', { from: envelope.authorPubB64.slice(0, 8) });
+  return 'consumed';
 }
 
 /**
- * Входящая сторис личным сообщением. Возвращает true, если конверт наш, —
- * тогда messaging не сохраняет его как обычное сообщение переписки.
+ * Входящая сторис личным сообщением.
  *
  * Отправитель проверяется по DM-слою: конверт с чужим authorPubB64 не
  * принимается, иначе контакт публиковал бы сторис от имени другого контакта.
+ *
+ * v4.32.760: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш», и вызывающим он не читался вовсе: ветка в messaging.ts объявляла кадр
+ * разобранным в любом исходе. «Разобрано» двигает метку докуда прочитано, а
+ * relay отдаёт накопленное только по ней — секунда занятой базы стоила сторис
+ * навсегда, и повтора у неё нет.
+ *
+ * Отсрочка тут дороже, чем у настроек: разобрать кадр второй раз значит ещё
+ * раз скачать вложение. Поэтому откладываем только занятую базу — мусор вместо
+ * конверта, подставленный автор, незнакомец и упёршийся потолок годными не
+ * станут ни с какого раза.
  */
 export async function handleIncomingStory(
   text: string,
   senderPubB64: string,
   ownerPid: number
-): Promise<boolean> {
+): Promise<EnvelopeIntake> {
   const envelope = decodeStoryEnvelope(text, Date.now());
-  if (!envelope) return true;
+  if (!envelope) return 'consumed';
   if (envelope.authorPubB64 !== senderPubB64) {
     log.warn('story_author_mismatch_drop', { from: senderPubB64.slice(0, 8), claimed: envelope.authorPubB64.slice(0, 8) });
-    return true;
+    return 'consumed';
   }
   try {
-    await applyIncomingStory(envelope, ownerPid);
+    return await applyIncomingStory(envelope, ownerPid);
   } catch (e) {
+    // Сюда доходит только то, что не поймано внутри: медиа и запись строки
+    // разобраны там поимённо. Считаем такое занятой базой — один повтор
+    // ограничен сверху (см. internetCoordinator).
     log.warn('story_apply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
-  return true;
 }
 
