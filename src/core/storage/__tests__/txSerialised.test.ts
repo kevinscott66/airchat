@@ -207,12 +207,14 @@ describe('храповик: транзакцию открывает только
     expect(CODE).toMatch(/execAsync\('BEGIN IMMEDIATE;'\)/);
   });
 
-  it('все двадцать два места зовут помощника и все закрывают транзакцию', () => {
-    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(22);
-    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(22);
-    // Фиксаций двадцать три: touchGroupConversation фиксирует ещё и на раннем
-    // выходе, иначе транзакция уехала бы за пределы вызова.
-    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(23);
+  it('все двадцать три места зовут помощника и все закрывают транзакцию', () => {
+    // v4.32.724: двадцать третье — rollbackDekMigration, отмена перешифровки
+    // базы, когда канарейка не легла.
+    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(23);
+    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(23);
+    // Фиксаций двадцать четыре: touchGroupConversation фиксирует ещё и на
+    // раннем выходе, иначе транзакция уехала бы за пределы вызова.
+    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(24);
   });
 
   it('помощник ждёт предшественника до BEGIN, а не после', () => {

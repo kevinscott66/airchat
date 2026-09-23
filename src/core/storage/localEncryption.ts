@@ -221,11 +221,31 @@ export async function canaryOpensWith(dek: Uint8Array): Promise<CanaryVerdict> {
  *
  * Второй обрыв — сбой самой канарейки — от порядка не зависит: тогда не
  * записано ничего, и это ровно то состояние, в котором мы были до вызова.
+ *
+ * v4.32.724: последняя фраза была неправдой. writeCanary гасил свой отказ, и
+ * управление шло дальше — в запись ключа. Получалось ровно то состояние «ключ
+ * первым», против которого порядок и переставляли: Keychain отвергает одну
+ * запись и принимает следующую — то самое «User interaction is not allowed» на
+ * запирающемся устройстве, — и на диске остаются данные под новым ключом, ключ
+ * новый, а канарейка от старого. Следующий запуск не открывает канарейку ни
+ * тем, ни другим, отвечает stored_does_not_match_data и отказывается открыть
+ * базу — на каждом запуске, навсегда, хотя данные целы и верный ключ лежит
+ * рядом. Спасает только переустановка, то есть потеря переписки.
+ *
+ * Поэтому отказ канарейки теперь прекращает запись ключа и возвращается
+ * наружу: вызывающий знает, что стоит за его спиной, и решает сам. Тому, кто
+ * лишь заводит канарейку впервые, отказ по-прежнему безразличен.
+ *
+ * @returns записана ли канарейка. `false` — ключ в хранилище НЕ тронут.
  */
-export async function persistDek(dek: Uint8Array): Promise<void> {
-  await writeCanary(dek);
+export async function persistDek(dek: Uint8Array): Promise<boolean> {
+  if ((await writeCanary(dek)) === null) {
+    log.warn('dek_canary_write_failed');
+    return false;
+  }
   await SecureStore.setItemAsync(DEK_KEY, Buffer.from(dek).toString('base64'));
   setDekMemory(dek);
+  return true;
 }
 
 /**

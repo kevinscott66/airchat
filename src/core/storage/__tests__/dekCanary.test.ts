@@ -272,7 +272,24 @@ describe('источник: чтение хранилища различает �
     expect(key).toBeGreaterThan(canary);
   });
 
-  it('сбой записи канарейки не роняет запуск', () => {
+  /**
+   * v4.32.724. Порядок выше сам по себе ничего не гарантировал: отказ первой
+   * записи проглатывался, и управление шло во вторую — то есть получалось
+   * ровно «ключ первым». Keychain отвергает не сессию, а операцию, так что
+   * пройти могла именно вторая.
+   */
+  it('сбой записи канарейки прекращает запись ключа', () => {
+    const P = bodyOf(ENC, 'export async function persistDek(');
+    const guard = P.indexOf('=== null');
+    const key = P.indexOf('SecureStore.setItemAsync(DEK_KEY');
+    expect(guard).toBeGreaterThan(-1);
+    expect(key).toBeGreaterThan(guard);
+    expect(P.slice(guard, key)).toContain('return false;');
+  });
+
+  it('отказ уходит наружу значением, а не исключением', () => {
+    expect(ENC).toContain('export async function persistDek(dek: Uint8Array): Promise<boolean>');
+    // writeCanary по-прежнему ловит: отказать должен вызывающий, а не он.
     expect(bodyOf(ENC, 'async function writeCanary(')).toContain('} catch {');
   });
 });
@@ -310,6 +327,91 @@ describe('источник: миграция ключа спрашивает к�
     expect(MIG).not.toContain('setDekMemory(');
     expect(MIG).not.toContain('SecureStore.setItemAsync(DEK_KEY');
     expect(count(MIG, 'await persistDek(derived)')).toBe(4);
+  });
+});
+
+/**
+ * v4.32.724. Отказ persistDek означает, что ключ в хранилище НЕ тронут, —
+ * значит миграция не состоялась, и объявлять её выполненной нельзя ни в одной
+ * из четырёх веток. Раньше отказа не было вовсе: persistDek возвращала void, и
+ * все четыре ветки шли дальше ставить отметку «выполнено» по факту вызова.
+ */
+describe('источник: отказ канарейки останавливает миграцию', () => {
+  const MIG = bodyOf(LOCAL, 'async function migrateDekRandomToDeterministic(');
+
+  it('проверяется каждый из четырёх вызовов', () => {
+    expect(count(MIG, 'if (!(await persistDek(derived)))')).toBe(4);
+  });
+
+  it('ни одна ветка не ставит отметку после отказа', () => {
+    // Между отказом и ближайшей отметкой обязан стоять выход — return или throw.
+    let from = 0;
+    for (let i = 0; i < 4; i += 1) {
+      const guard = MIG.indexOf('if (!(await persistDek(derived)))', from);
+      expect(guard).toBeGreaterThan(-1);
+      const mark = MIG.indexOf('DEK_MIGRATED_KV,', guard);
+      expect(mark).toBeGreaterThan(guard);
+      const between = MIG.slice(guard, mark);
+      expect(between.includes('return;') || between.includes('throw ')).toBe(true);
+      from = guard + 1;
+    }
+  });
+
+  /**
+   * Три ветки из четырёх ничего не изменили: данные лежат там же, где лежали.
+   * Ронять на них открытие базы — менять «приложение без страховки» на
+   * «приложение не открывается», причём на запертом Keychain, то есть на
+   * фоновом запуске. Они просто не ставят отметку и пробуют в следующий раз.
+   */
+  it('три безобидные ветки откладывают миграцию, а не роняют запуск', () => {
+    expect(count(MIG, "log.warn('dek_migration_postponed'")).toBe(3);
+    expect(MIG).toContain("at: 'stored_key_absent'");
+    expect(MIG).toContain("at: 'stored_equals_derived'");
+    expect(MIG).toContain("at: 'data_already_under_derived'");
+  });
+
+  /**
+   * Четвёртая — другое дело: база уже перешифрована под derived, а канарейка
+   * осталась единственной записью о том, под каким ключом лежат данные. Не
+   * записав её, установку не спасёт ни один исход, поэтому перешифровку
+   * отменяем целиком и оставляем всё таким, каким взяли.
+   */
+  it('после перешифровки отказ откатывает её, а не оставляет как есть', () => {
+    const rekey = MIG.indexOf('await reencryptAtRest(database, stored, derived)');
+    const rollback = MIG.indexOf('await rollbackDekMigration(database, derived, stored);');
+    expect(rekey).toBeGreaterThan(-1);
+    expect(rollback).toBeGreaterThan(rekey);
+    expect(MIG.slice(rollback)).toContain('rolled back');
+  });
+
+  it('откат идёт в обратную сторону и одной транзакцией', () => {
+    const BACK = bodyOf(LOCAL, 'async function rollbackDekMigration(');
+    expect(BACK).toContain('await beginImmediate(database)');
+    // Именно derived → stored: перешифровка симметрична, перепутать её местами
+    // значило бы прогнать базу тем же ключом второй раз.
+    expect(BACK).toContain('await reencryptAtRest(database, derived, stored)');
+    expect(BACK).toContain('await txn.rollback()');
+  });
+
+  it('откат возвращает и секретный ключ, и действующий ключ в памяти', () => {
+    const BACK = bodyOf(LOCAL, 'async function rollbackDekMigration(');
+    expect(BACK).toContain('rewrapSecretKeyWithDek(derived, stored)');
+    expect(BACK).toContain('setDekMemory(stored)');
+  });
+
+  /**
+   * Обратная перевёртка секретного ключа — тоже запись в Keychain, а он только
+   * что отказал. Прервать откат из-за неё значило бы оставить базу под derived
+   * ради ключа, с которым следующий запуск и так разберётся: rewrap пробует
+   * оба ключа и на уже перевёрнутом отвечает успехом.
+   */
+  it('отказ обратной перевёртки не прерывает откат базы', () => {
+    const BACK = bodyOf(LOCAL, 'async function rollbackDekMigration(');
+    const rekey = BACK.indexOf('await reencryptAtRest(database, derived, stored)');
+    const rewrap = BACK.indexOf('rewrapSecretKeyWithDek(derived, stored)');
+    expect(rewrap).toBeGreaterThan(rekey);
+    expect(BACK).toContain("log.warn('dek_migration_rollback_secret_key_left_derived')");
+    expect(BACK.slice(rewrap)).not.toContain('throw');
   });
 });
 

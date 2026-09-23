@@ -36,6 +36,7 @@ import {
   getOrCreateDataEncryptionKey,
   canaryOpensWith,
   persistDek,
+  setDekMemory,
 } from './localEncryption';
 import { bytesEqualConstTime, deriveLocalDekFromMnemonic } from './dekDerivation';
 import { reactionScopeSql, type ReactionScope, type ReactionScopeSql } from './reactionScope';
@@ -1677,6 +1678,53 @@ async function reencryptAtRest(
 }
 
 /**
+ * Вернуть базу под прежний ключ (v4.32.724).
+ *
+ * Зовётся с одного места: канарейка не записалась уже после того, как база
+ * перешифрована. Без канарейки следующий запуск не узнает, под каким ключом
+ * лежат данные, и установка не спасётся ни при каком исходе, — поэтому
+ * перешифровку надо отменить целиком.
+ *
+ * Обратная перевёртка секретного ключа — тоже запись в Keychain, а Keychain
+ * только что отказал; её отказ здесь не смертелен и потому не прерывает откат.
+ * Следующий запуск найдёт данные под `stored`, откроет базу и начнёт миграцию
+ * заново, а rewrapSecretKeyWithDek сам разберётся с ключом, оставшимся под
+ * `derived`: он пробует оба и на уже перевёрнутом отвечает успехом.
+ */
+async function rollbackDekMigration(
+  database: SQLite.SQLiteDatabase,
+  derived: Uint8Array,
+  stored: Uint8Array
+): Promise<void> {
+  log.warn('dek_migration_rollback_started');
+  const txn = await beginImmediate(database);
+  try {
+    await reencryptAtRest(database, derived, stored);
+    await txn.commit();
+  } catch (e) {
+    try {
+      await txn.rollback();
+    } catch {
+      /* ignore */
+    }
+    log.error('dek_migration_rollback_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
+  try {
+    const { rewrapSecretKeyWithDek } = await import('../crypto/keyManager');
+    if (!(await rewrapSecretKeyWithDek(derived, stored))) {
+      log.warn('dek_migration_rollback_secret_key_left_derived');
+    }
+  } catch (e) {
+    log.warn('dek_migration_rollback_secret_key_failed', {
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
+  setDekMemory(stored);
+  log.warn('dek_migration_rollback_done');
+}
+
+/**
  * Случайный DEK → детерминированный из seed (после обновления можно восстановить DEK из мнемоники).
  * Должен выполняться до loadKeyPair() (см. ensureLocalStorageReadyForBoot).
  */
@@ -1749,7 +1797,16 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
       if (seedVerdict !== true && seedVerdict !== 'absent') {
         throw new Error(`dek canary rejects seed-derived key: ${seedVerdict}`);
       }
-      await persistDek(derived);
+      // v4.32.724: канарейка не записалась — значит и ключ не записан.
+      // Отметить миграцию выполненной здесь значило бы оставить установку
+      // вовсе без ключа в хранилище. Ничего не изменено, пробуем в следующий
+      // раз: Keychain отказывает на запертом устройстве, а не навсегда. Базу
+      // при этом не роняем: данные никуда не переезжали, а ключ дальше по
+      // запуску выберет resolveDekOnce — у него на этот случай своя таблица.
+      if (!(await persistDek(derived))) {
+        log.warn('dek_migration_postponed', { at: 'stored_key_absent' });
+        return;
+      }
       await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
         DEK_MIGRATED_KV,
         'true',
@@ -1761,7 +1818,12 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
     if (bytesEqualConstTime(stored, derived)) {
       // persistDek вместо setDekMemory: ключ тот же, а канарейки у такой
       // установки может ещё не быть — заодно и заведём.
-      await persistDek(derived);
+      // v4.32.724: не завелась — ничего страшного, ключ в хранилище и так
+      // верный. Отметку не ставим, чтобы канарейку завёл следующий запуск.
+      if (!(await persistDek(derived))) {
+        log.warn('dek_migration_postponed', { at: 'stored_equals_derived' });
+        return;
+      }
       await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
         DEK_MIGRATED_KV,
         'true',
@@ -1786,7 +1848,14 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
         throw new Error('dek canary matches neither stored nor derived key');
       }
       // Данные уже под derived: переносить нечего, надо лишь закрепить ключ.
-      await persistDek(derived);
+      // Канарейка здесь и так указывает на derived, её запись — повтор того
+      // же значения; но если Keychain отказал, отказал он и ключу.
+      // v4.32.724: тогда в хранилище остаётся прежний stored — ровно то, с чем
+      // мы сюда пришли. Хуже не стало, отметку не ставим.
+      if (!(await persistDek(derived))) {
+        log.warn('dek_migration_postponed', { at: 'data_already_under_derived' });
+        return;
+      }
       await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
         DEK_MIGRATED_KV,
         'true',
@@ -1819,7 +1888,18 @@ async function migrateDekRandomToDeterministic(database: SQLite.SQLiteDatabase):
       throw e;
     }
 
-    await persistDek(derived);
+    // v4.32.724: здесь, в отличие от трёх мест выше, отступать просто так уже
+    // некуда — база перешифрована и лежит под derived. Канарейка при этом
+    // остаётся единственной записью, по которой следующий запуск понимает, под
+    // каким ключом данные; не записав её, установку не спасёт ни один исход:
+    // с новым ключом канарейку не открывает никто (stored_does_not_match_data,
+    // отказ навсегда), со старым — миграция начнётся заново и упадёт на уже
+    // перевёрнутом секретном ключе. Поэтому откатываем перешифровку целиком и
+    // оставляем установку такой, какой взяли: следующий запуск попробует снова.
+    if (!(await persistDek(derived))) {
+      await rollbackDekMigration(database, derived, stored);
+      throw new Error('dek canary write failed after re-encryption: rolled back');
+    }
 
     await database.runAsync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [
       DEK_MIGRATED_KV,
