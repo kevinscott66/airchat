@@ -738,6 +738,11 @@ export class MessagingService {
       log.warn('msg_ipfs_missing', { cid });
       return;
     }
+    // v4.32.736: ответ разбора здесь никуда не идёт сознательно. За этим
+    // входом нет отметки «докуда прочитано», которую можно было бы
+    // перешагнуть: конверт берут по известному CID (обход истории, push,
+    // повторный заход по списку), и «сейчас не смогли» означает лишь, что он
+    // приедет следующим заходом по тому же CID.
     await this.persistIncomingFromEnvelope(em, peerPubKeyB64, cid, undefined, allowSelfAuthored);
   }
 
@@ -917,19 +922,35 @@ export class MessagingService {
     }
     const storageCid = `lan:${em.messageId}`;
     // Pass pre-verified plaintext through to persist path to avoid re-decrypting.
-    await this.persistIncomingFromEnvelope(em, peerPubKeyB64, storageCid, pt);
-    return 'consumed';
+    // v4.32.736: ответ разбора — наш ответ наружу. Здесь он и был нужен: по
+    // этому пути едут групповые сообщения, и «сейчас не смогли» раньше
+    // становилось «разобрано» ровно на этой строке.
+    return await this.persistIncomingFromEnvelope(em, peerPubKeyB64, storageCid, pt);
   }
 
+  /**
+   * Разбор расшифрованного конверта: куда его положить и что обновить.
+   *
+   * v4.32.736: отвечает словом, а не молчанием. Почти все выходы отсюда —
+   * `'consumed'` (разобрали, положили, отбросили осознанно), и они такими и
+   * были: смысл возврата не менялся, менялась только его форма. Ради одного
+   * выхода: групповой конверт приезжает сюда обычным DM с префиксом
+   * `\x02grp:`, и это ОСНОВНОЙ путь группового сообщения. Обработчик группы
+   * умеет ответить «сейчас не смогли» (состав не прочитался — см.
+   * handleIncomingGroupEnvelope), но здесь его ответ выбрасывался, наружу
+   * уходило `'consumed'`, и отметка «докуда прочитано» перешагивала кадр.
+   * Relay держит его тридцать суток — но запросить его больше никто не
+   * придёт, и сообщение живого участника не появлялось ни сейчас, ни потом.
+   */
   private async persistIncomingFromEnvelope(
     em: EncryptedMessage,
     peerPubKeyB64: string,
     cid: string,
     preDecryptedPt?: Uint8Array,
     allowSelfAuthored = false,
-  ): Promise<void> {
+  ): Promise<EnvelopeIntake> {
     const myDid = publicKeyToDidKey(this.pair.publicKey);
-    if (em.senderDid !== myDid && em.recipientDid !== myDid) return;
+    if (em.senderDid !== myDid && em.recipientDid !== myDid) return 'consumed';
     // v4.32.615: конверт принадлежит ровно одной переписке — той, чьим ключом
     // он расшифровывается. Значит его два DID обязаны быть нашим и DID того
     // канала, откуда он пришёл; третьего быть не может.
@@ -950,12 +971,12 @@ export class MessagingService {
     const peerDid = didFromPubB64(peerPubKeyB64);
     if (!peerDid) {
       log.warn('inbound_bad_peer_pub');
-      return;
+      return 'consumed';
     }
     const selfAuthored = em.senderDid === myDid;
     if (selfAuthored && !allowSelfAuthored) {
       log.warn('inbound_self_authored_rejected', { messageId: em.messageId.slice(0, 8) });
-      return;
+      return 'consumed';
     }
     if ((selfAuthored ? em.recipientDid : em.senderDid) !== peerDid) {
       log.warn('inbound_did_not_channel_peer', {
@@ -963,7 +984,7 @@ export class MessagingService {
         peer: peerDid.slice(-16),
         sender: em.senderDid.slice(-16),
       });
-      return;
+      return 'consumed';
     }
     // v4.32.124 (AUDIT P0 #1): replay-window guard. Drops envelopes older than
     // ENVELOPE_MAX_AGE_MS or more than ENVELOPE_MAX_SKEW_MS in the future.
@@ -978,12 +999,12 @@ export class MessagingService {
         delta_ms: now - em.timestamp,
         messageId: em.messageId.slice(0, 8),
       });
-      return;
+      return 'consumed';
     }
     // Fast in-memory check before the async SQLite round-trip (prevents BLE+LAN race)
-    if (this.seenMessageIds.has(em.messageId)) return;
+    if (this.seenMessageIds.has(em.messageId)) return 'consumed';
     this.markSeen(em.messageId);
-    if (await chatMessageExists(em.messageId, await this.ownerProfileId())) return;
+    if (await chatMessageExists(em.messageId, await this.ownerProfileId())) return 'consumed';
 
     // v4.32.317: блок-лист поднимается с диска асинхронно, а конструктор
     // rateLimiter отрабатывает при загрузке модуля — до того, как открыта база.
@@ -1005,13 +1026,13 @@ export class MessagingService {
       if (!sym) {
         // Not our key (implicit contact not yet created) — don't poison dedup.
         this.seenMessageIds.delete(em.messageId);
-        return;
+        return 'consumed';
       }
       pt = decryptSymmetric(sym, em.encryptedContent);
       if (!pt) {
         // Corrupt or not addressed to us — don't poison dedup so a later retry can succeed.
         this.seenMessageIds.delete(em.messageId);
-        return;
+        return 'consumed';
       }
     }
     // v4.32.115: guard JSON.parse — malformed plaintext must not throw and must
@@ -1022,7 +1043,7 @@ export class MessagingService {
     } catch (e) {
       log.warn('dm_payload_parse_failed', { err: e instanceof Error ? e.message : String(e) });
       this.seenMessageIds.delete(em.messageId);
-      return;
+      return 'consumed';
     }
     // v4.32.581: разбор мог УДАТЬСЯ и дать не объект. Четыре байта `null` —
     // валидный JSON, try выше их пропускает, а первое же обращение к полю
@@ -1033,7 +1054,7 @@ export class MessagingService {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       log.warn('dm_payload_not_object', { messageId: em.messageId.slice(0, 8) });
       this.seenMessageIds.delete(em.messageId);
-      return;
+      return 'consumed';
     }
 
     // v4.32.214 (Audit-43 C1): authenticated inner-timestamp check. If the
@@ -1050,7 +1071,7 @@ export class MessagingService {
           messageId: em.messageId.slice(0, 8),
         });
         this.seenMessageIds.delete(em.messageId);
-        return;
+        return 'consumed';
       }
       // v4.32.215 (Audit-44 M): tightened from 60s → 10s. Sender sets both
       // to Date.now() in the same microsecond so any mismatch beyond a few
@@ -1062,7 +1083,7 @@ export class MessagingService {
           messageId: em.messageId.slice(0, 8),
         });
         this.seenMessageIds.delete(em.messageId);
-        return;
+        return 'consumed';
       }
     }
 
@@ -1078,7 +1099,7 @@ export class MessagingService {
     // группе, исключены намеренно — см. blockPolicy.
     if (inbound && !survivesBlock((payload as { text?: unknown }).text) && rateLimiter.isBlocked(peerPubKeyB64)) {
       log.info('dm_blocked_drop', { from: peerPubKeyB64.slice(0, 12), kind: payload.kind ?? 'text' });
-      return;
+      return 'consumed';
     }
     // v4.32.120 #6: lan:/fallback: markers are not real IPFS CIDs — writing
     // them to conversation tip breaks syncDmHistoryFromProfile's DAG walk.
@@ -1099,7 +1120,7 @@ export class MessagingService {
       const auth = await getChatMessageAuthor(payload.targetMessageId, ownerPid);
       if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
         log.warn('delete_payload_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
-        return;
+        return 'consumed';
       }
       await deleteChatMessage(payload.targetMessageId, ownerPid);
       await maybeSetTip();
@@ -1114,7 +1135,7 @@ export class MessagingService {
         createdAt: em.timestamp,
         ownerProfileId: ownerPid,
       });
-      return;
+      return 'consumed';
     }
 
     if (payload.kind === 'edit' && 'targetMessageId' in payload && 'newText' in payload) {
@@ -1122,9 +1143,9 @@ export class MessagingService {
       const auth = await getChatMessageAuthor(payload.targetMessageId, ownerPid);
       if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
         log.warn('edit_payload_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
-        return;
+        return 'consumed';
       }
-      if (typeof payload.newText !== 'string') return;
+      if (typeof payload.newText !== 'string') return 'consumed';
       // v4.32.239: правка шла в базу без вычистки префикса, хотя первичное
       // сохранение его снимает. То есть обойти защиту системных строк можно
       // было в два шага: прислать обычное сообщение, а следом правку на
@@ -1132,7 +1153,7 @@ export class MessagingService {
       // op='edit' уже закрыли (см. groupControlEnvelope).
       await updateChatMessageText(payload.targetMessageId, stripSpoofedSysPrefix(payload.newText), ownerPid);
       await maybeSetTip();
-      return;
+      return 'consumed';
     }
 
     if (payload.kind === 'read_receipt' && 'messageIds' in payload && Array.isArray(payload.messageIds)) {
@@ -1153,7 +1174,7 @@ export class MessagingService {
       }
       if (dropped > 0) log.warn('read_receipts_oversized_drop', { dropped, from: peerPubKeyB64.slice(0, 8) });
       log.info('read_receipts_applied', { count: applied, from: peerPubKeyB64.slice(0, 8) });
-      return;
+      return 'consumed';
     }
 
     // v4.32.124 (AUDIT P0 #3): authenticated typing indicator. Ephemeral —
@@ -1169,7 +1190,7 @@ export class MessagingService {
       recordPeerActivityFor(ownerPid, peerPubKeyB64);
       const cbs = this.typingListeners.get(peerPubKeyB64);
       if (cbs) cbs.forEach((cb) => { try { cb(); } catch { /* ignore */ } });
-      return;
+      return 'consumed';
     }
 
     const textPayload = payload as { kind?: 'text'; text: string; mediaCids?: string[]; replyToId?: string; replyToPreview?: string };
@@ -1184,20 +1205,23 @@ export class MessagingService {
     // the group send path, so we simply drop them from the DM pipeline.
     // Group message envelope — route to group storage, skip DM storage
     if (textPayload.text?.startsWith('\x02grp:')) {
-      if (inbound) await handleIncomingGroupEnvelope(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return;
+      // v4.32.736: ответ обработчика — наш ответ. Своё эхо (`!inbound`) он не
+      // разбирает вовсе, и оно разобрано по определению: исходящее уже
+      // сохранено путём отправки.
+      if (!inbound) return 'consumed';
+      return await handleIncomingGroupEnvelope(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
     }
 
     // Group read receipt — update seen_by on the message, skip DM storage
     if (textPayload.text?.startsWith(GROUP_READ_RECEIPT_PREFIX)) {
       if (inbound) await handleIncomingGroupReadReceipt(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return;
+      return 'consumed';
     }
 
     // Group join request — store as pending join request for admin, skip DM storage
     if (textPayload.text?.startsWith(GROUP_JOIN_REQUEST_PREFIX)) {
       if (inbound) await handleIncomingGroupJoinRequest(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return;
+      return 'consumed';
     }
 
     // v4.32.231: управляющий конверт группы (бан/кик/роль/мета) — применяем к
@@ -1205,7 +1229,7 @@ export class MessagingService {
     // сырой JSON с чужими публичными ключами).
     if (textPayload.text?.startsWith(GROUP_CTL_PREFIX)) {
       if (inbound) await handleIncomingGroupControl(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return;
+      return 'consumed';
     }
 
     // v4.32.246: сторис контакта. Раньше ездила через IPFS pubsub, который на
@@ -1216,7 +1240,7 @@ export class MessagingService {
         const { handleIncomingStory } = await import('./storyService');
         await handleIncomingStory(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.232: реакция на сообщение — обновляет существующую строку, своего
@@ -1226,7 +1250,7 @@ export class MessagingService {
         const { handleIncomingReaction } = await import('./reactionSync');
         await handleIncomingReaction(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.250: голос в опросе — обновляет счётчики существующего опроса,
@@ -1236,7 +1260,7 @@ export class MessagingService {
         const { handleIncomingPollVote } = await import('./pollVoteSync');
         await handleIncomingPollVote(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.251: завершение опроса автором (или админом группы).
@@ -1245,7 +1269,7 @@ export class MessagingService {
         const { handleIncomingPollClose } = await import('./pollVoteSync');
         await handleIncomingPollClose(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.235: закрепление в личке — меняет только баннер, своего пузыря в
@@ -1255,7 +1279,7 @@ export class MessagingService {
         const { handleIncomingDmPin } = await import('./dmPinSync');
         await handleIncomingDmPin(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.237: таймер исчезающих сообщений. Сам конверт пузырём не
@@ -1265,7 +1289,7 @@ export class MessagingService {
         const { handleIncomingDisappear } = await import('./disappearSync');
         await handleIncomingDisappear(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.571: запрет копирования и пересылки, включённый собеседником.
@@ -1276,7 +1300,7 @@ export class MessagingService {
         const { handleIncomingCopyGuard } = await import('./copyGuardSync');
         await handleIncomingCopyGuard(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.238: просьба «не показывай моё время входа». Пузыря не создаёт;
@@ -1286,7 +1310,7 @@ export class MessagingService {
         const { handleIncomingLastSeenPref } = await import('./presencePrefSync');
         await handleIncomingLastSeenPref(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.247: имя, фото и «О себе» собеседника. Раньше профиль уходил
@@ -1297,7 +1321,7 @@ export class MessagingService {
         const { handleIncomingPeerProfile } = await import('./profileSync');
         await handleIncomingPeerProfile(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.671: просьба прислать свой профиль. Пузыря не создаёт — это
@@ -1308,7 +1332,7 @@ export class MessagingService {
         const { handleIncomingProfileRequest } = await import('./profileSync');
         await handleIncomingProfileRequest(textPayload.text, peerPubKeyB64, ownerPid);
       }
-      return;
+      return 'consumed';
     }
 
     // v4.32.568: номер строки живой геолокации — это номер сессии, а не номер
@@ -1333,7 +1357,7 @@ export class MessagingService {
       if (auth) {
         if (auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
           log.warn('liveloc_update_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
-          return;
+          return 'consumed';
         }
         // И заменять можно только живую геолокацию: иначе тот же конверт
         // молча подменял бы текст обычного сообщения, минуя правку.
@@ -1345,11 +1369,11 @@ export class MessagingService {
         // честной записью в журнале.
         if (prev === null) {
           log.warn('liveloc_update_rejected_unreadable', { from: peerPubKeyB64.slice(0, 8) });
-          return;
+          return 'consumed';
         }
         if (prev != null && !prev.startsWith(LIVELOC_PREFIX)) {
           log.warn('liveloc_update_rejected_not_liveloc', { from: peerPubKeyB64.slice(0, 8) });
-          return;
+          return 'consumed';
         }
         // v4.32.568: у каждой посылки свой номер конверта, поэтому защита от
         // повторов её больше не прикрывает. Придержанная и подсунутая позже
@@ -1357,11 +1381,11 @@ export class MessagingService {
         const verdict = decideLiveLocUpdate(prev != null ? parseLiveLoc(prev) : null, liveNext);
         if (verdict.kind === 'skip') {
           log.warn('liveloc_update_skipped', { code: verdict.code, from: peerPubKeyB64.slice(0, 8) });
-          return;
+          return 'consumed';
         }
         await updateChatMessageText(rowId, rawText, ownerPid);
         await maybeSetTip();
-        return;
+        return 'consumed';
       }
     }
     // v4.32.282: цитата приходит от собеседника, и длину её до этой версии
@@ -1381,7 +1405,7 @@ export class MessagingService {
         len: typeof textPayload.text === 'string' ? textPayload.text.length : -1,
         from: peerPubKeyB64.slice(0, 8),
       });
-      return;
+      return 'consumed';
     }
     // v4.32.508: список вложений приходил в строку базы как есть. В слот CID
     // можно положить `../` и увести загрузку картинки на чужой сервер — то
@@ -1447,6 +1471,7 @@ export class MessagingService {
         });
       }
     }
+    return 'consumed';
   }
 
   private async uploadMediaFromUri(uri: string, targetDid?: string): Promise<MediaUploadResult> {

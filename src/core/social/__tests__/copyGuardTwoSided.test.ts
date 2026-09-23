@@ -106,7 +106,10 @@ describe('решение уходит собеседнику', () => {
     const branch = messaging.slice(idx, idx + 320);
     expect(branch).toContain("await import('./copyGuardSync')");
     expect(branch).toContain('handleIncomingCopyGuard(textPayload.text, peerPubKeyB64, ownerPid)');
-    expect(branch).toContain('return;');
+    // v4.32.736: выход тот же, просто назван словом — разбор конверта теперь
+    // отвечает вердиктом (см. groupIntakeVerdict736). Утверждение прежнее:
+    // ветка завершается здесь и в переписку пузырём не проваливается.
+    expect(branch).toContain("return 'consumed';");
   });
 });
 

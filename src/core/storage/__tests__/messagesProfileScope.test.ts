@@ -237,8 +237,11 @@ describe('отсев повторов спрашивает про свой ак�
   });
 
   it('приём конвертов передаёт свой профиль', () => {
+    // v4.32.736: выход назван словом — разбор конверта отвечает вердиктом
+    // (см. groupIntakeVerdict736). Утверждение прежнее: отсев повторов
+    // спрашивает про свой профиль, а не про базу целиком.
     expect(MESSAGING).toContain(
-      'if (await chatMessageExists(em.messageId, await this.ownerProfileId())) return;',
+      "if (await chatMessageExists(em.messageId, await this.ownerProfileId())) return 'consumed';",
     );
     expect(MESSAGING).not.toContain('chatMessageExists(em.messageId)');
   });
