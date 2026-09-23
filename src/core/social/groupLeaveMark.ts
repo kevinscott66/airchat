@@ -34,20 +34,49 @@
  * Ключ профильный (profileScopedKv): аккаунты на одном устройстве не делят
  * решения о выходе, а при удалении профиля отметки уезжают вместе с `p<id>:%`.
  */
-import { scopedKvDeleteFor, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvDeleteFor, scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { createMarkFallback } from './markFallback';
 import { log } from '../logger';
 
 export const LEAVE_MARK_PREFIX = 'grp_left_v1:';
+
+/** Выходы, о которых база отметку не приняла (v4.32.787). См. markFallback. */
+const unsavedLeaves = createMarkFallback();
 
 /** Ключ строится из одного идентификатора, поэтому порядок значения не имеет. */
 export function leaveMarkKey(groupId: string): string {
   return `${LEAVE_MARK_PREFIX}${groupId}`;
 }
 
-/** Запомнить выход. Ошибка записи не должна мешать самому выходу. */
+/**
+ * Запомнить выход. Ошибка записи не должна мешать самому выходу.
+ *
+ * v4.32.787: писала гасящая `scopedKvSetFor` — та зовёт проверяемую и
+ * выбрасывает её ответ, поэтому catch ниже не срабатывал никогда, и занятая
+ * база стирала отметку молча. Теперь отказ виден, и не легшая отметка живёт
+ * в памяти процесса до первого чтения.
+ */
 export async function markGroupLeft(groupId: string, pid: number, ts: number = Date.now()): Promise<void> {
+  const at = Math.floor(ts);
   try {
-    await scopedKvSetFor(pid, leaveMarkKey(groupId), String(Math.floor(ts)));
+    if (await scopedKvSetCheckedFor(pid, leaveMarkKey(groupId), String(at))) {
+      unsavedLeaves.forget(pid, groupId);
+      return;
+    }
+  } catch (e) {
+    log.warn('group_leave_mark_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+  unsavedLeaves.remember(pid, groupId, at);
+  log.warn('group_leave_mark_unsaved', { at });
+}
+
+/** Дописать на диск отметку, которую база не приняла в прошлый раз. */
+async function repairLeaveMark(groupId: string, pid: number, at: number): Promise<void> {
+  try {
+    if (await scopedKvSetCheckedFor(pid, leaveMarkKey(groupId), String(at))) {
+      unsavedLeaves.forget(pid, groupId);
+      log.info('group_leave_mark_repaired', { at });
+    }
   } catch (e) {
     log.warn('group_leave_mark_failed', { err: e instanceof Error ? e.message : String(e) });
   }
@@ -55,6 +84,7 @@ export async function markGroupLeft(groupId: string, pid: number, ts: number = D
 
 /** Снять отметку: пришло законное новое приглашение, и оно принято. */
 export async function clearGroupLeft(groupId: string, pid: number): Promise<void> {
+  unsavedLeaves.forget(pid, groupId);
   try {
     await scopedKvDeleteFor(pid, leaveMarkKey(groupId));
   } catch (e) {
@@ -73,6 +103,14 @@ export async function clearGroupLeft(groupId: string, pid: number): Promise<void
  * из неё можно выйти снова.
  */
 export async function inviteNewerThanLeave(groupId: string, pid: number, ts: number): Promise<boolean> {
+  // v4.32.787: отметка, не легшая на диск, судит наравне с диском. Заодно
+  // пробуем дописать её: база могла освободиться, и тогда отметка переживёт
+  // перезапуск.
+  const kept = unsavedLeaves.pending(pid, groupId);
+  if (kept !== null) {
+    await repairLeaveMark(groupId, pid, kept);
+    if (ts <= kept) return false;
+  }
   try {
     const got = await scopedKvTryGetFor(pid, leaveMarkKey(groupId));
     if (got === null) {

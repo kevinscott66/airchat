@@ -30,6 +30,12 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvSetFor: jest.fn(async (pid: number, key: string, value: string) => {
     mockKv.set(`${pid}|${key}`, value);
   }),
+  // v4.32.787: отметку выхода пишет проверяемая форма — здесь база исправна
+  // всегда, проверки ниже про время приглашения, а не про отказ записи.
+  scopedKvSetCheckedFor: jest.fn(async (pid: number, key: string, value: string) => {
+    mockKv.set(`${pid}|${key}`, value);
+    return true;
+  }),
   scopedKvDeleteFor: jest.fn(async (pid: number, key: string) => {
     mockKv.delete(`${pid}|${key}`);
   }),

@@ -28,10 +28,19 @@
  * устройстве не должны делить чёрные списки, а при удалении профиля отметки
  * уезжают вместе с `p<id>:%`.
  */
-import { scopedKvDeleteFor, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvDeleteFor, scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { createMarkFallback } from './markFallback';
 import { log } from '../logger';
 
 export const REMOVAL_MARK_PREFIX = 'grp_removed_v1:';
+
+/** Исключения, о которых база отметку не приняла (v4.32.787). См. markFallback. */
+const unsavedRemovals = createMarkFallback();
+
+/** Ключ запаса: тот же, что и у базы, только без общего префикса. */
+function fallbackKey(peerPubB64: string, groupId: string): string {
+  return `${peerPubB64}:${groupId}`;
+}
 
 /**
  * Идентификатор группы идёт ПОСЛЕДНИМ по той же причине, что и в
@@ -42,15 +51,47 @@ export function removalMarkKey(peerPubB64: string, groupId: string): string {
   return `${REMOVAL_MARK_PREFIX}${peerPubB64}:${groupId}`;
 }
 
-/** Запомнить исключение. Ошибка записи не должна ронять разбор конверта. */
+/**
+ * Запомнить исключение. Ошибка записи не должна ронять разбор конверта.
+ *
+ * v4.32.787: писала гасящая `scopedKvSetFor` — та зовёт проверяемую и
+ * выбрасывает её ответ, поэтому catch ниже не срабатывал никогда, и занятая
+ * база стирала отметку молча. Исключённый возвращался по старой ссылке ко
+ * всем, у кого нет пригласительного токена, то есть ко всем, кроме
+ * администраторов. Теперь отказ виден, и не легшая отметка живёт в памяти
+ * процесса до первого чтения.
+ */
 export async function markGroupRemoval(
   groupId: string,
   peerPubB64: string,
   pid: number,
   ts: number
 ): Promise<void> {
+  const at = Math.floor(ts);
   try {
-    await scopedKvSetFor(pid, removalMarkKey(peerPubB64, groupId), String(Math.floor(ts)));
+    if (await scopedKvSetCheckedFor(pid, removalMarkKey(peerPubB64, groupId), String(at))) {
+      unsavedRemovals.forget(pid, fallbackKey(peerPubB64, groupId));
+      return;
+    }
+  } catch (e) {
+    log.warn('group_removal_mark_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+  unsavedRemovals.remember(pid, fallbackKey(peerPubB64, groupId), at);
+  log.warn('group_removal_mark_unsaved', { at });
+}
+
+/** Дописать на диск отметку, которую база не приняла в прошлый раз. */
+async function repairRemovalMark(
+  groupId: string,
+  peerPubB64: string,
+  pid: number,
+  at: number
+): Promise<void> {
+  try {
+    if (await scopedKvSetCheckedFor(pid, removalMarkKey(peerPubB64, groupId), String(at))) {
+      unsavedRemovals.forget(pid, fallbackKey(peerPubB64, groupId));
+      log.info('group_removal_mark_repaired', { at });
+    }
   } catch (e) {
     log.warn('group_removal_mark_failed', { err: e instanceof Error ? e.message : String(e) });
   }
@@ -62,6 +103,7 @@ export async function clearGroupRemoval(
   peerPubB64: string,
   pid: number
 ): Promise<void> {
+  unsavedRemovals.forget(pid, fallbackKey(peerPubB64, groupId));
   try {
     await scopedKvDeleteFor(pid, removalMarkKey(peerPubB64, groupId));
   } catch (e) {
@@ -81,6 +123,14 @@ export async function wasRemovedFromGroup(
   peerPubB64: string,
   pid: number
 ): Promise<boolean> {
+  // v4.32.787: отметка, не легшая на диск, отвечает наравне с диском. Заодно
+  // пробуем дописать её: база могла освободиться, и тогда отметка переживёт
+  // перезапуск.
+  const kept = unsavedRemovals.pending(pid, fallbackKey(peerPubB64, groupId));
+  if (kept !== null) {
+    await repairRemovalMark(groupId, peerPubB64, pid, kept);
+    return true;
+  }
   try {
     const got = await scopedKvTryGetFor(pid, removalMarkKey(peerPubB64, groupId));
     if (got === null) {
