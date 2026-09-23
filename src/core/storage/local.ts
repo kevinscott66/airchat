@@ -1542,20 +1542,29 @@ function ensureGroupAvatarCidEncrypted(database: SQLite.SQLiteDatabase): Promise
   );
 }
 
-/** Какие из нужных колонок реально есть в этой БД — старые установки отстают по схеме. */
+/**
+ * Какие из нужных колонок реально есть в этой БД — старые установки отстают по схеме.
+ *
+ * v4.32.724: отказ PRAGMA больше не гасится в пустой список. Единственный
+ * вызывающий — reencryptAtRest, и пустой список там означает «в этой таблице
+ * шифровать нечего, идём дальше». Ответ верный для отставшей схемы (PRAGMA на
+ * несуществующую таблицу не падает, а отдаёт ноль строк) и разрушительный для
+ * сорванного чтения: таблица оставалась под СТАРЫМ ключом, остальная база
+ * переезжала на новый, а следом persistDek объявляла новый ключ действующим —
+ * старого после этого не оставалось нигде. Сообщения и вложения такой таблицы
+ * не открывались больше никогда. Пусть лучше отказ уйдёт наверх: транзакция
+ * миграции откатится, установка останется в прежнем виде, следующий запуск
+ * попробует снова.
+ */
 async function existingColumnsOf(
   database: SQLite.SQLiteDatabase,
   table: string,
   wanted: readonly string[]
 ): Promise<string[]> {
   if (wanted.length === 0) return [];
-  try {
-    const info = await database.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
-    const have = new Set(info.map((c) => c.name));
-    return wanted.filter((c) => have.has(c));
-  } catch {
-    return [];
-  }
+  const info = await database.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  const have = new Set(info.map((c) => c.name));
+  return wanted.filter((c) => have.has(c));
 }
 
 /**
