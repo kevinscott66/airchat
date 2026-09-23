@@ -25,6 +25,19 @@ export type InlinePostRef = {
   postId: string;
   mediaCids: readonly unknown[];
   documentsCount: number;
+  /**
+   * Наш ли это пост (v4.32.735).
+   *
+   * Удаление оправдано ровно одним случаем — своя публикация, оборванная между
+   * записью строки и записью байтов: разослать её не успели, значит и терять
+   * нечего. У принятой от контакта публикации всё наоборот: она уже единственная
+   * копия. Перезапросить её нечем — отправитель считает доставку состоявшейся, —
+   * и снести её из-за одной не легшей фотографии значит стереть заодно текст и
+   * остальные снимки, безвозвратно.
+   *
+   * Неизвестно, чей пост, — считается чужим: цена ошибки здесь односторонняя.
+   */
+  own: boolean;
 };
 
 export type PostToPurge = {
@@ -38,6 +51,12 @@ export type PostToPurge = {
 export type OrphanScanResult = {
   /** Посты, у которых пропала хотя бы часть вложений. */
   purgePosts: PostToPurge[];
+  /**
+   * Чужие посты с той же пропажей (v4.32.735). Не удаляются — только попадают
+   * в журнал: место фотографии останется пустым (resolveFeedMediaUri отдаёт на
+   * такую ссылку пустую строку), а текст и остальные снимки целы.
+   */
+  keepForeign: PostToPurge[];
   /** kv-ключи, чьего поста больше нет. */
   orphanKeys: string[];
 };
@@ -86,6 +105,7 @@ export function scanInlineOrphans(input: {
   const present = new Set(input.inlineKeys);
 
   const purgePosts: PostToPurge[] = [];
+  const keepForeign: PostToPurge[] = [];
   for (const post of input.posts) {
     const mediaCids = post.mediaCids ?? [];
     const inlineSlots: string[] = [];
@@ -102,14 +122,15 @@ export function scanInlineOrphans(input: {
     if (inlineSlots.length === 0) continue;
     const missing = inlineSlots.reduce((n, key) => (present.has(key) ? n : n + 1), 0);
     if (missing > 0) {
-      purgePosts.push({ postId: post.postId, missing, mediaN: mediaCids.length, docsN });
+      const found = { postId: post.postId, missing, mediaN: mediaCids.length, docsN };
+      (post.own ? purgePosts : keepForeign).push(found);
     }
   }
 
   // Ключи удалённых постов. Посты из purgePosts сюда не попадают: их вложения
   // сносятся удалением по префиксу, а не по одному ключу.
   const orphanKeys: string[] = [];
-  if (input.knownPostIdsEverywhere === null) return { purgePosts, orphanKeys };
+  if (input.knownPostIdsEverywhere === null) return { purgePosts, keepForeign, orphanKeys };
   const knownPosts = new Set(input.knownPostIdsEverywhere);
   for (const key of input.inlineKeys) {
     const pid = postIdFromInlineKey(key);
@@ -117,5 +138,5 @@ export function scanInlineOrphans(input: {
     if (!knownPosts.has(pid)) orphanKeys.push(key);
   }
 
-  return { purgePosts, orphanKeys };
+  return { purgePosts, keepForeign, orphanKeys };
 }

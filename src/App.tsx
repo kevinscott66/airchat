@@ -847,7 +847,7 @@ function MainTabs({
           // already; a stale inline attachment is harmless until this sweep
           // removes it.
           try {
-            await reconcileOrphanInlineMedia(pid);
+            await reconcileOrphanInlineMedia(pid, did);
           } catch (err) {
             log.warn('feed_reconcile_failed', {
               err: err instanceof Error ? err.message : String(err),

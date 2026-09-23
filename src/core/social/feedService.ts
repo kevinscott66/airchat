@@ -2771,9 +2771,15 @@ async function applyFeedEnvelope(
       // Пока кладём в kvStore по ключу inline:<postId>:<i>.
       for (let i = 0; i < inlineMedia.media.length; i++) {
         // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
-        // фотографии останется пустым — reconcileOrphanInlineMedia потом
-        // подчистит ссылку. Но узнать о нём надо: раньше kvSet гасил
+        // фотографии останется пустым (resolveFeedMediaUri отдаёт на такую
+        // ссылку пустую строку). Но узнать о нём надо: раньше kvSet гасил
         // ошибку молча, и «пустая картинка у контакта» не имела следа.
+        //
+        // v4.32.735: прежде здесь было написано, что ссылку «потом подчистит
+        // reconcileOrphanInlineMedia». Она этого не делала — она удаляла пост
+        // целиком, вместе с текстом и уцелевшими снимками, и принятую от
+        // контакта публикацию вернуть после этого было нечем. Теперь уборка
+        // трогает только свои посты, см. InlinePostRef.own.
         if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, inlineMedia.media[i]))) {
           log.warn('feed_inline_media_receive_save_failed', {
             postId: payload.postId.slice(0, 24),
@@ -3510,7 +3516,13 @@ async function listPostIdsEverywhere(): Promise<string[] | null> {
   return out;
 }
 
-export async function reconcileOrphanInlineMedia(profileId: number): Promise<void> {
+/**
+ * @param myDid наш собственный DID. Нужен, чтобы отличить оборванную СВОЮ
+ *   публикацию (её удаление и есть смысл этой уборки) от принятой чужой, где
+ *   пропавшая фотография — не повод стирать текст. `null` — определить не
+ *   вышло; тогда не удаляется ничего. См. InlinePostRef.own.
+ */
+export async function reconcileOrphanInlineMedia(profileId: number, myDid: string | null): Promise<void> {
   void profileId; // ensureStorage uses the already-bound profile context.
   const s = await ensureStorage();
   const postIds = await s.listAllPostIds();
@@ -3540,12 +3552,23 @@ export async function reconcileOrphanInlineMedia(profileId: number): Promise<voi
       postId,
       mediaCids: post.mediaCids ?? [],
       documentsCount: Array.isArray(documents) ? documents.length : 0,
+      own: !!myDid && post.authorDid === myDid,
     });
   }
 
   // Список постов всех профилей, а не только своего: см. listPostIdsEverywhere.
   const knownPostIdsEverywhere = await listPostIdsEverywhere();
-  const { purgePosts, orphanKeys } = scanInlineOrphans({ posts, inlineKeys, knownPostIdsEverywhere });
+  const { purgePosts, keepForeign, orphanKeys } = scanInlineOrphans({ posts, inlineKeys, knownPostIdsEverywhere });
+  if (keepForeign.length > 0) {
+    // v4.32.735: чужие публикации с той же пропажей остаются на месте. След
+    // нужен: пустая плитка у контакта — это не норма, а не легшая запись байтов
+    // на приёме (см. feed_inline_media_receive_save_failed).
+    log.warn('feed_reconcile_foreign_kept', {
+      profileId,
+      posts: keepForeign.length,
+      missing: keepForeign.reduce((n, p) => n + p.missing, 0),
+    });
+  }
 
   let purged = 0;
   for (const p of purgePosts) {

@@ -27,6 +27,7 @@ function post(postId: string, media: number, docs: number): InlinePostRef {
     postId,
     mediaCids: Array.from({ length: media }, (_, i) => `inline:${postId}:${i}`),
     documentsCount: docs,
+    own: true,
   };
 }
 
@@ -63,7 +64,7 @@ describe('целые посты не трогаются', () => {
   it('пост без вложений не считается битым при пустой базе ключей', () => {
     const r = scanInlineOrphans({
       knownPostIdsEverywhere: [P1],
-      posts: [{ postId: P1, mediaCids: [], documentsCount: 0 }],
+      posts: [{ postId: P1, mediaCids: [], documentsCount: 0, own: true }],
       inlineKeys: [],
     });
     expect(r.purgePosts).toEqual([]);
@@ -72,7 +73,7 @@ describe('целые посты не трогаются', () => {
   it('старые IPFS-CID не ищутся в kv — байтов там и не было', () => {
     const r = scanInlineOrphans({
       knownPostIdsEverywhere: [P1],
-      posts: [{ postId: P1, mediaCids: ['bafybeigdyrzt', 'bafkreih'], documentsCount: 0 }],
+      posts: [{ postId: P1, mediaCids: ['bafybeigdyrzt', 'bafkreih'], documentsCount: 0, own: true }],
       inlineKeys: [],
     });
     expect(r.purgePosts).toEqual([]);
@@ -81,7 +82,7 @@ describe('целые посты не трогаются', () => {
   it('нечитаемый mediaCids (не строки) не приводит к удалению поста', () => {
     const r = scanInlineOrphans({
       knownPostIdsEverywhere: [P1],
-      posts: [{ postId: P1, mediaCids: [null, undefined, 42], documentsCount: 0 }],
+      posts: [{ postId: P1, mediaCids: [null, undefined, 42], documentsCount: 0, own: true }],
       inlineKeys: [],
     });
     expect(r.purgePosts).toEqual([]);
@@ -115,6 +116,7 @@ describe('битые посты находятся', () => {
       postId: P1,
       mediaCids: [`inline:${P1}:0`, 'bafybeigdyrzt', `inline:${P1}:2`],
       documentsCount: 0,
+      own: true,
     };
     const ok = scanInlineOrphans({
       knownPostIdsEverywhere: [P1],
@@ -239,6 +241,65 @@ describe('вложения соседнего профиля', () => {
   });
 });
 
+/**
+ * v4.32.735. Удаление оправдано одним случаем: своя публикация, оборванная
+ * между записью строки и записью байтов, — разослать её не успели. Принятая от
+ * контакта публикация попадала в то же состояние иначе: не легла одна запись
+ * байтов на приёме (feed_inline_media_receive_save_failed), — и уборка сносила
+ * её целиком, вместе с текстом и уцелевшими снимками. Перезапросить нечем:
+ * отправитель считает доставку состоявшейся.
+ */
+describe('чужая публикация не удаляется', () => {
+  /** Тот же пост, но пришедший от контакта. */
+  const foreign = (p: InlinePostRef): InlinePostRef => ({ ...p, own: false });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: своя с той же пропажей — удаляется', () => {
+    const mine = post(P1, 2, 0);
+    const r = scanInlineOrphans({
+      posts: [mine],
+      inlineKeys: [inlineMediaKey(P1, 0)],
+      knownPostIdsEverywhere: [P1],
+    });
+    // Про keepForeign здесь намеренно ни слова: проверка должна проходить и
+    // на коде до правки — иначе она доказывает наличие нового поля, а не то,
+    // что своя публикация по-прежнему удаляется.
+    expect(r.purgePosts.map((x) => x.postId)).toEqual([P1]);
+  });
+
+  it('чужая с той же пропажей — остаётся, и о ней есть след', () => {
+    const theirs = foreign(post(P1, 2, 0));
+    const r = scanInlineOrphans({
+      posts: [theirs],
+      inlineKeys: [inlineMediaKey(P1, 0)],
+      knownPostIdsEverywhere: [P1],
+    });
+    expect(r.purgePosts).toEqual([]);
+    expect(r.keepForeign).toEqual([{ postId: P1, missing: 1, mediaN: 2, docsN: 0 }]);
+  });
+
+  it('уцелевшие байты чужой публикации не становятся сиротами', () => {
+    const theirs = foreign(post(P1, 2, 0));
+    const r = scanInlineOrphans({
+      posts: [theirs],
+      inlineKeys: [inlineMediaKey(P1, 0)],
+      knownPostIdsEverywhere: [P1],
+    });
+    expect(r.orphanKeys).toEqual([]);
+  });
+
+  it('в одном обходе своя удаляется, чужая нет', () => {
+    const mine = post(P1, 1, 0);
+    const theirs = foreign(post(P2, 1, 0));
+    const r = scanInlineOrphans({
+      posts: [mine, theirs],
+      inlineKeys: [],
+      knownPostIdsEverywhere: [P1, P2],
+    });
+    expect(r.purgePosts.map((x) => x.postId)).toEqual([P1]);
+    expect(r.keepForeign.map((x) => x.postId)).toEqual([P2]);
+  });
+});
+
 describe('вызывающий даёт общий список, а не свой', () => {
   const feedService = fs.readFileSync(
     path.join(__dirname, '..', 'feedService.ts'),
@@ -283,6 +344,23 @@ describe('вызывающий даёт общий список, а не сво�
   it('прежняя форма вызова не вернулась', () => {
     expect(feedService).not.toContain('allPostIds: postIds');
     expect(feedService).not.toContain('allPostIds:');
+  });
+
+  /**
+   * v4.32.735: правило «удаляем только своё» работает лишь тогда, когда автор
+   * поста доходит до разбора. Поэтому закреплено и то, откуда берётся свой DID,
+   * и то, что при неизвестном авторе пост считается чужим.
+   */
+  it('автор поста доходит до разбора, а неизвестный DID делает пост чужим', () => {
+    expect(feedService).toContain('own: !!myDid && post.authorDid === myDid,');
+    expect(feedService).toContain(
+      'export async function reconcileOrphanInlineMedia(profileId: number, myDid: string | null): Promise<void> {'
+    );
+  });
+
+  it('свой DID передаёт вызывающий, а не выдумывает уборка', () => {
+    const app = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'App.tsx'), 'utf8');
+    expect(app).toContain('await reconcileOrphanInlineMedia(pid, did);');
   });
 
   it('удаление вложений профиля идёт по общим префиксам, а не по литералам', () => {
