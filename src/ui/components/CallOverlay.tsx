@@ -413,12 +413,21 @@ export function CallOverlay({ locked }: { locked: boolean }): React.ReactElement
   const isOutgoing = call.state === 'outgoing';
   const isConnected = call.state === 'connected';
   const isEnded = call.state === 'ended';
+  /**
+   * v4.32.745: у разговора появилась своя первая фаза — трубку сняли, а
+   * проходимого пути для звука ICE ещё не нашёл (`connectedAt === null`).
+   * Раньше её не было видно: часы запускались от снятой трубки и шли поверх
+   * тишины, а у звонка, который так и не соединился, набегала «длительность».
+   *
+   * Слово для дозвона заодно стало «Вызов…»: рядом с «Соединением…» прежнее
+   * «Подключение…» читалось как то же самое, сказанное дважды.
+   */
   const stateLabel = isIncoming
     ? (call.isVideo ? 'Входящий видеозвонок' : 'Входящий звонок…')
     : isOutgoing
-      ? 'Подключение…'
+      ? 'Вызов…'
       : isConnected
-        ? formatClockDuration(elapsed)
+        ? (call.connectedAt ? formatClockDuration(elapsed) : 'Соединение…')
         : 'Звонок завершён';
   const localUrl = streamUrl(media.localStream);
   const remoteUrl = streamUrl(media.remoteStream);

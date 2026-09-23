@@ -953,11 +953,16 @@ function ProfileScreenImpl({
                    * подписывался «Отклонён». А несостоявшийся исходящий назывался
                    * «Пропущен», хотя пропустить собственный звонок нельзя.
                    */
+                  // v4.32.745: «не соединились» — свой исход. Трубку сняли, а
+                  // звук не пошёл: подписать это «Нет ответа» значило бы
+                  // обвинить собеседника в том, чего он не делал.
                   const durationStr = entry.outcome === 'answered'
                     ? formatSpokenDuration(entry.durationMs ?? 0)
-                    : isMissed
-                      ? (isOut ? 'Нет ответа' : 'Пропущен')
-                      : 'Отклонён';
+                    : entry.outcome === 'failed'
+                      ? 'Не соединились'
+                      : isMissed
+                        ? (isOut ? 'Нет ответа' : 'Пропущен')
+                        : 'Отклонён';
                   const dateStr = dayMonthShortTime(entry.startedAt);
                   return (
                     <View key={entry.id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>

@@ -117,7 +117,10 @@ describe('call media UI contract', () => {
     // единственное, что отличает идущий звонок от завершённого, — текст
     // состояния и то, какие кнопки показаны. Это требование WCAG 1.4.1, а не
     // оформление: убрать их нельзя.
-    expect(overlay).toContain("'Подключение…'");
+    expect(overlay).toContain("'Вызов…'");
+    // v4.32.745: у разговора две фазы, и вторая наступает не сразу — пока ICE
+    // не нашёл путь, часов нет, а есть слово.
+    expect(overlay).toContain("'Соединение…'");
     expect(overlay).toContain("'Звонок завершён'");
     expect(overlay).toContain("'Входящий звонок…'");
     expect(overlay).toContain('formatClockDuration(elapsed)');

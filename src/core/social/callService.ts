@@ -142,8 +142,15 @@ export type CallLogEntry = {
   peerName: string;
   isVideo: boolean;
   direction: 'outgoing' | 'incoming';
-  /** 'answered' = connected, 'missed' = never connected, 'declined' = rejected */
-  outcome: 'answered' | 'missed' | 'declined';
+  /**
+   * 'answered' — говорили; 'missed' — не взяли трубку; 'declined' — отказали;
+   * 'failed' — трубку сняли, но соединиться так и не смогли (v4.32.745).
+   *
+   * Последний исход раньше выглядел как 'answered' с длительностью: разговор
+   * считался начатым по обмену SDP, а он удаётся всегда — это сигнальный
+   * сервер, а не звук.
+   */
+  outcome: 'answered' | 'missed' | 'declined' | 'failed';
   startedAt: number;
   durationMs: number | null;
 };
@@ -181,9 +188,17 @@ export function subscribeCallLog(cb: (log: CallLogEntry[]) => void): () => void 
 
 function recordCallEnd(info: CallInfo, endedAt: number, cause: CallEndCause): void {
   const connectedAt = info.connectedAt;
+  // v4.32.745: «трубку сняли, но не соединились» — отдельный исход.
+  // Состояние 'connected' без времени соединения бывает ровно в этом случае:
+  // предложение и ответ доехали через сигнальный сервер, а ICE проходимого
+  // пути между устройствами не нашёл (в настройках по умолчанию TURN нет, и
+  // за симметричным NAT одного STUN не хватает). Записывать это «пропущенным»
+  // нельзя — трубку взяли; «состоявшимся» тем более — слышно не было.
   const outcome: CallLogEntry['outcome'] = connectedAt
     ? 'answered'
-    : (cause === 'declined' ? 'declined' : 'missed');
+    : info.state === 'connected'
+      ? 'failed'
+      : (cause === 'declined' ? 'declined' : 'missed');
   const entry: CallLogEntry = {
     // v4.32.188 (Round-18 #9): endedAt_peerSuffix collides when two calls
     // end in the same ms with the same peer (and a clock rewind via NTP
@@ -432,7 +447,10 @@ export async function loadCallLog(pid: number): Promise<void> {
           if (!isPubKeyB64(r.peerPubB64)) continue;
           if (typeof r.startedAt !== 'number' || !Number.isFinite(r.startedAt)) continue;
           if (r.direction !== 'outgoing' && r.direction !== 'incoming') continue;
-          if (r.outcome !== 'answered' && r.outcome !== 'missed' && r.outcome !== 'declined') continue;
+          // v4.32.745: 'failed' — четвёртый исход. Список закрытый нарочно:
+          // журнал приходит с диска, а исход уезжает в надпись на экране.
+          if (r.outcome !== 'answered' && r.outcome !== 'missed'
+            && r.outcome !== 'declined' && r.outcome !== 'failed') continue;
           const entry = e as CallLogEntry;
           entry.peerName = typeof entry.peerName === 'string' ? entry.peerName.slice(0, 128) : '';
           clean.push(entry);
@@ -458,6 +476,21 @@ let mySigningPair: KeyPairBytes | null = null;
 
 // WebRTC state
 let pc: RTCPeerConnection | null = null;
+/**
+ * Когда между устройствами впервые нашёлся проходимый путь (v4.32.745).
+ *
+ * Не то же самое, что «обменялись SDP»: обмен предложением и ответом идёт
+ * через сигнальный сервер и удаётся всегда, а звук течёт только после того,
+ * как ICE подобрал пару адресов, по которой пакеты доходят. Между этими двумя
+ * событиями — от долей секунды до никогда: за NAT, который не пробивается
+ * одним STUN, пара не находится вовсе (в настройках по умолчанию TURN нет).
+ *
+ * Отдельная переменная, а не поле звонка, потому что порядок двух событий не
+ * задан: у принимающего ICE успевает соединиться ещё до того, как `acceptCall`
+ * доберётся до строки с «разговор идёт». Кто пришёл вторым, тот и сводит их
+ * вместе.
+ */
+let iceConnectedAt: number | null = null;
 let localStream: CallMediaStream | null = null;
 let remoteStream: CallMediaStream | null = null;
 let signaling: WebRTCSignaling | null = null;
@@ -663,6 +696,9 @@ function cleanupCallResources(): void {
   localStream = null;
   remoteStream = null;
   pc = null;
+  // v4.32.745: путь принадлежит соединению, а не службе. Оставить отметку
+  // здесь — значит записать следующему звонку чужое время соединения.
+  iceConnectedAt = null;
   pendingRemoteIce.length = 0;
 
   if (oldPc) {
@@ -681,6 +717,25 @@ function setState(state: CallState, extra?: Partial<CallInfo>): void {
   if (!currentCall) return;
   currentCall = { ...currentCall, state, ...extra };
   emit();
+}
+
+/**
+ * ICE нашёл путь — с этой секунды разговор действительно идёт (v4.32.745).
+ *
+ * Порядок двух событий не задан, поэтому сводит их вместе тот, кто пришёл
+ * вторым: путь нашёлся при уже начатом разговоре — время проставит эта
+ * функция; разговор начался при уже найденном пути — его проставит сам
+ * переход, он читает `iceConnectedAt`.
+ *
+ * Повторное соединение после разрыва (ICE сорвался и подобрал пару заново)
+ * время не переписывает: разговор тот же самый, и считается он с первой
+ * секунды, когда собеседника стало слышно.
+ */
+function markMediaConnected(): void {
+  if (iceConnectedAt === null) iceConnectedAt = Date.now();
+  if (currentCall && currentCall.state === 'connected' && currentCall.connectedAt === null) {
+    setState('connected', { connectedAt: iceConnectedAt });
+  }
 }
 
 async function getSignaling(): Promise<WebRTCSignaling | null> {
@@ -984,7 +1039,11 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       if (callGeneration !== generation || pc !== answerPc || currentCall?.state !== 'outgoing') return;
       await flushPendingIce(answerPc);
       if (callGeneration !== generation || pc !== answerPc || currentCall?.state !== 'outgoing') return;
-      setState('connected', { connectedAt: Date.now() });
+      // v4.32.745: трубку сняли — но слышно ли друг друга, ответ SDP не
+      // говорит. Время разговора ставит ICE, когда найдёт проходимый путь;
+      // до тех пор здесь `null`, и это не «ещё не успели заполнить», а
+      // «звука пока нет» — на нём держатся и надпись на экране, и журнал.
+      setState('connected', { connectedAt: iceConnectedAt });
     } catch (e) {
       log.warn('call_set_remote_answer_failed', { err: e instanceof Error ? e.message : String(e) });
     }
@@ -1192,6 +1251,7 @@ async function _createPc(myPub: string, remotePub: string): Promise<RTCPeerConne
       }, 10_000);
     } else if (st === 'connected' || st === 'completed') {
       clearGrace();
+      markMediaConnected();
     } else if (st === 'closed') {
       clearGrace();
     }
@@ -1847,7 +1907,10 @@ export async function acceptCall(): Promise<boolean> {
 
     // Направление и время начала переносятся из строки входящего звонка
     // (проверка выше гарантирует, что это она же), а не проставляются заново.
-    currentCall = { ...currentCall, state: 'connected', peerName: fromName, isVideo, connectedAt: Date.now() };
+    // v4.32.745: `connectedAt` — время найденного пути, а не поднятой трубки;
+    // у принимающего ICE к этой строке нередко уже успел соединиться, поэтому
+    // читаем отметку, а не ставим свою.
+    currentCall = { ...currentCall, state: 'connected', peerName: fromName, isVideo, connectedAt: iceConnectedAt };
     pendingOffer = null;
     emit();
     return true;
