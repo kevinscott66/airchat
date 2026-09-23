@@ -20,7 +20,7 @@ import {
   undeliveredText,
 } from './controlFanout';
 import { canInteractInGroup } from './groupSendPolicy';
-import { lookupGroupActor, lookupGroupActorRead, roleOf } from './groupActor';
+import { lookupGroupActorRead, roleOf } from './groupActor';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import {

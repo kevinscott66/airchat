@@ -41,7 +41,8 @@ jest.mock('../pollVotePending', () => ({
 
 const mockSeen: string[] = [];
 jest.mock('../groupActor', () => ({
-  lookupGroupActor: jest.fn(async (groupId: string) => {
+  // v4.32.755: приёмник голоса перешёл на различающее чтение состава.
+  lookupGroupActorRead: jest.fn(async (groupId: string) => {
     mockSeen.push(groupId);
     if (groupId === 'g-throws') throw new Error('база недоступна');
     // Не-участник: применение штатно и без исключения заканчивается здесь.

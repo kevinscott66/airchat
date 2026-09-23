@@ -36,7 +36,8 @@ import {
   type FanoutUndelivered,
 } from './controlFanout';
 import { canApplyGroupMessageOp, canInteractInGroup } from './groupSendPolicy';
-import { lookupGroupActor, roleOf } from './groupActor';
+import { lookupGroupActorRead, roleOf } from './groupActor';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import {
   POLL_CLOSE_PREFIX,
@@ -208,20 +209,24 @@ export async function castAndSyncPollVote(params: {
 }
 
 /**
- * Применяет входящий конверт голоса. Возвращает true, если конверт наш
- * (независимо от того, применился он или был отброшен).
+ * Применяет входящий конверт голоса.
+ *
+ * v4.32.755: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш», и развилка в messaging.ts его не читала — кадр объявлялся разобранным
+ * при любом исходе, метка «докуда прочитано» шла дальше, и relay свой кадр
+ * больше не отдавал. Голос пропадал совсем: счётчики у двух людей расходились,
+ * и ни один экран об этом не говорил. Тот же приём, что у реакции в v4.32.754.
  */
 export async function handleIncomingPollVote(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(POLL_VOTE_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(POLL_VOTE_PREFIX)) return 'consumed';
   const env = decodePollVoteEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Профиль-владелец — от службы переписки (v4.32.481), см. handleIncomingReaction.
-  await applyIncomingPollVote(env, senderPubB64, ownerPid, Date.now(), true);
-  return true;
+  return await applyIncomingPollVote(env, senderPubB64, ownerPid, Date.now(), true);
 }
 
 /**
@@ -233,6 +238,10 @@ const pendingVotes = createPendingPollVotes();
 /**
  * Общее тело применения голоса: и для только что пришедшего конверта, и для
  * снятого с полки. `canPark` не даёт снятому голосу лечь обратно на полку.
+ *
+ * v4.32.755: отвечает исходом приёма. Снятому с полки голосу этот ответ ни к
+ * чему — его кадр разобран давно, и метка по нему уже прошла; `deferred` там
+ * значит лишь «во второй раз тоже не вышло», и смотреть на него некому.
  */
 async function applyIncomingPollVote(
   env: PollVoteEnvelope,
@@ -240,14 +249,21 @@ async function applyIncomingPollVote(
   pid: number,
   now: number,
   canPark: boolean
-): Promise<void> {
+): Promise<EnvelopeIntake> {
   if (env.groupId) {
     // Голос от не-участника — тот же анти-спуф, что и для реакций: иначе
     // посторонний, знающий id группы и сообщения, накручивает опрос всем.
-    const actor = await lookupGroupActor(env.groupId, senderPubB64, pid);
+    //
+    // v4.32.755: чтение различающее. Схлопывающая форма объявляла группу
+    // незнакомой по отказу базы, и голос участника пропадал молча.
+    const actor = await lookupGroupActorRead(env.groupId, senderPubB64, pid);
+    if (!actor) {
+      log.warn('poll_vote_group_unreadable', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     if (!actor.group) {
       log.debug('poll_vote_unknown_group', { gid: env.groupId.slice(0, 8) });
-      return;
+      return 'consumed';
     }
     // v4.32.273: не только бан, но и read-only — тот же вердикт, что отправитель
     // проверяет у себя перед записью голоса.
@@ -258,7 +274,7 @@ async function applyIncomingPollVote(
         from: senderPubB64.slice(0, 12),
         code: verdict.code,
       });
-      return;
+      return 'consumed';
     }
   }
 
@@ -268,12 +284,16 @@ async function applyIncomingPollVote(
   // счётчики закрытого опроса продолжали бы расти.
   const closed = await pollIsClosed(pid, env.msgId);
   if (closed === null) {
+    // v4.32.755: прочитать флаг не вышло — это отказ kv, и он пройдёт сам.
+    // Раньше голос на нём отбрасывался навсегда: осторожность на месте (в
+    // закрытый опрос голос не принимаем), а цена у неё была та же, что у
+    // потери.
     log.warn('poll_vote_closed_unknown_drop', { from: senderPubB64.slice(0, 12) });
-    return;
+    return 'deferred';
   }
   if (closed) {
     log.debug('poll_vote_closed_drop', { from: senderPubB64.slice(0, 12) });
-    return;
+    return 'consumed';
   }
 
   // v4.32.342: сам опрос, а не только конверт. До этого голос писался по любому
@@ -300,7 +320,9 @@ async function applyIncomingPollVote(
       };
       if (pendingVotes.park(vote)) {
         log.info('poll_vote_parked', { from: senderPubB64.slice(0, 12), group: !!env.groupId });
-        return;
+        // Голос лежит на полке и будет применён, когда придёт сам опрос:
+        // держать за него ещё и метку незачем, кадр своё дело сделал.
+        return 'consumed';
       }
     }
     log.warn('poll_vote_target_drop', {
@@ -308,16 +330,31 @@ async function applyIncomingPollVote(
       group: !!env.groupId,
       code: target.code,
     });
-    return;
+    return 'consumed';
   }
 
   // Автор голоса берётся из ПОДПИСАННОГО отправителя DM, а не из конверта —
   // иначе любой мог бы проголосовать от чужого имени. allowMultiple — из текста
   // опроса, а не из конверта: с чужим multi: true хранилище не вытесняло
   // прошлый выбор, и один человек занимал все варианты одиночного опроса.
-  if (env.on) await setPollVote(env.msgId, senderPubB64, env.idx, pid, target.allowMultiple);
-  else await deletePollVote(env.msgId, senderPubB64, env.idx, pid);
+  //
+  // v4.32.755: отказ самой записи — тоже «сейчас не смогли». Обе функции на
+  // упавшем запросе бросают, и раньше это исключение уходило сквозь развилку
+  // в messaging наверх, где приёмник кадра ловил его общей ловушкой. Исход был
+  // верный по случайности; теперь он назван, а снятому с полки голосу ловушка
+  // по-прежнему нужна своя — она стоит в flushPendingPollVotes.
+  try {
+    if (env.on) await setPollVote(env.msgId, senderPubB64, env.idx, pid, target.allowMultiple);
+    else await deletePollVote(env.msgId, senderPubB64, env.idx, pid);
+  } catch (e) {
+    log.warn('poll_vote_write_failed', {
+      from: senderPubB64.slice(0, 12),
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return 'deferred';
+  }
   log.info('poll_vote_applied', { group: !!env.groupId, on: env.on });
+  return 'consumed';
 }
 
 /**
@@ -343,7 +380,10 @@ export async function flushPendingPollVotes(
     // исключение на середине списка теряло безвозвратно весь его хвост, и
     // теряло молча: вызывающие пишут в журнал один общий poll_vote_flush_failed.
     try {
-      await applyIncomingPollVote(
+      // v4.32.755: отказ записи теперь называется словом, а не исключением, и
+      // счётчик обязан его увидеть — иначе «применено N» включало бы голоса,
+      // которые никуда не легли, и строка poll_votes_flushed врала бы.
+      const intake = await applyIncomingPollVote(
         {
           msgId: v.msgId,
           idx: v.idx,
@@ -359,7 +399,8 @@ export async function flushPendingPollVotes(
         now,
         false
       );
-      applied += 1;
+      if (intake === 'deferred') failed += 1;
+      else applied += 1;
     } catch (e) {
       failed += 1;
       log.warn('poll_vote_apply_failed', {
@@ -442,25 +483,35 @@ export async function closeAndSyncPoll(params: {
 }
 
 /**
- * Применяет входящий конверт завершения. Возвращает true, если конверт наш
- * (независимо от того, применился он или был отброшен).
+ * Применяет входящий конверт завершения.
+ *
+ * v4.32.755: отвечает словом, а не `true`. Завершение опроса — конверт без
+ * повтора и без второй посылки: не применённый сейчас, он не применится
+ * никогда. Опрос остаётся открытым у получателя, тот продолжает голосовать, а
+ * его голоса на другой стороне отбрасываются как «в закрытый опрос» — расход,
+ * который ни одна сторона не видит.
  */
 export async function handleIncomingPollClose(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(POLL_CLOSE_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(POLL_CLOSE_PREFIX)) return 'consumed';
   const env = decodePollCloseEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Профиль-владелец — от службы переписки (v4.32.481).
   const pid = ownerPid;
 
   if (env.groupId) {
-    const actor = await lookupGroupActor(env.groupId, senderPubB64, pid);
+    // v4.32.755: различающее чтение — см. голос выше.
+    const actor = await lookupGroupActorRead(env.groupId, senderPubB64, pid);
+    if (!actor) {
+      log.warn('poll_close_group_unreadable', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     if (!actor.group) {
       log.debug('poll_close_unknown_group', { gid: env.groupId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     // Закрыть можно свой опрос либо любой, если ты админ группы — те же права,
     // что даёт кнопку в GroupsScreen. Без этой проверки рядовой участник гасил
@@ -470,7 +521,7 @@ export async function handleIncomingPollClose(
     // можно было бы засорять kv ключами poll_closed_*.
     if (!target) {
       log.debug('poll_close_unknown_message', { gid: env.groupId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     // v4.32.342: сообщение обязано быть из названной группы. Права проверялись
     // по env.groupId, а закрывался опрос по env.msgId — то есть админ своей
@@ -480,7 +531,7 @@ export async function handleIncomingPollClose(
         gid: env.groupId.slice(0, 8),
         from: senderPubB64.slice(0, 12),
       });
-      return true;
+      return 'consumed';
     }
     // v4.32.429: тот же вердикт, что на удалении своего сообщения, и та же
     // функция. Раньше здесь стояли две проверки от руки — «не участник или
@@ -502,7 +553,7 @@ export async function handleIncomingPollClose(
         from: senderPubB64.slice(0, 12),
         code: verdict.code,
       });
-      return true;
+      return 'consumed';
     }
   } else {
     // Личный опрос: закрыть его вправе только тот, кто его создал. direction
@@ -510,20 +561,23 @@ export async function handleIncomingPollClose(
     const author = await getChatMessageAuthor(env.msgId, pid);
     if (!author || author.direction !== 'in' || author.contactPubB64 !== senderPubB64) {
       log.warn('poll_close_not_author_drop', { from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
   }
 
   // v4.32.644: конверт наш и разобран, но если запись не легла — опрос у нас
   // не закрылся. Строка «poll_close_applied» и побудка подписчиков соврали бы:
   // пузырь перечитал бы флаг и снова нашёл опрос открытым.
+  // v4.32.755: и метку «докуда прочитано» двигать в этом случае нельзя. Отказ
+  // kv пройдёт сам, а второй посылки у конверта завершения нет: разобранным
+  // его объявляли молча, и опрос оставался открытым навсегда.
   if (!(await scopedKvSetCheckedFor(pid, pollClosedKey(env.msgId), '1'))) {
     log.warn('poll_close_not_applied', { group: !!env.groupId });
-    return true;
+    return 'deferred';
   }
   // Запись в kv не будит подписчиков chat-writes, а пузырь опроса перечитывает флаг
   // именно по ним — без этого закрытие увидели бы только после перезахода в чат.
   notifyChatStorageChanged();
   log.info('poll_close_applied', { group: !!env.groupId });
-  return true;
+  return 'consumed';
 }

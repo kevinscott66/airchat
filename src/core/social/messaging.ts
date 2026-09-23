@@ -1267,21 +1267,18 @@ export class MessagingService {
 
     // v4.32.250: голос в опросе — обновляет счётчики существующего опроса,
     // своего пузыря в чате не создаёт.
+    // v4.32.755: ответ обработчика — наш ответ, как и у реакции выше.
     if (textPayload.text?.startsWith(POLL_VOTE_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingPollVote } = await import('./pollVoteSync');
-        await handleIncomingPollVote(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingPollVote } = await import('./pollVoteSync');
+      return await handleIncomingPollVote(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.251: завершение опроса автором (или админом группы).
     if (textPayload.text?.startsWith(POLL_CLOSE_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingPollClose } = await import('./pollVoteSync');
-        await handleIncomingPollClose(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingPollClose } = await import('./pollVoteSync');
+      return await handleIncomingPollClose(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.235: закрепление в личке — меняет только баннер, своего пузыря в

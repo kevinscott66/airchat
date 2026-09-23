@@ -78,6 +78,12 @@ jest.mock('../../storage/local', () => ({
     { peerPubB64: mockPeer, role: 'member' },
   ],
   getGroup: async () => ({ id: mockGroup, type: 'group', adminOnlyPosting: false }),
+  // v4.32.755: приёмники конвертов опроса читают строку группы различающим
+  // getGroupRead: «группы нет» и «база не ответила» — больше не одно и то же.
+  getGroupRead: async () => ({
+    state: 'found',
+    value: { id: mockGroup, type: 'group', adminOnlyPosting: false },
+  }),
   notifyChatStorageChanged: () => {
     mockNotifies += 1;
   },
@@ -170,14 +176,18 @@ describe('проверка не пустая: флаг читается — вс
     expect(mockFanouts).toBe(0);
   });
 
+  // v4.32.755: обработчики отвечают словом EnvelopeIntake вместо «конверт наш».
+  // 'consumed' значит «метку докуда прочитано двигать можно».
   it('открытый опрос принимает чужой голос', async () => {
-    await expect(handleIncomingPollVote(voteEnvelope(true), mockPeer, PID)).resolves.toBe(true);
+    const intake = await handleIncomingPollVote(voteEnvelope(true), mockPeer, PID);
+    expect(intake).toBe('consumed');
     expect(mockVotesSet).toEqual([`${MSG}/${mockPeer}/0`]);
   });
 
-  it('завершённый опрос чужой голос отбрасывает', async () => {
+  it('завершённый опрос чужой голос отбрасывает насовсем', async () => {
     mockKv.set(CLOSED_KEY, '1');
-    await expect(handleIncomingPollVote(voteEnvelope(true), mockPeer, PID)).resolves.toBe(true);
+    const intake = await handleIncomingPollVote(voteEnvelope(true), mockPeer, PID);
+    expect(intake).toBe('consumed');
     expect(mockVotesSet).toEqual([]);
   });
 
@@ -191,7 +201,8 @@ describe('проверка не пустая: флаг читается — вс
   });
 
   it('чужое завершение тоже применяется', async () => {
-    await expect(handleIncomingPollClose(closeEnvelope(), mockPeer, PID)).resolves.toBe(true);
+    const intake = await handleIncomingPollClose(closeEnvelope(), mockPeer, PID);
+    expect(intake).toBe('consumed');
     expect(mockKv.get(CLOSED_KEY)).toBe('1');
     expect(mockNotifies).toBe(1);
   });
@@ -230,9 +241,14 @@ describe('флаг не прочитался — голосовать нельз
     expect(mockVotesDeleted).toEqual([]);
   });
 
-  it('чужой голос не попадает в счётчики, но конверт считается нашим', async () => {
+  // v4.32.755: осторожность тут верная — в завершённый опрос голос не пускаем,
+  // — но пока кадр считался разобранным, цена одной занятой секунды kv равнялась
+  // цене потерянного голоса: relay держит кадр ещё тридцать суток, а
+  // перезапрашивают его только по метке «докуда прочитано».
+  it('чужой голос не попадает в счётчики, и кадр откладывается', async () => {
     mockFailClosedRead = true;
-    await expect(handleIncomingPollVote(voteEnvelope(true), mockPeer, PID)).resolves.toBe(true);
+    const intake = await handleIncomingPollVote(voteEnvelope(true), mockPeer, PID);
+    expect(intake).toBe('deferred');
     expect(mockVotesSet).toEqual([]);
     expect(mockVotesDeleted).toEqual([]);
   });
@@ -247,7 +263,7 @@ describe('флаг не прочитался — голосовать нельз
       ts: Date.now(),
       groupId: mockGroup,
     });
-    await expect(handleIncomingPollVote(env, mockPeer, PID)).resolves.toBe(true);
+    await expect(handleIncomingPollVote(env, mockPeer, PID)).resolves.toBe('deferred');
     expect(mockVotesSet).toEqual([]);
   });
 });
@@ -270,9 +286,12 @@ describe('флаг не записался — опрос не завершён'
     expect(res.reason).toMatch(/[А-Яа-яЁё]/);
   });
 
-  it('чужое завершение без удачной записи не будит подписчиков', async () => {
+  // v4.32.755: второй посылки у конверта завершения нет. Пока он объявлялся
+  // разобранным, занятая база оставляла опрос открытым навсегда.
+  it('чужое завершение без удачной записи не будит подписчиков и откладывается', async () => {
     mockFailClosedWrite = true;
-    await expect(handleIncomingPollClose(closeEnvelope(), mockPeer, PID)).resolves.toBe(true);
+    const intake = await handleIncomingPollClose(closeEnvelope(), mockPeer, PID);
+    expect(intake).toBe('deferred');
     expect(mockKv.has(CLOSED_KEY)).toBe(false);
     expect(mockNotifies).toBe(0);
   });
