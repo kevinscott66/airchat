@@ -20,14 +20,16 @@ import {
   readChatMessageWindow,
   upsertChatMessage,
   upsertChatMessageChecked,
-  saveChatMessage,
+  saveChatMessageChecked,
   saveChatMessageWithTouch,
   updateChatMessageStatusChecked,
   updateChatMessageText,
   updateChatMessageTextChecked,
   touchConversation,
   type ChatMessageRow,
+  type ChatMessageWrite,
 } from '../storage/local';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
 import { lookupValue } from '../utils/lookupResult';
 import { compareChatRows, oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
@@ -292,6 +294,21 @@ async function publishMessageWithRetry(
     }
   }
   return null;
+}
+
+/**
+ * Надгробие «сообщение удалено» — с повтором по занятой секунде (v4.32.788).
+ *
+ * Причина отказа тут почти всегда одна: SQLite занят другим запросом на доли
+ * секунды. Те же паузы, что у чтений и у журнала звонков (v4.32.749), — они
+ * укладываются в те сотни миллисекунд, за которые блокировка снимается сама.
+ */
+async function markMessageDeleted(row: ChatMessageRow): Promise<ChatMessageWrite> {
+  for (let attempt = 0; ; attempt++) {
+    const wrote = await saveChatMessageChecked(row);
+    if (wrote !== 'failed' || attempt >= READ_RETRY_ATTEMPTS) return wrote;
+    await new Promise((r) => setTimeout(r, readRetryDelayMs(attempt + 1)));
+  }
 }
 
 let messagingInstance: MessagingService | null = null;
@@ -1146,7 +1163,13 @@ export class MessagingService {
         return 'deferred';
       }
       await maybeSetTip();
-      await saveChatMessage({
+      // v4.32.788: надгробие кладётся проверяемой формой и с повтором.
+      //
+      // Прежде его писала гасящая `saveChatMessage`, у которой ответа нет
+      // вовсе. Секунда занятой базы — и строка исчезала, а пометки «сообщение
+      // удалено» не появлялось: на экране оставалась дыра без объяснения, и тем
+      // обиднее, что собеседник уверен, что пометку у нас видно.
+      const marked = await markMessageDeleted({
         id: em.messageId,
         contactPubB64: peerPubKeyB64,
         cid,
@@ -1157,6 +1180,17 @@ export class MessagingService {
         createdAt: em.timestamp,
         ownerProfileId: ownerPid,
       });
+      if (marked === 'failed') {
+        // Отложить кадр здесь нельзя, и это не оплошность порядка. Поменять его
+        // местами — значит при отказе удаления оставить в переписке обе строки
+        // сразу: и само сообщение, и пустую отметку о его удалении (инвариант
+        // v4.32.771). А повтор после удавшегося удаления бесполезен: цели уже
+        // нет, второй заход упрётся в проверку авторства и объявит чужим наше
+        // же удаление. Поэтому честная плата за отказ одна — сказать о нём
+        // вслух. Теряется пометка, не содержимое: сообщения на экране больше
+        // нет, а «удалено» рядом с ним не написано.
+        log.warn('delete_payload_mark_failed', { from: peerPubKeyB64.slice(0, 8) });
+      }
       return 'consumed';
     }
 
