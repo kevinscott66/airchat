@@ -276,7 +276,8 @@ describe('повод для правки жив', () => {
   it('служебный конверт не оставляет строки в переписке даже когда её завели', () => {
     const src = codeOnly(MESSAGING());
     expect(src).toContain('const control = isControlOnlyText(text);');
-    expect(src).toContain('if (!control && !callerOwnsRow) await upsertChatMessage(row);');
+    // v4.32.781: то же правило словом — «писать не нужно» отличается от «не легло».
+    expect(src).toContain("if (control || callerOwnsRow) return 'skipped';");
   });
 
   it('часовой лимит служебных конвертов по-прежнему отдельный отказ', () => {

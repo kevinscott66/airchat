@@ -19,6 +19,7 @@ import {
   listChatMessages,
   readChatMessageWindow,
   upsertChatMessage,
+  upsertChatMessageChecked,
   saveChatMessage,
   saveChatMessageWithTouch,
   updateChatMessageStatusChecked,
@@ -1679,7 +1680,14 @@ export class MessagingService {
     }
     const ts = Date.now();
     const messageId = uuidv4();
-    await upsertChatMessage({
+    /**
+     * v4.32.781: у заметки в «Избранном» нет второй копии нигде — она никуда
+     * не отправлялась, и сети она не касалась вовсе. Строка в базе и есть вся
+     * заметка. Прежде запись гасила свой отказ сама, ответ был всё равно
+     * успешным, а экран на успех очищает поле ввода, ответ и черновик:
+     * написанное себе исчезало бесследно от одной занятой секунды.
+     */
+    const wrote = await upsertChatMessageChecked({
       id: messageId,
       contactPubB64,
       // Тот же вид ссылки, что у заметок, сохранённых экраном переписки:
@@ -1694,6 +1702,10 @@ export class MessagingService {
       replyToId: replyToId ?? null,
       replyToPreview: truncateReplyPreview(replyToPreview),
     });
+    if (wrote === 'failed') {
+      log.warn('self_chat_row_failed', { messageId });
+      return null;
+    }
     void touchConversation(contactPubB64, ownerPid, previewLabelForText(text).slice(0, 120), 'out', false);
     return messageId;
   }
@@ -1955,15 +1967,35 @@ export class MessagingService {
     // Записать поверх нельзя — upsert затёр бы время начала сессии временем
     // такта, и пузырь прыгал бы в конец списка каждые полминуты.
     const callerOwnsRow = isLiveLocMessage(text);
-    const saveRow = async (row: ChatMessageRow): Promise<void> => {
-      if (!control && !callerOwnsRow) await upsertChatMessage(row);
+    /**
+     * v4.32.781: запись отвечает исходом. `'skipped'` — строки тут и не должно
+     * быть (служебный конверт, живая геолокация), `'failed'` — должна была, но
+     * не легла. Прежде оба случая были неотличимы от удачи: перезапись гасила
+     * свой отказ сама и отвечала `void`.
+     */
+    const saveRow = async (row: ChatMessageRow): Promise<'written' | 'skipped' | 'failed'> => {
+      if (control || callerOwnsRow) return 'skipped';
+      return await upsertChatMessageChecked(row);
     };
     const touchConv = (): void => {
       if (!control) {
         void touchConversation(contactPubB64, ownerPid, previewLabelForText(text).slice(0, 120), 'out', false);
       }
     };
-    await measureAsync('dm_db_upsert_pending', () => saveRow(pending));
+    /**
+     * v4.32.781: своя исходящая строка — якорь всего, что будет дальше.
+     * Очереди повторной отправки у личных сообщений нет (`outboxEnqueue` в бою
+     * никем не зовётся), поэтому именно она даёт и «Повторить», и сам след
+     * того, что человек это писал. Не легла — отправлять нельзя: экран на любой
+     * ответ, кроме `'refused'`, очищает поле ввода, ответ и черновик, и
+     * набранное перестало бы существовать где бы то ни было, пока собеседник
+     * читает пришедшее. Занятая база отпускает через секунду, а `'refused'`
+     * возвращает текст в поле — человек повторит сам.
+     */
+    if ((await measureAsync('dm_db_upsert_pending', () => saveRow(pending))) === 'failed') {
+      log.warn('dm_pending_row_failed', { messageId, peerDid });
+      return { outcome: 'refused', cid: null };
+    }
 
     const cid = await measureAsync('dm_ipfs_publish', () => publishMessageWithRetry(this.store, em));
     if (!cid) {
@@ -2012,7 +2044,14 @@ export class MessagingService {
         return { outcome: 'sent', cid: fallbackRef };
       }
       log.info('dm_send_no_online_route', { peerDid, messageId });
-      await saveRow({ ...pending, status: 'failed' });
+      // v4.32.781: пометку «не отправлено» тоже умеет не пустить занятая база.
+      // Текст при этом не теряется — строка `sending` легла выше и видна в
+      // переписке, — но кнопки «Повторить» у неё нет, а признаться в этом
+      // ответом уже нельзя: вернуть текст в поле значило бы написать его
+      // дважды. Остаётся назвать в журнале.
+      if ((await saveRow({ ...pending, status: 'failed' })) === 'failed') {
+        log.warn('dm_failed_mark_row_failed', { messageId, peerDid });
+      }
       touchConv();
       // v4.32.726: маршрута нет, но строка сохранена — её видно в переписке и
       // её можно повторить. Возвращать текст в поле ввода тут нельзя: он

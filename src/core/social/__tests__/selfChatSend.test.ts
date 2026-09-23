@@ -102,7 +102,9 @@ describe('saveToSelfChat пишет в базу и никуда не отпра�
   });
 
   it('строка ложится доставленной, с местной ссылкой вместо CID', () => {
-    expect(body).toContain('await upsertChatMessage(');
+    // v4.32.781: строка пишется различающей формой — заметка себе нигде больше
+    // не существует, и отказ записи здесь обязан быть виден.
+    expect(body).toContain('await upsertChatMessageChecked(');
     expect(body).toContain("status: 'delivered'");
     expect(body).toContain('cid: `local:${ts}`');
     expect(body).toContain('void touchConversation(');
@@ -110,7 +112,9 @@ describe('saveToSelfChat пишет в базу и никуда не отпра�
 
   it('служебный конверт и живая метка в заметки не попадают', () => {
     expect(body).toContain('if (isControlOnlyText(text) || isLiveLocMessage(text))');
-    expect(body.indexOf('return null;')).toBeLessThan(body.indexOf('await upsertChatMessage('));
+    expect(body.indexOf('return null;')).toBeLessThan(
+      body.indexOf('await upsertChatMessageChecked(')
+    );
   });
 
   it('вложения проходят обычную загрузку — местный путь в переписке не рисуется', () => {

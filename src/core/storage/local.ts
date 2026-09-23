@@ -3409,7 +3409,31 @@ export async function saveChatMessageWithTouch(
   }
 }
 
-export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
+/**
+ * Исход перезаписи строки личного сообщения: легла или не вышло (v4.32.781).
+ *
+ * «Уже лежало» здесь нет — на то он и upsert: строка либо новая, либо
+ * переписана, и оба случая одинаково хороши.
+ */
+export type ChatUpsertWrite = 'written' | 'failed';
+
+/**
+ * Перезапись строки личного сообщения с честным исходом.
+ *
+ * До v4.32.781 существовала только гасящая форма: отказ — занятая база,
+ * неподнявшаяся блокировка `beginImmediate`, переполненный диск — оседал в
+ * `catch` одной строкой журнала, а наружу уходил `void`. У соседей по таблице
+ * различающая форма была давно (`saveChatMessageChecked`,
+ * `deleteChatMessageChecked`, `updateChatMessageStatusChecked`,
+ * `updateChatMessageTextChecked`), у перезаписи — нет.
+ *
+ * Держалась на ней отправка: `sendMessageWork` пишет этой формой свою же
+ * исходящую строку и по ней одной отвечает экрану «сохранено» — а экран на это
+ * слово очищает поле ввода, ответ и черновик. Очереди повторной отправки у
+ * личных сообщений нет (см. `outboxEnqueue`), так что строка беседы и есть
+ * единственный якорь повтора. Не легла она — набранного нет больше нигде.
+ */
+export async function upsertChatMessageChecked(row: ChatMessageRow): Promise<ChatUpsertWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -3482,10 +3506,21 @@ export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
       throw e;
     }
     emitChatWrites();
+    return 'written';
   } catch (e) {
     log.warn('chat_message_upsert_failed', { err: e instanceof Error ? e.message : String(e) });
     notifyIfStoragePressure(e, 'chat_message_upsert');
+    return 'failed';
   }
+}
+
+/**
+ * Гасящая форма перезаписи: для мест, где показать отказ всё равно негде.
+ * Там, где от исхода зависит видимое человеку последствие, зовут
+ * {@link upsertChatMessageChecked}.
+ */
+export async function upsertChatMessage(row: ChatMessageRow): Promise<void> {
+  await upsertChatMessageChecked(row);
 }
 
 /**

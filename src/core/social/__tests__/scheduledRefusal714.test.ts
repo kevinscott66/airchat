@@ -135,7 +135,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: null у sendMessage — око�
     const b = body();
     const idLine = b.indexOf('const messageId = uuidv4();');
     const route = b.indexOf("log.info('dm_send_no_online_route', { peerDid, messageId });");
-    const failed = b.indexOf("await saveRow({ ...pending, status: 'failed' });", route);
+    // v4.32.781: запись отвечает исходом — сама строка та же, обёрнута в проверку.
+    const failed = b.indexOf("saveRow({ ...pending, status: 'failed' })", route);
     expect(route).toBeGreaterThan(idLine);
     expect(failed).toBeGreaterThan(route);
   });

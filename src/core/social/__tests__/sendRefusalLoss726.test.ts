@@ -106,7 +106,9 @@ describe('отсутствие маршрута — не отказ: строк�
 
   it('сохранённое называется stored и только когда оно вправду сохранено', () => {
     const w = work();
-    const saved = w.indexOf("await saveRow({ ...pending, status: 'failed' });");
+    // v4.32.781: запись обёрнута в проверку исхода — строка та же, слово
+    // `stored` по-прежнему стоит после неё.
+    const saved = w.indexOf("saveRow({ ...pending, status: 'failed' })");
     const verdict = w.indexOf(
       "return { outcome: control || callerOwnsRow ? 'refused' : 'stored', cid: null };"
     );
@@ -114,7 +116,9 @@ describe('отсутствие маршрута — не отказ: строк�
     expect(verdict).toBeGreaterThan(saved);
     // saveRow молча ничего не пишет для служебного конверта и живой
     // геолокации — там сохранять нечего, и исход не должен обещать обратного.
-    expect(w).toContain('if (!control && !callerOwnsRow) await upsertChatMessage(row);');
+    // v4.32.781: то же правило, но словом: «писать было не нужно» теперь
+    // отличается от «не записалось».
+    expect(w).toContain("if (control || callerOwnsRow) return 'skipped';");
   });
 
   it('ушедшее по запасному пути остаётся успехом', () => {

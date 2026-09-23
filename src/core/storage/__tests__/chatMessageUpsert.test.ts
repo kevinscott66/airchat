@@ -12,7 +12,13 @@ import { join } from 'path';
 
 const SRC = readFileSync(join(__dirname, '..', 'local.ts'), 'utf8');
 
-/** Оператор из тела названной функции: от `INSERT` до закрывающей обратной кавычки. */
+/**
+ * Оператор из тела названной функции: от `INSERT` до закрывающей обратной
+ * кавычки.
+ *
+ * v4.32.781: запрос переехал в различающую форму `upsertChatMessageChecked`, а
+ * прежнее имя осталось тонкой обёрткой над ней — запроса в нём больше нет.
+ */
 function statementIn(fn: string): string {
   const at = SRC.indexOf(`export async function ${fn}(`);
   expect(at).toBeGreaterThanOrEqual(0);
@@ -71,7 +77,7 @@ function readRow(d: DatabaseSync): Row {
 describe('повторное сохранение сообщения', () => {
   it('upsertChatMessage не трогает реакции, «Избранное», метку правки и пересылку', () => {
     const d = freshDb();
-    d.prepare(statementIn('upsertChatMessage')).run(
+    d.prepare(statementIn('upsertChatMessageChecked')).run(
       'm1', 'peerA', 'cid-new', 'текст из очереди', 'out', 'delivered', null, 1000, 1, null, null, 'internet',
     );
     const row = readRow(d);
@@ -104,7 +110,7 @@ describe('повторное сохранение сообщения', () => {
 
   it('строка другого профиля остаётся отдельной строкой', () => {
     const d = freshDb();
-    d.prepare(statementIn('upsertChatMessage')).run(
+    d.prepare(statementIn('upsertChatMessageChecked')).run(
       'm1', 'peerA', 'cid-p2', 'сообщение второго профиля', 'in', 'sent', null, 2000, 2, null, null, 'lan',
     );
     expect((d.prepare('SELECT COUNT(*) AS n FROM chat_messages').get() as { n: number }).n).toBe(2);

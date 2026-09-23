@@ -126,7 +126,8 @@ describe('отправка: вторую строку никто не завод
   it('живая геолокация не сохраняется отправкой — строку ведёт экран', () => {
     const s = MESSAGING();
     expect(s).toContain('const callerOwnsRow = isLiveLocMessage(text);');
-    expect(s).toContain('if (!control && !callerOwnsRow) await upsertChatMessage(row);');
+    // v4.32.781: то же правило словом — «писать не нужно» отличается от «не легло».
+    expect(s).toContain("if (control || callerOwnsRow) return 'skipped';");
   });
 
   it('экран по-прежнему кладёт свою строку под номером сессии', () => {

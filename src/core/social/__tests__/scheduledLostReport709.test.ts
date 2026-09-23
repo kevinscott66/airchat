@@ -142,7 +142,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('личная копия пишется позже, чем бросает запрет на запись без сети', () => {
     const m = MESSAGING();
     const gate = m.indexOf('await requireOnlineWrite(await localPathTo(contactPubB64));');
-    const save = m.indexOf('await measureAsync(\'dm_db_upsert_pending\', () => saveRow(pending));');
+    // v4.32.781: запись отвечает исходом — сама строка та же, обёрнута в проверку.
+    const save = m.indexOf('measureAsync(\'dm_db_upsert_pending\', () => saveRow(pending))');
     expect(gate).toBeGreaterThan(0);
     expect(save).toBeGreaterThan(gate);
     expect(POLICY()).toContain('export const CACHE_ONLY_MODE = true;');

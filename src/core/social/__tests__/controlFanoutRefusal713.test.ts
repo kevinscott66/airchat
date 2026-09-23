@@ -204,14 +204,16 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: null действительно
     expect(code).toContain('if (!rateLimiter.canSendControl(contactPubB64)) {');
     expect(code).toContain("code: 'NO_SESSION_DM',");
     // Хвост «маршрута нет»: строка помечается провалом и возвращается null.
-    expect(code).toContain("await saveRow({ ...pending, status: 'failed' });");
+    // v4.32.781: запись отвечает исходом — сама строка та же, обёрнута в проверку.
+    expect(code).toContain("saveRow({ ...pending, status: 'failed' })");
     expect(code).toContain("log.info('dm_send_no_online_route', { peerDid, messageId });");
   });
 
   it('служебный конверт не оставляет за собой строки, которую можно переслать', () => {
     const code = codeOnly(MESSAGING);
     expect(code).toContain('const control = isControlOnlyText(text);');
-    expect(code).toContain('if (!control && !callerOwnsRow) await upsertChatMessage(row);');
+    // v4.32.781: то же правило словом — «писать не нужно» отличается от «не легло».
+    expect(code).toContain("if (control || callerOwnsRow) return 'skipped';");
   });
 
   it('очереди повторной отправки нет — это закреплено отдельным рэтчетом', () => {
