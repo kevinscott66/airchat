@@ -24,11 +24,7 @@ import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
 import { userErrorText } from './userErrorText';
 import { getConfigSync, loadConfig, saveConfigOverride, type AppConfig } from '../../core/config';
-import { loadKeyPair } from '../../core/crypto/keyManager';
-import {
-  startInternetTransportIfEnabled,
-  stopInternetTransportStack,
-} from '../../core/transport/internet/internetCoordinator';
+import { restartInternetTransport } from '../../core/transport/internet/restartInternetTransport';
 import {
   enableOpenFluxTunnelStats,
   getOpenFluxRunning,
@@ -39,6 +35,7 @@ import {
   type OpenFluxTunnelStats,
   type OpenFluxUiStatus,
 } from '../../core/vpn/openFluxController';
+import { addOpenFluxReviveListener } from '../../core/vpn/openFluxNetworkGuard';
 
 /**
  * «Канал поднят», а не «Работает». Разница не косметическая: статус `on`
@@ -109,6 +106,19 @@ export function OpenFluxSettingsSection(): React.ReactElement {
     return () => clearInterval(id);
   }, [stats?.counting]);
 
+  // Экран читает состояние один раз, при открытии, а туннель за его спиной
+  // переподнимается сам при смене сети — и порт у ядра каждый раз новый. Без
+  // этой подписки открытый экран показывал бы номер, которого уже нет, и
+  // «Работает» в ту самую секунду, когда ядро как раз не поднялось.
+  useEffect(
+    () =>
+      addOpenFluxReviveListener(({ status: s, socks: addr }) => {
+        setStatus(s);
+        setSocks(addr);
+      }),
+    [],
+  );
+
   /** Записать решение пользователя в override и вернуть свежий конфиг. */
   const persist = useCallback(async (on: boolean): Promise<AppConfig> => {
     const base = getConfigSync().openflux;
@@ -120,24 +130,15 @@ export function OpenFluxSettingsSection(): React.ReactElement {
   /**
    * Переподнять интернет-транспорт после переключения туннеля.
    *
-   * Подмена маршрута (ProxySelector на стороне Android) действует только на
-   * НОВЫЕ соединения. Веб-сокет ntfy — главный канал приложения — к этому
-   * моменту уже открыт и продолжит идти прежним путём, пока его не закроют.
-   * Без перезапуска включение туннеля выглядело бы как «нажал, и ничего не
-   * изменилось», а выключение оставляло бы трафик в уже погашенном SOCKS5.
-   *
-   * Тот же приём, что и при смене адреса relay (см. RelaySettingsSection):
-   * сначала остановить, потом поднять заново — иначе координатор помнит, что
-   * уже запущен, и старт молча выходит.
+   * Сама процедура переехала в core (`restartInternetTransport`): ровно то же
+   * самое понадобилось мосту внешнего агента, который переключает туннель без
+   * участия этого экрана. Почему без перезапуска «нажал, и ничего не
+   * изменилось» — см. шапку того модуля.
    */
-  const restartTransport = useCallback(async (cfg: AppConfig): Promise<void> => {
-    stopInternetTransportStack();
-    if (cfg.internet?.enabled === false) return;
-    const pair = await loadKeyPair();
-    // Ключей ещё нет — значит, транспорт и не стартовал: поднимать нечего.
-    if (!pair) return;
-    await startInternetTransportIfEnabled(pair, cfg);
-  }, []);
+  const restartTransport = useCallback(
+    async (cfg: AppConfig): Promise<void> => restartInternetTransport(cfg),
+    [],
+  );
 
   const onToggle = useCallback(
     async (on: boolean) => {
