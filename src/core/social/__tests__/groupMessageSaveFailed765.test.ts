@@ -52,6 +52,12 @@ jest.mock('../../storage/local', () => ({
     if (mockWrite === 'inserted') mockInserted.push(row);
     return mockWrite;
   }),
+  // v4.32.775: приёмник пишет строку и след в списке чатов одной операцией —
+  // иначе отказ следа терялся между двумя записями. Исходы у неё те же три.
+  insertGroupMessageWithTouch: jest.fn(async (row: { id: string }, touch: unknown) => {
+    if (mockWrite === 'inserted') { mockInserted.push(row); mockTouched.push([touch]); }
+    return mockWrite;
+  }),
   touchGroupConversation: jest.fn(async (...a: unknown[]) => { mockTouched.push(a); }),
   markGroupMessageSeen: jest.fn(async () => {}),
   markGroupMessageSeenChecked: jest.fn(async () => 'recorded'),
@@ -235,7 +241,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 
   it('приёмник спрашивает различающей формой, а не прежней', () => {
-    expect(GRP).toContain('const stored = await insertGroupMessageChecked(row);');
+    // v4.32.775: та же различающая форма, но теперь пишущая строку и след
+    // одной операцией — см. groupMessageTouchAtomic775.
+    expect(GRP).toContain('const stored = await insertGroupMessageWithTouch(row, {');
     expect(GRP).not.toContain('const stored = await insertGroupMessage(row);');
     expect(GRP).not.toContain('if (!stored) {');
   });

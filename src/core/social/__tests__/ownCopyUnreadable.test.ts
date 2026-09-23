@@ -58,6 +58,11 @@ jest.mock('../../storage/local', () => ({
     mockInserted.push(row);
     return 'inserted';
   }),
+  // v4.32.775: приёмник кладёт строку и след одной операцией.
+  insertGroupMessageWithTouch: jest.fn(async (row: { replyToId: string | null; replyToPreview: string | null }) => {
+    mockInserted.push(row);
+    return 'inserted';
+  }),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
   markGroupMessageSeenChecked: jest.fn(async () => 'recorded'),
@@ -81,6 +86,9 @@ jest.mock('../../identity/profileManager', () => ({
 jest.mock('../../identity/ownProfile', () => ({
   getOwnDisplayNameFor: async () => 'Я',
   getOwnDisplayName: async () => 'Я',
+  // v4.32.605: упоминание сверяется и с username; без него приём падал бы на
+  // чтении своих имён.
+  getOwnUsernameFor: async () => 'ya',
 }));
 jest.mock('../messaging', () => ({
   getMessagingService: () => ({ sendMessage: async () => {}, groupRecipient: async () => null }),

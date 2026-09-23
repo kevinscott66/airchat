@@ -21,9 +21,9 @@ import {
   getGroupMessageTexts,
   getGroupMessageTargetRead,
   insertGroupMessageChecked,
+  insertGroupMessageWithTouch,
   updateGroupMessageText,
   deleteGroupMessageChecked,
-  touchGroupConversation,
   markGroupMessageSeenChecked,
   insertGroupJoinRequest,
   createGroup,
@@ -688,7 +688,55 @@ export async function handleIncomingGroupEnvelope(
     // в базе не появлялось. Сообщение пропадало навсегда и числилось в журнале
     // дубликатом. Отказ записи — заминка временная, ей нужна вторая попытка;
     // ориентир в этом же файле — handleIncomingGroupReadReceipt.
-    const stored = await insertGroupMessageChecked(row);
+    // v4.32.775: кому адресовано и чьим именем подписано — считается ДО записи,
+    // потому что след в списке переписок теперь ложится вместе со строкой, одной
+    // транзакцией. Отказ чтения имени поэтому разбирается тут же, до записи:
+    // почему именно так — в комментарии внутри catch.
+    //
+    // v4.32.478: имя владельца сообщения (pid), а не того профиля, что открыт
+    // на экране: приём идёт в фоне и активным может быть любой аккаунт.
+    // v4.32.605: имён два — отображаемое и канонический username. Обращение
+    // по username до этой версии не поднимало ни счётчик, ни push: сравнение
+    // знало только первое имя, хотя именно username неизменяем и именно его
+    // человек даёт вместо «как меня записать».
+    let myNames: (string | null)[];
+    try {
+      myNames = [await getOwnDisplayNameFor(pid), await getOwnUsernameFor(pid)];
+    } catch (e) {
+      // v4.32.775: свои имена читаются из базы, и `getOwnUsernameFor` свой отказ
+      // не гасит. Прежде он прилетал уже ПОСЛЕ записи строки и уводил кадр в
+      // общий catch — сообщение оставалось в базе без следа в списке чатов.
+      // Теперь чтение стоит до записи, поэтому отказ здесь не оставляет ничего
+      // и кадр можно честно перезапросить. Молча считать «упоминания нет»
+      // нельзя: бейдж упоминания второй раз взяться неоткуда.
+      log.warn('group_msg_own_names_failed', {
+        gid: env.groupId.slice(0, 8),
+        err: e instanceof Error ? e.message : String(e),
+      });
+      return 'deferred';
+    }
+    const kind: GroupKind = group.type === 'channel' ? 'channel' : 'group';
+    // v4.32.255: раньше здесь был `.includes('@' + имя)` — он срабатывал внутри
+    // более длинного имени (@аня внутри @анна) и на почтовом адресе
+    // (alice@bob.com считался упоминанием bob). Границы слова проверяет
+    // isMentionOf. Плюс каналы: там нет реальных упоминаний, только рассылка
+    // админа, — push это учитывал, а счётчик mention_count нет, и на канале
+    // висел бейдж упоминаний.
+    const isMention = kind === 'group' && isMentionOfAny(env.text, myNames);
+    // v4.32.256: «Анонимные посты» прятали имя только в ленте сообщений, а
+    // список чатов показывал «Вася: текст» и push выносил то же имя на экран
+    // блокировки. В самой строке имя сохраняется (иначе выключение настройки
+    // уже ничего не вернёт) — скрывается только там, где оно показывается.
+    const shownSenderName = group.anonymousPosting ? null : (env.senderName || null);
+    const stored = await insertGroupMessageWithTouch(row, {
+      groupId: env.groupId,
+      ownerProfileId: pid,
+      preview: env.text.slice(0, 120),
+      incrementUnread: true,
+      senderName: shownSenderName,
+      incrementMention: isMention,
+      senderPubB64: env.senderPubB64,
+    });
     if (stored === 'failed') {
       log.warn('group_msg_save_failed_defer', { msgId: env.msgId.slice(0, 8), gid: env.groupId.slice(0, 8) });
       return 'deferred';
@@ -705,27 +753,6 @@ export async function handleIncomingGroupEnvelope(
         .then(({ flushPendingPollEnvelopes }) => flushPendingPollEnvelopes(env.msgId, pid))
         .catch((e) => log.warn('poll_vote_flush_failed', { err: e instanceof Error ? e.message : String(e) }));
     }
-    // v4.32.478: имя владельца сообщения (pid), а не того профиля, что открыт
-    // на экране: приём идёт в фоне и активным может быть любой аккаунт.
-    // v4.32.605: имён два — отображаемое и канонический username. Обращение
-    // по username до этой версии не поднимало ни счётчик, ни push: сравнение
-    // знало только первое имя, хотя именно username неизменяем и именно его
-    // человек даёт вместо «как меня записать».
-    const myNames = [await getOwnDisplayNameFor(pid), await getOwnUsernameFor(pid)];
-    const kind: GroupKind = group.type === 'channel' ? 'channel' : 'group';
-    // v4.32.255: раньше здесь был `.includes('@' + имя)` — он срабатывал внутри
-    // более длинного имени (@аня внутри @анна) и на почтовом адресе
-    // (alice@bob.com считался упоминанием bob). Границы слова проверяет
-    // isMentionOf. Плюс каналы: там нет реальных упоминаний, только рассылка
-    // админа, — push это учитывал, а счётчик mention_count нет, и на канале
-    // висел бейдж упоминаний.
-    const isMention = kind === 'group' && isMentionOfAny(env.text, myNames);
-    // v4.32.256: «Анонимные посты» прятали имя только в ленте сообщений, а
-    // список чатов показывал «Вася: текст» и push выносил то же имя на экран
-    // блокировки. В самой строке имя сохраняется (иначе выключение настройки
-    // уже ничего не вернёт) — скрывается только там, где оно показывается.
-    const shownSenderName = group.anonymousPosting ? null : (env.senderName || null);
-    await touchGroupConversation(env.groupId, pid, env.text.slice(0, 120), true, shownSenderName, isMention, env.senderPubB64);
     log.info('group_msg_received', { groupId: env.groupId.slice(0, 8), msgId: env.msgId.slice(0, 8) });
     // v4.32.168: всегда зовём callback — он сам решает (notify_groups/mentions/mute).
     // Ранее фильтр `notifyGroupsSetting !== 'false'` здесь инвертировал

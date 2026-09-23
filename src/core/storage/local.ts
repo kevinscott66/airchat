@@ -6731,6 +6731,61 @@ export async function updateGroupMeta(
   await d.runAsync(`UPDATE groups SET ${sets.join(', ')} WHERE id = ? AND owner_profile_id = ?`, vals as SQLite.SQLiteBindValue[]);
 }
 
+/**
+ * След сообщения в списке переписок: что показать и что досчитать.
+ *
+ * Отдельным типом, потому что с v4.32.775 этот след кладётся не только сам по
+ * себе, но и одной транзакцией с самим сообщением — см.
+ * `insertGroupMessageWithTouch`.
+ */
+export type GroupTouch = {
+  groupId: string;
+  ownerProfileId: number;
+  preview: string;
+  incrementUnread: boolean;
+  senderName?: string | null;
+  incrementMention?: boolean;
+  senderPubB64?: string | null;
+};
+
+/** Зашифрованные поля следа. Готовятся ДО BEGIN — см. ниже. */
+type GroupTouchEnc = { previewEnc: string | null; senderNameEnc: string | null };
+
+// v4.32.218 (CRIT-4 part 2): encrypt group preview at rest.
+// v4.32.224 (re-audit): prep encryption BEFORE BEGIN IMMEDIATE so the
+// async Keystore fetch doesn't starve the SQLite write lock.
+function encodeGroupTouch(t: GroupTouch, dek: Uint8Array): GroupTouchEnc {
+  const previewTrunc = t.preview.slice(0, LAST_MESSAGE_PREVIEW_MAX);
+  return {
+    previewEnc: previewTrunc ? encryptAtRestString(previewTrunc, dek) : null,
+    // v4.32.285: имя автора последней реплики — тоже имя; шифруется вместе с
+    // превью, которое оно подписывает.
+    senderNameEnc: encryptAtRestNullable(t.senderName ?? null, dek),
+  };
+}
+
+/**
+ * Записать след. Только внутри уже открытой транзакции — счётчики читаются и
+ * тут же переписываются, и без IMMEDIATE два одновременных приёма теряют один
+ * инкремент (v4.32.141).
+ */
+async function runGroupTouch(d: SQLite.SQLiteDatabase, t: GroupTouch, enc: GroupTouchEnc): Promise<void> {
+  const existing = await d.getFirstAsync<{ unread_count: number; mention_count: number }>(
+    'SELECT unread_count, mention_count FROM groups WHERE id = ? AND owner_profile_id = ?',
+    [t.groupId, t.ownerProfileId]
+  );
+  // Группы нет — следу негде лежать. Это не отказ: так выглядит сообщение в
+  // группу, которую у себя уже удалили.
+  if (!existing) return;
+  const newUnread = t.incrementUnread ? existing.unread_count + 1 : existing.unread_count;
+  const newMention = t.incrementMention ? (existing.mention_count || 0) + 1 : (existing.mention_count || 0);
+  await d.runAsync(
+    `UPDATE groups SET last_message_at = ?, last_message_preview = ?, unread_count = ?, last_message_sender_name = ?, mention_count = ?, last_message_sender_pub = ?
+     WHERE id = ? AND owner_profile_id = ?`,
+    [Date.now(), enc.previewEnc, newUnread, enc.senderNameEnc, newMention, t.senderPubB64 ?? null, t.groupId, t.ownerProfileId]
+  );
+}
+
 export async function touchGroupConversation(
   groupId: string,
   ownerProfileId: number,
@@ -6740,39 +6795,13 @@ export async function touchGroupConversation(
   incrementMention?: boolean,
   senderPubB64?: string | null
 ): Promise<void> {
+  const t: GroupTouch = { groupId, ownerProfileId, preview, incrementUnread, senderName, incrementMention, senderPubB64 };
   try {
     const d = await db();
-    // v4.32.218 (CRIT-4 part 2): encrypt group preview at rest.
-    // v4.32.224 (re-audit): prep encryption BEFORE BEGIN IMMEDIATE so the
-    // async Keystore fetch doesn't starve the SQLite write lock.
-    const previewTrunc = preview.slice(0, LAST_MESSAGE_PREVIEW_MAX);
-    const dek = await getOrCreateDataEncryptionKey();
-    const previewEnc = previewTrunc ? encryptAtRestString(previewTrunc, dek) : null;
-    // v4.32.285: имя автора последней реплики — тоже имя; шифруется вместе с
-    // превью, которое оно подписывает.
-    const senderNameEnc = encryptAtRestNullable(senderName ?? null, dek);
-    // v4.32.141 (AUDIT P1): mirror touchConversation — SELECT-then-UPDATE
-    // races with itself when two deliveries for the same group land
-    // concurrently (LAN + internet retry, or two senders). Both readers see
-    // the same counters, both write old+1, one increment is lost. BEGIN
-    // IMMEDIATE serialises writers so the second read sees the first update.
+    const enc = encodeGroupTouch(t, await getOrCreateDataEncryptionKey());
     const txn = await beginImmediate(d);
     try {
-      const existing = await d.getFirstAsync<{ unread_count: number; mention_count: number }>(
-        'SELECT unread_count, mention_count FROM groups WHERE id = ? AND owner_profile_id = ?',
-        [groupId, ownerProfileId]
-      );
-      if (!existing) {
-        await txn.commit();
-        return;
-      }
-      const newUnread = incrementUnread ? existing.unread_count + 1 : existing.unread_count;
-      const newMention = incrementMention ? (existing.mention_count || 0) + 1 : (existing.mention_count || 0);
-      await d.runAsync(
-        `UPDATE groups SET last_message_at = ?, last_message_preview = ?, unread_count = ?, last_message_sender_name = ?, mention_count = ?, last_message_sender_pub = ?
-         WHERE id = ? AND owner_profile_id = ?`,
-        [Date.now(), previewEnc, newUnread, senderNameEnc, newMention, senderPubB64 ?? null, groupId, ownerProfileId]
-      );
+      await runGroupTouch(d, t, enc);
       await txn.commit();
     } catch (inner) {
       try { await txn.rollback(); } catch { /* ignore */ }
@@ -7147,6 +7176,32 @@ export async function updateGroupMemberRole(
  * переписке этого не было: там повтор отсекается через `chatMessageExists`
  * ДО записи, и счётчик трогается только на новом сообщении.
  */
+const INSERT_GROUP_MESSAGE_SQL = `INSERT OR IGNORE INTO group_messages
+         (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id, reply_to_preview, reactions, created_at, owner_profile_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/** Значения строки сообщения, уже зашифрованные. Готовятся до BEGIN. */
+function encodeGroupMessageValues(msg: GroupMessageRow, dek: Uint8Array): SQLite.SQLiteBindValue[] {
+  return [
+    msg.id, msg.groupId, msg.senderPubB64,
+    // v4.32.285: имя отправителя человек указывает сам, и в группе оно обычно
+    // настоящее — по одной колонке `sender_name` читался весь состав группы и
+    // кто в ней сколько говорит, при полностью зашифрованных сообщениях.
+    encryptAtRestNullable(msg.senderName ?? null, dek),
+    encryptAtRestString(msg.text, dek),
+    // v4.32.279: media_cids шифруется — как в chat_messages. Дескриптор `nb:`
+    // НЕСЁТ КЛЮЧ РАСШИФРОВКИ вложения (см. blobRef.ts), так что открытый
+    // media_cids сводит на нет шифрование самого файла: текст сообщения лежал
+    // шифртекстом, а ключ к прикреплённой к нему фотографии — рядом, открыто.
+    encryptAtRestNullable(msg.mediaCids ?? null, dek),
+    msg.replyToId ?? null,
+    // v4.32.282: цитата — кусок чужого сообщения; шифруется как и всё остальное.
+    encryptAtRestNullable(msg.replyToPreview ?? null, dek),
+    encryptAtRestNullable(msg.reactions ?? null, dek),
+    msg.createdAt, msg.ownerProfileId,
+  ];
+}
+
 export async function insertGroupMessage(msg: GroupMessageRow): Promise<boolean> {
   return (await insertGroupMessageChecked(msg)) === 'inserted';
 }
@@ -7175,30 +7230,60 @@ export async function insertGroupMessageChecked(msg: GroupMessageRow): Promise<G
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
-    const textEnc = encryptAtRestString(msg.text, dek);
-    // v4.32.279: media_cids шифруется — как в chat_messages. Дескриптор `nb:`
-    // НЕСЁТ КЛЮЧ РАСШИФРОВКИ вложения (см. blobRef.ts), так что открытый
-    // media_cids сводит на нет шифрование самого файла: текст сообщения лежал
-    // шифртекстом, а ключ к прикреплённой к нему фотографии — рядом, открыто.
-    const mediaEnc = encryptAtRestNullable(msg.mediaCids ?? null, dek);
-    // v4.32.282: цитата — кусок чужого сообщения; шифруется как и всё остальное.
-    const replyEnc = encryptAtRestNullable(msg.replyToPreview ?? null, dek);
-    // v4.32.285: имя отправителя человек указывает сам, и в группе оно обычно
-    // настоящее — по одной колонке `sender_name` читался весь состав группы и
-    // кто в ней сколько говорит, при полностью зашифрованных сообщениях.
-    const senderEnc = encryptAtRestNullable(msg.senderName ?? null, dek);
-    const res = await d.runAsync(
-      `INSERT OR IGNORE INTO group_messages
-         (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id, reply_to_preview, reactions, created_at, owner_profile_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [msg.id, msg.groupId, msg.senderPubB64, senderEnc, textEnc,
-       mediaEnc, msg.replyToId ?? null, replyEnc,
-       encryptAtRestNullable(msg.reactions ?? null, dek), msg.createdAt, msg.ownerProfileId]
-    );
+    const res = await d.runAsync(INSERT_GROUP_MESSAGE_SQL, encodeGroupMessageValues(msg, dek));
     emitChatWrites();
     // `changes === 0` — сработало OR IGNORE, то есть строка с таким id уже
     // лежит: это повтор конверта, а не новое сообщение.
     return (res.changes ?? 0) > 0 ? 'inserted' : 'duplicate';
+  } catch (e) {
+    log.warn('insert_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
+    notifyIfStoragePressure(e, 'group_message_save');
+    return 'failed';
+  }
+}
+
+/**
+ * Записать входящее сообщение группы вместе с его следом в списке переписок —
+ * одной транзакцией (v4.32.775).
+ *
+ * Порознь это не чинилось ничем. Строка ложилась первой, а `touchGroupConversation`
+ * гасил свой отказ внутри себя и отвечал `void`; приёмник считал кадр
+ * разобранным и двигал метку «докуда прочитано» у ретранслятора. Второй раз
+ * тот же конверт не придёт, а если и придёт — запись ответит `'duplicate'`, и
+ * приёмник выйдет ДО следа (так и задумано с v4.32.581: повтор не поднимает
+ * счётчик). То есть занятая база на долю секунды навсегда съедала бейдж
+ * непрочитанного и бейдж упоминания, а в списке чатов группа оставалась с
+ * позавчерашним превью — при том, что само сообщение внутри неё лежало.
+ *
+ * Обратный порядок не спасал: отказ записи после удавшегося следа дал бы
+ * повторный инкремент на перезапросе. Лечит только неделимость — теперь либо
+ * оба действия, либо ни одного, и `'failed'` честно означает «ничего не
+ * сделано, приходите ещё раз».
+ *
+ * След кладётся только на настоящей записи. `'duplicate'` — это повтор
+ * конверта, и он по-прежнему не трогает ни счётчики, ни превью.
+ */
+export async function insertGroupMessageWithTouch(msg: GroupMessageRow, touch: GroupTouch): Promise<GroupMessageWrite> {
+  try {
+    const d = await db();
+    const dek = await getOrCreateDataEncryptionKey();
+    // Оба шифрования — до BEGIN: ключ достаётся из Keystore, а держать на этом
+    // ожидании взятую IMMEDIATE-блокировку записи нельзя (v4.32.224).
+    const values = encodeGroupMessageValues(msg, dek);
+    const enc = encodeGroupTouch(touch, dek);
+    const txn = await beginImmediate(d);
+    let inserted = false;
+    try {
+      const res = await d.runAsync(INSERT_GROUP_MESSAGE_SQL, values);
+      inserted = (res.changes ?? 0) > 0;
+      if (inserted) await runGroupTouch(d, touch, enc);
+      await txn.commit();
+    } catch (inner) {
+      try { await txn.rollback(); } catch { /* ignore */ }
+      throw inner;
+    }
+    emitChatWrites();
+    return inserted ? 'inserted' : 'duplicate';
   } catch (e) {
     log.warn('insert_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
     notifyIfStoragePressure(e, 'group_message_save');
