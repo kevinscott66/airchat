@@ -137,12 +137,13 @@ describe('одно сообщение — одно уведомление', () =
     // v4.32.767: до этого круга здесь стояло чтение строки ДО записи, и оно
     // сплющивало «строки нет» с «базу не удалось спросить». Теперь ответ даёт
     // `INSERT OR IGNORE`: изменил строку — сообщение новое, не изменил — повтор.
-    expect(MESSAGING).toContain('const stored = await saveChatMessageChecked(row);');
+    // v4.32.776: и той же записью ложится след в списке чатов.
+    expect(MESSAGING).toContain('const stored = await saveChatMessageWithTouch(row, {');
     expect(MESSAGING).toContain("const alreadyStored = stored === 'duplicate';");
   });
 
   it('несостоявшаяся запись не показывает плашку и не двигает счётчик', () => {
-    const at = MESSAGING.indexOf('const stored = await saveChatMessageChecked(row);');
+    const at = MESSAGING.indexOf('const stored = await saveChatMessageWithTouch(row, {');
     expect(at).toBeGreaterThan(0);
     const head = MESSAGING.slice(at, MESSAGING.indexOf("const alreadyStored = stored === 'duplicate';", at));
     expect(head).toContain("if (stored === 'failed') {");
@@ -155,8 +156,11 @@ describe('одно сообщение — одно уведомление', () =
     // опроса, и она растёт (v4.32.764). Смысл проверки — обе ветки стоят
     // рядом с чтением, а не точное число символов между ними.
     const body = MESSAGING.slice(at, at + 2200);
-    expect(body).toContain('if (!alreadyStored) {\n      void touchConversation(');
     expect(body).toContain('if (!alreadyStored) {\n        log.info(\'dm_incoming_saved\'');
+    // v4.32.776: счётчик непрочитанного повтор не двигает раньше и надёжнее —
+    // запись отвечает 'duplicate' и следа не кладёт вовсе, внутри себя. Здесь
+    // остаётся закрепить, что отдельного сдвига списка в приёмнике не осталось.
+    expect(MESSAGING).not.toContain('void touchConversation(peerPubKeyB64');
   });
 
   it('push и приём разводятся по одному и тому же cid', () => {

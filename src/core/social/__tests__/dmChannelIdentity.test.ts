@@ -37,6 +37,8 @@ jest.mock('../../storage/local', () => ({
   upsertChatMessage: async () => {},
   saveChatMessage: async (r: Record<string, unknown>) => { mockSaved.push(r); },
   saveChatMessageChecked: async (r: Record<string, unknown>) => { mockSaved.push(r); return 'inserted'; },
+  // v4.32.776: входящее пишется вместе со следом в списке чатов, одной операцией.
+  saveChatMessageWithTouch: async (r: Record<string, unknown>) => { mockSaved.push(r); return 'inserted'; },
   updateChatMessageStatus: async () => {},
   updateChatMessageText: async () => true,
   updateChatMessageTextChecked: async () => 'updated',

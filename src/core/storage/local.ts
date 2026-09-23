@@ -3267,6 +3267,35 @@ export function notifyChatStorageChanged(): void {
   emitChatWrites();
 }
 
+const INSERT_CHAT_MESSAGE_SQL = `INSERT OR IGNORE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/**
+ * Значения строки личного сообщения, уже зашифрованные (v4.32.776).
+ *
+ * Отдельно от самой записи потому, что шифрование обязано случиться ДО
+ * `BEGIN IMMEDIATE`: ключ данных достаётся через очередь к хранилищу ключей и
+ * под взятой блокировкой держал бы её сотни миллисекунд (см. v4.32.224).
+ */
+function encodeChatMessageValues(row: ChatMessageRow, dek: Uint8Array): SQLite.SQLiteBindValue[] {
+  return [
+    row.id,
+    row.contactPubB64,
+    row.cid,
+    encryptAtRestString(row.text, dek),
+    row.direction,
+    row.status,
+    encryptAtRestNullable(row.mediaCids, dek),
+    row.createdAt,
+    row.ownerProfileId ?? 1,
+    row.replyToId ?? null,
+    // v4.32.282: цитата — это кусок чужого сообщения, и лежала она открытым
+    // текстом вплотную к зашифрованному. Ответить на сообщение значило
+    // выложить его начало в базу в читаемом виде.
+    encryptAtRestNullable(row.replyToPreview ?? null, dek),
+  ];
+}
+
 export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
   await saveChatMessageChecked(row);
 }
@@ -3294,33 +3323,11 @@ export async function saveChatMessageChecked(row: ChatMessageRow): Promise<ChatM
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
-    const textEnc = encryptAtRestString(row.text, dek);
-    const mediaEnc = encryptAtRestNullable(row.mediaCids, dek);
-    // v4.32.282: цитата — это кусок чужого сообщения, и лежала она открытым
-    // текстом вплотную к зашифрованному. Ответить на сообщение значило
-    // выложить его начало в базу в читаемом виде.
-    const replyEnc = encryptAtRestNullable(row.replyToPreview ?? null, dek);
-    const ownerPid = row.ownerProfileId ?? 1;
+    const values = encodeChatMessageValues(row, dek);
     const txn = await beginImmediate(d);
     let changed = 0;
     try {
-      const res = await d.runAsync(
-        `INSERT OR IGNORE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          row.id,
-          row.contactPubB64,
-          row.cid,
-          textEnc,
-          row.direction,
-          row.status,
-          mediaEnc,
-          row.createdAt,
-          ownerPid,
-          row.replyToId ?? null,
-          replyEnc,
-        ]
-      );
+      const res = await d.runAsync(INSERT_CHAT_MESSAGE_SQL, values);
       changed = res.changes ?? 0;
       await txn.commit();
     } catch (e) {
@@ -3345,6 +3352,58 @@ export async function saveChatMessageChecked(row: ChatMessageRow): Promise<ChatM
     // при этом по-прежнему не летит — переписка не должна падать из-за одной
     // строки, а тот, кто пишет своё только что составленное сообщение, читает
     // обёртку выше и исхода не разбирает.
+    notifyIfStoragePressure(e, 'chat_message_save');
+    return 'failed';
+  }
+}
+
+/**
+ * Записать входящее личное сообщение и его след в списке чатов одной
+ * операцией (v4.32.776).
+ *
+ * Раньше приёмник писал строку, а список переписок двигал отдельным вызовом
+ * `touchConversation` — и вовсе без `await`: `void touchConversation(...)`.
+ * Тот свой отказ гасит сам и отвечает `void`, поэтому занятая база стирала
+ * весь след молча: сообщение лежало в переписке, а в списке чатов не было ни
+ * «нового», ни текста, ни времени — разговор оставался внизу со вчерашней
+ * строкой. Починить повтором нельзя: повтор конверта отвечает `'duplicate'` и
+ * до следа не доходит вовсе — так задумано с v4.32.477, чтобы счётчик не рос
+ * на каждую копию одного сообщения.
+ *
+ * Поменять порядок нельзя тоже: удавшийся след при неудавшейся строке дал бы
+ * двойной счётчик на второй попытке. Поэтому — одна транзакция, и `'failed'`
+ * честно значит «не произошло ничего, спрашивайте снова».
+ *
+ * Групповой брат этой функции — `insertGroupMessageWithTouch` (v4.32.775).
+ */
+export async function saveChatMessageWithTouch(
+  row: ChatMessageRow,
+  touch: ConvTouch
+): Promise<ChatMessageWrite> {
+  try {
+    const d = await db();
+    const dek = await getOrCreateDataEncryptionKey();
+    // Оба шифрования и чтение настройки — до BEGIN: ключ данных идёт через
+    // очередь к хранилищу ключей и под взятой блокировкой держал бы её
+    // сотни миллисекунд (v4.32.224).
+    const values = encodeChatMessageValues(row, dek);
+    const prep = await prepareConvTouch(touch, dek);
+    const txn = await beginImmediate(d);
+    let inserted = false;
+    try {
+      const res = await d.runAsync(INSERT_CHAT_MESSAGE_SQL, values);
+      inserted = (res.changes ?? 0) > 0;
+      // Повтор конверта следа не двигает: превью и счётчик у него вчерашние.
+      if (inserted) await runConvTouch(d, touch, prep);
+      await txn.commit();
+    } catch (inner) {
+      try { await txn.rollback(); } catch { /* ignore */ }
+      throw inner;
+    }
+    emitChatWrites();
+    return inserted ? 'inserted' : 'duplicate';
+  } catch (e) {
+    log.warn('chat_message_save_failed', { err: e instanceof Error ? e.message : String(e) });
     notifyIfStoragePressure(e, 'chat_message_save');
     return 'failed';
   }
@@ -5080,8 +5139,108 @@ export async function listArchivedConversationsRead(ownerProfileId: number): Pro
   return read?.slice() ?? null;
 }
 
-/** Обновить/создать запись диалога после отправки/получения сообщения. */
+/**
+ * След личной переписки в списке чатов: превью, время, счётчик непрочитанного
+ * (v4.32.776).
+ *
+ * Отдельным описанием — потому что приёмник входящего кладёт его той же
+ * транзакцией, что и саму строку сообщения (`saveChatMessageWithTouch`).
+ */
+export type ConvTouch = {
+  contactPubB64: string;
+  ownerProfileId: number;
+  preview: string;
+  direction: 'in' | 'out';
+  incrementUnread: boolean;
+};
 
+/** Всё, что для следа надо добыть ДО BEGIN: шифрование превью и настройка. */
+type ConvTouchPrep = { previewTrunc: string; previewEnc: string; defaultDisappear: number | null };
+
+async function prepareConvTouch(t: ConvTouch, dek: Uint8Array): Promise<ConvTouchPrep> {
+  // v4.32.218 (Paranoid CRIT-4 part 2): encrypt message preview at rest.
+  // v4.32.224 (Paranoid re-audit): fetch the DEK BEFORE opening the
+  // BEGIN IMMEDIATE transaction. Previously getOrCreateDataEncryptionKey()
+  // ran inside the tx — it hits SecureStore/Keystore via a serialised queue,
+  // holding the SQLite write lock for up to hundreds of ms on cold start
+  // and starving concurrent writers.
+  const previewTrunc = t.preview.slice(0, LAST_MESSAGE_PREVIEW_MAX);
+  const previewEnc = previewTrunc ? encryptAtRestString(previewTrunc, dek) : '';
+  // Читаем ДО BEGIN IMMEDIATE по той же причине, что и DEK: внутри
+  // транзакции этот запрос держал бы write-lock.
+  const defaultDisappear = await getDefaultDisappearMsFor(t.ownerProfileId);
+  return { previewTrunc, previewEnc, defaultDisappear };
+}
+
+/** Сам след. Зовётся ТОЛЬКО внутри уже открытой транзакции. */
+async function runConvTouch(
+  d: SQLite.SQLiteDatabase,
+  t: ConvTouch,
+  prep: ConvTouchPrep
+): Promise<void> {
+  const { contactPubB64, ownerProfileId, direction, incrementUnread } = t;
+  const { previewTrunc, previewEnc, defaultDisappear } = prep;
+  const existing = await d.getFirstAsync<{
+    unread_count: number;
+    disappear_after_ms: number | null;
+    last_message_at: number | null;
+  }>(
+    'SELECT unread_count, disappear_after_ms, last_message_at FROM conversations WHERE contact_pub_b64 = ? AND owner_profile_id = ?',
+    [contactPubB64, ownerProfileId]
+  );
+  // Значение по умолчанию ставится ровно один раз — при первом сообщении в
+  // разговоре. Строка могла появиться и раньше (закрепление/архив/черновик
+  // для контакта без переписки), поэтому «новизна» определяется отсутствием
+  // сообщений, а не отсутствием строки. NULL здесь означает «пользователь
+  // ничего не выбирал»: явное «Выкл» пишется как 0, иначе настройка
+  // переустанавливала бы таймер, который человек только что снял.
+  const applyDefault = shouldApplyDefaultAutoDelete({
+    defaultMs: defaultDisappear,
+    exists: !!existing,
+    currentMs: existing?.disappear_after_ms ?? null,
+    lastMessageAt: existing?.last_message_at ?? null,
+  });
+  const now = Date.now();
+  if (existing) {
+    const newUnread = incrementUnread ? existing.unread_count + 1 : existing.unread_count;
+    if (previewTrunc) {
+      await d.runAsync(
+        `UPDATE conversations SET last_message_at = ?, last_message_preview = ?, last_message_direction = ?, unread_count = ?
+         WHERE contact_pub_b64 = ? AND owner_profile_id = ?`,
+        [now, previewEnc, direction, newUnread, contactPubB64, ownerProfileId]
+      );
+    } else {
+      // BLE presence ping — only update timestamp and unread, preserve existing preview
+      await d.runAsync(
+        `UPDATE conversations SET last_message_at = ?, unread_count = ?
+         WHERE contact_pub_b64 = ? AND owner_profile_id = ?`,
+        [now, newUnread, contactPubB64, ownerProfileId]
+      );
+    }
+  } else {
+    await d.runAsync(
+      `INSERT OR IGNORE INTO conversations (contact_pub_b64, owner_profile_id, unread_count, last_message_at, last_message_preview, last_message_direction)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [contactPubB64, ownerProfileId, incrementUnread ? 1 : 0, now, previewTrunc ? previewEnc : null, direction]
+    );
+  }
+  if (applyDefault) {
+    await d.runAsync(
+      `UPDATE conversations SET disappear_after_ms = ?, disappear_set_at = ?
+       WHERE contact_pub_b64 = ? AND owner_profile_id = ? AND disappear_after_ms IS NULL`,
+      [defaultDisappear, now, contactPubB64, ownerProfileId]
+    );
+  }
+}
+
+/**
+ * Обновить/создать запись диалога после отправки/получения сообщения.
+ *
+ * Своей транзакцией и со своим проглоченным отказом — так её зовут экраны на
+ * СВОЁ только что составленное сообщение. Входящее пишется иначе: там след
+ * ложится вместе со строкой, одной транзакцией, и отказ уезжает к вызывающему
+ * (`saveChatMessageWithTouch`, v4.32.776).
+ */
 export async function touchConversation(
   contactPubB64: string,
   ownerProfileId: number,
@@ -5089,20 +5248,11 @@ export async function touchConversation(
   direction: 'in' | 'out',
   incrementUnread: boolean
 ): Promise<void> {
+  const t: ConvTouch = { contactPubB64, ownerProfileId, preview, direction, incrementUnread };
   try {
     const d = await db();
-    // v4.32.218 (Paranoid CRIT-4 part 2): encrypt message preview at rest.
-    // v4.32.224 (Paranoid re-audit): fetch the DEK BEFORE opening the
-    // BEGIN IMMEDIATE transaction. Previously getOrCreateDataEncryptionKey()
-    // ran inside the tx — it hits SecureStore/Keystore via a serialised queue,
-    // holding the SQLite write lock for up to hundreds of ms on cold start
-    // and starving concurrent writers.
-    const previewTrunc = preview.slice(0, LAST_MESSAGE_PREVIEW_MAX);
     const dek = await getOrCreateDataEncryptionKey();
-    const previewEnc = previewTrunc ? encryptAtRestString(previewTrunc, dek) : '';
-    // Читаем ДО BEGIN IMMEDIATE по той же причине, что и DEK: внутри
-    // транзакции этот запрос держал бы write-lock.
-    const defaultDisappear = await getDefaultDisappearMsFor(ownerProfileId);
+    const prep = await prepareConvTouch(t, dek);
     // v4.32.134 (AUDIT P1): the SELECT-then-UPDATE/INSERT dance races with
     // itself when two deliveries for a new contact land concurrently (e.g.
     // LAN + internet retry). Wrapping in BEGIN IMMEDIATE serialises
@@ -5110,57 +5260,7 @@ export async function touchConversation(
     // or one sees the row the other just inserted and UPDATEs it.
     const txn = await beginImmediate(d);
     try {
-      const existing = await d.getFirstAsync<{
-        unread_count: number;
-        disappear_after_ms: number | null;
-        last_message_at: number | null;
-      }>(
-        'SELECT unread_count, disappear_after_ms, last_message_at FROM conversations WHERE contact_pub_b64 = ? AND owner_profile_id = ?',
-        [contactPubB64, ownerProfileId]
-      );
-      // Значение по умолчанию ставится ровно один раз — при первом сообщении в
-      // разговоре. Строка могла появиться и раньше (закрепление/архив/черновик
-      // для контакта без переписки), поэтому «новизна» определяется отсутствием
-      // сообщений, а не отсутствием строки. NULL здесь означает «пользователь
-      // ничего не выбирал»: явное «Выкл» пишется как 0, иначе настройка
-      // переустанавливала бы таймер, который человек только что снял.
-      const applyDefault = shouldApplyDefaultAutoDelete({
-        defaultMs: defaultDisappear,
-        exists: !!existing,
-        currentMs: existing?.disappear_after_ms ?? null,
-        lastMessageAt: existing?.last_message_at ?? null,
-      });
-      const now = Date.now();
-      if (existing) {
-        const newUnread = incrementUnread ? existing.unread_count + 1 : existing.unread_count;
-        if (previewTrunc) {
-          await d.runAsync(
-            `UPDATE conversations SET last_message_at = ?, last_message_preview = ?, last_message_direction = ?, unread_count = ?
-             WHERE contact_pub_b64 = ? AND owner_profile_id = ?`,
-            [now, previewEnc, direction, newUnread, contactPubB64, ownerProfileId]
-          );
-        } else {
-          // BLE presence ping — only update timestamp and unread, preserve existing preview
-          await d.runAsync(
-            `UPDATE conversations SET last_message_at = ?, unread_count = ?
-             WHERE contact_pub_b64 = ? AND owner_profile_id = ?`,
-            [now, newUnread, contactPubB64, ownerProfileId]
-          );
-        }
-      } else {
-        await d.runAsync(
-          `INSERT OR IGNORE INTO conversations (contact_pub_b64, owner_profile_id, unread_count, last_message_at, last_message_preview, last_message_direction)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [contactPubB64, ownerProfileId, incrementUnread ? 1 : 0, now, previewTrunc ? previewEnc : null, direction]
-        );
-      }
-      if (applyDefault) {
-        await d.runAsync(
-          `UPDATE conversations SET disappear_after_ms = ?, disappear_set_at = ?
-           WHERE contact_pub_b64 = ? AND owner_profile_id = ? AND disappear_after_ms IS NULL`,
-          [defaultDisappear, now, contactPubB64, ownerProfileId]
-        );
-      }
+      await runConvTouch(d, t, prep);
       await txn.commit();
     } catch (inner) {
       try { await txn.rollback(); } catch { /* ignore */ }

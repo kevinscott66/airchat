@@ -207,17 +207,19 @@ describe('храповик: транзакцию открывает только
     expect(CODE).toMatch(/execAsync\('BEGIN IMMEDIATE;'\)/);
   });
 
-  it('все двадцать четыре места зовут помощника и все закрывают транзакцию', () => {
+  it('все двадцать пять мест зовут помощника и все закрывают транзакцию', () => {
     // v4.32.724: двадцать третье — rollbackDekMigration, отмена перешифровки
     // базы, когда канарейка не легла.
     // v4.32.775: двадцать четвёртое — insertGroupMessageWithTouch: входящее
     // сообщение группы и его след в списке переписок кладутся неделимо.
-    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(24);
-    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(24);
+    // v4.32.776: двадцать пятое — saveChatMessageWithTouch, то же самое для
+    // личного сообщения.
+    expect((OUTSIDE.match(/await beginImmediate\(/g) ?? []).length).toBe(25);
+    expect((OUTSIDE.match(/await txn\.rollback\(\)/g) ?? []).length).toBe(25);
     // v4.32.775: фиксаций ровно столько же. Прежде их было на одну больше —
     // touchGroupConversation фиксировал ещё и на раннем выходе «группы нет»;
     // теперь этот выход спрятан в runGroupTouch, и путь к COMMIT один.
-    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(24);
+    expect((OUTSIDE.match(/await txn\.commit\(\)/g) ?? []).length).toBe(25);
   });
 
   it('помощник ждёт предшественника до BEGIN, а не после', () => {

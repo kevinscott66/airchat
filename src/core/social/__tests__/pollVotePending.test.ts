@@ -214,7 +214,7 @@ describe('приём сообщения разгружает полку', () => 
     const s = MSG();
     // v4.32.767: запись идёт различающей формой — отказ базы больше не
     // выдаётся за удачу, и снятие с полки стоит уже за этой развилкой.
-    const at = s.indexOf('const stored = await saveChatMessageChecked(row);');
+    const at = s.indexOf('const stored = await saveChatMessageWithTouch(row, {');
     expect(at).toBeGreaterThan(0);
     const after = s.slice(at, at + 1400);
     expect(after).toContain('isPollMessage(row.text)');

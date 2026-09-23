@@ -141,7 +141,7 @@ describe('форма исходников', () => {
 
   it('разговор берёт значение у своего владельца, а не у экрана', () => {
     expect(src('core/storage/local.ts')).toContain(
-      'const defaultDisappear = await getDefaultDisappearMsFor(ownerProfileId);'
+      'const defaultDisappear = await getDefaultDisappearMsFor(t.ownerProfileId);'
     );
   });
 

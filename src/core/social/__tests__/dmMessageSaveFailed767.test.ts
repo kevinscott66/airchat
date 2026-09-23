@@ -46,6 +46,12 @@ jest.mock('../../storage/local', () => ({
     if (mockWrite === 'inserted') mockSaved.push(r);
     return mockWrite;
   },
+  // v4.32.776: входящее пишется вместе со следом в списке чатов, одной
+  // операцией: отказ следа больше не терялся между двумя записями.
+  saveChatMessageWithTouch: async (r: Record<string, unknown>, touch: unknown) => {
+    if (mockWrite === 'inserted') { mockSaved.push(r); mockTouched.push([touch]); }
+    return mockWrite;
+  },
   updateChatMessageStatus: async () => {},
   updateChatMessageText: async () => true,
   updateChatMessageTextChecked: async () => 'updated',
@@ -266,7 +272,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 
   it('приёмник спрашивает различающей формой и выходит до побочных действий', () => {
-    const write = MESSAGING.indexOf('const stored = await saveChatMessageChecked(row);');
+    const write = MESSAGING.indexOf('const stored = await saveChatMessageWithTouch(row, {');
     const defer = MESSAGING.indexOf("if (stored === 'failed') {");
     const dup = MESSAGING.indexOf("const alreadyStored = stored === 'duplicate';");
     expect(write).toBeGreaterThan(0);

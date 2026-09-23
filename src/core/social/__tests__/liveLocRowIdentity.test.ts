@@ -90,7 +90,7 @@ describe('приём: строка складывается по номеру с
     // v4.32.767: отдельного чтения ДО записи больше нет — на вопрос «была ли
     // уже такая строка» отвечает сама запись. Строка при этом та же самая:
     // пишется ровно `row` с `id: rowId`, проверено выше.
-    expect(s).toContain('const stored = await saveChatMessageChecked(row);');
+    expect(s).toContain('const stored = await saveChatMessageWithTouch(row, {');
     expect(s).toContain("const alreadyStored = stored === 'duplicate';");
     expect(s).not.toContain('await getChatMessageAuthor(rowId, ownerPid)');
   });

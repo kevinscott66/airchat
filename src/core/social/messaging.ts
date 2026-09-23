@@ -20,7 +20,7 @@ import {
   readChatMessageWindow,
   upsertChatMessage,
   saveChatMessage,
-  saveChatMessageChecked,
+  saveChatMessageWithTouch,
   updateChatMessageStatusChecked,
   updateChatMessageText,
   updateChatMessageTextChecked,
@@ -1528,12 +1528,26 @@ export class MessagingService {
     // это намеренно, выбирая меньший из двух перекосов). Теперь выбирать не из
     // чего: `INSERT OR IGNORE` сам говорит, изменил он строку или нет, — ответ
     // точный, и лишнего чтения на каждое входящее сообщение больше нет.
-    const stored = await saveChatMessageChecked(row);
+    //
+    // v4.32.776: след в списке чатов — превью, время, счётчик непрочитанного —
+    // ложится ТОЙ ЖЕ операцией. Раньше он шёл следом отдельным `void
+    // touchConversation(...)`, а тот свой отказ гасит сам: занятая база молча
+    // съедала весь след, и сообщение оставалось внутри переписки, не подняв
+    // разговор в списке. Перезапросить было нечем — повтор конверта отвечает
+    // `'duplicate'` и до следа не доходит (так задумано с v4.32.477).
+    const previewText = previewLabelForText(row.text).slice(0, 120);
+    const stored = await saveChatMessageWithTouch(row, {
+      contactPubB64: peerPubKeyB64,
+      ownerProfileId: ownerPid,
+      preview: previewText,
+      direction: inbound ? 'in' : 'out',
+      incrementUnread: inbound,
+    });
     // Отказ записи — заминка временная, ей нужна вторая попытка. Ответить
     // `'consumed'` значило бы двинуть метку «докуда прочитано» у ретранслятора
     // мимо кадра, которого нет нигде: сообщение пропало бы навсегда. Выходим ДО
-    // maybeSetTip, touchConversation и плашки — иначе в списке чатов появятся
-    // превью и единица непрочитанного от сообщения, которого в переписке нет.
+    // maybeSetTip и плашки — иначе в приложении всплывёт уведомление о
+    // сообщении, которого в переписке нет.
     if (stored === 'failed') {
       log.warn('dm_save_failed_defer', { messageId: em.messageId.slice(0, 8), cid: cid.slice(0, 16) });
       return 'deferred';
@@ -1550,15 +1564,6 @@ export class MessagingService {
         .catch((e) => log.warn('poll_vote_flush_failed', { err: e instanceof Error ? e.message : String(e) }));
     }
     await maybeSetTip();
-    // v4.32.477: превью считается по сохранённому тексту, а не по сырому. Они
-    // расходились ровно на подделку системной строки: в базу текст ложился без
-    // префикса системной строки (см. sysLineGuard), а в превью тот же префикс
-    // означал «это системная строка» — и собеседник показывал в списке чатов
-    // строку от имени приложения.
-    const previewText = previewLabelForText(row.text).slice(0, 120);
-    if (!alreadyStored) {
-      void touchConversation(peerPubKeyB64, ownerPid, previewText, inbound ? 'in' : 'out', inbound);
-    }
     if (inbound) {
       // v4.32.226: last-seen on the LOCAL receive clock (see typing branch) —
       // not the sender's unauthenticated em.timestamp, which broke the

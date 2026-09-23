@@ -150,7 +150,8 @@ describe('форма исходников: проверка стоит до ди
       'if (inbound && liveNext) {',
       // v4.32.767: запись идёт различающей формой — отказ базы больше не
       // выдаётся за повтор и откладывает кадр.
-      'await saveChatMessageChecked(row)',
+      // v4.32.776: и той же формой ложится след в списке чатов.
+      'await saveChatMessageWithTouch(row, {',
     ]) {
       expect(at(marker)).toBeGreaterThan(gate);
     }
