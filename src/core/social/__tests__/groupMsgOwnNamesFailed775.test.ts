@@ -75,6 +75,8 @@ jest.mock('../../identity/profileManager', () => ({
 }));
 jest.mock('../../identity/ownProfile', () => ({
   getOwnDisplayNameFor: async () => { mockOrder.push('name'); return 'Аня'; },
+  // v4.32.779: приём читает своё отображаемое имя различающей формой.
+  getOwnDisplayNameTryFor: async () => { mockOrder.push('name'); return { name: 'Аня' }; },
   getOwnDisplayName: async () => 'Аня',
   getOwnUsernameFor: async () => {
     mockOrder.push('username');

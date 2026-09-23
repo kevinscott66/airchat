@@ -13,7 +13,11 @@ import { readEnvelopeBody } from './envelopeBody';
 import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { clampEnvelopeTs } from './envelopeTime';
 import { profileManager } from '../identity/profileManager';
-import { getOwnDisplayNameFor, getOwnUsernameFor } from '../identity/ownProfile';
+import {
+  getOwnDisplayNameFor,
+  getOwnDisplayNameTryFor,
+  getOwnUsernameFor,
+} from '../identity/ownProfile';
 import {
   listGroupMembersRead,
   getGroup,
@@ -701,7 +705,13 @@ export async function handleIncomingGroupEnvelope(
     // человек даёт вместо «как меня записать».
     let myNames: (string | null)[];
     try {
-      myNames = [await getOwnDisplayNameFor(pid), await getOwnUsernameFor(pid)];
+      // v4.32.779: отображаемое имя читается различающей формой. Строчная
+      // сводила «ячейка не открылась» к «имени нет», и из этого тут делался
+      // вывод наоборот: «меня не звали». Бейдж упоминания и push пропадали
+      // молча, а взяться второй раз им неоткуда — кадр уже разобран.
+      const shown = await getOwnDisplayNameTryFor(pid);
+      if (shown === null) throw new Error('own display name unreadable');
+      myNames = [shown.name, await getOwnUsernameFor(pid)];
     } catch (e) {
       // v4.32.775: свои имена читаются из базы, и `getOwnUsernameFor` свой отказ
       // не гасит. Прежде он прилетал уже ПОСЛЕ записи строки и уводил кадр в

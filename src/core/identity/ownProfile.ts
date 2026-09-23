@@ -239,6 +239,30 @@ export async function getOwnDisplayNameFor(pid: number): Promise<string | null> 
   }
 }
 
+/**
+ * Отображаемое имя заданного аккаунта с отдельным ответом «прочитать не
+ * удалось» (v4.32.779). Пара к {@link getOwnUsernameTryFor}.
+ *
+ * `null` — ячейка имени на месте и не открылась. `{ name: null }` — имени нет
+ * ни в карточке, ни у профиля, и это твёрдое знание.
+ *
+ * Строчная форма выше сводит оба случая к одному null, и читающим местам этого
+ * довольно: показать нечего и там, и там. Но есть место, где из «имени нет»
+ * делается вывод НАОБОРОТ: приём группового сообщения по обоим своим именам
+ * решает, упоминание это или нет. Нечитаемая ячейка там тихо значила «меня не
+ * звали» — бейдж упоминания и push пропадали, и взяться второй раз им неоткуда:
+ * кадр уже разобран.
+ */
+export async function getOwnDisplayNameTryFor(pid: number): Promise<{ name: string | null } | null> {
+  const cell = await ownFieldTryGetFor(pid, OWN_DISPLAY_NAME_KEY);
+  if (cell === null) return null;
+  const clean = sanitizeOwnDisplayName(cell.text);
+  if (clean) return { name: clean };
+  // Тот же запасной вариант, что у строчной формы: профиль, заведённый вторым,
+  // до первой правки имени представляется тем, под которым его завели.
+  return { name: sanitizeOwnDisplayName(profileManager.getProfileName(pid)) || null };
+}
+
 /** Username активного аккаунта. У каждого DID может быть только одно значение. */
 export async function getOwnUsername(): Promise<string | null> {
   return await getOwnUsernameFor(activeProfileId());

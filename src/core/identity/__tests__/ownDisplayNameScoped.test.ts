@@ -142,8 +142,14 @@ describe('приём группового конверта не спрашива
   });
 
   it('все пять мест приёма спрашивают имя владельца', () => {
+    // v4.32.779: пятое место — подсчёт упоминаний — читает различающей формой
+    // (нечитаемая ячейка там значила бы «меня не звали»), но профиль спрашивает
+    // тот же самый. Правило о номере профиля от формы не зависит.
     const calls = groupSrc.match(/await getOwnDisplayNameFor\(pid\)/g) ?? [];
-    expect(calls).toHaveLength(5);
+    const tryCalls = groupSrc.match(/await getOwnDisplayNameTryFor\(pid\)/g) ?? [];
+    expect(calls).toHaveLength(4);
+    expect(tryCalls).toHaveLength(1);
+    expect(groupSrc).not.toMatch(/getOwnDisplayNameTryFor\((?!pid\))/);
   });
 
   it('имя и ключ в ответах берутся у одного профиля', () => {

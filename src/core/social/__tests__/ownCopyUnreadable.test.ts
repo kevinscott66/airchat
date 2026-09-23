@@ -85,6 +85,8 @@ jest.mock('../../identity/profileManager', () => ({
 }));
 jest.mock('../../identity/ownProfile', () => ({
   getOwnDisplayNameFor: async () => 'Я',
+  // v4.32.779: приём группы читает своё имя различающей формой.
+  getOwnDisplayNameTryFor: async () => ({ name: 'Я' }),
   getOwnDisplayName: async () => 'Я',
   // v4.32.605: упоминание сверяется и с username; без него приём падал бы на
   // чтении своих имён.
