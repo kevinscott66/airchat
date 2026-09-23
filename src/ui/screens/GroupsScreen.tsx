@@ -2148,6 +2148,43 @@ function GroupChatScreen({
     }
   }, [group.id, myPubB64, myDisplayName, pid, loadMessages]);
 
+  /**
+   * Копия удаляемого сообщения в «Недавно удалённые».
+   *
+   * v4.32.725: копию клали, но её судьбу не спрашивали.
+   * `kvUpdateSecretScoped` отвечает 'written' | 'failed' | 'unreadable' и
+   * молчит: 'unreadable' — прежняя ячейка корзины не расшифровалась, и модуль
+   * намеренно отказывается писать поверх чужого шифртекста; 'failed' — запись
+   * не легла (полный диск, отказ базы). Ни то ни другое не бросает, а следом
+   * шло жёсткое удаление и рассылка надгробия участникам: восстанавливать
+   * нечем, и узнать об этом человек мог только открыв пустую корзину — уже
+   * после того, как сообщения не стало. В личной переписке это правило с
+   * v4.32.631 соблюдается (`saveRecentlyDeleted` в ChatScreen), группам оно не
+   * досталось.
+   *
+   * @returns легла ли копия. `false` — удалять всё равно можно, но сказать об
+   * этом человеку обязательно.
+   */
+  const saveGrpRecentlyDeleted = useCallback(async (msg: GroupMessageRow): Promise<boolean> => {
+    try {
+      const { kvUpdateSecretScoped } = await import('../../core/storage/local');
+      const now = Date.now();
+      const res = await kvUpdateSecretScoped(pid, recentlyDeletedGroupKey(group.id), (raw) => {
+        let list: Array<{ id: string; text: string; senderName: string; deletedAt: number }> = [];
+        try { list = raw ? (JSON.parse(raw) as Array<{ id: string; text: string; senderName: string; deletedAt: number }>) : []; } catch { list = []; }
+        if (!Array.isArray(list)) list = [];
+        list = list.filter((x) => x.deletedAt > now - GRP_RECENTLY_DELETED_TTL_MS);
+        list.unshift({ id: msg.id, text: msg.text, senderName: msg.senderName ?? shortIdentity(msg.senderPubB64), deletedAt: now });
+        if (list.length > 50) list = list.slice(0, 50);
+        return JSON.stringify(list);
+      });
+      return res === 'written';
+    } catch (e) {
+      log.warn('group_recently_deleted_copy_failed', { err: rawErrorText(e) });
+      return false;
+    }
+  }, [pid, group.id]);
+
   const deleteMsg = useCallback((msg: GroupMessageRow) => {
     const isOwn = msg.senderPubB64 === myPubB64;
     if (!isOwn && !amAdmin) return;
@@ -2160,26 +2197,18 @@ function GroupChatScreen({
           // оставлял сообщение на месте молча, и «Удалить» выглядело кнопкой,
           // которая просто иногда не срабатывает.
           runGuardedOp(async () => {
-            const { kvUpdateSecretScoped } = await import('../../core/storage/local');
-            const now = Date.now();
-            await kvUpdateSecretScoped(pid, recentlyDeletedGroupKey(group.id), (raw) => {
-              let list: Array<{ id: string; text: string; senderName: string; deletedAt: number }> = [];
-              try { list = raw ? (JSON.parse(raw) as Array<{ id: string; text: string; senderName: string; deletedAt: number }>) : []; } catch { list = []; }
-              list = list.filter((x) => x.deletedAt > now - GRP_RECENTLY_DELETED_TTL_MS);
-              list.unshift({ id: msg.id, text: msg.text, senderName: msg.senderName ?? shortIdentity(msg.senderPubB64), deletedAt: now });
-              if (list.length > 50) list = list.slice(0, 50);
-              return JSON.stringify(list);
-            });
+            const kept = await saveGrpRecentlyDeleted(msg);
             await deleteGroupMessage(msg.id, pid);
             // v4.32.232: удаление чистило только свою БД — у остальных
             // сообщение оставалось на месте.
             announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: msg.id }, myDisplayName));
             await loadMessages();
+            if (!kept) showError('Сообщение удалено. Копия в «Недавно удалённые» не сохранилась');
           }, 'Не удалось удалить сообщение', 'group_msg_delete_failed');
         },
       },
     ]);
-  }, [myPubB64, amAdmin, pid, loadMessages, group.id, myDisplayName]);
+  }, [myPubB64, amAdmin, pid, loadMessages, group.id, myDisplayName, saveGrpRecentlyDeleted]);
 
   /**
    * Закрепляет или открепляет сообщение. Возвращает false, если прав не
@@ -4214,6 +4243,16 @@ function GroupChatScreen({
                       { text: 'Отмена', style: 'cancel' },
                       { text: 'Удалить', style: 'destructive', onPress: () => {
                         runGuardedOp(async () => {
+                          // v4.32.725: удаление пачкой в корзину не заходило
+                          // вовсе — ни одной копии, при том что одиночное её
+                          // кладёт, экран «Недавно удалённые» у групп есть, а в
+                          // личной переписке ту же дыру закрыли в v4.32.631.
+                          // Выделить десять сообщений и нажать «Удалить» значило
+                          // потерять их насовсем.
+                          let allKept = true;
+                          for (const m of messages.filter((x) => ids.includes(x.id))) {
+                            if (!(await saveGrpRecentlyDeleted(m))) allKept = false;
+                          }
                           await Promise.all(ids.map((id) => deleteGroupMessage(id, pid)));
                           // v4.32.232: массовое удаление, как и одиночное,
                           // чистило только свою БД.
@@ -4222,6 +4261,7 @@ function GroupChatScreen({
                           }
                           setSelectedGrpIds(new Set());
                           void loadMessages();
+                          if (!allKept) showError('Часть сообщений удалена без копии в «Недавно удалённые»');
                         }, 'Не удалось удалить сообщения', 'ui_group_delete_selected_failed');
                       }},
                     ]);
