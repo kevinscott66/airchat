@@ -58,7 +58,12 @@ jest.mock('../../storage/local', () => ({
   getChatMessageTexts: async (ids: string[]) => new Map(ids.map((id) => [id, `текст ${id}`])),
   getGroupMessageTexts: async (ids: string[]) => new Map(ids.map((id) => [id, `текст ${id}`])),
   listGroupMembers: async () => [{ peerPubB64: 'me-pub', role: 'owner' }],
+  listGroupMembersRead: async () => [{ peerPubB64: 'me-pub', role: 'owner' }],
   getGroup: async () => ({ id: 'g1', adminOnlyPinning: false, type: 'group' }),
+  getGroupRead: async () => ({
+    state: 'found',
+    value: { id: 'g1', adminOnlyPinning: false, type: 'group', isAdmin: true },
+  }),
   notifyChatStorageChanged: () => {
     mockNotifies += 1;
   },

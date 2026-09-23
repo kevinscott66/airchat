@@ -186,7 +186,12 @@ describe('вызывающие подключены к дому', () => {
       .filter((f) => f.lines.some((l) => /lookupGroupActor(Read)?\(/.test(l)))
       .map((f) => f.key)
       .sort();
-    expect(users).toEqual(['groupMessaging.ts', 'pollVoteSync.ts', 'reactionSync.ts']);
+    expect(users).toEqual([
+      'groupMessaging.ts',
+      'groupPinSync.ts',
+      'pollVoteSync.ts',
+      'reactionSync.ts',
+    ]);
 
     // Четыре приёмника конвертов (реакция, голос, завершение опроса,
     // отметка о прочтении в группе) и одна отправляющая сторона (проверка
@@ -212,10 +217,16 @@ describe('вызывающие подключены к дому', () => {
     // v4.32.755: и оба приёмника опроса — голос и завершение. Схлопывающих не
     // осталось ни одного: довод «отправитель повторит» не выдержал ни разу,
     // потому что ни один служебный конверт о своей судьбе не узнаёт.
+    //
+    // v4.32.761: шестой — своё закрепление. Оно читало строку группы через
+    // `getGroup`, схлопывающий «такой группы нет» и «прочитать не удалось» в
+    // один null, а состав — через сплющивающую обёртку, и роль по нему молча
+    // выходила «участник». Человеку сообщали, что группу, возможно, только что
+    // удалили, — про открытую у него на экране.
     const reading = outside.filter((l) => l.includes('await lookupGroupActorRead(')).length;
     expect(collapsing).toBe(0);
-    expect(reading).toBe(5);
-    expect(collapsing + reading).toBe(5);
+    expect(reading).toBe(6);
+    expect(collapsing + reading).toBe(6);
   });
 
   it('roleOf зовут там, где список участников уже прочитан', () => {

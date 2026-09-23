@@ -59,7 +59,12 @@ jest.mock('../../storage/local', () => ({
     mockGroupPins.push({ id, text });
   },
   listGroupMembers: async () => [{ peerPubB64: 'my-pub-b64', role: 'owner' }],
+  listGroupMembersRead: async () => [{ peerPubB64: 'my-pub-b64', role: 'owner' }],
   getGroup: async () => ({ id: 'g1', type: 'group', adminOnlyPinning: false }),
+  getGroupRead: async () => ({
+    state: 'found',
+    value: { id: 'g1', type: 'group', adminOnlyPinning: false, isAdmin: true },
+  }),
   // Все запрошенные id считаем существующими: «чьё это сообщение» здесь не
   // предмет набора.
   getGroupMessageTexts: async (ids: string[]) => new Map(ids.map((id) => [id, `текст ${id}`])),

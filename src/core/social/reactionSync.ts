@@ -11,7 +11,7 @@
  */
 
 import { profileManager } from '../identity/profileManager';
-import { listGroupMembers, toggleReaction } from '../storage/local';
+import { listGroupMembersRead, toggleReaction } from '../storage/local';
 import { reactionWriteFailureText } from './reactionWrite';
 import type { ReactionScope } from '../storage/reactionScope';
 import {
@@ -65,6 +65,15 @@ export type ReactionResult =
   | { ok: true; on: boolean; warning: string | null };
 
 /**
+ * Состав группы не прочитался (v4.32.761).
+ *
+ * Слово в слово как у опроса (v4.32.648): беда одна и та же, и человек должен
+ * узнавать её по одному и тому же тексту, чем бы он ни занимался — голосовал
+ * или ставил реакцию.
+ */
+const MEMBERS_UNKNOWN = 'Не удалось прочитать состав группы. Попробуйте ещё раз.';
+
+/**
  * Локально переключает реакцию и рассылает конверт.
  *
  * peerPubB64 обязателен для личной реакции, groupId — для групповой.
@@ -89,7 +98,17 @@ export async function toggleAndSyncReaction(params: {
   // применяет приёмная сторона. Иначе read-only участник ставил реакцию, видел
   // её у себя, а у остальных её отбрасывали как чужую: расхождение без единого
   // признака отказа.
-  const members = groupId ? await listGroupMembers(groupId, pid) : [];
+  // v4.32.761: состав, который не прочитался, — не пустая группа. Прежнее
+  // чтение отдавало пустой список и на сбой тоже, а из пустого списка делаются
+  // два вывода: «вас нет среди участников» и «рассылать некому». Секунда
+  // занятой базы отказывала человеку в реакции в его собственной группе
+  // словами про чужую группу — и он верил им, потому что отказ выглядит
+  // окончательным.
+  const members = groupId ? await listGroupMembersRead(groupId, pid) : [];
+  if (members === null) {
+    log.warn('reaction_members_read_failed', { gid: groupId?.slice(0, 8) });
+    return { ok: false, reason: MEMBERS_UNKNOWN };
+  }
   if (groupId) {
     const verdict = canInteractInGroup(roleOf(members, actorKey));
     if (!verdict.allowed) {

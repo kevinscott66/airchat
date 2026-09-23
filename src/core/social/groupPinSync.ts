@@ -12,10 +12,12 @@
  * group_messages — и не расходится с оригиналом после правки. Старый формат
  * (массив объектов) на чтении понимается.
  */
-import { setGroupPinnedMessage, listGroupMembers, getGroup, getGroupMessageTexts } from '../storage/local';
+import { setGroupPinnedMessage, getGroupMessageTexts } from '../storage/local';
 import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { canPinInGroup, type PinRole } from './groupPinPolicy';
+import { lookupGroupActorRead } from './groupActor';
+import { ownGroupRole } from './ownGroupRole';
 import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import type { GroupControlOutcome } from './groupControlOutcome';
 import { log } from '../logger';
@@ -203,13 +205,6 @@ export async function clearPinned(groupId: string, ownerProfileId: number): Prom
   });
 }
 
-/** Роль в группе по собственному публичному ключу. */
-async function myRoleIn(groupId: string, myPubB64: string, ownerProfileId: number): Promise<PinRole> {
-  const members = await listGroupMembers(groupId, ownerProfileId);
-  const me = members.find((m) => m.peerPubB64 === myPubB64);
-  return (me?.role as PinRole | undefined) ?? 'member';
-}
-
 /**
  * Почему закрепление не состоялось (v4.32.453).
  *
@@ -218,10 +213,16 @@ async function myRoleIn(groupId: string, myPubB64: string, ownerProfileId: numbe
  * человека могли просто не догрузиться ключи профиля или пропасть строка
  * группы. Совет «попросите администратора» в таком положении бесполезен, а
  * настоящая причина не называется никогда.
+ *
+ * v4.32.761: «группу не удалось прочитать» — отдельная от «группы нет».
+ * Слились они не здесь, а в `getGroup`, который отвечал одним `null` и на
+ * пустоту, и на отказ базы: человеку сообщали, что группу, возможно, только
+ * что удалили, — про открытую у него на экране.
  */
 export type GroupPinRefusal =
   | 'no_identity'
   | 'no_group'
+  | 'group_unreadable'
   | 'denied'
   | 'read_failed'
   | 'write_failed';
@@ -243,6 +244,7 @@ export type GroupPinResult =
 const REFUSAL: Record<GroupPinRefusal, string> = {
   no_identity: 'Профиль ещё загружается — попробуйте снова через несколько секунд.',
   no_group: 'Группа не найдена — возможно, её только что удалили.',
+  group_unreadable: 'Не удалось прочитать эту группу — попробуйте ещё раз.',
   denied: 'Закреплять и откреплять сообщения в этой группе могут только администраторы.',
   read_failed: 'Не удалось прочитать закреплённые в этой группе — попробуйте ещё раз.',
   write_failed: 'Не удалось сохранить закреплённые в этой группе — попробуйте ещё раз.',
@@ -272,9 +274,25 @@ export async function togglePinAndSync(params: {
   if (!me) return { ok: false, reason: 'no_identity' };
   const { pid, myPubB64: myPub } = me;
 
-  const group = await getGroup(groupId, pid);
+  // v4.32.761: строка группы и состав читаются тем же входом, что и на приёме
+  // чужого конверта, — и он отличает отказ базы от «такой группы нет». Прежде
+  // здесь стояли `getGroup`, схлопывающий оба исхода в один `null`, и чтение
+  // состава, отдававшее на сбое пустой список: незанятая секунда базы говорила
+  // человеку «группа не найдена — возможно, её только что удалили» про группу,
+  // открытую у него на экране, а роль в ней молча становилась «участник» —
+  // право закреплять выдавалось или отнималось по несуществующему ответу.
+  const actor = await lookupGroupActorRead(groupId, myPub, pid);
+  if (!actor) {
+    log.warn('group_pin_group_unreadable', { gid: groupId.slice(0, 8), pid });
+    return { ok: false, reason: 'group_unreadable' };
+  }
+  const group = actor.group;
   if (!group) return { ok: false, reason: 'no_group' };
-  const role = await myRoleIn(groupId, myPub, pid);
+  // Своей строки в составе нет — роль берёт тот же ownGroupRole, что и экран:
+  // сначала строка участника, и лишь при её отсутствии флаг groups.is_admin
+  // (v4.32.512). Раньше здесь стояло своё «нет строки — значит участник»,
+  // которое флага не знало, а сбой чтения давало за ту же «строки нет».
+  const role = ownGroupRole(actor.members, myPub, group.isAdmin) as PinRole;
   // Та же функция, что и на приёме: расхождение здесь означало бы, что своё
   // же закрепление у остальных молча отбрасывается.
   if (!canPinInGroup({ role, adminOnlyPinning: group.adminOnlyPinning, type: group.type })) {
