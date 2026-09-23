@@ -17,6 +17,7 @@ import { bytesEqualConstTime } from '../storage/dekDerivation';
 import { PROFILE_STATE_KEY } from './profileStateKey';
 
 const PROFILES_STATE_KEY = PROFILE_STATE_KEY;
+
 /**
  * Имя ключа-зеркала должно совпадать с тем, что читает фоновый обработчик
  * (src/notifications/backgroundNotifyPrefs.ts). Импортировать его оттуда нельзя
@@ -253,12 +254,38 @@ class ProfileManager {
       ],
     };
     await persistKeyPair(pair0);
-    await this.persistState();
+    // v4.32.731: снимок, который не удалось прочитать, не затирается профилем
+    // по умолчанию.
+    //
+    // Раньше запись шла безусловно, и единственная запись о том, сколько
+    // профилей было, как они назывались и какой был активен, стиралась своей
+    // же неудачей чтения — навсегда. Причины у неудачи разные: снимок пришёл
+    // от более новой сборки (`v !== 1` — это откат установки, а не порча),
+    // Keystore вернул мусор, значение не разобралось. В первом случае снимок
+    // целый и его прочтёт та же новая сборка, если поставить её обратно, — но
+    // только если мы его не затёрли.
+    //
+    // Профиль по умолчанию остаётся в памяти: приложение работает, ключ на
+    // устройстве приведён к нему (выше), зеркало номера обновлено — не
+    // записан только сам снимок. Любая осознанная правка списка профилей
+    // (завести, переименовать, переключить, удалить) пишет его как обычно:
+    // к этому моменту человек уже действовал, и хранить прежнее незачем.
+    if (this.snapshotIncomplete) log.warn('profile_manager_default_kept_in_memory');
+    await this.persistState({ keepDiskSnapshot: this.snapshotIncomplete });
   }
 
-  private async persistState(): Promise<void> {
+  /**
+   * @param keepDiskSnapshot не трогать запись на диске — состояние живёт
+   *   только в памяти. Единственный случай: снимок на диске есть, но принять
+   *   его не вышло (см. migrateOrCreateDefault). Зеркало номера при этом
+   *   обновляется: приложение действительно работает под этим профилем, и
+   *   фоновый обработчик должен знать, чьи настройки читать.
+   */
+  private async persistState(opts?: { keepDiskSnapshot?: boolean }): Promise<void> {
     if (!this.state) return;
-    await SecureStore.setItemAsync(PROFILES_STATE_KEY, JSON.stringify(this.state));
+    if (!opts?.keepDiskSnapshot) {
+      await SecureStore.setItemAsync(PROFILES_STATE_KEY, JSON.stringify(this.state));
+    }
     this.invalidateProfileCache();
     await this.mirrorActiveProfileId();
   }
@@ -683,6 +710,22 @@ class ProfileManager {
           err: e instanceof Error ? e.message : String(e),
         });
       }
+    }
+    // v4.32.731: отпустить `@имя` в общем реестре. Вызова не было вовсе —
+    // функция releaseOwnUsernameGlobally писалась ровно для этого места и
+    // стояла ненужной. Имя удалённого профиля оставалось занятым навсегда и
+    // продолжало указывать на ключ, которым больше никто не пользуется: чужие
+    // сообщения на `@имя` уходили в никуда, а вернуть имя себе было нельзя.
+    // Делается до уборки базы: реестру нужен только номер профиля, а порядок
+    // важен для памяти о публикации, которую эта же функция сбрасывает.
+    try {
+      const { releaseOwnUsernameGlobally } = await import('./usernameRegistry');
+      await releaseOwnUsernameGlobally(profileId);
+    } catch (e) {
+      log.warn('delete_profile_username_release_failed', {
+        profileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
     }
     // v4.32.49: очистка данных удалённого профиля. Если тут упадёт — профиль
     // уже исключён из state, поэтому orphaned данные не приведут к UI-регрессу

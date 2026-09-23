@@ -160,6 +160,12 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
  * глотается — брошенная запись безвредна, а падать на удалении нельзя.
  */
 export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): Promise<void> {
+  // v4.32.731: память о «уже опубликовано» сбрасывается вместе с именем.
+  // Номера профилей выдаются заново после удаления, и профиль с тем же
+  // номером, взявший то же имя, попадал под `republished.get(pid) === sent` —
+  // то есть заявку в реестр не отправлял вовсе. Имя на сервере при этом было
+  // отпущено: `@имя` не вело никуда, а приложение считало его опубликованным.
+  republished.delete(profileId);
   try {
     const mnemonic = await getStoredMnemonic();
     if (!mnemonic) return;
