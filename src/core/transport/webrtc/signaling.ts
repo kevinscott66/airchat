@@ -82,6 +82,14 @@ export type HangupPayload = { fromPeerId?: string };
  */
 export type MissedCall = { fromPeerId: string; at: number; attempts: number; e?: string };
 export type MissedCallsPayload = { calls: MissedCall[] };
+/**
+ * Ответ серверу на доставленный журнал (v4.32.744).
+ *
+ * `stored: false` означает ровно одно: записи до диска не дошли, и убирать
+ * свою копию серверу нельзя. Перебирать причины незачем — они все его не
+ * касаются.
+ */
+export type MissedCallsReceipt = { stored: boolean };
 
 /**
  * Socket.IO signaling aligned with `signaling-server/index.js`.
@@ -332,14 +340,23 @@ export class WebRTCSignaling {
    * тот же миг, когда отправлял его, — сокет, оборвавшийся на этой секунде,
    * уносил пропущенные звонки навсегда. Расписка уходит после того, как
    * обработчик отработал: не отработал — сервер отдаст журнал ещё раз.
+   *
+   * v4.32.744: расписка теперь бывает отрицательной. Молчания для отказа мало:
+   * сервер ждёт её десять секунд и, не дождавшись при живом сокете, считает,
+   * что расписок не шлёт старая сборка, — и журнал всё равно убирает. То есть
+   * обработчик, честно сказавший «не сохранил», отличался от старого клиента
+   * только задержкой. Теперь он отвечает `false`, это уходит в расписке
+   * словами, и сервер придерживает журнал до следующего входа. Обработчик,
+   * который не возвращает ничего (все, кроме журнала звонков), по-прежнему
+   * означает «принято».
    */
-  onMissedCalls(handler: (msg: MissedCallsPayload) => void | Promise<void>): void {
+  onMissedCalls(handler: (msg: MissedCallsPayload) => void | boolean | Promise<void | boolean>): void {
     this.socket?.off('missed_calls');
-    this.socket?.on('missed_calls', (msg: MissedCallsPayload, ack?: () => void) => {
+    this.socket?.on('missed_calls', (msg: MissedCallsPayload, ack?: (res?: MissedCallsReceipt) => void) => {
       void Promise.resolve()
         .then(() => handler(msg))
-        .then(() => {
-          if (typeof ack === 'function') ack();
+        .then((stored) => {
+          if (typeof ack === 'function') ack({ stored: stored !== false });
         })
         .catch(() => {
           /* журнал останется на сервере до следующего входа */

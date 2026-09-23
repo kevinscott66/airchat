@@ -200,6 +200,40 @@ describe('WebRTCSignaling — расписка о получении журна�
     expect(seen).toHaveLength(1);
     expect(ack).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * v4.32.744: обработчику мало упасть, чтобы журнал уцелел.
+   *
+   * Сервер ждёт расписку отведённый срок и, не дождавшись при живом сокете,
+   * списывает молчание на сборку, которая расписок не шлёт, — и копию убирает.
+   * Значит отказ обязан прийти словами, а не отсутствием слов.
+   */
+  test('обработчик сказал «не сохранил» — это уходит в расписке', async () => {
+    const s = await connectedSignaling();
+    s.onMissedCalls(async () => false);
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ack).toHaveBeenCalledWith({ stored: false });
+  });
+
+  test('обработчик сказал «сохранил» — расписка утвердительная', async () => {
+    const s = await connectedSignaling();
+    s.onMissedCalls(async () => true);
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ack).toHaveBeenCalledWith({ stored: true });
+  });
+
+  test('обработчик, который ничего не отвечает, значит «принято»', async () => {
+    const s = await connectedSignaling();
+    s.onMissedCalls(() => undefined);
+    const ack = jest.fn();
+    mockSocket.emit('missed_calls', { calls: [] }, ack);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ack).toHaveBeenCalledWith({ stored: true });
+  });
 });
 
 /**

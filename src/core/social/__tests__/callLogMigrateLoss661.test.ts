@@ -212,7 +212,10 @@ describe('журнал звонков не пропадает из-за сорв
     expect(src).toContain('          await kvDelete(LEGACY_CALL_LOG_KEY);');
     expect(src).not.toContain('kvSetSecret(callLogKey(pid), legacy);');
     // Запись журнала: ответ читают, а исключение уходит в лог, а не в пустоту.
-    expect(src).toContain('      if (!(await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot)))) {');
+    // v4.32.744: ответ ещё и возвращается вызывающему — придержанные сервером
+    // звонки убирают с него свою копию по этому самому слову.
+    expect(src).toContain('      if (await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot))) return true;');
+    expect(src).toContain("      log.warn('call_log_persist_failed', { pid: profileId });");
     expect(src).not.toContain('kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot));');
     expect(src).toContain("      log.warn('call_log_persist_error', { err: e instanceof Error ? e.message : String(e) });");
     // Ровно два места, где журнал вообще пишется.

@@ -542,11 +542,21 @@ function createSignalingServer(options = {}) {
         const missed = readMissedCalls(value.peerId);
         if (missed.length > 0) {
           const forPeerId = value.peerId;
-          socket.timeout(missedDeliveryAckMs).emit('missed_calls', { calls: missed }, (error) => {
+          socket.timeout(missedDeliveryAckMs).emit('missed_calls', { calls: missed }, (error, receipt) => {
             // Ошибка здесь — истёкшее ожидание. Если сокет на связи, значит
             // журнал доехал, а расписки не шлёт старая сборка: убираем. Если
             // связь оборвалась — журнал остаётся до следующего входа.
             if (error && !socket.connected) return;
+            // v4.32.744: расписка бывает отрицательной. Клиент кладёт журнал
+            // на диск и до этой версии молчал, если запись не удалась, — а
+            // молчание тут неотличимо от старой сборки, и своя копия всё
+            // равно уходила. Звонок пропадал совсем: у клиента он остался
+            // только в памяти до перезапуска, у нас — уже нигде. Теперь
+            // «не сохранил» приходит словами и копию мы придерживаем.
+            //
+            // Держать её вечно клиент этим не заставит: журнал живёт
+            // missedCallTtlMs и уходит по общим пределам на записи и байты.
+            if (receipt && receipt.stored === false) return;
             dropMissedTarget(forPeerId);
           });
         }

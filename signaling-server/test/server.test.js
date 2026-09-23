@@ -826,6 +826,48 @@ test('старая сборка без расписки журнал всё же
   assert.equal(secondDelivery, null);
 });
 
+test('клиент расписался отказом — журнал придёт ещё раз (v4.32.744)', async (t) => {
+  // Молчания для отказа мало: ожидание расписки истекает за отведённый срок, и
+  // при живом сокете сервер списывает молчание на старую сборку. Клиент, у
+  // которого запись на диск не удалась, обязан сказать это словами.
+  const server = createSignalingServer({ port: 0, missedDeliveryAckMs: 100 });
+  const port = await server.listen();
+  const alice = await connectedClient(port);
+  const aliceId = identity();
+  const bobId = identity();
+  t.after(async () => {
+    alice.close();
+    await server.close();
+  });
+
+  await registerClient(alice, aliceId, 'room-a');
+  const unavailable = waitForEvent(alice, 'peer_unavailable');
+  alice.emit('offer', { roomId: 'room-a', targetPeerId: bobId.peerId, sdp: 'v=0' });
+  await unavailable;
+
+  /** Вход, на котором клиент отвечает ровно так, как ему велели. */
+  const login = async (receipt) => {
+    const socket = await connectedClient(port);
+    t.after(() => socket.close());
+    let delivered = null;
+    socket.on('missed_calls', (value, ack) => {
+      delivered = value;
+      if (typeof ack === 'function') ack(receipt);
+    });
+    await registerClient(socket, bobId, 'room-a');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    socket.close();
+    return delivered;
+  };
+
+  // Не сохранил — своя копия остаётся, и на следующем входе журнал тот же.
+  assert.equal((await login({ stored: false })).calls.length, 1);
+  assert.equal((await login({ stored: false })).calls.length, 1);
+  // Сохранил — копия уходит, и третий вход приходит уже пустым.
+  assert.equal((await login({ stored: true })).calls.length, 1);
+  assert.equal(await login({ stored: true }), null);
+});
+
 
 test('за nginx на той же машине разные клиенты не делят предел (v4.32.721)', async (t) => {
   const server = createSignalingServer({ port: 0, host: '127.0.0.1', maxConnectionsPerIp: 1, trustProxy: 'loopback' });

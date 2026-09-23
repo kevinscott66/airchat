@@ -162,7 +162,7 @@ const callLogKey = (pid: number): string => `p${pid}:${LEGACY_CALL_LOG_KEY}`;
 let callLog: CallLogEntry[] = [];
 let callProfileId: number | null = null;
 const callLogListeners = new Set<(log: CallLogEntry[]) => void>();
-const callLogPersistenceQueues = new Map<number, Promise<void>>();
+const callLogPersistenceQueues = new Map<number, Promise<unknown>>();
 
 function emitCallLog(): void {
   for (const cb of callLogListeners) {
@@ -230,11 +230,32 @@ function recordCallEnd(info: CallInfo, endedAt: number, cause: CallEndCause): vo
  * Записи без расписки отбрасываются молча. Цена — звонки со старых клиентов не
  * попадут в журнал, пока те не обновятся; так же поступили с неподписанным
  * предложением в v4.32.585.
+ *
+ * v4.32.744: ответ говорит не только «сколько», но и «легло ли». Это не
+ * дотошность: сервер держит придержанный звонок в единственном экземпляре и
+ * убирает свою копию по расписке о доставке. Запись же в журнал уходила
+ * брошенным `void persistCallLog(...)` — функция возвращала число и не ждала
+ * диска вовсе. Значит расписка означала «дошло до приложения», хотя убирать
+ * копию можно только за «лежит на диске»: сорванная запись (шифровальный ключ
+ * ещё не поднят — а список приезжает первым же событием после регистрации,
+ * ровно в эту минуту; полный диск; занятое хранилище) оставляла звонок жить
+ * только в памяти. У человека он был виден до перезапуска, у сервера — уже
+ * нигде, и «вам звонили» пропадало навсегда.
  */
+export type MissedCallsIntake = {
+  /** Сколько звонков легло в журнал: по ним поднимается уведомление. */
+  added: number;
+  /**
+   * Лежит ли журнал с ними на диске. `false` — серверу расписываться нельзя,
+   * пусть отдаст тот же список при следующем входе.
+   */
+  stored: boolean;
+};
+
 export async function recordMissedCalls(
   calls: Array<{ fromPeerId: string; at: number; attempts: number; e?: string }>,
   myPub: string
-): Promise<number> {
+): Promise<MissedCallsIntake> {
   let added = 0;
   for (const call of calls) {
     if (!isPubKeyB64(call.fromPeerId)) continue;
@@ -278,11 +299,18 @@ export async function recordMissedCalls(
     callLog = [entry, ...callLog].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_LOG);
     added += 1;
   }
-  if (added === 0) return 0;
-  emitCallLog();
+  if (added > 0) emitCallLog();
   const profileId = callProfileId;
-  if (profileId !== null) void persistCallLog(profileId, callLog);
-  return added;
+  // Служба без владельца журнала не ведёт — класть записи некуда, и
+  // расписываться за них тем более нельзя.
+  if (profileId === null) return { added, stored: false };
+  // Пишем даже когда нового ничего не прибавилось. Ноль здесь чаще всего
+  // значит «эти звонки у нас уже есть» — а повторную доставку сервер шлёт
+  // ровно тем, за кого мы в прошлый раз не расписались, и лежат ли они на
+  // диске, из одного лишь `added === 0` не следует. Цена — одна запись на
+  // доставку, и только пока серверу есть что отдавать.
+  const stored = await persistCallLog(profileId, callLog);
+  return { added, stored };
 }
 
 /**
@@ -290,7 +318,7 @@ export async function recordMissedCalls(
  * чем кончилось. Это метаданные переписки, и защищены они должны быть так же,
  * как её текст: тот же общий DEK через kvSetSecret.
  */
-function enqueueCallLogPersistence(profileId: number, operation: () => Promise<void>): Promise<void> {
+function enqueueCallLogPersistence<T>(profileId: number, operation: () => Promise<T>): Promise<T> {
   const previous = callLogPersistenceQueues.get(profileId) ?? Promise.resolve();
   const current = previous.catch(() => {}).then(operation);
   callLogPersistenceQueues.set(profileId, current);
@@ -299,7 +327,7 @@ function enqueueCallLogPersistence(profileId: number, operation: () => Promise<v
   });
 }
 
-function persistCallLog(profileId: number, entries = callLog): Promise<void> {
+function persistCallLog(profileId: number, entries = callLog): Promise<boolean> {
   const snapshot = entries.slice(0, MAX_LOG);
   return enqueueCallLogPersistence(profileId, async () => {
     try {
@@ -308,11 +336,17 @@ function persistCallLog(profileId: number, entries = callLog): Promise<void> {
       // терялся вместе с пустым catch — сорванная запись журнала не оставляла
       // ни следа. Показывать человеку нечего (журнал ведётся сам собой), но
       // диагностика обязана быть: иначе записи просто исчезали к перезапуску.
-      if (!(await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot)))) {
-        log.warn('call_log_persist_failed', { pid: profileId });
-      }
+      //
+      // v4.32.744: и ответ уходит наверх, а не только в журнал приложения.
+      // Одному вызывающему он жизненно нужен: придержанные сервером звонки
+      // существуют ровно в одном экземпляре, и расписываться за них можно
+      // только после того, как они действительно легли.
+      if (await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot))) return true;
+      log.warn('call_log_persist_failed', { pid: profileId });
+      return false;
     } catch (e) {
       log.warn('call_log_persist_error', { err: e instanceof Error ? e.message : String(e) });
+      return false;
     }
   });
 }
@@ -1034,18 +1068,28 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // когда блок-лист ещё поднимается с диска. Тот же приём, что в onOffer:
     // дождаться, иначе отсев не сработает ровно в момент своей нужды.
     await rateLimiter.whenReady();
-    const added = await recordMissedCalls(calls, myPub);
-    if (added === 0) return;
-    log.info('call_missed_delivered', { count: added });
-    try {
-      // Тот же приём, что и у dismissCallBanner: модуль уведомлений тянется
-      // по требованию, чтобы звонки не зависели от него на старте.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const notifications = require('../../notifications/pushNotifications') as {
-        notifyMissedCall(opts: { count: number }): Promise<void>;
-      };
-      void notifications.notifyMissedCall({ count: added }).catch(() => { /* журнал уже пополнен */ });
-    } catch { /* notifee не подключён (тесты, Expo Go) */ }
+    const intake = await recordMissedCalls(calls, myPub);
+    if (intake.added > 0) {
+      log.info('call_missed_delivered', { count: intake.added });
+      try {
+        // Тот же приём, что и у dismissCallBanner: модуль уведомлений тянется
+        // по требованию, чтобы звонки не зависели от него на старте.
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const notifications = require('../../notifications/pushNotifications') as {
+          notifyMissedCall(opts: { count: number }): Promise<void>;
+        };
+        void notifications.notifyMissedCall({ count: intake.added })
+          .catch(() => { /* журнал уже пополнен */ });
+      } catch { /* notifee не подключён (тесты, Expo Go) */ }
+    }
+    // v4.32.744: сказать человеку — важнее, чем сохранить, поэтому уведомление
+    // поднимается и когда запись не легла: звонок он увидит хотя бы сейчас, в
+    // списке, живущем в памяти. А вот расписку сервер получит только за
+    // записанное — не записанное он отдаст ещё раз при следующем входе, и
+    // повтор не раздвоит запись: тот же звонок уже отсеется по совпадению
+    // ключа и времени.
+    if (!intake.stored) log.warn('call_missed_not_stored', { count: intake.added });
+    return intake.stored;
   });
 
   sig.onPeerUnavailable((msg) => {
