@@ -30,7 +30,10 @@ jest.mock('../../storage/local', () => ({
   },
   kvListKeysByPrefix: async () => [],
   setConversationDisappearTimer: async (peer: string, pid: number, ms: number) => {
+    // v4.32.750: запись отчитывается о себе — как и запрет копирования.
+    if (mockTimerApplyFails) return false;
     mockTimers.push({ peer, pid, ms });
+    return true;
   },
   saveChatMessage: async (row: { id: string }) => {
     mockRows.push(row.id);
@@ -41,6 +44,7 @@ const mockTimers: { peer: string; pid: number; ms: number }[] = [];
 const mockRows: string[] = [];
 const mockGuards: { pid: number; peer: string; on: boolean }[] = [];
 let mockGuardApplyFails = false;
+let mockTimerApplyFails = false;
 const mockPresence: { pid: number; peer: string; show: boolean }[] = [];
 
 jest.mock('../../identity/profileManager', () => ({
@@ -106,6 +110,7 @@ beforeEach(() => {
   mockRows.length = 0;
   mockGuards.length = 0;
   mockGuardApplyFails = false;
+  mockTimerApplyFails = false;
   mockPresence.length = 0;
 });
 
@@ -210,10 +215,9 @@ describe('проверка стоит во всех трёх обработчи�
       .join('\n');
   }
 
-  // copyGuardSync.ts проверяется отдельно: у него свежесть и сдвиг знака
-  // разнесены (v4.32.655) — см. describe ниже.
+  // copyGuardSync.ts и disappearSync.ts проверяются отдельно: у них свежесть и
+  // сдвиг знака разнесены (v4.32.655 и v4.32.750) — см. describe ниже.
   it.each([
-    ['disappearSync.ts', 'disappear'],
     ['presencePrefSync.ts', 'presence'],
   ])('%s гасит устаревший конверт до применения', (file, kind) => {
     const c = code(file);
@@ -292,6 +296,59 @@ describe('запрет копирования: знак двигается по�
     expect(c).not.toContain("acceptControlTs('copyguard'");
     // Отказ применения виден в журнале, а не только по отсутствию знака.
     expect(c).toContain("log.warn('copy_guard_apply_failed'");
+  });
+});
+
+describe('автоудаление: знак двигается после применения', () => {
+  /**
+   * v4.32.750 — та же пара, что у запрета копирования. `setConversationDisappearTimer`
+   * молчала о своём отказе (возвращала `void`), а знак двигался до неё: строка
+   * диалога не менялась, повтор того же конверта отвергался как старый, и
+   * переписка, которую собеседник считает исчезающей, оставалась у нас
+   * навсегда. Само собой это не чинится: повтора у служебного конверта нет.
+   */
+  it('не легшая запись оставляет конверт повторяемым', async () => {
+    const day = encodeDisappearEnvelope({ ms: 24 * 3600_000, ts: Date.now() - 10_000 });
+    mockTimerApplyFails = true;
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(mockTimers).toEqual([]);
+    // Знак не сдвинут — тот же конверт примут ещё раз.
+    expect(mockKv.size).toBe(0);
+    // И системной строки о непроизошедшем в переписке не появилось.
+    expect(mockRows).toEqual([]);
+
+    mockTimerApplyFails = false;
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(mockTimers.map((t) => t.ms)).toEqual([24 * 3600_000]);
+    expect(mockKv.size).toBe(1);
+    expect(mockRows).toHaveLength(1);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: удавшееся применение знак двигает — повтор не проходит', async () => {
+    const day = encodeDisappearEnvelope({ ms: 24 * 3600_000, ts: Date.now() - 10_000 });
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(mockTimers.map((t) => t.ms)).toEqual([24 * 3600_000]);
+  });
+
+  it('порядок в исходнике: свежесть → применение → сдвиг', () => {
+    const c = readFileSync(join(__dirname, '..', 'disappearSync.ts'), 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    const fresh = c.indexOf("controlTsFresh('disappear'");
+    const apply = c.indexOf('setConversationDisappearTimer(senderPubB64');
+    const commit = c.indexOf("commitControlTs('disappear'");
+    expect(fresh).toBeGreaterThan(0);
+    expect(apply).toBeGreaterThan(fresh);
+    expect(commit).toBeGreaterThan(apply);
+    expect(c).not.toContain("acceptControlTs('disappear'");
+    expect(c).toContain("log.warn('disappear_apply_failed'");
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: запись таймера отвечает булевым', () => {
+    const local = readFileSync(join(__dirname, '..', '..', 'storage', 'local.ts'), 'utf8');
+    expect(local).toContain('  disappearAfterMs: number | null\n): Promise<boolean> {');
   });
 });
 

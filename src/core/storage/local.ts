@@ -5274,7 +5274,7 @@ export async function setConversationDisappearTimer(
   contactPubB64: string,
   ownerProfileId: number,
   disappearAfterMs: number | null
-): Promise<void> {
+): Promise<boolean> {
   try {
     const d = await db();
     const setAt = disappearAfterMs != null && disappearAfterMs > 0 ? Date.now() : null;
@@ -5287,8 +5287,17 @@ export async function setConversationDisappearTimer(
       [disappearAfterMs, setAt, contactPubB64, ownerProfileId]
     );
     emitChatWrites();
+    return true;
   } catch (e) {
+    // v4.32.750: отказ называется вызывающему, а не только журналу. Раньше
+    // отсюда возвращалось `void`, и «таймер стоит» не отличалось от «записать
+    // не вышло»: у себя экран показывал новое значение, входящее решение
+    // собеседника считалось применённым и двигало водяной знак — повтор того
+    // же конверта отвергался как старый, и автоудаление не включалось уже
+    // никогда. Для функции, смысл которой — не оставлять переписку на
+    // устройстве, молчаливый отказ хуже видимого.
     log.warn('conversation_disappear_timer_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 

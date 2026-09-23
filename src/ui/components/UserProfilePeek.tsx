@@ -785,8 +785,10 @@ export function UserProfilePeek({
           ['1 неделя', 7 * 86_400_000],
         ] as const).map(([label, ms]) => ({
           text: label,
+          // v4.32.750: то же, что на экране переписки — не легшая запись не
+          // должна оставлять на экране значение, которого нет в базе.
           onPress: () => void setDisappearAndSync({ peerPubB64: pub, ms }).then((res) => {
-            setDisappearMs(ms);
+            if (res.synced || res.applied) setDisappearMs(ms);
             if (!res.synced) showError(res.warning);
           }).catch((e: unknown) => showError(userErrorText(e, 'Не удалось изменить автоудаление'))),
         })),

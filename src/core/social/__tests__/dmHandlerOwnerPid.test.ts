@@ -13,7 +13,9 @@
  */
 
 const mockSetPinned = jest.fn<Promise<void>, [string, number, string | null]>(async () => {});
-const mockSetTimer = jest.fn<Promise<void>, [string, number, number]>(async () => {});
+// v4.32.750: запись таймера отчитывается о себе — обработчик двигает водяной
+// знак только по её слову.
+const mockSetTimer = jest.fn<Promise<boolean>, [string, number, number]>(async () => true);
 const mockSaveMsg = jest.fn<Promise<void>, [Record<string, unknown>]>(async () => {});
 const mockTexts = jest.fn<Promise<Map<string, string>>, [string[], string, number]>(
   async (ids) => new Map(ids.map((id) => [id, 'текст']))

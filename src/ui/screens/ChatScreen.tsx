@@ -3434,8 +3434,12 @@ function ChatThreadView({
                           // проверяется. Если конверт до собеседника не доехал,
                           // человек узнаёт об этом сразу, а не по чужой переписке,
                           // которая никуда не делась.
+                          // v4.32.750: значение на экране обновляется только
+                          // когда таймер действительно встал у себя. Отказ
+                          // записи оставлял бы выбранное значение на экране —
+                          // и человек считал бы, что автоудаление работает.
                           onPress: () => void setDisappearAndSync({ peerPubB64: peerB64, ms }).then((res) => {
-                            setDisappearMs(ms);
+                            if (res.synced || res.applied) setDisappearMs(ms);
                             if (!res.synced) showError(res.warning);
                           }),
                         })),

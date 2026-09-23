@@ -46,9 +46,12 @@ const warnBody = (): string => bodyOf(src, 'function disappearWarning(');
 
 describe('v4.32.448 — итог рассылки таймера обязан быть назван', () => {
   it('DisappearSyncResult — размеченное объединение, отказ всегда с текстом', () => {
-    expect(src).toContain(
-      'export type DisappearSyncResult = { synced: true } | { synced: false; warning: string };'
-    );
+    // v4.32.750: у отказа появилось поле `applied` — встал ли таймер хотя бы у
+    // себя. Раньше отказ был только один (собеседник не узнал), а не легшая
+    // запись в базу молчала вовсе.
+    expect(src).toContain('export type DisappearSyncResult =');
+    expect(src).toContain('  | { synced: true }');
+    expect(src).toContain('  | { synced: false; applied: boolean; warning: string };');
     expect(src).toContain('}): Promise<DisappearSyncResult> {');
     // Пустого выхода не осталось: раньше вся функция была Promise<void>.
     expect(src).not.toContain('  ms: number;\n}): Promise<void> {');
@@ -60,8 +63,16 @@ describe('v4.32.448 — итог рассылки таймера обязан б
     expect(b).not.toBe('');
     const mute = codeLines(b).filter((l) => l.trim() === 'return;');
     expect(mute).toEqual([]);
-    expect(b).toContain('return { synced: false, warning: disappearWarning(ms, delivery.reason) };');
+    expect(b).toContain(
+      'return { synced: false, applied: true, warning: disappearWarning(ms, delivery.reason) };');
     expect(b).toContain('return { synced: true };');
+    // v4.32.750: и третий выход — запись не легла даже у себя. Отправлять в
+    // этом случае нечего: конверт объявлял бы состояние, которого у нас нет.
+    expect(b).toContain(
+      'return { synced: false, applied: false, warning: disappearLocalWarning(ms) };');
+    const failAt = b.indexOf("return { synced: false, applied: false");
+    expect(failAt).toBeGreaterThan(0);
+    expect(failAt).toBeLessThan(b.indexOf('fanoutControlEnvelope('));
   });
 
   it('таймер ставится у себя до отправки — отказ рассылки его не отменяет', () => {
@@ -106,8 +117,12 @@ describe('v4.32.448 — экран проговаривает расхожден
     expect(chatSrc).not.toContain(
       'setDisappearAndSync({ peerPubB64: peerB64, ms }).then(() => setDisappearMs(ms))'
     );
-    // Значение на экране обновляется в любом случае: у себя таймер уже стоит.
-    expect(chatSrc).toContain('setDisappearMs(ms);');
+    // v4.32.750: значение на экране обновляется, только когда таймер
+    // действительно встал у себя. Пока отказ был один (собеседник не узнал),
+    // «в любом случае» было правдой; теперь отказать может и запись в базу, и
+    // оставленное на экране значение было бы обещанием пустого места.
+    expect(chatSrc).toContain('if (res.synced || res.applied) setDisappearMs(ms);');
+    expect(chatSrc).not.toContain('            setDisappearMs(ms);\n');
   });
 
   it('обещание в модалке осталось на месте — именно его и проверяем', () => {

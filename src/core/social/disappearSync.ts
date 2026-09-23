@@ -14,7 +14,7 @@
  * Плюс обе стороны видят системную строку «кто и что включил».
  */
 import { setConversationDisappearTimer, saveChatMessage } from '../storage/local';
-import { acceptControlTs } from './controlWatermark';
+import { commitControlTs, controlTsFresh } from './controlWatermark';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
 import { log } from '../logger';
@@ -85,8 +85,14 @@ async function insertSysRow(params: {
  * устройств, и пишет, исходя из этого.
  *
  * Повторной отправки у служебного конверта нет — «не ушло» значит «не уйдёт».
+ *
+ * v4.32.750: у отказа появилось поле `applied` — встал ли таймер хотя бы у
+ * себя. Запись в базу тоже умеет не лечь, и тогда неправда получается вдвое
+ * больше: таймера нет нигде, а экран показывает выбранное значение.
  */
-export type DisappearSyncResult = { synced: true } | { synced: false; warning: string };
+export type DisappearSyncResult =
+  | { synced: true }
+  | { synced: false; applied: boolean; warning: string };
 
 /**
  * Что сказать, когда решение о таймере до собеседника не доехало. Формулировка
@@ -103,6 +109,16 @@ function disappearWarning(ms: number, reason: FanoutUndelivered): string {
 }
 
 /**
+ * Что сказать, когда таймер не встал даже у себя (v4.32.750). Собеседнику в
+ * этом случае не отправляют ничего: конверт объявлял бы состояние, которого у
+ * нас нет, — у него переписка стиралась бы, у нас копилась.
+ */
+function disappearLocalWarning(ms: number): string {
+  const what = ms > 0 ? 'Автоудаление не включилось' : 'Автоудаление не выключилось';
+  return `${what}: не удалось сохранить настройку на этом устройстве. Попробуйте ещё раз.`;
+}
+
+/**
  * Ставит таймер локально и сообщает решение собеседнику.
  * `ms` — 0 или «Выкл»; значение уже должно быть из набора экрана чата.
  */
@@ -114,7 +130,14 @@ export async function setDisappearAndSync(params: {
   const ms = Number.isFinite(params.ms) && params.ms > 0 ? Math.round(params.ms) : 0;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
   const ts = Date.now();
-  await setConversationDisappearTimer(peerPubB64, pid, ms);
+  // v4.32.750: запись у себя тоже умеет не лечь, и раньше её ответ никто не
+  // смотрел. Тогда дальше шли обе неправды сразу: системная строка «Вы
+  // включили исчезающие сообщения» в переписке и конверт собеседнику — при
+  // том, что у нас таймера нет. Собеседник бы стирал, мы бы копили.
+  if (!(await setConversationDisappearTimer(peerPubB64, pid, ms))) {
+    log.warn('disappear_local_write_failed', { to: peerPubB64.slice(0, 12), ms });
+    return { synced: false, applied: false, warning: disappearLocalWarning(ms) };
+  }
   await insertSysRow({ peerPubB64, ownerProfileId: pid, ms, key: ts, createdAt: ts, byMe: true });
 
   // v4.32.448: рассылка — общая воронка служебных конвертов, и её отказ
@@ -125,7 +148,7 @@ export async function setDisappearAndSync(params: {
     peerPubB64,
   });
   if (!delivery.sent) {
-    return { synced: false, warning: disappearWarning(ms, delivery.reason) };
+    return { synced: false, applied: true, warning: disappearWarning(ms, delivery.reason) };
   }
   return { synced: true };
 }
@@ -149,10 +172,21 @@ export async function handleIncomingDisappear(
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await acceptControlTs('disappear', senderPubB64, pid, env.ts))) return true;
+  if (!(await controlTsFresh('disappear', senderPubB64, pid, env.ts))) return true;
   // Разговор определяется ПОДПИСАННЫМ отправителем DM: иначе любой контакт
   // включал бы автоудаление в чужой переписке.
-  await setConversationDisappearTimer(senderPubB64, pid, env.ms);
+  const applied = await setConversationDisappearTimer(senderPubB64, pid, env.ms);
+  // v4.32.750: знак двигаем ПОСЛЕ применения — та же пара, что у запрета
+  // копирования (v4.32.655) и в группе. Сдвиг до него делал отказ вечным:
+  // запись могла не лечь, а повтор того же конверта отвергался уже как старый.
+  // Само собой это не чинилось ничем: повтора у служебного конверта нет,
+  // отправитель второй раз его не шлёт, а ответить ему нечем — и переписка,
+  // которую собеседник считает исчезающей, оставалась у нас навсегда.
+  if (!applied) {
+    log.warn('disappear_apply_failed', { from: senderPubB64.slice(0, 12), ms: env.ms });
+    return true;
+  }
+  await commitControlTs('disappear', senderPubB64, pid, env.ts);
   // Место в ленте — по своему времени: по чужому ts строка легла бы куда
   // угодно, в том числе в будущее. А id считается от ts отправителя, чтобы
   // повторная доставка того же конверта не добавляла вторую строку.
