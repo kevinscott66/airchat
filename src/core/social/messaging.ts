@@ -1220,8 +1220,11 @@ export class MessagingService {
 
     // Group join request — store as pending join request for admin, skip DM storage
     if (textPayload.text?.startsWith(GROUP_JOIN_REQUEST_PREFIX)) {
-      if (inbound) await handleIncomingGroupJoinRequest(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return 'consumed';
+      // v4.32.738: ответ обработчика — наш ответ. Отказ базы у него значит
+      // «перезапросить»: заявка не появится у администратора больше никогда,
+      // а заявителю уже сказано «Запрос отправлен».
+      if (!inbound) return 'consumed';
+      return await handleIncomingGroupJoinRequest(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
     }
 
     // v4.32.231: управляющий конверт группы (бан/кик/роль/мета) — применяем к

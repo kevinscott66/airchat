@@ -173,11 +173,20 @@ describe('форма исходников — v4.32.507', () => {
     // `return false` значит «это не мой конверт» и отправляет служебный текст
     // в переписку как обычное сообщение. Он допустим ровно один раз — в
     // проверке префикса.
-    for (const fn of ['handleIncomingGroupReadReceipt', 'handleIncomingGroupJoinRequest']) {
-      const at = group.indexOf(`export async function ${fn}`);
-      expect(at).toBeGreaterThan(0);
-      const body = group.slice(at, group.indexOf('\n}\n', at));
-      expect(body.match(/return false;/g)).toHaveLength(1);
-    }
+    const at = group.indexOf('export async function handleIncomingGroupReadReceipt');
+    expect(at).toBeGreaterThan(0);
+    const body = group.slice(at, group.indexOf('\n}\n', at));
+    expect(body.match(/return false;/g)).toHaveLength(1);
+
+    // v4.32.738: у заявки на вступление такого выхода не осталось вовсе. Она
+    // отвечает вердиктом, и оба его слова — `'consumed'` и `'deferred'` —
+    // значат «конверт мой». Правило не ослабло, а стало строже: вернуть
+    // служебный текст в переписку ей теперь нечем. Проверка префикса на месте
+    // страховкой — приёмник проверяет его до вызова.
+    const jr = group.indexOf('export async function handleIncomingGroupJoinRequest');
+    expect(jr).toBeGreaterThan(0);
+    const jrBody = group.slice(jr, group.indexOf('\n}\n', jr));
+    expect(jrBody.match(/return false;/g)).toBeNull();
+    expect(jrBody).toContain("if (!text.startsWith(GROUP_JOIN_REQUEST_PREFIX)) return 'consumed';");
   });
 });

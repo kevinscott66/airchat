@@ -53,6 +53,11 @@ jest.mock('../../storage/local', () => ({
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
+  // v4.32.738: приём заявки спрашивает состав различающей формой — она отвечает
+  // null, когда база не прочиталась, и не выдаёт сбой за пустую группу. Здесь
+  // база читается всегда, поэтому ответ тот же, что у соседа.
+  listGroupMembersRead: jest.fn(async (gid: string, pid: number) =>
+    (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   getGroupMessageTarget: jest.fn(async () => null),
   insertGroupMessage: jest.fn(async () => true),

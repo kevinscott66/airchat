@@ -804,36 +804,49 @@ async function joinRequestIntake(requesterPubB64: string, pid: number): Promise<
 }
 
 /**
- * Handle an incoming join request sent to us as group admin.
- * Returns true if handled so messaging layer skips normal DM storage.
+ * Заявка на вступление, пришедшая нам как администратору группы.
+ *
+ * v4.32.738: отвечает словом, а не «да». Заявка — это одна строка в базе у
+ * администратора и бесконечное ожидание у заявителя: ответить ему нечем,
+ * повторов у конверта нет, а у себя он уже увидел «Запрос на вступление
+ * отправлен администратору». Раньше запись шла `await` без чтения ответа, а
+ * любой отказ базы ловился в `log.debug` и наружу уходило «разобрано»: строка
+ * не появлялась ни в чьём списке, и не узнавал об этом никто.
+ *
+ * Все выходы, кроме отказа базы, — `'consumed'`: конверт наш при любом исходе
+ * (иначе служебный текст лёг бы в переписку обычным сообщением), и отказ по
+ * делу — бан, не-контакт, отозванная ссылка, не наша группа — повтором не
+ * исправляется.
  */
-export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRecipient, senderPubB64?: string): Promise<boolean> {
-  if (!text.startsWith(GROUP_JOIN_REQUEST_PREFIX)) return false;
+export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRecipient, senderPubB64?: string): Promise<EnvelopeIntake> {
+  // Позвали не по адресу: приёмник проверяет префикс до вызова. Отложить
+  // такой конверт не за что — перезапрос вернёт ровно его же.
+  if (!text.startsWith(GROUP_JOIN_REQUEST_PREFIX)) return 'consumed';
   // v4.32.197 (Round-27 #2): byte-cap before parse; no legitimate join-request
   // ever approaches 32 KB.
   // v4.32.507: потолок и разбор — через общий readEnvelopeBody (см. соседнюю
   // отметку о прочтении): своя копия не отсеивала массив и примитив.
   const env = readEnvelopeBody<GroupJoinRequestEnvelope>(text, GROUP_JOIN_REQUEST_PREFIX, 32 * 1024);
-  if (!env) return true;
+  if (!env) return 'consumed';
   try {
     // Конверт наш при любом исходе: false отдал бы служебный текст в
     // переписку как обычное сообщение.
-    if (!env.groupId || !env.requesterPubB64 || !env.requesterName) return true;
+    if (!env.groupId || !env.requesterPubB64 || !env.requesterName) return 'consumed';
     // v4.32.188 (Round-18 #6): cap untrusted string fields so a malicious
     // requester can't bloat SQLite with a multi-MB message or freeze the
     // admin UI rendering an emoji-bomb name.
-    if (typeof env.groupId !== 'string' || env.groupId.length > 128) return true;
-    if (!isPubKeyB64(env.requesterPubB64)) return true;
+    if (typeof env.groupId !== 'string' || env.groupId.length > 128) return 'consumed';
+    if (!isPubKeyB64(env.requesterPubB64)) return 'consumed';
     // v4.32.239: имя заявителя админ видит не только в списке заявок — при
     // одобрении оно подставляется в системную строку «X вступил(а) в группу»
     // (GroupsScreen). Без вычистки control-символов перевод строки внутри
     // имени дорисовывал к ней вторую строку от имени приложения, а прислать
     // заявку может кто угодно по ссылке-приглашению.
     const requesterName = sanitizeDisplayName(env.requesterName);
-    if (!requesterName) return true;
+    if (!requesterName) return 'consumed';
     env.requesterName = requesterName;
     if (env.message != null) {
-      if (typeof env.message !== 'string') return true;
+      if (typeof env.message !== 'string') return 'consumed';
       env.message = env.message.slice(0, 512);
     }
     // v4.32.176: anti-spoof — requesterPubB64 должен совпадать с DM-отправителем,
@@ -844,14 +857,14 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
         env: env.requesterPubB64.slice(0, 12),
         signer: senderPubB64.slice(0, 12),
       });
-      return true;
+      return 'consumed';
     }
     const pid = rcpt.pid;
     // Only store if we actually admin this group
     // v4.32.511: см. приём сообщения — архив не делает группу чужой, иначе
     // администратор терял заявки на вступление, пока группа скрыта.
     const grp = await getGroup(env.groupId, pid);
-    if (!grp) return true; // not our group — consume silently
+    if (!grp) return 'consumed'; // not our group — consume silently
     /**
      * v4.32.512: «администратор ли я» спрашивается у group_members — той же
      * таблицы, по которой нас судят остальные участники. Колонку
@@ -863,8 +876,16 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
      * Список участников всё равно читается ниже (проверка «знаком ли
      * заявитель»), так что запросов не прибавилось — он просто поднят выше.
      */
-    const grpMembers = await listGroupMembers(env.groupId, pid);
-    if (!isAdminRole(ownGroupRole(grpMembers, rcpt.myPub, !!grp.isAdmin))) return true;
+    // v4.32.738: состав различающим чтением. Прежнее отдавало на сбое пустой
+    // список, и `ownGroupRole` сползал на запасной ответ `groups.is_admin` —
+    // ту самую колонку, из-за которой правило и переписывали: повышенный
+    // администратор в ней не отмечен, и заявка отбрасывалась молча.
+    const grpMembers = await listGroupMembersRead(env.groupId, pid);
+    if (!grpMembers) {
+      log.warn('group_join_request_members_unreadable', { groupId: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
+    if (!isAdminRole(ownGroupRole(grpMembers, rcpt.myPub, !!grp.isAdmin))) return 'consumed';
     /**
      * v4.32.171: фильтр «Добавление в группы — только контакты» — чтобы
      * администратор не разбирал спам от незнакомцев.
@@ -896,7 +917,7 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
       )
     ) {
       log.info('group_join_request_revoked_link', { from: env.requesterPubB64.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     const intake = await joinRequestIntake(env.requesterPubB64, pid);
     if (!acceptJoinRequest({ knownRole: known?.role, ...intake })) {
@@ -904,14 +925,29 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
         from: env.requesterPubB64.slice(0, 8),
         reason: known?.role === 'banned' ? 'banned' : 'non_contact',
       });
-      return true;
+      return 'consumed';
     }
-    await insertGroupJoinRequest(env.groupId, env.requesterPubB64, env.requesterName, env.message ?? null, pid);
-    log.info('group_join_request_received', { groupId: env.groupId.slice(0, 8), from: env.requesterPubB64.slice(0, 8) });
+    // v4.32.738: ответ записи читается — как у соседней заявки по конверту
+    // 'join' (см. `const queued = await insertGroupJoinRequest` ниже). `created`
+    // здесь только для журнала: повторное открытие ссылки обновляет ту же
+    // строку, и это не беда, а нормальный ход.
+    const queued = await insertGroupJoinRequest(env.groupId, env.requesterPubB64, env.requesterName, env.message ?? null, pid);
+    log.info('group_join_request_received', {
+      groupId: env.groupId.slice(0, 8),
+      from: env.requesterPubB64.slice(0, 8),
+      created: queued.created,
+    });
   } catch (e) {
-    log.debug('group_join_request_parse_failed', { err: e instanceof Error ? e.message : String(e) });
+    // v4.32.738: сюда попадает только отказ базы — разбор конверта закончился
+    // выше, до try, а проверки внутри не бросают. Значит это «сейчас не
+    // смогли»: заявку надо перезапросить, а не считать разобранной. Прежде
+    // отказ уходил в log.debug и наружу шло «разобрано» — строка не появлялась
+    // у администратора никогда, а заявитель ждал ответа, которого не будет:
+    // ответить ему нечем, повторов у конверта нет.
+    log.warn('group_join_request_store_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
-  return true;
+  return 'consumed';
 }
 
 // ─── Group control envelopes (синхронизация ролей и настроек) ────────────────
