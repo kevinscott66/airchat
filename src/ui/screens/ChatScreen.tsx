@@ -1791,6 +1791,7 @@ function ChatThreadView({
         const peerDid = didFromPubB64(peerB64);
         if (!peerDid) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
         let sentAny = false;
+        let refusedCount = 0;
         let skippedTooLarge = 0;
         for (const va of videoAssets) {
           const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
@@ -1804,10 +1805,15 @@ function ChatThreadView({
             continue;
           }
           const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, up.cid);
-          await svc.sendMessage(peerB64, docText);
+          // v4.32.726: `sentAny` ставилось независимо от ответа, а отказ
+          // отправки не бросает. Загруженное видео не попадало ни в переписку,
+          // ни в единственный баннер о неудаче — молчание было полным.
+          const res = await svc.sendMessageResult(peerB64, docText);
+          if (res.outcome === 'refused') { refusedCount++; continue; }
           sentAny = true;
         }
-        if (skippedTooLarge > 0) showError(`Видео больше ${formatLimit(videoMaxBytes)} отправить нельзя (пропущено: ${skippedTooLarge})`);
+        if (refusedCount > 0) showError(`Отправить не удалось (видео: ${refusedCount}). Попробуйте ещё раз`);
+        else if (skippedTooLarge > 0) showError(`Видео больше ${formatLimit(videoMaxBytes)} отправить нельзя (пропущено: ${skippedTooLarge})`);
         else if (!sentAny) showError('Не удалось загрузить видео');
         void appendNewMessages();
       } catch (e) {
@@ -1881,7 +1887,10 @@ function ChatThreadView({
     const locText = makeLocationText(read.coords.lat, read.coords.lon, label);
     setSending(true);
     try {
-      await svc.sendMessage(peerB64, locText);
+      // v4.32.726: отказ отправки не бросает — и точка на карте не уходила
+      // никуда молча, при обычном виде экрана. См. sendMessageResult.
+      const res = await svc.sendMessageResult(peerB64, locText);
+      if (res.outcome === 'refused' && isMountedRef.current) showError('Геолокация не отправлена. Попробуйте ещё раз');
     } catch (e) {
       log.error('chat_send_location_failed', { err: rawErrorText(e) });
       if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить геолокацию'));
@@ -1962,7 +1971,10 @@ function ChatThreadView({
     // молча — собеседник не получал ничего, а отправитель видел обычный
     // разблокированный ввод и был уверен, что карточка ушла.
     try {
-      await svc.sendMessage(peerB64, cardText);
+      // v4.32.726: та же дыра, что закрывали в v4.32.543, но со стороны тихого
+      // отказа: исключения нет, карточки у собеседника тоже.
+      const res = await svc.sendMessageResult(peerB64, cardText);
+      if (res.outcome === 'refused' && isMountedRef.current) showError('Карточка контакта не отправлена. Попробуйте ещё раз');
     } catch (e) {
       log.error('chat_share_contact_failed', { err: rawErrorText(e) });
       if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить карточку контакта'));
@@ -2048,6 +2060,7 @@ function ChatThreadView({
         const { formatLimit, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
         const peerDid = publicKeyToDidKey(new Uint8Array(Buffer.from(peerB64, 'base64')));
         let sentAny = false;
+        let refusedCount = 0;
         let limitBytes = MAX_BLOB_BYTES;
         for (const va of videoAssets) {
           try {
@@ -2062,11 +2075,15 @@ function ChatThreadView({
             }
             const name = va.uri.split('/').pop() ?? 'video.mp4';
             const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? 0, up.cid);
-            await svc.sendMessage(peerB64, docText);
+            // v4.32.726: см. тот же цикл выше — отказ отправки молчит, а
+            // `sentAny` о нём не спрашивал.
+            const res = await svc.sendMessageResult(peerB64, docText);
+            if (res.outcome === 'refused') { refusedCount++; continue; }
             sentAny = true;
           } catch (e) { log.warn('attachsheet_video_send_failed', { err: rawErrorText(e) }); }
         }
-        if (tooLargeCount > 0) showError(`Видео больше ${formatLimit(limitBytes)} отправить нельзя (пропущено: ${tooLargeCount})`);
+        if (refusedCount > 0) showError(`Отправить не удалось (видео: ${refusedCount}). Попробуйте ещё раз`);
+        else if (tooLargeCount > 0) showError(`Видео больше ${formatLimit(limitBytes)} отправить нельзя (пропущено: ${tooLargeCount})`);
         else if (!sentAny) showError('Не удалось загрузить видео');
         void appendNewMessages();
       } finally { setSending(false); }
@@ -2121,7 +2138,10 @@ function ChatThreadView({
         return;
       }
       const docText = makeDocText(asset.name ?? 'document', asset.size ?? up.sizeBytes ?? 0, up.cid);
-      await svc.sendMessage(peerB64, docText);
+      // v4.32.726: файл уже загружен, а отказ отправки молчит — до этой версии
+      // документ не появлялся ни в переписке, ни в единственном баннере.
+      const res = await svc.sendMessageResult(peerB64, docText);
+      if (res.outcome === 'refused') { showError('Документ не отправлен. Попробуйте ещё раз'); return; }
       void appendNewMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить документ'));
@@ -2153,7 +2173,18 @@ function ChatThreadView({
         try {
           const svc = getMessagingService();
           if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
-          await measurePerformance('chat_send_media', () => svc.sendMessage(peerB64, text, uris));
+          const res = await measurePerformance('chat_send_media', () => svc.sendMessageResult(peerB64, text, uris));
+          // v4.32.726: то же, что и у текста ниже, — отказ отправки не бросает.
+          // Здесь вместе с подписью пропадали и уже загруженные вложения:
+          // ссылок на них не оставалось нигде.
+          if (res.outcome === 'refused') {
+            setMsg(text);
+            msgRef.current = text;
+            setOptimisticOutgoing(null);
+            log.warn('chat_send_media_refused');
+            showError('Отправить не удалось. Попробуйте ещё раз');
+            return;
+          }
           void appendNewMessages();
         } catch (e) {
           setMsg(text);
@@ -2251,7 +2282,13 @@ function ChatThreadView({
           const blob = await uploadEncryptedBlob(result.uri, 'audio/m4a', peerDid);
           if (!blob) throw new Error('Голосовое не загрузилось. Проверьте соединение и повторите.');
           const voiceText = makeVoiceText(result.uri, result.durationMs, blob);
-          await svc.sendMessage(peerB64, voiceText);
+          // v4.32.726: отказ отправки не бросает (заблокированный контакт,
+          // часовой лимит, нет общего ключа) — и запись пропадала молча: строки
+          // в переписке не появлялось, заглушка снималась, человек оставался
+          // уверен, что голосовое ушло. Отказ здесь равен неудаче загрузки
+          // строкой выше, поэтому и обрабатывается одинаково.
+          const res = await svc.sendMessageResult(peerB64, voiceText);
+          if (res.outcome === 'refused') throw new Error('Голосовое не отправлено. Запишите заново.');
           // Сначала настоящая строка из базы, только потом снимается заглушка:
           // иначе между её снятием и приходом строки пузырь моргает. Обычное
           // сличение по тексту (см. appendNewMessages) здесь не сработает —
@@ -2297,7 +2334,9 @@ function ChatThreadView({
       } else {
         const svc = getMessagingService();
         if (!svc) { showError(NOT_READY_TEXT); return; }
-        await svc.sendMessage(peerB64, gifText);
+        // v4.32.726: см. остальные отправки — отказ не бросает.
+        const res = await svc.sendMessageResult(peerB64, gifText);
+        if (res.outcome === 'refused') { showError('GIF не отправлен. Попробуйте ещё раз'); return; }
         void appendNewMessages();
         scrollToNewest();
       }
@@ -2438,9 +2477,30 @@ function ChatThreadView({
         try {
           const svc = getMessagingService();
           if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
-          await measurePerformance('chat_send_text', () =>
-            svc.sendMessage(peerB64, text, undefined, replyRef?.id, truncateReplyPreview(replyRef?.text) ?? undefined)
+          const res = await measurePerformance('chat_send_text', () =>
+            svc.sendMessageResult(peerB64, text, undefined, replyRef?.id, truncateReplyPreview(replyRef?.text) ?? undefined)
           );
+          /**
+           * v4.32.726: поле, ответ и черновик очищены ДО отправки — так же, как
+           * у правки (v4.32.620), и по той же причине. Значит возвращать их
+           * надо на каждом отказе, а не только на брошенном исключении: отправка
+           * отвечает отказом молча — заблокированный контакт, часовой лимит, нет
+           * общего ключа. Набранное в этот момент не существует больше нигде, и
+           * до этой версии оно просто пропадало, а предварительный пузырь
+           * оставался висеть «отправляется» навсегда.
+           *
+           * Сохранённую строку (`stored`) возвращать в поле нельзя — она уже в
+           * переписке, с пометкой «не отправлено» и кнопкой «Повторить».
+           */
+          if (res.outcome === 'refused') {
+            setMsg(text);
+            msgRef.current = text;
+            setReplyTo(replyRef);
+            setOptimisticOutgoing(null);
+            log.warn('chat_send_refused');
+            showError('Отправить не удалось. Текст вернулся в поле ввода');
+            return;
+          }
           void appendNewMessages();
         } catch (e) {
           const errMsg = rawErrorText(e);

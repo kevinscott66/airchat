@@ -261,11 +261,13 @@ describe('повод для правки жив', () => {
 
   it('два отказа sendMessage случаются ДО того, как заведена строка переписки', () => {
     const src = codeOnly(MESSAGING());
-    const sig = src.indexOf(`  async sendMessage(`);
+    // v4.32.726: сама отправка переехала в sendMessageResult, а sendMessage
+    // остался обёрткой над ней. Порядок отказов от этого не изменился.
+    const sig = src.indexOf(`  async sendMessageResult(`);
     expect(sig).toBeGreaterThan(-1);
     const body = src.slice(sig);
     const noSession = body.indexOf(`code: 'NO_SESSION_DM',`);
-    const noDid = body.indexOf('if (!peerDid) return null;');
+    const noDid = body.indexOf("if (!peerDid) return { outcome: 'refused', cid: null };");
     const mid = body.indexOf('const messageId = uuidv4();');
     expect(noSession).toBeGreaterThan(-1);
     expect(noDid).toBeGreaterThan(noSession);

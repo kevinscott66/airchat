@@ -102,13 +102,17 @@ describe('отказ отправки отложенного личного со
 });
 
 describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: null у sendMessage — окончательный отказ', () => {
-  const SIG = `  async sendMessage(
+  // v4.32.726: отправка переехала в sendMessageResult — он называет исход
+  // словом, а sendMessage остался обёрткой, отдающей только ссылку. Для
+  // отложенной отправки это ничего не поменяло: null у неё по-прежнему значит
+  // «не ушло», и разбирать его на два случая она не умеет.
+  const SIG = `  async sendMessageResult(
     contactPubB64: string,
     text: string,
     mediaUris?: string[],
     replyToId?: string,
     replyToPreview?: string
-  ): Promise<string | null> {`;
+  ): Promise<DmSendResult> {`;
 
   const body = () => {
     const m = MESSAGING();
@@ -120,7 +124,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: null у sendMessage — око�
   it('нет общего ключа и негодный peerDid возвращают null ДО заведения строки', () => {
     const b = body();
     const noSession = b.indexOf("code: 'NO_SESSION_DM',");
-    const noPeer = b.indexOf('if (!peerDid) return null;');
+    const noPeer = b.indexOf("if (!peerDid) return { outcome: 'refused', cid: null };");
     const idLine = b.indexOf('const messageId = uuidv4();');
     expect(noSession).toBeGreaterThan(0);
     expect(noPeer).toBeGreaterThan(noSession);

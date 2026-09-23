@@ -84,6 +84,17 @@ import { recordPeerActivityFor } from './presenceService';
 // называются вместе, см. `twoSidedEdit.ts`.
 export type { PeerDelivery, TwoSidedOutcome } from './twoSidedEdit';
 
+/**
+ * Что стало с набранным после отправки (v4.32.726).
+ *
+ * `sent` — ушло, ссылка есть. `stored` — не ушло, но строка сохранена в
+ * переписке со статусом «не отправлено»: она видна и её можно повторить.
+ * `refused` — отправка отклонена до того, как что-либо было записано: текста
+ * нет нигде, кроме поля ввода. Подробнее — в `sendMessageResult`.
+ */
+export type DmSendOutcome = 'sent' | 'stored' | 'refused';
+export type DmSendResult = { outcome: DmSendOutcome; cid: string | null };
+
 type InnerPayload =
   | { kind?: 'text'; text: string; mediaCids?: string[]; replyToId?: string; replyToPreview?: string }
   | { kind: 'delete'; targetMessageId: string }
@@ -1541,18 +1552,38 @@ export class MessagingService {
     return messageId;
   }
 
-  async sendMessage(
+  /**
+   * Отправить и сказать, что стало с набранным (v4.32.726).
+   *
+   * `sendMessage` отвечает `string | null`, и `null` у него значит две разные
+   * вещи. Либо строка легла в переписку со статусом «не отправлено» — маршрута
+   * не нашлось, но текст на месте, его видно и его можно повторить. Либо до
+   * записи дело не дошло вовсе: контакт заблокирован, исчерпан часовой лимит,
+   * нет общего ключа, негодный ключ собеседника. Тогда набранного не остаётся
+   * нигде, кроме поля ввода, — а экран это поле очищает до отправки.
+   *
+   * Разница видна только здесь, внутри. Снаружи её не вычислить, а перепутать
+   * дорого: вернуть текст в поле там, где строка уже сохранена, значит написать
+   * его дважды. Поэтому ответ называет исход словом, а `sendMessage` остаётся
+   * прежней обёрткой для тех, кому довольно ссылки.
+   *
+   * Соседнее правило то же самое и старше: отказ загрузки вложений бросает
+   * исключение именно потому, что тихий null «оставил бы пузырь висеть, а
+   * подпись — пропасть» (см. decideMediaSend ниже).
+   */
+  async sendMessageResult(
     contactPubB64: string,
     text: string,
     mediaUris?: string[],
     replyToId?: string,
     replyToPreview?: string
-  ): Promise<string | null> {
+  ): Promise<DmSendResult> {
     // v4.32.560: своя переписка не проходит ни одной проверки ниже — себя не
     // блокируют, себе не считают часовой лимит и с собой не договариваются о
     // ключе. См. saveToSelfChat.
     if (this.isMyOwnKey(contactPubB64)) {
-      return this.saveToSelfChat(contactPubB64, text, mediaUris, replyToId, replyToPreview);
+      const selfCid = await this.saveToSelfChat(contactPubB64, text, mediaUris, replyToId, replyToPreview);
+      return { outcome: selfCid ? 'sent' : 'refused', cid: selfCid };
     }
     // v4.32.318: блок-лист поднят с диска — иначе на первых секундах после
     // запуска обе проверки ниже отвечали бы «не заблокирован» кому угодно.
@@ -1568,7 +1599,7 @@ export class MessagingService {
         severity: ErrorSeverity.ERROR,
         retryable: false,
       });
-      return null;
+      return { outcome: 'refused', cid: null };
     }
     // v4.32.329: служебный конверт (реакция, галочка о прочтении, голос в
     // опросе, рассылка группы) тратит свой запас, а не полусотню человеческих
@@ -1580,7 +1611,7 @@ export class MessagingService {
         // Без ErrorHandler: человек этого конверта не отправлял и баннер
         // «слишком много сообщений» ему ни о чём не скажет.
         log.warn('dm_send_control_rate_limited', { to: contactPubB64.slice(0, 12) });
-        return null;
+        return { outcome: 'refused', cid: null };
       }
     } else if (!rateLimiter.canSendMessage(contactPubB64)) {
       // v4.32.318: без ключа контакта в context — оттуда он уходит в Sentry
@@ -1594,19 +1625,19 @@ export class MessagingService {
         severity: ErrorSeverity.ERROR,
         retryable: false,
       });
-      return null;
+      return { outcome: 'refused', cid: null };
     }
     const t0 = Date.now();
-    return new Promise<string | null>((resolve, reject) => {
+    return new Promise<DmSendResult>((resolve, reject) => {
       setTimeout(() => {
         void (async () => {
           try {
-            const cid = await this.sendMessageWork(contactPubB64, text, mediaUris, replyToId, replyToPreview);
+            const res = await this.sendMessageWork(contactPubB64, text, mediaUris, replyToId, replyToPreview);
             const ms = Date.now() - t0;
             if (ms > 3000) {
               log.info('perf_slow', { op: 'sendMessage', ms });
             }
-            resolve(cid);
+            resolve(res);
           } catch (e) {
             reject(e);
           }
@@ -1615,13 +1646,25 @@ export class MessagingService {
     });
   }
 
-  private async sendMessageWork(
+  /** Та же отправка для тех, кому довольно ссылки; см. sendMessageResult. */
+  async sendMessage(
     contactPubB64: string,
     text: string,
     mediaUris?: string[],
     replyToId?: string,
     replyToPreview?: string
   ): Promise<string | null> {
+    const res = await this.sendMessageResult(contactPubB64, text, mediaUris, replyToId, replyToPreview);
+    return res.cid;
+  }
+
+  private async sendMessageWork(
+    contactPubB64: string,
+    text: string,
+    mediaUris?: string[],
+    replyToId?: string,
+    replyToPreview?: string
+  ): Promise<DmSendResult> {
     await requireOnlineWrite(await localPathTo(contactPubB64));
     await measureAsync('dm_startListening', () => this.startListening());
     // v4.32.464: номер профиля берётся один раз в начале работы и дальше
@@ -1665,11 +1708,13 @@ export class MessagingService {
           severity: ErrorSeverity.ERROR,
           retryable: false,
         });
-        return null;
+        // v4.32.726: строки в переписке ещё нет и не будет — набранное живёт
+        // только в поле ввода экрана. Исход зовётся отказом именно поэтому.
+        return { outcome: 'refused', cid: null };
       }
     }
     const peerDid = didFromPubB64(contactPubB64);
-    if (!peerDid) return null;
+    if (!peerDid) return { outcome: 'refused', cid: null };
     const myDid = publicKeyToDidKey(this.pair.publicKey);
     const pairKey = dmPairKey(myDid, peerDid);
     const tips = await measureAsync('dm_conversation_tips', () => getLocalConversationTips());
@@ -1818,12 +1863,17 @@ export class MessagingService {
         // properly. Consistent with receive-side isPlainCid guard.
         touchConv();
         void republishProfileFromKv(this.pair);
-        return fallbackRef;
+        return { outcome: 'sent', cid: fallbackRef };
       }
       log.info('dm_send_no_online_route', { peerDid, messageId });
       await saveRow({ ...pending, status: 'failed' });
       touchConv();
-      return null;
+      // v4.32.726: маршрута нет, но строка сохранена — её видно в переписке и
+      // её можно повторить. Возвращать текст в поле ввода тут нельзя: он
+      // окажется написан дважды. Служебный конверт и живая геолокация через
+      // saveRow не проходят (см. control/callerOwnsRow), у них не сохранено
+      // ничего.
+      return { outcome: control || callerOwnsRow ? 'refused' : 'stored', cid: null };
     }
 
     await saveRow({
@@ -1890,7 +1940,7 @@ export class MessagingService {
         void pushNotificationService.sendPushToContact(peerDid, cid, myDid, pushKind);
       });
     }
-    return cid;
+    return { outcome: 'sent', cid };
   }
 
   /**

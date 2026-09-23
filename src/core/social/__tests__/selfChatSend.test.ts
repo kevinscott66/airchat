@@ -66,10 +66,11 @@ describe('свой ключ узнаётся по did, а не по строке
 
 describe('своя переписка отделяется до всех проверок отправки', () => {
   it('sendMessage начинается с проверки своего ключа', () => {
-    const body = methodBody(MESSAGING, '  async sendMessage(');
+    // v4.32.726: проверки живут в sendMessageResult, sendMessage — обёртка.
+    const body = methodBody(MESSAGING, '  async sendMessageResult(');
     const self = body.indexOf('this.isMyOwnKey(contactPubB64)');
     expect(self).toBeGreaterThan(-1);
-    expect(body).toContain('return this.saveToSelfChat(');
+    expect(body).toContain('await this.saveToSelfChat(');
     // Блокировка, часовой лимит и поиск общего ключа — всё ниже: себя не
     // блокируют, себе не считают лимит и с собой не договариваются о ключе.
     for (const later of ['rateLimiter.isBlocked', 'canSendMessage', 'sendMessageWork']) {
@@ -78,7 +79,7 @@ describe('своя переписка отделяется до всех про�
   });
 
   it('NO_SESSION_DM живёт только в отправке собеседнику', () => {
-    expect(methodBody(MESSAGING, '  async sendMessage(')).not.toContain('NO_SESSION_DM');
+    expect(methodBody(MESSAGING, '  async sendMessageResult(')).not.toContain('NO_SESSION_DM');
     expect(methodBody(MESSAGING, '  private async saveToSelfChat(')).not.toContain('NO_SESSION_DM');
     expect(methodBody(MESSAGING, '  private async sendMessageWork(')).toContain('NO_SESSION_DM');
   });
