@@ -50,7 +50,7 @@ import {
   getGroupRead,
   listGroupMessages,
   listAllGroupMessages,
-  listGroupMembers,
+  listGroupMembersRead,
   insertGroupMessage,
   touchGroupConversation,
   markGroupRead,
@@ -272,6 +272,16 @@ const GRP_RECENTLY_DELETED_TTL_MS = 7 * 86_400_000;
 // бывает и постоянным (адресат заблокировал) — без потолка повтор шёл бы на
 // каждую запись в хранилище до самого выхода из группы.
 const GROUP_RECEIPT_MAX_TRIES = 3;
+
+/**
+ * Состав группы не прочитался (v4.32.762).
+ *
+ * Слово в слово как у опроса (v4.32.648) и реакции (v4.32.761): беда одна и та
+ * же — база была занята, — и человек должен узнавать её по одному тексту, чем
+ * бы он ни занимался. Главное в нём — «попробуйте ещё раз»: в отличие от «вас
+ * тут нет» и «никого не найдено», этот отказ проходит сам.
+ */
+const MEMBERS_UNREADABLE = 'Не удалось прочитать состав группы. Попробуйте ещё раз.';
 
 // v4.32.227 (BUG-11): корректная русская плюрализация. Раньше всегда выводилось
 // «N участников» → «1 участников». Единый источник правды теперь в
@@ -1203,7 +1213,13 @@ function GroupChatScreen({
   useEffect(() => {
     // v4.32.230: забаненные остаются строками в group_members (это чёрный
     // список), но в упоминаниях/подсказках их быть не должно.
-    void listGroupMembers(group.id, pid).then((ms) => setAllMembers(ms.filter((m) => m.role !== 'banned')));
+    // v4.32.762: пустой список на сбое чтения обнулял подсказки @-упоминаний —
+    // человек начинал писать имя и получал «никого нет», хотя группа полна.
+    // Нечитаемый состав оставляет прежний: он был верен секунду назад.
+    void listGroupMembersRead(group.id, pid).then((ms) => {
+      if (ms === null) return;
+      setAllMembers(ms.filter((m) => m.role !== 'banned'));
+    });
   }, [group.id, pid]);
 
   // Auto-translate incoming group messages
@@ -2563,7 +2579,11 @@ function GroupChatScreen({
         setText('');
         // Забаненных нет в allMembers (они отфильтрованы), поэтому ищем в БД.
         void (async () => {
-          const all = await listGroupMembers(group.id, pid);
+          // v4.32.762: отказ базы отвечал «такого заблокированного нет» —
+          // администратор верил и переставал искать, а человек оставался в
+          // бане. «Не найден» должно значить «не найден».
+          const all = await listGroupMembersRead(group.id, pid);
+          if (all === null) { showError(MEMBERS_UNREADABLE); return; }
           const target = pickTarget(
             all.filter((m) => m.role === 'banned'),
             `Заблокированный участник «${argName}» не найден`
@@ -3547,6 +3567,14 @@ function GroupChatScreen({
         // несёт токен, а колонка invite_link не шифруется и никем
         // не читается (см. схему groups).
         const showInviteSheet = async (token: string): Promise<void> => {
+          // v4.32.762: ссылка живёт дольше секунды, в которую её собрали. На
+          // сбое чтения состав приходил пустым, и ссылка уходила в переписку с
+          // одним админом внутри: вошедший по ней заводил группу, в которой
+          // кроме него и админа нет никого, и его сообщения доходили только до
+          // админа. Ссылку пересылают и открывают неделями — такую лучше не
+          // выдавать вовсе.
+          const roster = await listGroupMembersRead(group.id, pid);
+          if (roster === null) { showError(MEMBERS_UNREADABLE); return; }
           // v4.32.606: наружу уходит https-форма той же ссылки.
           const link = webForm(buildGroupInviteLink({
             id: group.id,
@@ -3554,7 +3582,7 @@ function GroupChatScreen({
             type: group.type,
             adminPub: myPubB64,
             requireApproval,
-            members: await listGroupMembers(group.id, pid),
+            members: roster,
             token,
           }));
           openSheet('Пригласительная ссылка', link, [
@@ -5173,7 +5201,12 @@ function GroupMembersScreen({
   // v4.32.230: забаненные хранятся как строки с role='banned' — в списке
   // участников их показывать нельзя (иначе бан выглядит как обычный участник).
   const loadMembers = useCallback(async (): Promise<void> => {
-    const ms = await listGroupMembers(group.id, pid);
+    // v4.32.762: нечитаемый состав оставляет на экране прежний. Пустой список
+    // на сбое опустошал разом и участников, и забаненных: карточка группы
+    // показывала «никого нет», а раздел блокировок — снятые баны, которых
+    // никто не снимал.
+    const ms = await listGroupMembersRead(group.id, pid);
+    if (ms === null) return;
     setMembers(ms.filter((m) => m.role !== 'banned'));
     setBannedMembers(ms.filter((m) => m.role === 'banned'));
   }, [group.id, pid]);
@@ -5518,7 +5551,17 @@ function GroupMembersScreen({
             // v4.32.230: upsertGroupMember — это INSERT OR REPLACE, поэтому
             // одобрение заявки бесшумно затёрло бы role='banned' и вернуло
             // забаненного в группу в обход бана.
-            const existing = await listGroupMembers(group.id, pid);
+            // v4.32.762: состав, который не прочитался, — не пустая группа.
+            // Прежнее чтение отдавало на сбое пустой список, и проверка бана
+            // ниже проходила вхолостую: забаненный заявитель возвращался в
+            // группу одним нажатием — ровно та дыра, что закрыта в v4.32.230.
+            // Тем же пустым списком уходило и приглашение, в котором нет ни
+            // одного участника.
+            const existing = await listGroupMembersRead(group.id, pid);
+            if (existing === null) {
+              Alert.alert('AirChat', MEMBERS_UNREADABLE);
+              return;
+            }
             if (existing.some((m) => m.peerPubB64 === item.requesterPubB64 && m.role === 'banned')) {
               Alert.alert('AirChat', `${item.requesterName ?? 'Участник'} заблокирован(а) в этой группе.\nСначала снимите блокировку командой /unban @имя`);
               return;
@@ -5766,7 +5809,13 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
    */
   const confirmLeaveGroup = useCallback((g: GroupRow): void => {
     void (async () => {
-      const iAmOwner = (await listGroupMembers(g.id, pid)).some(
+      // v4.32.762: выход необратим, а предупреждение владельцу — единственное,
+      // что стоит между ним и группой без владельца навсегда. На сбое чтения
+      // состав приходил пустым, владелец в нём не находился, и человек читал
+      // мягкий текст для рядового участника. Не знаем роли — не спрашиваем.
+      const roster = await listGroupMembersRead(g.id, pid);
+      if (roster === null) { showError(MEMBERS_UNREADABLE); return; }
+      const iAmOwner = roster.some(
         (m) => m.peerPubB64 === myPubB64 && m.role === 'owner'
       );
       Alert.alert(
@@ -5936,13 +5985,17 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
           const invite = await ensureGroupInviteToken(g.id, pid, myPub);
           if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
           announceInviteToken(invite.announced);
+          // v4.32.762: то же, что и у кнопки в карточке группы, — ссылку с
+          // пустым составом наружу не выпускаем (см. showInviteSheet).
+          const roster = await listGroupMembersRead(g.id, pid);
+          if (roster === null) { showError(MEMBERS_UNREADABLE); return; }
           const link = webForm(buildGroupInviteLink({
             id: g.id,
             name: g.name,
             type: g.type,
             adminPub: myPub,
             requireApproval: g.requireApproval ?? false,
-            members: await listGroupMembers(g.id, pid),
+            members: roster,
             token: invite.token,
           }));
           void Share.share({ message: link, title: `Присоединиться к ${g.name}` });

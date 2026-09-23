@@ -15,7 +15,6 @@ import { clampEnvelopeTs } from './envelopeTime';
 import { profileManager } from '../identity/profileManager';
 import { getOwnDisplayNameFor, getOwnUsernameFor } from '../identity/ownProfile';
 import {
-  listGroupMembers,
   listGroupMembersRead,
   getGroup,
   getGroupRead,
@@ -1287,16 +1286,27 @@ export async function sendGroupInvite(
   // v4.32.246: аватар берём из своей же строки группы, а не параметром, — иначе
   // пришлось бы править все вызовы, а приглашённый до сих пор видел бы кружок
   // с буквой, пока админ не изменит какую-нибудь настройку.
-  let avatarCid: string | undefined;
-  // v4.32.615: и владельца — тем же запросом к своей базе, а не параметром.
-  // Роль 'owner' до сих пор не покидала устройство создателя (см. ownerPub в
+  const pid = profileManager.getActiveProfile()?.id ?? 1;
+  // v4.32.762: состав читается различающей обёрткой. Прежняя отдавала на сбое
+  // пустой список, владелец в нём не находился — и приглашение уходило БЕЗ
+  // ownerPub, то есть ровно таким, каким было до v4.32.615: у приглашённого
+  // владельца группы не существует, он лежит рядовым участником, и его вправе
+  // выгнать любой администратор. Повторной отправки у приглашения нет, и
+  // второго конверта не будет никогда — а пригласивший видит «отправлено».
+  const roster = await listGroupMembersRead(groupId, pid);
+  if (roster === null) {
+    log.warn('group_invite_members_unreadable', { gid: groupId.slice(0, 8), pid });
+    return { op: 'invite', sent: false, reason: 'members_unreadable' };
+  }
+  // v4.32.615: владелец — тем же запросом к своей базе, а не параметром. Роль
+  // 'owner' до сих пор не покидала устройство создателя (см. ownerPub в
   // кодеке), поэтому у приглашённого её неоткуда было взять.
-  let ownerPub: string | undefined;
-  try {
-    const pid = profileManager.getActiveProfile()?.id ?? 1;
-    avatarCid = (await getGroup(groupId, pid))?.avatarCid ?? undefined;
-    ownerPub = (await listGroupMembers(groupId, pid)).find((m) => m.role === 'owner')?.peerPubB64;
-  } catch { /* без аватара и владельца приглашение всё равно уходит */ }
+  const ownerPub = roster.find((m) => m.role === 'owner')?.peerPubB64;
+  // Аватар — единственное, чего отказ базы стоит терпимо: кружок с буквой
+  // сменится сам при первой же правке настроек группы. Отменять из-за него
+  // приглашение значило бы менять беду на большую.
+  const groupRead = await getGroupRead(groupId, pid);
+  const avatarCid = lookupValue(groupRead)?.avatarCid ?? undefined;
   // v4.32.379: последняя остановка перед отправкой. Разбор приглашения требует
   // непустого названия и отбрасывает конверт целиком, если его нет, — а
   // названия, набранные до этой версии, чистку не проходили. Уйди такое имя как
