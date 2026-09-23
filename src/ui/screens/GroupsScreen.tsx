@@ -723,7 +723,9 @@ function GroupChatScreen({
       if (!list.length && group.pinnedMessageId) {
         // v4.32.643: перенос не состоялся (список не прочитался) — оставляем
         // как было. Ещё одна попытка будет при следующем открытии группы.
-        list = (await applyLocalPin({ groupId: group.id, ownerProfileId: pid, msgId: group.pinnedMessageId, on: true })) ?? list;
+        // v4.32.758: и то же самое, если не легла сама запись.
+        const moved = await applyLocalPin({ groupId: group.id, ownerProfileId: pid, msgId: group.pinnedMessageId, on: true });
+        if (moved.ok) list = moved.entries;
       }
       setGrpPinnedList(list);
       if (list.length) { setPinnedMsgId(list[0].id); setPinnedMsgText(list[0].text); }
@@ -3903,7 +3905,13 @@ function GroupChatScreen({
                     setPinnedMsgText(left[0]?.text ?? null);
                     return;
                   }
-                  await clearPinned(group.id, pid);
+                  // v4.32.758: не легло — баннер не стираем. Иначе в шапке
+                  // пусто, в kv список цел, и он «сам вернётся» при следующем
+                  // открытии группы.
+                  if (!(await clearPinned(group.id, pid))) {
+                    Alert.alert('AirChat', groupPinRefusalText('write_failed'));
+                    return;
+                  }
                   setGrpPinnedList([]);
                   setPinnedMsgId(null);
                   setPinnedMsgText(null);

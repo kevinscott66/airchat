@@ -238,7 +238,7 @@ describe('список не прочитался', () => {
     mockFailPinList = true;
     expect(
       await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm3', on: true })
-    ).toBeNull();
+    ).toEqual({ ok: false, reason: 'read_failed' });
     expect(mockKv.get(GRP_KEY)).toBe(before);
     expect(mockGroupPins).toEqual([]);
     mockFailPinList = false;
@@ -275,7 +275,7 @@ describe('форма исходников: отказ доходит до выз
 
   it('входящий конверт группы не объявляет о том, чего не записал', () => {
     const s = read('core/social/groupMessaging.ts');
-    const guard = s.indexOf("if (applied === null) {\n      log.warn('group_ctl_pin_not_applied'");
+    const guard = s.indexOf("if (!write.ok) {\n      log.warn('group_ctl_pin_not_applied'");
     expect(guard).toBeGreaterThan(0);
     const row = s.indexOf("insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено'");
     // Строка «Сообщение закреплено» — после отказа, а не до него.
@@ -284,9 +284,9 @@ describe('форма исходников: отказ доходит до выз
 
   it('разовый перенос старых закреплений оставляет список как был', () => {
     const s = read('ui/screens/GroupsScreen.tsx');
-    expect(s).toContain(
-      'list = (await applyLocalPin({ groupId: group.id, ownerProfileId: pid, msgId: group.pinnedMessageId, on: true })) ?? list;'
-    );
+    // v4.32.758: `?? list` больше не хватает — отказов у записи стало два, и
+    // оба приходят объектом.
+    expect(s).toContain('if (moved.ok) list = moved.entries;');
   });
 
   it('все три кнопки закрепления в личке показывают отказ, а не молчат', () => {

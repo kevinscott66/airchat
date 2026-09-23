@@ -146,8 +146,8 @@ describe('две записи подряд, начатые одновремен�
 
 describe('очередь не съедает обычную работу', () => {
   it('одна запись возвращает свой же список', async () => {
-    const entries = await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm1', on: true });
-    expect(entries?.map((e) => e.id)).toEqual(['m1']);
+    const write = await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm1', on: true });
+    expect(write.ok && write.entries.map((e) => e.id)).toEqual(['m1']);
   });
 
   it('падение одной записи не останавливает следующие', async () => {
@@ -157,8 +157,8 @@ describe('очередь не съедает обычную работу', () =>
     await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm1', on: true });
     mockTexts.set('m2', 'текст m2');
     await tick();
-    const entries = await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm2', on: true });
-    expect(entries?.map((e) => e.id)).toEqual(['m2']);
+    const write = await applyLocalPin({ groupId: GROUP, ownerProfileId: PID, msgId: 'm2', on: true });
+    expect(write.ok && write.entries.map((e) => e.id)).toEqual(['m2']);
   });
 });
 

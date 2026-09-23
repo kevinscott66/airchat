@@ -13,7 +13,7 @@
  * (массив объектов) на чтении понимается.
  */
 import { setGroupPinnedMessage, listGroupMembers, getGroup, getGroupMessageTexts } from '../storage/local';
-import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { canPinInGroup, type PinRole } from './groupPinPolicy';
 import { createSerialRunner } from '../../notifications/lifecycleQueue';
@@ -122,13 +122,27 @@ export async function resolvePinned(groupId: string, ownerProfileId: number): Pr
  */
 const pinWrites = createSerialRunner();
 
+/**
+ * Что вышло из записи закрепления (v4.32.758).
+ *
+ * Раньше отсюда возвращался `PinnedEntry[] | null`, и `null` значил ровно
+ * одно — «список не прочитался». Провал САМОЙ записи не значил ничего:
+ * `scopedKvSetFor` о нём не сообщает никому, а список ниже перечитывается из
+ * kv уже после неудачи, то есть приходит прежним — и вызывающий объявлял
+ * закрепление применённым. У остальных участников оно при этом есть: конверт
+ * разослан, а повторной отправки у служебного конверта нет.
+ */
+export type GroupPinWrite =
+  | { ok: true; entries: PinnedEntry[] }
+  | { ok: false; reason: 'read_failed' | 'write_failed' };
+
 /** Пишет закрепление в kv + groups.pinned_message_id/text. */
 export async function applyLocalPin(params: {
   groupId: string;
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<PinnedEntry[] | null> {
+}): Promise<GroupPinWrite> {
   return pinWrites(() => applyLocalPinSerial(params));
 }
 
@@ -137,19 +151,22 @@ async function applyLocalPinSerial(params: {
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<PinnedEntry[] | null> {
+}): Promise<GroupPinWrite> {
   const { groupId, ownerProfileId, msgId, on } = params;
   // v4.32.643: список не прочитался — не пишем ничего. Прежде сюда приходил
   // пустой массив, и объявление группы сводило все закрепления к одному.
   const current = await readPinnedIds(groupId, ownerProfileId);
   if (current === null) {
     log.warn('group_pin_list_read_failed', { gid: groupId.slice(0, 8), pid: ownerProfileId });
-    return null;
+    return { ok: false, reason: 'read_failed' };
   }
   const nextIds = on
     ? [msgId, ...current.filter((id) => id !== msgId)].slice(0, MAX_PINNED)
     : current.filter((id) => id !== msgId);
-  await scopedKvSetFor(ownerProfileId, pinListKey(groupId), JSON.stringify(nextIds));
+  if (!(await scopedKvSetCheckedFor(ownerProfileId, pinListKey(groupId), JSON.stringify(nextIds)))) {
+    log.warn('group_pin_list_write_failed', { gid: groupId.slice(0, 8), pid: ownerProfileId });
+    return { ok: false, reason: 'write_failed' };
+  }
   const entries = await resolvePinned(groupId, ownerProfileId);
   // v4.32.576: непрочитанное закрепление не записываем текстом. Раньше сюда
   // уходила пустая строка, groups.pinned_message_text шифровался ею поверх
@@ -162,7 +179,7 @@ async function applyLocalPinSerial(params: {
     top?.id ?? null,
     top && !top.unreadable ? top.text : null
   );
-  return entries;
+  return { ok: true, entries };
 }
 
 /**
@@ -170,11 +187,19 @@ async function applyLocalPinSerial(params: {
  *
  * Тоже по очереди: иначе «открепить всё» и одновременное закрепление могли
  * закончиться пустым списком в kv и живым id в groups.pinned_message_id.
+ *
+ * v4.32.758: отвечает, легло ли. Прежняя немая запись позволяла экрану стереть
+ * баннер у себя при целом списке в kv — расхождение держалось до следующего
+ * открытия группы и выглядело как «само вернулось».
  */
-export async function clearPinned(groupId: string, ownerProfileId: number): Promise<void> {
-  await pinWrites(async () => {
-    await scopedKvSetFor(ownerProfileId, pinListKey(groupId), '[]');
+export async function clearPinned(groupId: string, ownerProfileId: number): Promise<boolean> {
+  return pinWrites(async () => {
+    if (!(await scopedKvSetCheckedFor(ownerProfileId, pinListKey(groupId), '[]'))) {
+      log.warn('group_pin_clear_write_failed', { gid: groupId.slice(0, 8), pid: ownerProfileId });
+      return false;
+    }
     await setGroupPinnedMessage(groupId, ownerProfileId, null, null);
+    return true;
   });
 }
 
@@ -194,7 +219,12 @@ async function myRoleIn(groupId: string, myPubB64: string, ownerProfileId: numbe
  * группы. Совет «попросите администратора» в таком положении бесполезен, а
  * настоящая причина не называется никогда.
  */
-export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied' | 'read_failed';
+export type GroupPinRefusal =
+  | 'no_identity'
+  | 'no_group'
+  | 'denied'
+  | 'read_failed'
+  | 'write_failed';
 
 /**
  * Итог закрепления.
@@ -215,6 +245,7 @@ const REFUSAL: Record<GroupPinRefusal, string> = {
   no_group: 'Группа не найдена — возможно, её только что удалили.',
   denied: 'Закреплять и откреплять сообщения в этой группе могут только администраторы.',
   read_failed: 'Не удалось прочитать закреплённые в этой группе — попробуйте ещё раз.',
+  write_failed: 'Не удалось сохранить закреплённые в этой группе — попробуйте ещё раз.',
 };
 
 /** Текст отказа для человека. */
@@ -251,11 +282,11 @@ export async function togglePinAndSync(params: {
     return { ok: false, reason: 'denied' };
   }
 
-  const entries = await applyLocalPin({ groupId, ownerProfileId: pid, msgId, on });
+  const write = await applyLocalPin({ groupId, ownerProfileId: pid, msgId, on });
   // Ничего не записано — и рассылать нечего: у остальных закрепление
   // появилось бы, а у себя нет.
-  if (entries === null) return { ok: false, reason: 'read_failed' };
+  if (!write.ok) return { ok: false, reason: write.reason };
   const { fanoutGroupControl } = await import('./groupMessaging');
   const sync = fanoutGroupControl(groupId, pid, myPub, { op: 'pin', msgId, on }, params.actorName ?? undefined);
-  return { ok: true, entries, sync };
+  return { ok: true, entries: write.entries, sync };
 }

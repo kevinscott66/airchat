@@ -1816,13 +1816,20 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       return 'consumed';
     }
     const { applyLocalPin } = await import('./groupPinSync');
-    const applied = await applyLocalPin({ groupId: env.groupId, ownerProfileId: pid, msgId: env.msgId, on: env.on });
-    // v4.32.643: конверт наш в любом случае — обычным сообщением его сохранять
-    // нельзя. Но записи не было, и строки «Сообщение закреплено» быть не
+    const write = await applyLocalPin({ groupId: env.groupId, ownerProfileId: pid, msgId: env.msgId, on: env.on });
+    // v4.32.643: записи не было — и строки «Сообщение закреплено» быть не
     // должно: она сказала бы о том, чего в шапке нет.
-    if (applied === null) {
-      log.warn('group_ctl_pin_not_applied', { gid: env.groupId.slice(0, 8) });
-      return 'consumed';
+    //
+    // v4.32.758: и кадр в таком случае откладываем. Оба отказа здесь — заминка
+    // базы, она пройдёт сама; «разобрано» же двигает метку докуда прочитано, а
+    // relay отдаёт накопленное только по ней — то есть занятая на секунду база
+    // стоила закрепления навсегда, при том что у остальных участников оно есть.
+    if (!write.ok) {
+      log.warn('group_ctl_pin_not_applied', {
+        gid: env.groupId.slice(0, 8),
+        reason: write.reason,
+      });
+      return 'deferred';
     }
     await insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено' : 'Сообщение откреплено');
     log.info('group_ctl_pin_applied', { gid: env.groupId.slice(0, 8), on: env.on });

@@ -136,18 +136,14 @@ describe('форма исходников', () => {
       // к одному.
       expect(s).toContain('scopedKvTryGetFor(ownerProfileId, pinListKey(');
       expect(s).not.toContain('scopedKvGetFor(ownerProfileId, pinListKey(');
+      // v4.32.757 (личка) и v4.32.758 (группа): запись стала проверяемой.
+      // Немая о своём провале молчала, а список перечитывался из kv уже после
+      // неудачи, то есть приходил прежним — и вызывающий объявлял закрепление
+      // применённым. У остальных оно при этом есть: конверт разослан, повтора
+      // у служебного конверта нет.
+      expect(s).toContain('scopedKvSetCheckedFor(ownerProfileId, pinListKey(');
+      expect(s).not.toContain('scopedKvSetFor(ownerProfileId, pinListKey(');
     }
-    // v4.32.757: в личке запись стала проверяемой — немая о своём провале
-    // молчала, и список перечитывался из kv уже после неудачи, то есть
-    // прежним. В группе она пока немая: там у входящего конверта своя дорожка
-    // (groupMessaging), и переводить её нужно вместе с ней. Пока строка ниже
-    // держит этот долг на виду.
-    expect(src('core/social/dmPinSync.ts')).toContain(
-      'scopedKvSetCheckedFor(ownerProfileId, pinListKey('
-    );
-    expect(src('core/social/groupPinSync.ts')).toContain(
-      'scopedKvSetFor(ownerProfileId, pinListKey('
-    );
   });
 
   it('отметка «опрос завершён» — тоже в namespace профиля', () => {

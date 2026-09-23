@@ -53,14 +53,18 @@ describe('отказ закрепления назван причиной, а н
     // v4.32.643: четвёртая — «список закреплений не прочитался». Она не
     // «нет прав» и не «нет группы»: права есть, группа на месте, а записи не
     // было, и повтор через секунду обычно проходит.
-    expect(PIN).toContain(
-      "export type GroupPinRefusal = 'no_identity' | 'no_group' | 'denied' | 'read_failed';"
-    );
+    //
+    // v4.32.758: пятая — «не легла сама запись». Прежде она молчала: запись
+    // была немой, а список ниже перечитывался из kv уже после неудачи, то есть
+    // приходил прежним, — и отказ выдавался за успех.
+    for (const reason of ['no_identity', 'no_group', 'denied', 'read_failed', 'write_failed']) {
+      expect(PIN).toContain(`  | '${reason}'`);
+    }
     const body = bodyOf(PIN, 'export async function togglePinAndSync(');
     expect(body).toContain("return { ok: false, reason: 'no_identity' };");
     expect(body).toContain("return { ok: false, reason: 'no_group' };");
     expect(body).toContain("return { ok: false, reason: 'denied' };");
-    expect(body).toContain("if (entries === null) return { ok: false, reason: 'read_failed' };");
+    expect(body).toContain('if (!write.ok) return { ok: false, reason: write.reason };');
     // Голого null в ответе больше нет — иначе три причины снова слились бы.
     expect(body).not.toContain('return null;');
   });
@@ -71,6 +75,8 @@ describe('отказ закрепления назван причиной, а н
     expect(PIN).toContain('Профиль ещё загружается');
     expect(PIN).toContain('Группа не найдена');
     expect(PIN).toContain('могут только администраторы');
+    expect(PIN).toContain('Не удалось прочитать закреплённые');
+    expect(PIN).toContain('Не удалось сохранить закреплённые');
   });
 
   it('экран берёт текст из таблицы, а не пишет «нет прав» на всё подряд', () => {
@@ -84,7 +90,7 @@ describe('исход рассылки закрепления дочитан', ()
   it('успех несёт и список, и обещание рассылки', () => {
     expect(PIN).toContain('| { ok: true; entries: PinnedEntry[]; sync: Promise<GroupControlOutcome> }');
     const body = bodyOf(PIN, 'export async function togglePinAndSync(');
-    expect(body).toContain('return { ok: true, entries, sync };');
+    expect(body).toContain('return { ok: true, entries: write.entries, sync };');
     // Обещание больше не выбрасывается внутри модуля.
     expect(body).not.toContain('void fanoutGroupControl(');
   });
