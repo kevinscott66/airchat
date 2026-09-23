@@ -20,10 +20,25 @@ jest.mock('expo-file-system/legacy', () => {
     EncodingType: { UTF8: 'utf8' },
     getInfoAsync: jest.fn(async (uri: string) => ({ exists: uri in files })),
     readAsStringAsync: jest.fn(async (uri: string) => files[uri] ?? ''),
-    writeAsStringAsync: jest.fn(async (uri: string, data: string) => { files[uri] = data; }),
+    writeAsStringAsync: jest.fn(async (uri: string, data: string) => {
+      // v4.32.728: обрыв записи изображается так же, как на устройстве: файл
+      // уже открыт на усечение, часть байт легла, дальше — отказ.
+      if (mockWriteFailsAfterBytes != null) {
+        files[uri] = data.slice(0, mockWriteFailsAfterBytes);
+        throw new Error('ENOSPC');
+      }
+      files[uri] = data;
+    }),
     deleteAsync: jest.fn(async (uri: string) => { delete files[uri]; }),
+    moveAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
+      if (!(from in files)) throw new Error('ENOENT');
+      files[to] = files[from];
+      delete files[from];
+    }),
   };
 });
+/** Сколько байт успевает лечь до отказа записи; null — запись проходит целиком. */
+let mockWriteFailsAfterBytes: number | null = null;
 jest.mock('react-native', () => ({
   InteractionManager: { runAfterInteractions: (cb: () => void) => cb() },
 }));
@@ -85,6 +100,7 @@ const WALLET_PUB = Buffer.from(new Uint8Array(32).fill(7)).toString('base64');
 beforeEach(() => {
   for (const k of Object.keys(fsMock.__files)) delete fsMock.__files[k];
   mockActiveProfileId = 1;
+  mockWriteFailsAfterBytes = null;
   mockMnemonic = 'test mnemonic phrase';
   mockImportedMessages = 0;
   mockImportedKv = 0;
@@ -294,5 +310,49 @@ describe('восстановление из файла (v4.32.370)', () => {
       await tryRestoreDialogBackupFromFile();
       expect(rl.reloadBlocked).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+/**
+ * v4.32.728: прямая перезапись била по единственной локальной копии. Файл
+ * открывался на усечение ДО того, как новое содержимое оказывалось на диске, и
+ * обрыв на середине (нет места, приложение сняли, питание пропало) оставлял
+ * вместо копии обрезанный JSON: разбору он не поддаётся, импорт отвергает его
+ * целиком, а старой, целой, уже нет. Между тем смысл файла ровно в том, чтобы
+ * пережить потерю базы — это последнее, к чему можно вернуться.
+ */
+describe('обрыв записи не уносит прежнюю копию', () => {
+  const URI = '/doc/airchat_dialogs_backup_v1_p1.json';
+  const OLD = JSON.stringify({ v: 1, walletPubKeyB64: WALLET_PUB, exportedAt: 1, messages: [{ id: 'старое' }] });
+
+  it('запись сорвалась — на месте по-прежнему прежняя копия, целая', async () => {
+    fsMock.__files[URI] = OLD;
+    mockWriteFailsAfterBytes = 12;
+    await expect(exportDialogBackupToFile()).rejects.toThrow('ENOSPC');
+    expect(fsMock.__files[URI]).toBe(OLD);
+    // И разбирается она по-прежнему: это не обрывок.
+    expect(() => JSON.parse(fsMock.__files[URI])).not.toThrow();
+  });
+
+  it('копии не было и не появилось: обрывок не выдаёт себя за неё', async () => {
+    mockWriteFailsAfterBytes = 12;
+    await expect(exportDialogBackupToFile()).rejects.toThrow('ENOSPC');
+    // Ни на месте копии, ни рядом: обрывок не копия, а место занимает — и
+    // хуже того, восстановление нашло бы его и отвергло как испорченный.
+    expect(Object.keys(fsMock.__files)).toEqual([]);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: удачная запись прежнюю копию заменяет', async () => {
+    fsMock.__files[URI] = OLD;
+    expect(await exportDialogBackupToFile()).toBe(URI);
+    const written = JSON.parse(fsMock.__files[URI]) as { messages: unknown[]; exportedAt: number };
+    expect(written.messages).toEqual([]);
+    expect(written.exportedAt).toBeGreaterThan(1);
+    expect(Object.keys(fsMock.__files)).toEqual([URI]);
+  });
+
+  it('копии ещё не было — запись всё равно встаёт на нужное имя', async () => {
+    expect(await exportDialogBackupToFile()).toBe(URI);
+    expect(Object.keys(fsMock.__files)).toEqual([URI]);
   });
 });

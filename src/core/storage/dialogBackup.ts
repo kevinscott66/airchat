@@ -262,9 +262,28 @@ export async function exportDialogBackupToFile(): Promise<string | null> {
     groupMessages: groups.messages,
     groupMembers: groups.members,
   };
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify(payload), {
-    encoding: FileSystem.EncodingType.UTF8,
-  });
+  // v4.32.728: запись идёт во временный файл и только потом встаёт на место.
+  // Прямая перезапись била по единственной локальной копии: файл открывался на
+  // усечение ДО того, как новое содержимое оказывалось на диске, и обрыв на
+  // середине (нехватка места, снятие приложения, отключение питания) оставлял
+  // вместо копии обрезанный JSON. Разбору он не поддаётся — импорт такую копию
+  // отвергает целиком, — а старой, целой, уже нет. Между тем смысл файла ровно
+  // в том, чтобы пережить потерю базы: это последнее, к чему можно вернуться.
+  // Тот же приём, что при разборе архива аккаунта (accountVault, v4.32.617).
+  const temporary = `${uri}.tmp-${Date.now()}`;
+  try {
+    await FileSystem.writeAsStringAsync(temporary, JSON.stringify(payload), {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    // Перестановка имени: содержимое к этому моменту уже целиком на диске.
+    await FileSystem.deleteAsync(uri, { idempotent: true });
+    await FileSystem.moveAsync({ from: temporary, to: uri });
+  } catch (e) {
+    // Обрывок не оставляем: он не копия и занимает столько же места.
+    await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => {});
+    log.warn('dialog_backup_export_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
   log.info('dialog_backup_exported', {
     messages: messages.length,
     kv: kv.length,
