@@ -22,6 +22,10 @@ import {
   setOpenIntentConsumer,
   type OpenIntent,
 } from '../openIntent';
+// Срок дозвона лежит в звонках, а не в уведомлениях: callPush намеренно без
+// импортов (его читает отдельный запуск JS фонового обработчика). Сюда его
+// тянет проверка — здесь лишний модуль ничего не стоит.
+import { OUTGOING_RINGING_TIMEOUT_MS } from '../../core/social/callTeardown';
 
 const CALL_ID = 'a1b2c3d4e5f60718a1b2c3d4e5f60718';
 const SENDER = 'did:key:z6MkvMHxVsrnyccHiUmVw2MAQXexvXsEyTyS4sTCLy785nLm';
@@ -46,10 +50,12 @@ test('один баннер на звонок', () => {
   expect(callBannerId(CALL_ID)).not.toBe(callBannerId('b'.repeat(32)));
 });
 
-test('баннер переживает срок звонящего, но ненамного', () => {
-  // Звонящий вешает трубку через 45 с (OUTGOING_RINGING_TIMEOUT_MS).
-  expect(CALL_BANNER_TIMEOUT_MS).toBeGreaterThan(45_000);
-  expect(CALL_BANNER_TIMEOUT_MS).toBeLessThanOrEqual(120_000);
+test('баннер висит ровно столько, сколько звонящий звонит', () => {
+  // v4.32.746: было «переживает срок звонящего, но ненамного» — то есть
+  // строго больше 45 с. Эта «ненамного» и есть дыра: после того как звонящий
+  // бросил дозваниваться, телефон ещё пятнадцать секунд звал к трубке, за
+  // которой никого нет, и смахнуть зов было нельзя — баннер `ongoing`.
+  expect(CALL_BANNER_TIMEOUT_MS).toBe(OUTGOING_RINGING_TIMEOUT_MS);
 });
 
 test('push о звонке разбирается как звонок', () => {

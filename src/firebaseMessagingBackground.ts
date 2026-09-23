@@ -12,6 +12,7 @@ import {
 } from './notifications/openIntent';
 import { vibrationFor } from './notifications/vibrationPattern';
 import { parsePushKind } from './notifications/pushKind';
+import { dismissCallBanner } from './notifications/callBanner';
 import {
   CALL_BANNER_BODY,
   CALL_BANNER_TIMEOUT_MS,
@@ -227,6 +228,12 @@ try {
       if (type !== EventType.PRESS) return;
       const intent = parseOpenIntent(detail?.notification?.data);
       if (!intent) return;
+      // v4.32.746: баннер звонка не смахивается (`ongoing`, `autoCancel:
+      // false`) — это защита от случайного касания, а не от нажатия. Нажали
+      // намеренно: приложение сейчас поднимется, и если звонок ещё жив, его
+      // покажет экран звонка, а не строка в шторке. Оставить её висеть значит
+      // вернуть человека к зову, на который он уже откликнулся.
+      if (intent.kind === 'call') dismissCallBanner(intent.callId);
       deliverOpenIntent(intent, 'background-press');
     }
   );

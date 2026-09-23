@@ -21,7 +21,8 @@ import { rateLimiter } from '../security/rateLimiter';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sealCallEnvelope, openCallEnvelope, MISSED_RECEIPT_MAX_AGE_MS } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
-import { callBannerId, newCallId } from '../../notifications/callPush';
+import { dismissCallBanner } from '../../notifications/callBanner';
+import { newCallId } from '../../notifications/callPush';
 import { randomBytes } from '@noble/hashes/utils.js';
 import type { KeyPairBytes } from '../crypto/keyManager';
 
@@ -1616,24 +1617,6 @@ async function sendCallWake(myPub: string, peerPubB64: string, callId: string): 
   } catch (e) {
     log.info('call_wake_push_failed', { err: e instanceof Error ? e.message : String(e) });
   }
-}
-
-/**
- * Погасить баннер звонка, показанный фоновым обработчиком push (v4.32.573).
- *
- * Баннер живёт до минуты и не смахивается сам — иначе окно звонка исчезало бы
- * с экрана блокировки от случайного касания. Когда предложение доехало и
- * звонок зазвонил уже в приложении, баннер лишний: номер звонка приезжает
- * вместе с предложением ровно ради этого.
- */
-function dismissCallBanner(callId: string): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const notifee = require('@notifee/react-native').default as {
-      cancelNotification(id: string): Promise<void>;
-    };
-    void notifee.cancelNotification(callBannerId(callId)).catch(() => { /* уже погашен */ });
-  } catch { /* notifee не подключён (тесты, Expo Go) */ }
 }
 
 /**

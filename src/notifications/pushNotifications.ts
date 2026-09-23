@@ -19,6 +19,7 @@ import { nextRetryDelayMs } from './pushRegisterRetry';
 import { NOTIFICATION_SMALL_ICON } from './notificationIcon';
 import { shouldSuppressDmBanner, shouldSuppressGroupBanner } from './activeChatSuppress';
 import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenIntent } from './openIntent';
+import { dismissCallBanner } from './callBanner';
 import { CALL_PUSH_KIND } from './callPush';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
 import { peerIdFromDid, signPushPayload } from './pushEnvelope';
@@ -250,6 +251,11 @@ export class PushNotificationService {
         const initial = await notifee.getInitialNotification();
         const intent = parseOpenIntent(initial?.notification?.data);
         if (intent) {
+          // v4.32.746: то же, что и в обоих обработчиках событий, — нажатие
+          // гасит баннер звонка. Здесь это особенно заметно: приложение
+          // поднялось именно этим нажатием, то есть человек уже откликнулся,
+          // а несмахиваемая строка «Входящий звонок» всё ещё в шторке.
+          if (intent.kind === 'call') dismissCallBanner(intent.callId);
           log.info('push_press_cold_start', { outcome: deliverOpenIntent(intent, 'cold-start') });
         }
       } catch (e) {
@@ -422,6 +428,10 @@ export class PushNotificationService {
           // намерению, а открывает переписку экран вкладок.
           const intent = parseOpenIntent(detail.notification?.data);
           if (intent) {
+            // v4.32.746: то же, что и в фоновом обработчике, — нажатие гасит
+            // баннер звонка. При открытом приложении он бывает от звонка,
+            // который начался до того, как приложение подняли.
+            if (intent.kind === 'call') dismissCallBanner(intent.callId);
             log.info('push_press_foreground', { outcome: deliverOpenIntent(intent, 'foreground-press') });
           }
         }
