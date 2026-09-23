@@ -10,7 +10,12 @@
  */
 
 import { AppState, type AppStateStatus } from 'react-native';
-import { scopedKvGetFor, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import {
+  scopedKvGetFor,
+  scopedKvSetCheckedFor,
+  scopedKvSetFor,
+  scopedKvTryGetFor,
+} from '../storage/profileScopedKv';
 import { ownerPidForPublicKeyB64 } from '../identity/ownerPidLookup';
 import { ownFieldGetFor } from '../identity/ownProfile';
 import { pubsubPublish, pubsubSubscribe } from '../transport/ipfs/pubsub';
@@ -208,48 +213,73 @@ export async function loadHiddenPeers(): Promise<boolean> {
  * входящее после переключения), память трогать нельзя: она принадлежит
  * работающему профилю. Тогда правится только запись адресата — он поднимет её
  * при своём следующем старте.
+ *
+ * v4.32.751: отвечает, легла ли просьба на диск. Раньше обе записи уходили
+ * через `void ... .catch(ignore)`, то есть отказ базы не доходил никуда, кроме
+ * пустого обработчика. В памяти запрет при этом стоял — и до перезапуска всё
+ * выглядело исполненным. После перезапуска список поднимался без него, а
+ * второй раз собеседник просьбу не шлёт: у него записано, что мы её получили.
+ * Человек просил не отмечать его время входа — и оно снова показывалось.
  */
-export function setPeerLastSeenAllowedFor(
+export async function setPeerLastSeenAllowedFor(
   ownerProfileId: number,
   peerPubB64: string,
   allow: boolean
-): void {
+): Promise<boolean> {
   if (ownerProfileId !== presencePid) {
-    void persistHiddenPeerFor(ownerProfileId, peerPubB64, allow);
-    return;
+    return persistHiddenPeerFor(ownerProfileId, peerPubB64, allow);
   }
   const next = withHiddenPeer([...hiddenPeers], peerPubB64, !allow);
+  let stored = true;
   if (!allow) {
     if (next) hiddenPeers.add(peerPubB64);
     lastSeenCache.delete(peerPubB64);
-    void scopedKvSetFor(presencePid, presenceLastSeenKey(peerPubB64), '0').catch(() => { /* ignore */ });
+    // Стирание собранного времени — часть той же просьбы: не сложилось оно,
+    // значит просьба исполнена наполовину, и говорить «исполнена» нельзя.
+    stored = await scopedKvSetCheckedFor(
+      presencePid, presenceLastSeenKey(peerPubB64), '0'
+    ).catch(() => false);
   } else if (next) {
     hiddenPeers.delete(peerPubB64);
   }
   if (next) {
-    void scopedKvSetFor(presencePid, HIDDEN_PEERS_KEY, JSON.stringify(next)).catch(() => { /* ignore */ });
+    const listed = await scopedKvSetCheckedFor(
+      presencePid, HIDDEN_PEERS_KEY, JSON.stringify(next)
+    ).catch(() => false);
+    stored = stored && listed;
   }
   emitPresence(peerPubB64);
+  if (!stored) {
+    log.warn('presence_hidden_peer_not_stored', { pid: presencePid, allow });
+  }
+  return stored;
 }
 
 /** Просьба, адресованная работающему профилю. */
-export function setPeerLastSeenAllowed(peerPubB64: string, allow: boolean): void {
-  setPeerLastSeenAllowedFor(presencePid, peerPubB64, allow);
+export async function setPeerLastSeenAllowed(peerPubB64: string, allow: boolean): Promise<boolean> {
+  return setPeerLastSeenAllowedFor(presencePid, peerPubB64, allow);
 }
 
 /**
  * Тот же учёт для аккаунта, которого сейчас нет на экране: чтение — правка —
  * запись прямо в его записи. Провал чтения НЕ приводит к записи: иначе один
  * сбой базы стёр бы весь накопленный список запретов чужого аккаунта.
+ *
+ * v4.32.751: отвечает так же, как и путь работающего профиля. Здесь памяти,
+ * которая скрыла бы отказ, нет вовсе: не легло — значит для этого аккаунта
+ * просьбы не существует.
  */
 async function persistHiddenPeerFor(
   ownerProfileId: number,
   peerPubB64: string,
   allow: boolean
-): Promise<void> {
+): Promise<boolean> {
   try {
     if (!allow) {
-      await scopedKvSetFor(ownerProfileId, presenceLastSeenKey(peerPubB64), '0');
+      if (!(await scopedKvSetCheckedFor(ownerProfileId, presenceLastSeenKey(peerPubB64), '0'))) {
+        log.warn('presence_last_seen_reset_failed', { pid: ownerProfileId });
+        return false;
+      }
     }
     // v4.32.642: обещание в шапке не выполнялось. scopedKvGetFor отвечает
     // одним null и на «запретов не было», и на «прочитать не удалось», поэтому
@@ -258,13 +288,15 @@ async function persistHiddenPeerFor(
     const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
     if (read === null) {
       log.warn('presence_hidden_peers_read_failed', { pid: ownerProfileId });
-      return;
+      return false;
     }
     const next = withHiddenPeer(parseHiddenPeers(read.value), peerPubB64, !allow);
-    if (!next) return;
-    await scopedKvSetFor(ownerProfileId, HIDDEN_PEERS_KEY, JSON.stringify(next));
+    // Список уже такой, какой нужен: править нечего, и это успех, а не отказ.
+    if (!next) return true;
+    return await scopedKvSetCheckedFor(ownerProfileId, HIDDEN_PEERS_KEY, JSON.stringify(next));
   } catch (e) {
     log.warn('presence_hidden_peer_persist_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 

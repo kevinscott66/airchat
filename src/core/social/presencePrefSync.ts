@@ -31,7 +31,7 @@ import {
 import { shouldShareLastSeenWith, parseLastSeenVisibility, type LastSeenVisibility } from './presencePolicy';
 import { privacyPrefTryGetFor } from '../settings/privacyPrefs';
 import { canReachPeer } from './sendGate';
-import { acceptControlTs } from './controlWatermark';
+import { commitControlTs, controlTsFresh } from './controlWatermark';
 import {
   PRESENCE_PREF_PREFIX,
   encodePresencePrefEnvelope,
@@ -245,8 +245,19 @@ export async function handleIncomingLastSeenPref(
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await acceptControlTs('presence', senderPubB64, ownerProfileId, env.ts))) return true;
-  setPeerLastSeenAllowedFor(ownerProfileId, senderPubB64, env.show);
+  if (!(await controlTsFresh('presence', senderPubB64, ownerProfileId, env.ts))) return true;
+  const applied = await setPeerLastSeenAllowedFor(ownerProfileId, senderPubB64, env.show);
+  // v4.32.751: знак двигаем ПОСЛЕ применения — та же пара, что у запрета
+  // копирования (v4.32.655) и у таймера автоудаления (v4.32.750). Сдвиг до
+  // него делал отказ вечным: запись могла не лечь, а повтор того же конверта
+  // отвергался уже как старый. Починиться это не могло ничем — отправитель
+  // помнит, что просьбу мы получили (см. recordSent ниже), и второй раз её не
+  // шлёт, а сказать ему «не дошло» нечем.
+  if (!applied) {
+    log.warn('presence_pref_apply_failed', { from: senderPubB64.slice(0, 12), show: env.show });
+    return true;
+  }
+  await commitControlTs('presence', senderPubB64, ownerProfileId, env.ts);
   log.info('presence_pref_applied', { from: senderPubB64.slice(0, 12), show: env.show });
   return true;
 }

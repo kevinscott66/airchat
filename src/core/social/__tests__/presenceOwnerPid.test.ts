@@ -209,10 +209,11 @@ describe('форма исходников', () => {
   it('номер аккаунта приходит от вызывающего, а не от службы', () => {
     const s = src('presenceService.ts');
     expect(s).toContain('export function recordPeerActivityFor(');
-    expect(s).toContain('export function setPeerLastSeenAllowedFor(');
+    // v4.32.751: учёт просьбы стал асинхронным — он отвечает, легла ли она.
+    expect(s).toContain('export async function setPeerLastSeenAllowedFor(');
     // Простые имена остались — но только как обёртки над номером службы.
     expect(s).toContain('recordPeerActivityFor(presencePid, peerPubB64, ts);');
-    expect(s).toContain('setPeerLastSeenAllowedFor(presencePid, peerPubB64, allow);');
+    expect(s).toContain('return setPeerLastSeenAllowedFor(presencePid, peerPubB64, allow);');
   });
 
   it('приём сообщения знает владельца переписки', () => {

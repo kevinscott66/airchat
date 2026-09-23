@@ -46,6 +46,7 @@ const mockGuards: { pid: number; peer: string; on: boolean }[] = [];
 let mockGuardApplyFails = false;
 let mockTimerApplyFails = false;
 const mockPresence: { pid: number; peer: string; show: boolean }[] = [];
+let mockPresenceApplyFails = false;
 
 jest.mock('../../identity/profileManager', () => ({
   profileManager: { getActiveProfile: () => ({ id: 1, name: 'Личный', did: 'did:key:z1' }) },
@@ -66,8 +67,11 @@ jest.mock('../copyGuard', () => ({
 jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
 jest.mock('../messaging', () => ({ getMessagingService: () => null }));
 jest.mock('../presenceService', () => ({
-  setPeerLastSeenAllowedFor: (pid: number, peer: string, show: boolean) => {
+  // v4.32.751: запись отчитывается о себе — как запрет копирования и таймер.
+  setPeerLastSeenAllowedFor: async (pid: number, peer: string, show: boolean) => {
+    if (mockPresenceApplyFails) return false;
     mockPresence.push({ pid, peer, show });
+    return true;
   },
   setMyLastSeenVisibility: async () => {},
   effectiveMyLastSeenVisibility: async () => 'everybody',
@@ -112,6 +116,7 @@ beforeEach(() => {
   mockGuardApplyFails = false;
   mockTimerApplyFails = false;
   mockPresence.length = 0;
+  mockPresenceApplyFails = false;
 });
 
 describe('водяной знак служебных конвертов', () => {
@@ -207,7 +212,7 @@ describe('повтор конверта «показывать время вхо
   });
 });
 
-describe('проверка стоит во всех трёх обработчиках', () => {
+describe('во всех трёх обработчиках знак двигается после применения', () => {
   function code(name: string): string {
     return readFileSync(join(__dirname, '..', name), 'utf8')
       .split('\n')
@@ -215,26 +220,24 @@ describe('проверка стоит во всех трёх обработчи�
       .join('\n');
   }
 
-  // copyGuardSync.ts и disappearSync.ts проверяются отдельно: у них свежесть и
-  // сдвиг знака разнесены (v4.32.655 и v4.32.750) — см. describe ниже.
+  // Общая форма всех трёх: acceptControlTs делает проверку и сдвиг одним
+  // движением, и применить между ними нечего. Там, где применение умеет
+  // отказать, это делало отказ вечным — v4.32.655 (запрет копирования),
+  // v4.32.750 (таймер) и v4.32.751 (время входа). Поведение каждого проверено
+  // своим describe; здесь — что ни один не вернулся к слитной проверке.
   it.each([
-    ['presencePrefSync.ts', 'presence'],
-  ])('%s гасит устаревший конверт до применения', (file, kind) => {
+    ['copyGuardSync.ts', 'copyguard', 'setPeerCopyGuardFor(ownerPid'],
+    ['disappearSync.ts', 'disappear', 'setConversationDisappearTimer(senderPubB64'],
+    ['presencePrefSync.ts', 'presence', 'setPeerLastSeenAllowedFor(ownerProfileId'],
+  ])('%s: свежесть → применение → сдвиг', (file, kind, apply) => {
     const c = code(file);
-    expect(c).toContain(`acceptControlTs('${kind}'`);
-    // Именно до применения: строка проверки обязана стоять раньше записи.
-    const at = c.indexOf('acceptControlTs(');
-    const applyAt = Math.min(
-      ...[
-        'setConversationDisappearTimer(senderPubB64',
-        'setPeerCopyGuardFor(ownerPid',
-        'setPeerLastSeenAllowedFor(ownerProfileId',
-      ]
-        .map((s) => c.indexOf(s))
-        .filter((i) => i >= 0)
-    );
-    expect(at).toBeGreaterThan(0);
-    expect(at).toBeLessThan(applyAt);
+    expect(c).not.toContain(`acceptControlTs('${kind}'`);
+    const fresh = c.indexOf(`controlTsFresh('${kind}'`);
+    const applyAt = c.indexOf(apply);
+    const commit = c.indexOf(`commitControlTs('${kind}'`);
+    expect(fresh).toBeGreaterThan(0);
+    expect(applyAt).toBeGreaterThan(fresh);
+    expect(commit).toBeGreaterThan(applyAt);
   });
 });
 
@@ -331,24 +334,66 @@ describe('автоудаление: знак двигается после пр�
     expect(mockTimers.map((t) => t.ms)).toEqual([24 * 3600_000]);
   });
 
-  it('порядок в исходнике: свежесть → применение → сдвиг', () => {
-    const c = readFileSync(join(__dirname, '..', 'disappearSync.ts'), 'utf8')
-      .split('\n')
-      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-      .join('\n');
-    const fresh = c.indexOf("controlTsFresh('disappear'");
-    const apply = c.indexOf('setConversationDisappearTimer(senderPubB64');
-    const commit = c.indexOf("commitControlTs('disappear'");
-    expect(fresh).toBeGreaterThan(0);
-    expect(apply).toBeGreaterThan(fresh);
-    expect(commit).toBeGreaterThan(apply);
-    expect(c).not.toContain("acceptControlTs('disappear'");
+  it('отказ записи назван в журнале', () => {
+    // Порядок «свежесть → применение → сдвиг» закреплён общим рэтчетом выше;
+    // здесь — что молчаливого отказа не осталось.
+    const c = readFileSync(join(__dirname, '..', 'disappearSync.ts'), 'utf8');
     expect(c).toContain("log.warn('disappear_apply_failed'");
   });
 
   it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: запись таймера отвечает булевым', () => {
     const local = readFileSync(join(__dirname, '..', '..', 'storage', 'local.ts'), 'utf8');
     expect(local).toContain('  disappearAfterMs: number | null\n): Promise<boolean> {');
+  });
+});
+
+describe('время входа: знак двигается после применения', () => {
+  /**
+   * v4.32.751 — третий обработчик той же формы. `setPeerLastSeenAllowedFor`
+   * писала обе свои записи через `void ... .catch(ignore)`: отказ базы не
+   * доходил никуда. В памяти запрет при этом стоял, так что до перезапуска всё
+   * выглядело исполненным, а после — список поднимался без него.
+   *
+   * Второй раз собеседник просьбу не пришлёт: у него в `presence:pref_sent`
+   * записано, что мы её получили. Человек просил не отмечать его время входа —
+   * и оно снова показывалось всем, кому видно.
+   */
+  it('не легшая запись оставляет конверт повторяемым', async () => {
+    const hide = encodePresencePrefEnvelope({ show: false, ts: Date.now() - 10_000 });
+    mockPresenceApplyFails = true;
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(mockPresence).toEqual([]);
+    // Знак не сдвинут — ту же просьбу примут ещё раз.
+    expect(mockKv.size).toBe(0);
+
+    mockPresenceApplyFails = false;
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(mockPresence.map((p) => p.show)).toEqual([false]);
+    expect(mockKv.size).toBe(1);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: удавшееся применение знак двигает — повтор не проходит', async () => {
+    const hide = encodePresencePrefEnvelope({ show: false, ts: Date.now() - 10_000 });
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(mockPresence.map((p) => p.show)).toEqual([false]);
+  });
+
+  it('отказ записи назван в журнале', () => {
+    const c = readFileSync(join(__dirname, '..', 'presencePrefSync.ts'), 'utf8');
+    expect(c).toContain("log.warn('presence_pref_apply_failed'");
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: учёт просьбы отвечает булевым', () => {
+    const svc = readFileSync(join(__dirname, '..', 'presenceService.ts'), 'utf8');
+    expect(svc).toContain('export async function setPeerLastSeenAllowedFor(');
+    expect(svc).toContain('  allow: boolean\n): Promise<boolean> {');
+    // Обе записи просьбы — проверяемые: `scopedKvSetFor` отдаёт void, и её
+    // `.catch(ignore)` как раз и был молчанием.
+    const at = svc.indexOf('export async function setPeerLastSeenAllowedFor(');
+    const body = svc.slice(at, svc.indexOf('\n}\n', at));
+    expect(body).not.toContain('scopedKvSetFor(');
+    expect(body.split('scopedKvSetCheckedFor(').length - 1).toBe(2);
   });
 });
 
