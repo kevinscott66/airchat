@@ -4707,15 +4707,42 @@ export async function updateChatMessageStatus(
   status: string,
   ownerProfileId: number
 ): Promise<void> {
+  await updateChatMessageStatusChecked(id, status, ownerProfileId);
+}
+
+/**
+ * Исход смены состояния строки тремя словами (v4.32.770).
+ *
+ * Прежде эта запись отвечала `void` и гасила свой отказ в собственном
+ * `catch`. Единственный входящий конверт, который её зовёт, — отметка о
+ * прочтении: она считала отметку применённой и объявляла кадр разобранным,
+ * потому что отличить удавшуюся запись от занятой базы было нечем. Метка
+ * «докуда прочитано» у ретранслятора уходила вперёд, и галочка «прочитано» у
+ * отправителя не появлялась до тех пор, пока собеседник заново не откроет
+ * переписку (ChatScreen шлёт отметки по входящим при каждом открытии) — то
+ * есть могла не появиться вовсе.
+ *
+ * `'missing'` — такой строки уже нет: её успели удалить между чтением автора и
+ * записью. Повтор кадра её не вернёт.
+ */
+export type ChatStatusWrite = 'updated' | 'missing' | 'failed';
+
+export async function updateChatMessageStatusChecked(
+  id: string,
+  status: string,
+  ownerProfileId: number
+): Promise<ChatStatusWrite> {
   try {
     const d = await db();
-    await d.runAsync(
+    const res = await d.runAsync(
       'UPDATE chat_messages SET status = ? WHERE id = ? AND owner_profile_id = ?',
       [status, id, ownerProfileId]
     );
     emitChatWrites();
+    return (res.changes ?? 0) > 0 ? 'updated' : 'missing';
   } catch (e) {
     log.warn('chat_message_status_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
   }
 }
 

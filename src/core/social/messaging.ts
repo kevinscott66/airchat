@@ -20,7 +20,7 @@ import {
   upsertChatMessage,
   saveChatMessage,
   saveChatMessageChecked,
-  updateChatMessageStatus,
+  updateChatMessageStatusChecked,
   updateChatMessageText,
   touchConversation,
   type ChatMessageRow,
@@ -1191,6 +1191,12 @@ export class MessagingService {
       // же сообщению собеседник не шлёт. Применить отметку дважды безвредно
       // (status пишется в то же значение), поэтому кадр честнее повторить.
       let unreadable = 0;
+      // v4.32.770: отказ САМОЙ записи считается отдельно. Чтение автора могло
+      // пройти, а запись состояния — нет, и прежде она об этом не сообщала:
+      // отметка засчитывалась, кадр объявлялся разобранным, галочка у
+      // отправителя не появлялась до следующего открытия переписки у
+      // собеседника, то есть могла не появиться вовсе.
+      let unwritten = 0;
       for (const msgId of ids) {
         const authRead = await getChatMessageAuthorRead(msgId, ownerPid);
         if (authRead.state === 'failed') {
@@ -1199,15 +1205,23 @@ export class MessagingService {
         }
         const auth = lookupValue(authRead);
         if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'out') continue;
-        await updateChatMessageStatus(msgId, 'read', ownerPid);
+        const marked = await updateChatMessageStatusChecked(msgId, 'read', ownerPid);
+        if (marked === 'failed') {
+          unwritten++;
+          continue;
+        }
         applied++;
       }
       if (dropped > 0) log.warn('read_receipts_oversized_drop', { dropped, from: peerPubKeyB64.slice(0, 8) });
       log.info('read_receipts_applied', { count: applied, from: peerPubKeyB64.slice(0, 8) });
+      if (unwritten > 0) {
+        log.warn('read_receipts_write_failed', { unwritten, from: peerPubKeyB64.slice(0, 8) });
+      }
       if (unreadable > 0) {
         log.warn('read_receipts_author_unreadable', { unreadable, from: peerPubKeyB64.slice(0, 8) });
-        return 'deferred';
       }
+      // Применить отметку дважды безвредно — status пишется в то же значение.
+      if (unreadable > 0 || unwritten > 0) return 'deferred';
       return 'consumed';
     }
 
