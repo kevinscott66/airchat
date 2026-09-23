@@ -215,14 +215,42 @@ async function stashFiles(
   return stash;
 }
 
-/** Вернуть отложенное на место, затирая то, что успело лечь поверх. */
-async function unstashFiles(stash: StashedFiles): Promise<void> {
+/**
+ * Вернуть отложенное на место, затирая то, что успело лечь поверх.
+ *
+ * v4.32.724: отказ возврата больше не гасится вместе с уборкой. Оба шага были
+ * под `.catch(() => {})`, а каталог отложенного удалялся следом безусловно —
+ * то есть файл, который не удалось вернуть, оставался единственной копией
+ * рабочей базы и стирался в ту же секунду. Причина отказа не выдуманная: файл
+ * базы бывает занят (SQLite успел открыть его снова), и тогда `deleteAsync`
+ * целевого пути не проходит, а `moveAsync` поверх существующего — тем более.
+ * Наружу это выглядело как «восстановление не удалось», после чего человек
+ * обнаруживал, что и прежней переписки на устройстве больше нет.
+ *
+ * @returns вернулось ли ВСЁ. `false` — каталог `stash.dir` НЕ удалён: в нём
+ * лежит единственная копия невозвращённых файлов, и удалять её нельзя.
+ */
+async function unstashFiles(stash: StashedFiles): Promise<boolean> {
+  let complete = true;
   for (const entry of stash.names) {
     const destination = `${entry.from}${entry.name}`;
-    await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
-    await FileSystem.moveAsync({ from: `${stash.dir}${entry.name}`, to: destination }).catch(() => {});
+    try {
+      await FileSystem.deleteAsync(destination, { idempotent: true });
+      await FileSystem.moveAsync({ from: `${stash.dir}${entry.name}`, to: destination });
+    } catch (error) {
+      complete = false;
+      log.error('account_vault_unstash_file_failed', {
+        name: entry.name,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (!complete) {
+    log.error('account_vault_unstash_incomplete', { stashDir: stash.dir });
+    return false;
   }
   await FileSystem.deleteAsync(stash.dir, { idempotent: true }).catch(() => {});
+  return true;
 }
 
 async function replaceVaultDirectory(stageDir: string, finalDir: string, root: string, accountId: string): Promise<void> {
@@ -366,7 +394,11 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
       if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
       else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
     } catch (error) {
-      await unstashFiles(stash);
+      // v4.32.724: вернулось не всё — каталог отложенного остался на месте, и
+      // удалять его нельзя: это единственная копия того, что не вернулось.
+      if (!(await unstashFiles(stash))) {
+        log.error('account_vault_restore_rollback_incomplete', { accountId, stashDir: stash.dir });
+      }
       if (previousProfileState) {
         await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
       } else {
@@ -483,7 +515,11 @@ export async function restoreAccountVaultArchive(
       if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
       else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
     } catch (error) {
-      await unstashFiles(stash);
+      // v4.32.724: вернулось не всё — каталог отложенного остался на месте, и
+      // удалять его нельзя: это единственная копия того, что не вернулось.
+      if (!(await unstashFiles(stash))) {
+        log.error('account_vault_archive_rollback_incomplete', { accountId, stashDir: stash.dir });
+      }
       if (previousProfileState) {
         await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
       } else {

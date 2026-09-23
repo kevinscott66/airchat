@@ -4,6 +4,8 @@ const mockSecure = new Map<string, string>();
 const mockLockedKeys = new Set<string>();
 const mockFailCopyTo = new Set<string>();
 const mockFailWriteContaining = new Set<string>();
+/** Пути, переезд НА которые отказывает: занятый файл, отказ файловой системы. */
+const mockFailMoveTo = new Set<string>();
 
 function mockChildren(uri: string): string[] {
   const prefix = uri.endsWith('/') ? uri : `${uri}/`;
@@ -44,6 +46,7 @@ jest.mock('expo-file-system/legacy', () => ({
     for (const key of [...mockDirs]) if (hit(key)) mockDirs.delete(key);
   }),
   moveAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
+    if (mockFailMoveTo.has(to)) throw new Error(`move failed ${to}`);
     for (const key of [...mockFiles.keys()]) {
       if (key.startsWith(from)) {
         mockFiles.set(`${to}${key.slice(from.length)}`, mockFiles.get(key)!);
@@ -78,6 +81,7 @@ beforeEach(() => {
   mockLockedKeys.clear();
   mockFailCopyTo.clear();
   mockFailWriteContaining.clear();
+  mockFailMoveTo.clear();
   mockFiles.clear();
   mockDirs.clear();
   mockSecure.clear();
@@ -293,6 +297,25 @@ describe('сорвавшееся восстановление возвращае
     expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('рабочая лента');
     expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('рабочий аватар');
     expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Рабочий');
+  });
+
+  it('невернувшийся файл остаётся в отложенном, а не стирается вместе с ним (v4.32.724)', async () => {
+    await snapshotThenDiverge();
+    mockFailCopyTo.add('/doc/avatar_123.jpg');
+    // Возврат рабочей базы не проходит: файл занят — SQLite успел открыть его
+    // снова. Прежде оба шага возврата гасились, а каталог отложенного удалялся
+    // следом безусловно: единственная копия рабочей базы исчезала насовсем.
+    mockFailMoveTo.add('/doc/SQLite/airchat_local.db');
+
+    expect(await restoreAccountVault(MNEMONIC)).toBe(false);
+
+    const kept = [...mockFiles.keys()].filter(
+      (key) => key.includes('.restore-stash-') && key.endsWith('airchat_local.db')
+    );
+    expect(kept).toHaveLength(1);
+    expect(mockFiles.get(kept[0])).toBe('рабочая база');
+    // Остальное вернулось своим ходом — отказ одного файла не отменяет возврат.
+    expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('рабочая лента');
   });
 
   it('отложенное не остаётся мусором в документах', async () => {
