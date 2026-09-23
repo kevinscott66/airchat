@@ -1152,7 +1152,23 @@ export async function rotateGroupInviteToken(
   const { makeInviteToken } = await import('./groupInviteToken');
   const token = makeInviteToken(randomBytes);
   await updateGroupMeta(groupId, ownerProfileId, { inviteToken: token });
-  const admins = (await listGroupMembers(groupId, ownerProfileId))
+  // v4.32.753: состав берётся различающим чтением. listGroupMembers отдаёт на
+  // сбое пустой список, а пустой список администраторов — законный случай («я
+  // единственный»), и воронка отвечает на него «разослано нулю», то есть
+  // успехом. Значит секунда занятой базы объявляла сброс состоявшимся, а у
+  // второго администратора оставался прежний токен: его кнопка «Пригласительная
+  // ссылка» продолжала выдавать ссылки, которые группа уже не пускает, и узнать
+  // об этом ему неоткуда. Повтора у служебного конверта нет. Тот же приём, что
+  // у рассылки управляющего конверта в v4.32.737.
+  const members = await listGroupMembersRead(groupId, ownerProfileId);
+  if (!members) {
+    log.warn('group_invite_token_members_unreadable', { gid: groupId.slice(0, 8) });
+    // Токен уже записан, и прежние ссылки уже отозваны — прятать это было бы
+    // второй потерей. Наверх уходит правда: сброшено, но не разослано; текст
+    // для человека собирает inviteTokenSpreadProblem.
+    return { token, announced: { op: 'meta', sent: false, reason: 'members_unreadable' } };
+  }
+  const admins = members
     .filter((m) => (m.role === 'owner' || m.role === 'admin') && m.peerPubB64 !== myPubB64)
     .map((m) => m.peerPubB64);
   // v4.32.452: пустой список администраторов — законный случай (я единственный),
