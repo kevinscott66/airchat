@@ -187,9 +187,17 @@ export class IPFSMessageStore {
     });
   }
 
-  async announceCid(myDid: string, contactDid: string, cid: string): Promise<void> {
+  /**
+   * Объявить собеседнику ссылку на новое сообщение.
+   *
+   * v4.32.732: отвечает, ушло ли объявление. Содержимое лежит в IPFS под
+   * `cid`, и узнать этот `cid` собеседнику больше неоткуда — значит отказ
+   * здесь означает «сообщение никуда не поехало», а не мелкую неудачу
+   * уведомления. Прежде ответ выбрасывался, и отправитель видел «Доставлено».
+   */
+  async announceCid(myDid: string, contactDid: string, cid: string): Promise<boolean> {
     const t = topicFor(myDid, contactDid);
-    await pubsubPublish(t, new TextEncoder().encode(cid));
+    return pubsubPublish(t, new TextEncoder().encode(cid));
   }
 
   async announceReadReceipt(myDid: string, contactDid: string, messageId: string): Promise<void> {

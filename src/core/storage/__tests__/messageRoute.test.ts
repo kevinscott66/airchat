@@ -56,11 +56,66 @@ describe('столбец маршрута', () => {
   });
 });
 
+/** Тело одного метода: якоря — его объявление и следующее за ним. */
+function body(from: string, to: string): string {
+  const a = MSG.indexOf(from);
+  const b = MSG.indexOf(to, a);
+  expect(a).toBeGreaterThan(0);
+  expect(b).toBeGreaterThan(a);
+  return MSG.slice(a, b);
+}
+
 describe('отправка записывает путь', () => {
   it('успешная публикация помечается как ipfs — и в «отправлено», и в «доставлено»', () => {
     const work = MSG.slice(MSG.indexOf('private async sendMessageWork'));
     expect(work).toContain("status: 'sent',\n      transport: 'ipfs',");
-    expect(work).toContain("status: 'delivered',\n      transport: 'ipfs',");
+    // v4.32.732: «доставлено» пишется из markHandedOver, одной строкой.
+    expect(work).toContain("status: 'delivered', transport: 'ipfs'");
+  });
+
+  /**
+   * v4.32.732. «Доставлено» — утверждение о собеседнике, а не о себе. Раньше
+   * строка переписывалась в `delivered` сразу после записи в IPFS, не читая
+   * ответа ни одного канала: ни объявления ссылки, ни почтового ящика, ни
+   * маршрутизатора. Если ссылку никто не принял, сообщение не поехало никуда
+   * — собеседник узнаёт `cid` только из объявления, — а отправитель видел
+   * двойную галочку.
+   */
+  it('«доставлено» пишется один раз и только по подтверждению канала', () => {
+    const work = body('private async sendMessageWork', 'private async deliverControlEnvelope');
+    // Ответ объявления читается, а не выбрасывается.
+    expect(work).toContain('const announced = await this.store.announceCid(myDid, peerDid, cid);');
+    // Единственный писатель «доставлено» на пути IPFS — и он одноразовый.
+    // (Второе «доставлено» в методе — запасной путь, у него свой транспорт.)
+    expect(work.match(/status: 'delivered', transport: 'ipfs'/g) ?? []).toHaveLength(1);
+    expect(work).toContain('if (handedOver) return;');
+    // Ни один канал не подтвердил — строка остаётся «отправлено».
+    expect(work).toContain("if (announced || peerDid === myDid) await markHandedOver();");
+    // Подтверждение почтового ящика и маршрутизатора тоже переводит строку.
+    expect(work).toContain('.then((ok) => { if (ok) return markHandedOver(); })');
+    expect(work).toContain('if (ok) {\n              await markHandedOver();');
+  });
+
+  /**
+   * Тот же разбор для очереди: там объявление было ЕДИНСТВЕННЫМ каналом —
+   * запасная лестница стояла только в ветке «в IPFS не записалось».
+   */
+  it('очередь не отпускает сообщение, о котором никому не сказали', () => {
+    const retry = body('async retrySendDm', 'async sendReadReceipt');
+    expect(retry).toContain('let announced = await this.store.announceCid(myDid, peerDid, cid);');
+    expect(retry).toContain("status: announced ? 'delivered' : 'sent',");
+    // Не подтвердилось — остаётся в очереди и хвост переписки не двигает.
+    const bad = retry.indexOf('if (!announced) {\n      // Хвост переписки не двигаем');
+    const tip = retry.indexOf('await setLocalConversationTip(pairKey, cid);');
+    expect(bad).toBeGreaterThan(0);
+    expect(tip).toBeGreaterThan(bad);
+    expect(retry.slice(bad, tip)).toContain('return false;');
+  });
+
+  /** И для служебного конверта — удаления и правки сообщения. */
+  it('служебный конверт не считается доехавшим по одной записи в IPFS', () => {
+    const ctl = body('private async deliverControlEnvelope', 'private async buildControlEnvelope');
+    expect(ctl).toContain('if (cid && (await this.store.announceCid(myDid, peerDid, cid))) {');
   });
 
   it('запасной путь пишет тот транспорт, который подтвердил доставку', () => {

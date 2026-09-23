@@ -1895,7 +1895,30 @@ export class MessagingService {
       status: 'sent',
       transport: 'ipfs',
     });
-    await this.store.announceCid(myDid, peerDid, cid);
+    const announced = await this.store.announceCid(myDid, peerDid, cid);
+    /**
+     * v4.32.732: «Доставлено» ставится по подтверждению канала, а не просто
+     * так.
+     *
+     * Раньше двумя строками ниже строка безусловно переписывалась в
+     * `delivered` — двойная галочка и «Доставлено» в карточке сообщения. Ни
+     * один ответ при этом не читался: ни объявление ссылки, ни запись в
+     * почтовый ящик собеседника, ни отправка через маршрутизатор. Содержимое
+     * лежит в IPFS, но `cid` собеседник узнаёт только из объявления, и если
+     * ни один канал его не принял, сообщение не поехало НИКУДА — а
+     * отправитель был уверен в обратном. Ровно тот же класс, что и потерянные
+     * входящие в v4.32.730, только со стороны отправителя.
+     *
+     * Первое подтверждение и переводит строку; дальнейшие ничего не меняют.
+     * Каналы отвечают вразнобой, поэтому пишем один раз, по флагу.
+     * «Избранное» (`peerDid === myDid`) доставлено сразу: доставлять некому.
+     */
+    let handedOver = false;
+    const markHandedOver = async (): Promise<void> => {
+      if (handedOver) return;
+      handedOver = true;
+      await saveRow({ ...pending, cid, status: 'delivered', transport: 'ipfs' });
+    };
     // v4.32.118 Stage 2: also publish the wire envelope to recipient's
     // self-inbox so strangers (not yet in our contacts, and not yet with
     // us in their contacts) still receive it. Recipient's
@@ -1907,9 +1930,11 @@ export class MessagingService {
     if (peerDid !== myDid) {
       try {
         const wire = serializeEnvelopeToBytes(em);
-        void this.store.publishToSelfInbox(peerDid, wire).catch((e) => {
-          log.warn('self_inbox_publish_failed', { err: e instanceof Error ? e.message : String(e) });
-        });
+        void this.store.publishToSelfInbox(peerDid, wire)
+          .then((ok) => { if (ok) return markHandedOver(); })
+          .catch((e) => {
+            log.warn('self_inbox_publish_failed', { err: e instanceof Error ? e.message : String(e) });
+          });
         // v4.32.212 (Audit-41 #5 CRITICAL): IPFS-success path was only
         // announcing CID on the `airchat-dm-A-B` pubsub topic. If the
         // recipient has no internet (LAN-only / Wi-Fi без интернета), they
@@ -1921,7 +1946,12 @@ export class MessagingService {
         void (async () => {
           try {
             const ok = await multiTransportRouter.send(wire, peerDid);
-            if (!ok) {
+            if (ok) {
+              await markHandedOver();
+            } else {
+              // Веер по знакомым подтверждения не даёт вовсе (см.
+              // gossipDmToContacts: каждая отправка там брошена в `void`),
+              // поэтому строку он не переводит.
               await this.gossipDmToContacts(wire, peerDid, myDid);
             }
           } catch {
@@ -1932,12 +1962,7 @@ export class MessagingService {
         log.warn('self_inbox_publish_wire_failed', { err: e instanceof Error ? e.message : String(e) });
       }
     }
-    await saveRow({
-      ...pending,
-      cid,
-      status: 'delivered',
-      transport: 'ipfs',
-    });
+    if (announced || peerDid === myDid) await markHandedOver();
     await setLocalConversationTip(pairKey, cid);
     touchConv();
     void republishProfileFromKv(this.pair);
@@ -1978,8 +2003,11 @@ export class MessagingService {
     pairKey: string
   ): Promise<string | null> {
     const cid = await publishMessageWithRetry(this.store, em);
-    if (cid) {
-      await this.store.announceCid(myDid, peerDid, cid);
+    // v4.32.732: запись в IPFS сама по себе никого не извещает — ссылку
+    // собеседник узнаёт из объявления. Отказ объявления возвращал `cid`,
+    // будто конверт ушёл, и лестница ниже не проходилась вовсе: удаление и
+    // правка сообщения не доезжали, а отправителю казалось, что доехали.
+    if (cid && (await this.store.announceCid(myDid, peerDid, cid))) {
       await setLocalConversationTip(pairKey, cid);
       return cid;
     }
@@ -1992,6 +2020,14 @@ export class MessagingService {
     const fallbackOk = await multiTransportRouter.send(payload, peerDid);
     if (fallbackOk) {
       log.info('ctl_sent_via_fallback', { peerDid, messageId: em.messageId });
+      // Настоящая ссылка есть — конверт лежит в IPFS, не доехало только
+      // объявление. Тогда и в хвост переписки пишем её, а не заглушку: запрет
+      // на `fallback:` стоит ровно потому, что по заглушке обход истории
+      // останавливается.
+      if (cid) {
+        await setLocalConversationTip(pairKey, cid);
+        return cid;
+      }
       return `fallback:${em.messageId}`;
     }
     void this.gossipDmToContacts(payload, peerDid, myDid);
@@ -2225,6 +2261,30 @@ export class MessagingService {
       return false;
     }
     const pairKey = dmPairKey(myDid, peerDid);
+    /**
+     * v4.32.732: сперва объявление, и только потом строка «Доставлено».
+     *
+     * Здесь объявление ссылки было ЕДИНСТВЕННЫМ каналом на этом пути:
+     * запасная лестница (почтовый ящик, маршрутизатор) стояла только в ветке
+     * «в IPFS не записалось». Ответ объявления выбрасывался, строка писалась
+     * `delivered` строкой выше — и сообщение, о котором собеседнику никто не
+     * сказал, показывалось отправителю доставленным, а из очереди уходило
+     * навсегда.
+     *
+     * Теперь та же лестница проходится и здесь, а не подтвердившееся
+     * сообщение остаётся в очереди (`false`) и уезжает при следующей попытке.
+     */
+    let announced = await this.store.announceCid(myDid, peerDid, cid);
+    if (!announced && peerDid === myDid) announced = true; // «Избранное»
+    if (!announced) {
+      const wire = serializeEnvelopeToBytes(em);
+      try {
+        if (await this.store.publishToSelfInbox(peerDid, wire)) announced = true;
+      } catch (e) {
+        log.warn('dm_retry_self_inbox_failed', { err: e instanceof Error ? e.message : String(e) });
+      }
+      if (!announced && (await multiTransportRouter.send(wire, peerDid))) announced = true;
+    }
     if (!isControlOnlyText(payload.text)) {
       await upsertChatMessage({
         id: payload.messageId,
@@ -2232,7 +2292,7 @@ export class MessagingService {
         cid,
         text: payload.text,
         direction: 'out',
-        status: 'delivered',
+        status: announced ? 'delivered' : 'sent',
         mediaCids: payload.mediaCids.length ? JSON.stringify(payload.mediaCids) : null,
         createdAt: payload.ts,
         ownerProfileId: ownerPid,
@@ -2241,7 +2301,12 @@ export class MessagingService {
       });
       void touchConversation(payload.contactPubB64, ownerPid, previewLabelForText(payload.text).slice(0, 120), 'out', false);
     }
-    await this.store.announceCid(myDid, peerDid, cid);
+    if (!announced) {
+      // Хвост переписки не двигаем: собеседник этого `cid` не знает, и
+      // следующая попытка должна собрать тот же самый конверт.
+      log.warn('dm_retry_announce_failed', { messageId: payload.messageId, peerDid });
+      return false;
+    }
     await setLocalConversationTip(pairKey, cid);
     void republishProfileFromKv(this.pair);
     return true;
