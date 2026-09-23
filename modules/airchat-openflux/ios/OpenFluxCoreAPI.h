@@ -47,6 +47,39 @@ extern int OpenFluxIsRunning(void);
 extern void OpenFluxStop(void);
 extern void OpenFluxFree(char* p);
 
+/* ── Живость канала и смена сети ─────────────────────────────────────────── */
+
+/* Сказать ядру, что сетевой путь сменился: рвёт несущий сокет и сбрасывает
+ * экспоненту паузы переподключения. Без этого вызова туннель после
+ * переключения Wi-Fi ↔ LTE или включения постороннего VPN встаёт не сразу, а
+ * по дедлайну чтения — десятки секунд. Звать безопасно до Start, после Stop и
+ * несколько раз подряд: система на одном переключении присылает пачку
+ * событий. */
+extern int OpenFluxNetworkChanged(void);
+
+/* Есть ли живой канал ПРЯМО СЕЙЧАС. Отличается от OpenFluxIsRunning, который
+ * отвечает лишь «объект существует» и остаётся единицей на мёртвом туннеле. */
+extern int OpenFluxIsConnected(void);
+
+/* JSON состояния: connected, mode, socks_addr, байты и пакеты в обе стороны,
+ * reconnects, uptime_ms. Растущий reconnects при нулевом bytes_received —
+ * единственный способ увидеть с телефона, что ядро крутится в цикле.
+ * Строку освобождать через OpenFluxFree. */
+extern char* OpenFluxState(void);
+
+/* ── Режим системного VPN ────────────────────────────────────────────────── */
+
+/* На iOS не используется: здесь туннель app-scoped (локальный SOCKS5 +
+ * proxyConfigurations), права Network Extension у команды нет. Объявления
+ * держим только потому, что сборочный скрипт сверяет заголовок с C-API ядра
+ * целиком и останавливается на любом расхождении. */
+extern char* OpenFluxTunStart(char* transportName, char* docURL, char* maxToken, char* maxUID, char* dns, int mtu);
+extern void OpenFluxTunWritePacket(char* buf, int n);
+extern int OpenFluxTunReadPacket(char* buf, int capacity);
+extern char* OpenFluxTunStats(void);
+extern int OpenFluxTunIsRunning(void);
+extern void OpenFluxTunStop(void);
+
 #ifdef __cplusplus
 }
 #endif

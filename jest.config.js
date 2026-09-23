@@ -7,7 +7,21 @@ module.exports = {
   preset: 'jest-expo',
   setupFiles: ['<rootDir>/jest.setup.js'],
   testMatch: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx'],
-  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/'],
+  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/.claude/'],
+  // Каталоги, которые нельзя даже обходить. testPathIgnorePatterns прячет
+  // только сами тесты, а карту модулей haste строит по всему дереву — и
+  // спотыкается о копии.
+  //   .claude/worktrees — рабочие копии репозитория целиком, лежащие внутри
+  //     него же. Без этой строки jest считает каждую копию отдельным деревом:
+  //     сюит становится втрое больше, каждый модуль дублируется, и сотни сюит
+  //     падают на _assertNoDuplicates вместо своей настоящей проверки.
+  //   ios/, android/ — после pod install и prebuild там появляются копии
+  //     package.json из Pods и node_modules.
+  modulePathIgnorePatterns: [
+    '<rootDir>/.claude/',
+    '<rootDir>/ios/',
+    '<rootDir>/android/',
+  ],
   // `multiformats` ships an exports map with only an `import` (ESM) condition —
   // no `require` — so jest's CommonJS resolver can't find its subpaths. Map them
   // to the built ESM files and let the transform (below) compile them to CJS.

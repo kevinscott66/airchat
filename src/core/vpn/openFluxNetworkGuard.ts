@@ -123,7 +123,7 @@ async function reviveOnce(): Promise<OpenFluxReviveResult> {
 
   const status = await retryOpenFlux(cfg);
   if (status !== 'on' && status !== 'failed') {
-    // `unsupported` (iOS, web, сборка без ядра) и `off`: трогать было нечего,
+    // `unsupported` (web, сборка без ядра) и `off`: трогать было нечего,
     // и транспорт тоже трогать незачем — путь трафика не менялся.
     log.info('openflux_net_change_untouched', { status });
     return 'skipped';
