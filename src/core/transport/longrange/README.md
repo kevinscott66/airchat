@@ -1,42 +1,32 @@
 # Long Range Transport Modules
 
-## Образовательные модули для дальней связи
+## Educational research modules
 
-Эти модули предназначены только для **образовательных исследовательских целей**.
-Они не являются доступными функциями продукта и не должны появляться в
-пользовательском интерфейсе без отдельной реализации, тестов и аудита.
+These modules are for **educational research only**. They are not shipped product capabilities and must not appear in the UI without separate implementation, testing and review.
 
-### Доступные модули
-
-| Модуль | Технология | Статус |
-|--------|------------|--------|
-| `hfRadio.ts` | HF-радио (Xiegu G90, Yaesu FT-817) через USB-serial | Backlog-only |
+| Module | Technology | Status |
+| --- | --- | --- |
+| `hfRadio.ts` | HF radio (Xiegu G90, Yaesu FT-817) over USB serial | Backlog-only |
 | `lora.ts` | LoRa / Meshtastic | Backlog-only |
 | `wifiMesh.ts` | Wi-Fi Direct Mesh | Backlog-only |
-| `geographicRouter.ts` | Географическая маршрутизация | Внутренний прототип, не UI |
-| `opportunisticSync.ts` | Синхронизация при встрече | Backlog-only |
-| `relayService.ts` | Ретрансляция через чужие устройства | Backlog-only |
+| `geographicRouter.ts` | Geographic routing | Internal prototype, not UI |
+| `opportunisticSync.ts` | Opportunistic encounter synchronization | Backlog-only |
+| `relayService.ts` | Relay through other devices | Backlog-only |
 
-### Требования для реальной работы
+## Requirements for real operation
 
-Для полноценной работы потребуются нативные модули:
+Native modules would be required:
 
-- **HF-радио**: `react-native-usb-serial` (может потребоваться expo config plugin)
-- **LoRa**: `react-native-serialport` или адаптер через USB
-- **Wi-Fi Direct**: `react-native-wifi-direct` (Android только)
+- HF radio: `react-native-usb-serial`, potentially with an Expo config plugin.
+- LoRa: `react-native-serialport` or a USB adapter.
+- Wi-Fi Direct: `react-native-wifi-direct`, Android only.
 
-Перед установкой проверьте совместимость с текущим **Expo SDK** и **React Native** в проекте; часть библиотек не поддерживает новую архитектуру без форка.
+Check compatibility with the project's Expo SDK and React Native before installing. Some libraries require a fork for the new architecture.
 
-### Лицензионные ограничения
+## Radio licensing
 
-- Использование радиочастот требует соблюдения местного законодательства
-- В РФ для работы на HF-диапазонах требуется лицензия радиолюбителя
-- LoRa (868 МГц) разрешён без лицензии для устройств малой мощности в рамках регламента
+Radio use must comply with local regulations. The original design notes require an amateur-radio license for HF operation in Russia and describe low-power 868 MHz LoRa operation within applicable unlicensed-device limits. Verify current requirements for the actual equipment and jurisdiction before use.
 
-### Интеграция
+## Integration
 
-Подъём из `src/App.tsx` закрыт флагом `LONG_RANGE_PIPELINE_ENABLED`
-(`pipelineFlag.ts`, сейчас `false`): пока флаг выключен, `initLongRangeTransport()`
-— no-op и нативный Wi-Fi Direct не трогается. Что нужно доделать до включения —
-перечислено в `pipelineFlag.ts`. Лог готовности прототипов не означает, что
-транспорт доступен пользователю или пригоден для production.
+Startup from `src/App.tsx` is guarded by `LONG_RANGE_PIPELINE_ENABLED` in `pipelineFlag.ts`, currently `false`. While disabled, `initLongRangeTransport()` is a no-op and does not touch native Wi-Fi Direct. Remaining prerequisites are listed in `pipelineFlag.ts`. Prototype readiness logs do not establish user availability or production readiness.

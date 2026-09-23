@@ -80,8 +80,7 @@ push enabled.
 
 `{ cid, contactDid, kind }` and nothing else. No name, no text, no group id —
 the device looks the message up locally by `cid`. The iOS alert text is
-composed here, which is why it is impersonal ("Новое сообщение — откройте
-приложение"): the server has nothing personal to put in it.
+composed here, which is why it is impersonal ("New message — open the app"): the server has nothing personal to put in it.
 
 ### Payload shape, and why it differs per platform
 
@@ -125,7 +124,7 @@ encrypt. A `404`/`410` from the push service means the subscription is gone and
 the entry is dropped.
 
 The page asks for the permission on a tap, in Settings → Notifications →
-«Уведомления в браузере», and never on load: Safari — the only route to
+the browser-notifications control, and never on load: Safari — the only route to
 notifications on an iPhone without the App Store — hands out the Push API in
 response to a gesture, and a browser remembers a refusal for the whole domain.
 Turning the switch off unsubscribes the browser; the entry here dies with the

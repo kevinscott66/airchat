@@ -1,37 +1,22 @@
-# Ядро OpenFlux под iOS
+# OpenFlux core for iOS
 
-Сюда кладётся `OpenFlux.xcframework` — ядро OpenFlux (Go), собранное с тегом
-`mobile` в статические архивы для iPhone и симулятора. Заголовок с сигнатурами
-C-API лежит рядом, в `OpenFluxCoreAPI.h`, и **написан руками**: в отличие от
-Android, он в git и не является результатом сборки. Иначе модуль не собирался
-бы в свежем клоне, где ядра ещё нет.
+Place `OpenFlux.xcframework` here: the OpenFlux Go core built with the `mobile` tag as static archives for iPhone and simulator. The adjacent C API header, `OpenFluxCoreAPI.h`, is **handwritten**. Unlike Android, it is tracked rather than generated so a fresh clone can build without the core.
 
-Сам xcframework в репозиторий не коммитится (см. `.gitignore`): это 29 МБ,
-которые полностью получаются из исходников ядра. Собери один раз локально:
+The 29 MB xcframework is generated from core source and excluded by `.gitignore`. Build it locally:
 
-```
+```sh
 bash scripts/build-openflux-ios.sh
 ```
 
-Нужны установленный Go и Xcode (не только Command Line Tools). Исходники ядра
-скрипт ищет в `~/programs/OpenFlux` — другой путь задаётся переменной
-`OPENFLUX_SRC`.
+Requires Go and full Xcode, not just Command Line Tools. The default core source is `~/programs/OpenFlux`; override with `OPENFLUX_SRC`.
 
-**Собирать нужно до `pod install`.** `AirChatOpenFlux.podspec` смотрит на
-наличие xcframework в момент установки подов и только тогда включает ядро в
-сборку. Собрал ядро после — переустанови поды:
+**Build before `pod install`.** `AirChatOpenFlux.podspec` includes the core only if the xcframework exists when pods are installed. If built later, reinstall:
 
-```
+```sh
 bash scripts/build-openflux-ios.sh
 npx expo prebuild -p ios
 ```
 
-Без ядра приложение собирается и работает, просто туннель отвечает
-`isSupported() === false` и в настройках показан как недоступный. То же самое
-на iOS 16 и ниже: перехват трафика держится на API Network.framework из
-iOS 17, и туннель без перехвата не вёз бы ничего.
+Without the core, the app still builds and runs; the tunnel returns `isSupported() === false` and appears unavailable in settings. The same applies on iOS 16 and earlier: traffic interception requires Network.framework APIs from iOS 17.
 
-Только arm64 — 32-битных iPhone и симуляторов на Intel в поддержке уже нет.
-
-Скачивать готовую сборку ядра из сети модуль не умеет и не должен:
-непроверенный бинарник в туннеле обессмысливает сам туннель.
+Only arm64 is supported, not 32-bit iPhones or Intel simulators. The module deliberately cannot download a prebuilt core: an unverified binary would undermine the tunnel's trust boundary.

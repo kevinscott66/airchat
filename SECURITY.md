@@ -21,7 +21,7 @@ to be useful, not as a trusted party. The design addresses three vectors:
 
 ### What servers do see
 
-- **Posts published by link.** «Опубликовать по ссылке» uploads a signed but
+- **Posts published by link.** the Publish by link action uploads a signed but
   **unencrypted** copy of the post (text and attachments) to the cloud vault,
   which serves it to anyone holding the link (`GET /v1/post/:postId`). The app
   asks for explicit confirmation before the first upload and lets the author

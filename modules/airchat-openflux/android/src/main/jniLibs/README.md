@@ -1,23 +1,15 @@
-# Ядро OpenFlux
+# OpenFlux core
 
-Сюда кладётся `arm64-v8a/libopenflux.so` — ядро OpenFlux (Go), собранное под
-Android с тегом `mobile`. Рядом, в `../cpp/include/libopenflux.h`, оказывается
-заголовок с сигнатурами C-API: по нему компилируется JNI-обёртка.
+Place `arm64-v8a/libopenflux.so` here: the OpenFlux Go core built for Android with the `mobile` tag. The generated C API header is placed in `../cpp/include/libopenflux.h` for compiling the JNI wrapper.
 
-Бинарник в репозиторий не коммитится (см. `.gitignore`): это 12 МБ, которые
-полностью получаются из исходников ядра, и пересобираются они при каждом
-изменении. Собери один раз локально:
+The 12 MB binary is reproducible from core source and excluded by `.gitignore`. Build locally:
 
-```
+```sh
 bash scripts/build-openflux-android.sh
 ```
 
-Нужны установленный Go и Android NDK. Исходники ядра скрипт ищет в
-`~/programs/OpenFlux` — другой путь задаётся переменной `OPENFLUX_SRC`.
+Requires Go and the Android NDK. The default core source is `~/programs/OpenFlux`; override with `OPENFLUX_SRC`.
 
-Без этого файла сборка приложения останавливается на задаче `checkOpenFluxCore`
-с тем же советом — качать готовую сборку откуда-то из сети модуль не умеет и не
-должен: непроверенный бинарник в туннеле обессмысливает сам туннель.
+Without this file, the application build stops at `checkOpenFluxCore` with the same instructions. The module deliberately cannot download a prebuilt core: an unverified binary would undermine the tunnel's trust boundary.
 
-Только arm64-v8a: под x86_64-эмулятор ядро не собирается, и там туннель честно
-отвечает `isSupported() === false`.
+Only arm64-v8a is built. On x86_64 emulators, the tunnel returns `isSupported() === false`.

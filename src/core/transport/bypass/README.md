@@ -1,26 +1,26 @@
-# Bypass transport (каркас)
+# Bypass transport scaffold
 
-В репозитории **нет** сущностей из исходного ТЗ: `MultiTransportRouter`, `OpportunisticSync`, глобального `db`, `encryptForTarget`. Здесь — **типы, флаги по умолчанию (всё выключено), `BypassRouter`-заглушка** и SQL-файл для возможной будущей миграции.
+The repository does **not** contain the original specification's `MultiTransportRouter`, `OpportunisticSync`, global `db` or `encryptForTarget`. This directory contains types, disabled-by-default flags, a stub `BypassRouter`, and SQL for a possible future migration.
 
-## Почему не «полный стек» из ТЗ
+## Why this is not the full proposed stack
 
-- **Domain fronting** к произвольным чужим доменам без договорённости с CDN/оператором — юридически и технически рискованно; в React Native нет того же поведения, что в браузере с SNI/Host.
-- **DNS-туннель** через публичные DoH с длинными именами — злоупотребление чужой инфраструктурой и типичные нарушения ToS.
-- **VK / Telegram / Яндекс** — только с явными токенами пользователя и соблюдением правил сервисов; автоматическая «доставка чата» через них — отдельный продуктовый и юридический контур.
+- Domain fronting through unrelated domains without agreement from the CDN/operator carries technical and legal risks. React Native does not reproduce browser SNI/Host behavior.
+- DNS tunneling through public DoH endpoints using long names can abuse third-party infrastructure and violate service terms.
+- VK, Telegram and Yandex require explicit user tokens and compliance with service rules. Automatic chat delivery through them is a separate product and compliance concern.
 
-Для реального P2P используйте **`src/core/transport/webrtc/`** и ваш signaling.
+For actual P2P, use `src/core/transport/webrtc/` and your signaling service.
 
-## Настройка токенов (если когда-нибудь реализуете мосты)
+## Token setup for future bridges
 
-- **VK**: приложение VK, scope `messages` (и что требует ваш сценарий), токен пользователя — в переменных окружения сборки или в защищённом хранилище, не в git.
-- **Telegram**: Bot API — `bot` token от @BotFather; чат должен быть инициирован пользователем (`/start`). Храните токен в секретах CI/локально, не коммитьте.
-- **Яндекс.Диск**: OAuth, отдельное приложение в кабинете разработчика; токен с минимальными правами.
+- **VK:** register a VK app with `messages` and any scenario-required scopes. Store the user token in build environment variables or secure storage, never Git.
+- **Telegram:** obtain a Bot API token from @BotFather. The user must initiate the chat with `/start`. Keep the token in CI secrets or local secure storage.
+- **Yandex Disk:** register a developer application, use OAuth and minimum scopes.
 
-## Интеграция в приложение
+## Application integration
 
-1. Включите `"bypass": { "enabled": true, ... }` в `assets/config.json` (или override в `airchat-config.json` в document directory).
-2. Создайте `createBypassRouterFromFlags(cfg.bypass)` и подключите к слою отправки сообщений, когда появится реальная реализация каналов.
+1. Enable `"bypass": { "enabled": true, ... }` in `assets/config.json`, or override through `airchat-config.json` in the document directory.
+2. Create `createBypassRouterFromFlags(cfg.bypass)` and connect it to message delivery only when real channel implementations exist.
 
-## Тестовые сценарии (после реализации)
+## Future test scenarios
 
-Пока все каналы возвращают `available: false`, `send` — `false`. После реализации — проверять каждый канал изолированно (мок-сервер, тестовый аккаунт, согласованная политика).
+All current channels return `available: false` and `send: false`. After implementation, test each independently with a mock server, test account and agreed policy.

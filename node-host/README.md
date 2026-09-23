@@ -1,190 +1,121 @@
-# node-host: ядро AirChat вне телефона и сервер MCP поверх него
+# node-host: the AirChat core outside the phone, exposed through MCP
 
-Каталог состоит из двух слоёв.
+This directory contains two layers.
 
-**Ядро в Node.** `host.ts` поднимает тот же код, что работает в приложении:
-база, личность, служба переписки, транспорт через релей. Ничего не
-переписано — заменены только платформенные модули (`shims/`), ровно так же,
-как это делает `metro.config.js` для телефона. Сборка — один файл через
-`build.mjs`.
+**Node core.** `host.ts` runs the application's existing database, identity, messaging service and relay transport. Only platform modules are replaced through `shims/`, matching the role of `metro.config.js` on mobile. `build.mjs` produces a single-file bundle.
 
-**Сервер MCP.** `mcp/` выставляет наружу то, что ядро умеет делать честно без
-телефона: читать переписки и контакты, отправлять сообщения, править карточку
-профиля и настройки приватности. Транспорта два: stdio (процесс поднимает
-агент) и HTTP (процесс живёт на сервере).
+**MCP server.** `mcp/` exposes capabilities that work without a phone: reading conversations and contacts, sending messages, and editing profile and privacy settings. It supports stdio, where an agent launches the process, and HTTP, where the process runs on a server.
 
----
-
-## Сборка и запуск
+## Build and run
 
 ```sh
 node node-host/build.mjs node-host/mcp/main.ts node-host/dist/mcp.mjs
 
-# один раз: положить слова аккаунта в secure-store каталога
+# Once: enroll the account seed in the directory's secure store.
 AIRCHAT_SECURE_STORE_KEY=$(openssl rand -base64 32) \
   node node-host/dist/mcp.mjs enroll --workdir /var/lib/airchat
 
-# дальше слова не нужны
+# Subsequent starts do not require the seed phrase.
 AIRCHAT_SECURE_STORE_KEY=... node node-host/dist/mcp.mjs stdio --workdir /var/lib/airchat
 AIRCHAT_MCP_TOKEN=... AIRCHAT_SECURE_STORE_KEY=... \
   node node-host/dist/mcp.mjs http --workdir /var/lib/airchat --port 8787
 ```
 
-| Переменная | Обязательна | Зачем |
+| Variable | Required | Purpose |
 | --- | --- | --- |
-| `AIRCHAT_SECURE_STORE_KEY` | всегда | 32 байта в base64; ключ шифрования secure-store |
-| `AIRCHAT_MCP_TOKEN` | для `http` | пропуск, не короче 32 символов |
-| `AIRCHAT_WORKDIR`, `AIRCHAT_MCP_HOST`, `AIRCHAT_MCP_PORT` | нет | то же, что одноимённые аргументы |
+| `AIRCHAT_SECURE_STORE_KEY` | Always | 32-byte, base64-encoded secure-store encryption key |
+| `AIRCHAT_MCP_TOKEN` | HTTP mode | Authentication token, at least 32 characters |
+| `AIRCHAT_WORKDIR`, `AIRCHAT_MCP_HOST`, `AIRCHAT_MCP_PORT` | No | Equivalent to the corresponding command-line options |
 
-## Ключ шифрования обязателен
+## Encryption key requirement
 
-Без `AIRCHAT_SECURE_STORE_KEY` процесс **не стартует**. Это не придирка: в
-рабочем каталоге лежат секретные слова кошелька, то есть аккаунт целиком, и
-запасной режим (ключ файлом рядом) означал бы, что снимок тома или резервная
-копия уносит шифротекст вместе с ключом к нему. Для запуска «посмотреть
-руками» такой режим ещё приемлем, для сервера — нет, поэтому `mcp/main.ts`
-включает запрет до первого касания диска.
+The process **will not start** without `AIRCHAT_SECURE_STORE_KEY`. The working directory holds the account's seed phrase in encrypted form. A fallback key file beside it would put both ciphertext and its key into the same snapshot or backup. `mcp/main.ts` rejects that configuration before accessing disk.
 
-Ключ лучше передавать не строкой в юните, а через `LoadCredential=` systemd
-или другой источник: переменные окружения процесса видны в
-`/proc/<pid>/environ` и наследуются всем дочерним процессам.
+Prefer systemd `LoadCredential=` or another credential source to a literal key in a service unit. Process environment variables can be visible through `/proc/<pid>/environ` and are inherited by child processes.
 
-## Как слова аккаунта попадают на сервер
+## Account enrollment
 
-Один раз, командой `enroll`, и только потоком ввода:
+Supply the phrase once through `enroll`, using standard input:
 
 ```sh
 pass show airchat/seed | node node-host/dist/mcp.mjs enroll --workdir /var/lib/airchat
 ```
 
-Аргумент командной строки виден в `ps` любому пользователю машины и остаётся в
-истории оболочки; переменная окружения лежит в `/proc/<pid>/environ` всё время
-жизни процесса и достаётся по наследству дочерним. Стандартный ввод не
-остаётся нигде. С терминала команда читает фразу без эха, посимвольно, минуя
-историю строк `readline`.
+Command-line arguments may appear in `ps` and shell history; environment variables remain in the process environment and reach child processes. Standard input avoids these locations. Interactive enrollment reads without echo, character by character, bypassing `readline` history.
 
-Чего это не даёт: стереть фразу из памяти процесса нельзя — строки в JS
-неизменяемы. Что можно — не дать ей попасть никуда ещё и не держать дольше
-одной команды: дальше в каталоге остаётся только шифротекст, и сервер
-запускается без фразы вовсе.
+This does not erase the phrase from JavaScript memory: strings are immutable. It limits exposure and keeps the phrase in memory for a single command. Only ciphertext remains in the directory; later server starts do not need the phrase.
 
-## Пропуск для HTTP
+## HTTP authentication
 
-HTTP без `AIRCHAT_MCP_TOKEN` не поднимается вообще — за инструментами стоит
-аккаунт целиком, и открытый порт равен раздаче аккаунта.
+HTTP mode refuses to start without `AIRCHAT_MCP_TOKEN`: its tools operate on the account.
 
-Пропуск идёт в заголовке `Authorization: Bearer`, а не в адресе: `?token=…`
-оседает в журнале любого прокси, в истории браузера, в `Referer` и в списке
-процессов у того, кто позвал curl. Сравнение — по свёрткам sha256 через
-`timingSafeEqual`, чтобы время ответа не подсказывало посимвольный подбор.
+Send the token in `Authorization: Bearer`, never `?token=…`. URLs can reach proxy logs, browser history, `Referer` and command-line process listings. Comparison uses SHA-256 digests and `timingSafeEqual`.
 
-Слушается только петлевой адрес. TLS этот процесс не умеет, и притворяться
-незачем: наружу его выставляют обратным прокси с TLS или ssh-туннелем. Ключа
-«разрешить 0.0.0.0 всё равно» нет намеренно — он бы и стал обычным способом
-запуска.
+The listener binds to loopback only. The process does not implement TLS; expose it through a TLS reverse proxy or SSH tunnel. There is deliberately no option to permit an unprotected `0.0.0.0` listener.
 
----
+## Tools
 
-## Инструменты
-
-| Имя | Что делает |
+| Name | Function |
 | --- | --- |
-| `status` | DID, профиль, состояние сокета релея, время работы |
-| `conversations_list` | переписки с непрочитанными и превью |
-| `conversation_messages` | страница сообщений, постраничность курсором |
-| `contacts_list` | контакты |
-| `contact_add` | завести контакт по `did:key:…`, `airchat://…`, ссылке или ключу |
-| `message_send` | личное сообщение |
-| `profile_get` / `profile_set` | карточка: имя, «о себе», статус, местоимения |
-| `privacy_get` / `privacy_set` | настройки приватности |
+| `status` | DID, profile, relay socket state and uptime |
+| `conversations_list` | Conversations with unread counts and previews |
+| `conversation_messages` | Cursor-paginated messages |
+| `contacts_list` | Contacts |
+| `contact_add` | Add a contact from `did:key:…`, `airchat://…`, a link or key |
+| `message_send` | Send a direct message |
+| `profile_get` / `profile_set` | Name, bio, status and pronouns |
+| `privacy_get` / `privacy_set` | Privacy settings |
 
-Отказ приходит с `isError: true` и разобранной причиной: `blocked`,
-`rate_limited`, `no_session`, `no_route`, `read_failed`, `write_failed`,
-`bad_contact_id`, `bad_cursor`. Два различия, которые здесь не смешиваются:
+Failures return `isError: true` with a reason: `blocked`, `rate_limited`, `no_session`, `no_route`, `read_failed`, `write_failed`, `bad_contact_id` or `bad_cursor`.
 
-* `read_failed` — «прочитать не удалось», а не «ничего нет». Пустой список и
-  отказ чтения выглядят в ядре одинаково (`null`), и на пустоте агент напишет
-  «переписок нет», а это может быть неправдой.
-* `message_send` отвечает `null` на четыре разных случая. Причина
-  восстанавливается из журнала ядра (`runtime/logBus.ts`) — блокировку снимает
-  человек, лимит проходит сам, отсутствие ключа лечится добавлением контакта
-  заново.
+- `read_failed` means the read failed, not that the account is empty. The core represents both an empty result and a failed read as `null`; treating both as empty could mislead the agent.
+- `message_send` returns `null` for four different failures. The host recovers the reason from `runtime/logBus.ts`: a block needs human intervention, a rate limit expires, and a missing key requires adding the contact again.
 
----
+## Visibility and capability limits
 
-## Что этот сервер НЕ видит и не делает
+### Phone-sent messages are not visible here
 
-### 1. Сообщений, отправленных с телефона, здесь не видно
+Outgoing envelopes go to the recipient's topic, not the sender's. The transport suppresses self-echo using `senderDid === myDid`. A headless client subscribed to its own topic cannot observe messages sent from the phone. This is not a delay or configuration problem; it requires account synchronization, which is not connected here.
 
-Отправка кладёт конверт в тему получателя, а не в свою; собственное эхо
-транспорт гасит по `senderDid === myDid`. Значит headless-клиент, подписанный
-на свою тему, исходящие с телефона не увидит никогда — это не задержка и не
-ошибка настройки. Их дала бы только синхронизация аккаунта, а она не
-подключена (см. ниже).
+### Account synchronization is intentionally disconnected
 
-### 2. Синхронизация аккаунта намеренно не подключена
+`syncActiveAccount` would register another device, consume one of the account's eight slots, and retain the mutation log until this client consumes it. This is a user decision, not an implementation detail; a headless instance must not silently join the device list or cause log retention.
 
-`syncActiveAccount` завёл бы на сервере ещё одно устройство: оно занимает один
-из восьми слотов аккаунта и заставляет сервер удерживать журнал мутаций, пока
-этот клиент его не вычерпает. **Это решение пользователя, а не техническая
-деталь** — headless-экземпляр не должен появляться в чужом списке устройств и
-не должен заставлять сервер копить журнал ради себя.
+### A new instance starts with an empty database
 
-### 3. Старт — с пустой базы
+An enrolled directory contains identity, not conversation history. It sees relay traffic received **after** startup. An empty `conversations_list` in a fresh directory is therefore a valid empty result.
 
-Следствие первых двух пунктов. Каталог, заведённый `enroll`, содержит только
-личность; переписки в нём нет. Экземпляр видит ровно то, что пришло по релею
-**после** его запуска. Первая же `conversations_list` на свежем каталоге
-законно вернёт пустой список — и это именно пустота, а не отказ чтения.
+### Relay-only transport; no IPFS
 
-### 4. IPFS в Node не работает, релей — единственный путь
+The core disables Helia on mobile (`ipfs_disabled_on_mobile`), and this host identifies as `ios`. Traffic uses the relay (`ntfy.sh` by default); `message_send` reports `internet`. IPFS-dependent attachments and profile photos do not work here.
 
-Ядро отключает Helia на мобильных платформах (`ipfs_disabled_on_mobile`), а
-хост представляется как `ios`. Поэтому всё уходит и приходит через релей
-(`ntfy.sh` по умолчанию), и в ответе `message_send` путь всегда `internet`.
-Ничего, что зависит от IPFS — вложения, фотографии профиля, — здесь не
-работает.
+### Tools not exposed
 
-### Чего нет в списке инструментов
+OpenFlux tunnel control and application settings belong to the native application process and phone UI. The in-app bridge (`feat/agent-bridge`) handles them; this server must not claim to enable something it cannot control.
 
-Управления туннелем OpenFlux и настроек приложения. Туннель поднимает нативный
-модуль в процессе приложения, настройки приложения — это то, что человек видит
-на экране телефона; из процесса на сервере ни того, ни другого не существует.
-Инструмент, отвечающий «включено», ничего не включив, — не заглушка, а ложь.
-Этим честно занимается мост внутри приложения (ветка `feat/agent-bridge`).
+Calls, feeds, groups and attachments are also excluded: without WebRTC, IPFS and native modules they are absent or incomplete.
 
-Нет и звонков, ленты, групп, вложений: без WebRTC, IPFS и нативных модулей они
-здесь либо не работают вовсе, либо работают наполовину.
+## Verification
 
----
-
-## Проверка
-
-Оба скрипта печатают числа, а не «получилось».
+The scripts report measured results:
 
 ```sh
 node node-host/build.mjs node-host/proof.ts    node-host/dist/proof.mjs
 node node-host/build.mjs node-host/mcp/main.ts node-host/dist/mcp.mjs
 node node-host/build.mjs node-host/mcp/scenario.ts node-host/dist/scenario.mjs
 
-node node-host/dist/proof.mjs      # ядро: DID, база, сокет, конверт на релее
-node node-host/dist/scenario.mjs   # сервер: два экземпляра и настоящий клиент MCP
+node node-host/dist/proof.mjs      # Core: DID, database, socket, relay envelope
+node node-host/dist/scenario.mjs   # Server: two instances and a real MCP client
 ```
 
-`scenario.mjs` заводит две синтетические личности во временном каталоге,
-поднимает два процесса `mcp.mjs`, разговаривает с ними клиентом MCP по stdio и
-проверяет, среди прочего: отказ старта без ключа и без пропуска, отсутствие
-слов аккаунта открытым текстом в файлах каталога, доставку сообщения (по
-появлению строки в базе получателя, а не по ответу отправителя), отказы с
-причинами, 401 на HTTP без пропуска и с пропуском в адресе, чистую остановку по
-SIGTERM. Сообщения синтетические и уходят на публичный релей.
+`scenario.mjs` creates two synthetic identities in a temporary directory, starts two `mcp.mjs` processes and talks to them over stdio using an MCP client. It checks missing-key/token startup rejection, absence of plaintext seeds on disk, delivery by a row in the recipient database rather than the sender's response, reasoned failures, HTTP 401 for missing or URL-supplied tokens, and graceful SIGTERM shutdown. Synthetic messages use the public relay.
 
-## Коды возврата
+## Exit codes
 
-| Код | Что значит |
+| Code | Meaning |
 | --- | --- |
-| 0 | остановлено по сигналу или клиент закрыл канал |
-| 2 | условия запуска не те: нет ключа, нет пропуска, нет аккаунта в каталоге |
-| 70 | работало и упало: необработанное исключение, база закрыта, нужен перезапуск |
-| 75 | остановка не уложилась в 10 с; процесс вышел сам, чтобы не быть убитым на полуслове |
-| 130 | второй сигнал: остановку попросили не ждать |
+| 0 | Signal-driven shutdown or client channel closed |
+| 2 | Invalid startup conditions: missing key, token or enrolled account |
+| 70 | Runtime failure: unhandled exception or closed database; restart required |
+| 75 | Shutdown exceeded 10 seconds; process exited rather than waiting to be killed |
+| 130 | Second signal requested immediate exit |
