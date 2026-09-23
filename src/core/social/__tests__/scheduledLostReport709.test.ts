@@ -54,7 +54,8 @@ describe('потерянное отложенное сообщение назв�
 
   it('все три снятия недоставленной строки зовут отчёт', () => {
     const flush = codeOnly(FLUSH());
-    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(5); // объявление + четыре вызова
+    // v4.32.782: пятый вызов — своя копия группового сообщения не легла.
+    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(6); // объявление + пять вызовов
     // v4.32.714: четвёртый вызов — отказ sendMessage у личного отложенного сообщения.
     expect(countOf(flush, "'SCHEDULED_REFUSED',")).toBe(1);
     expect(flush).toContain("'SCHEDULED_DENIED',");
@@ -98,7 +99,8 @@ describe('потерянное отложенное сообщение назв�
 describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы целы', () => {
   it('число удалений строки расписания не изменилось', () => {
     const flush = FLUSH();
-    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(6);
+    // v4.32.782: седьмое — снятие строки, чья своя копия не легла за ABANDON_AFTER_MS.
+    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(7);
     expect(codeOnly(flush)).not.toContain('deleteScheduledMessage(msg.id)');
   });
 
@@ -113,12 +115,16 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы цел
   it('удачная отправка по-прежнему пишет свою копию и не рапортует о потере', () => {
     const flush = FLUSH();
     const sent = flush.indexOf("log.info('scheduled_group_message_sent'");
-    const insert = flush.indexOf('await insertGroupMessage({');
+    // v4.32.782: своя копия пишется вместе со следом и отвечает исходом.
+    const insert = flush.indexOf('await insertGroupMessageWithTouch(');
     expect(insert).toBeGreaterThan(0);
     expect(sent).toBeGreaterThan(insert);
     expect(flush).toContain("log.info('scheduled_message_sent', {");
-    // Между записью своей копии и отметкой об отправке отчёта о потере нет.
-    expect(flush.slice(insert, sent)).not.toContain('reportScheduledLost(');
+    // Отчёт о потере лежит в ветке отказа записи, а та выходит по `continue`
+    // и до отметки об отправке не доходит.
+    const fail = flush.indexOf("if (own === 'failed') {", insert);
+    expect(fail).toBeGreaterThan(insert);
+    expect(flush.slice(fail, sent)).toContain('continue;');
   });
 
   it('сторож смены профиля и удержание непрочитанной строки не тронуты', () => {

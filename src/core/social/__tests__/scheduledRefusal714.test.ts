@@ -77,7 +77,8 @@ describe('отказ отправки отложенного личного со
 
   it('удаление строки расписания везде идёт с владельцем профиля', () => {
     const flush = codeOnly(FLUSH());
-    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(6);
+    // v4.32.782: седьмое удаление — своя копия группового не легла дольше срока.
+    expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(7);
     expect(flush).not.toContain('deleteScheduledMessage(msg.id)');
   });
 

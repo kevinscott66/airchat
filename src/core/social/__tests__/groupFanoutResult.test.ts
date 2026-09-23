@@ -99,7 +99,8 @@ describe('итог групповой рассылки различает отк
     const code = codeLines(body);
     const denied = code.findIndex((l) => l.includes("problem?.kind === 'denied'"));
     const noRecipient = code.findIndex((l) => l.trim() === 'if (problem) {');
-    const insert = code.findIndex((l) => l.includes('await insertGroupMessage({'));
+    // v4.32.782: своя копия пишется неделимо со своим следом и отвечает исходом.
+    const insert = code.findIndex((l) => l.includes('await insertGroupMessageWithTouch('));
     expect(denied).toBeGreaterThanOrEqual(0);
     expect(noRecipient).toBeGreaterThan(denied);
     // обе ветки — до записи локальной копии и до удаления строки как «отправленной»

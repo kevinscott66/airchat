@@ -11,10 +11,9 @@ import { profileManager } from '../identity/profileManager';
 import { getMessagingService } from './messaging';
 import {
   insertScheduledMessage,
-  insertGroupMessage,
+  insertGroupMessageWithTouch,
   listDueScheduledMessages,
   deleteScheduledMessage,
-  touchGroupConversation,
 } from '../storage/local';
 import { fanoutGroupMessage } from './groupMessaging';
 import { groupSendProblem } from './groupSendOutcome';
@@ -343,28 +342,77 @@ async function flushDueOnce(): Promise<void> {
           }
           continue;
         }
-        await insertGroupMessage({
-          id: msgId,
-          groupId: msg.groupId,
-          senderPubB64: msg.contactPubB64,
-          senderName: senderLabel,
-          text: msg.text,
-          mediaCids: null,
-          replyToId: null,
-          replyToPreview: null,
-          reactions: null,
-          createdAt: Date.now(),
-          ownerProfileId: pid,
-        });
-        await touchGroupConversation(
-          msg.groupId,
-          pid,
-          msg.text.slice(0, 120),
-          false,
-          senderLabel,
-          false,
-          msg.contactPubB64
+        /**
+         * v4.32.782: своя копия пишется вместе со своим следом и с исходом.
+         *
+         * Гасящая `insertGroupMessage` отвечала `boolean`, и ответ этот
+         * выбрасывался, а `touchGroupConversation` глотала свой отказ внутри.
+         * Ниже по строке 'снимается только после подтверждённой отправки: … у
+         * группового — записанная строка беседы' — подтверждения-то и не было.
+         * Занятая на долю секунды база давала ровно ту картину, ради которой
+         * своя копия и заведена в v4.32.269: группа сообщение получила и уже
+         * отвечает, у автора его нет ни в истории, ни в превью, а строка
+         * расписания снята — то есть набранного не осталось нигде.
+         *
+         * Одной транзакцией — чтобы не было середины: строка без следа означала
+         * бы группу с позавчерашним превью при лежащем внутри сообщении.
+         */
+        const own = await insertGroupMessageWithTouch(
+          {
+            id: msgId,
+            groupId: msg.groupId,
+            senderPubB64: msg.contactPubB64,
+            senderName: senderLabel,
+            text: msg.text,
+            mediaCids: null,
+            replyToId: null,
+            replyToPreview: null,
+            reactions: null,
+            createdAt: Date.now(),
+            ownerProfileId: pid,
+          },
+          {
+            groupId: msg.groupId,
+            ownerProfileId: pid,
+            preview: msg.text.slice(0, 120),
+            // Своё сообщение: ни непрочитанным, ни упоминанием себе самому.
+            incrementUnread: false,
+            senderName: senderLabel,
+            incrementMention: false,
+            senderPubB64: msg.contactPubB64,
+          }
         );
+        if (own === 'failed') {
+          /**
+           * Строку расписания держим: она единственная хранит текст, и на
+           * следующем тике проход повторится целиком. Повтор рассылки для
+           * группы безвреден — `msgId` тот же (`msg.id`), а приёмник пишет
+           * `INSERT OR IGNORE` и отвечает `'duplicate'`, не поднимая ни
+           * счётчиков, ни уведомлений. Дороже молча потерять текст.
+           *
+           * Срок тот же, что у «никто не получил»: полчаса отказов базы — это
+           * уже не заминка, и дальше держать строку значит биться в неё
+           * каждые полминуты без конца. Слова о потере здесь другие: сообщение
+           * группа ПОЛУЧИЛА, и советовать набрать его заново нельзя — человек
+           * напишет то же самое дважды.
+           */
+          const staleMs = Date.now() - msg.sendAt;
+          if (staleMs > ABANDON_AFTER_MS) {
+            await deleteScheduledMessage(msg.id, pid);
+            log.warn('scheduled_group_own_row_abandoned', {
+              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), ageMs: staleMs,
+            });
+            reportScheduledLost(
+              'SCHEDULED_SENT_NOT_SAVED',
+              'Отложенное сообщение ушло в группу, но в вашей переписке не сохранилось. Откройте группу — оно там есть.'
+            );
+          } else {
+            log.warn('scheduled_group_own_row_failed', {
+              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8),
+            });
+          }
+          continue;
+        }
         log.info('scheduled_group_message_sent', { id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8) });
       } else {
         // v4.32.714: непустой ответ — конверт ушёл; null — отказ, и отказ
@@ -396,6 +444,8 @@ async function flushDueOnce(): Promise<void> {
       // Строка расписания снимается только после подтверждённой отправки:
       // у личного сообщения это непустой cid, у группового — записанная
       // строка беседы. Отказ уходит веткой выше и сюда не доходит.
+      // v4.32.782: и «записанная» здесь наконец значит записанную. До этого
+      // круга слово держалось на записи, которая свой отказ гасила молча.
       // v4.32.662: и владельца строки — явно. Без второго довода
       // deleteScheduledMessage берёт профиль, активный В МОМЕНТ УДАЛЕНИЯ, а
       // между проверкой профиля в начале витка и этой строкой лежит вся
