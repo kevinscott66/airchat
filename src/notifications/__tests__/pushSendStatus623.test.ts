@@ -44,5 +44,8 @@ it('разрешение на вебе по-прежнему обязатель�
   // Возврат ровно один — веб-ветка. На телефоне идём за токеном в любом случае:
   // разрешение человек вправе выдать позже, из настроек системы.
   expect(body.split('return;').length - 1).toBe(1);
-  expect(body).toContain('await this.registerTokenWithSignaling(options.peerId, token);');
+  // v4.32.734: сам вызов теперь идёт через registerTokenTracked — он же ставит
+  // повтор, если сигналинг не ответил. Утверждение прежнее: на телефоне адрес
+  // доставки записывается независимо от ответа на запрос разрешения.
+  expect(body).toContain("await this.registerTokenTracked(options.peerId, token, 'push_register_not_done');");
 });

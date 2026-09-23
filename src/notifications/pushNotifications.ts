@@ -15,6 +15,7 @@ import { isWithinDndWindow, parseDndHour } from './dndWindow';
 import { dmBannerText } from './dmBannerText';
 import { bannerIdForCid, bannerIdForGroup } from './bannerId';
 import { createSerialRunner } from './lifecycleQueue';
+import { nextRetryDelayMs } from './pushRegisterRetry';
 import { NOTIFICATION_SMALL_ICON } from './notificationIcon';
 import { shouldSuppressDmBanner, shouldSuppressGroupBanner } from './activeChatSuppress';
 import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenIntent } from './openIntent';
@@ -166,6 +167,14 @@ export class PushNotificationService {
   // а не только по push. См. showDmBanner.
   private unsubDmNotify: (() => void) | null = null;
   private currentPeerId: string | null = null;
+  /**
+   * Незаконченная запись адреса доставки (v4.32.734). См. pushRegisterRetry.
+   * Держим сам «токен», а не только флаг: к сроку повтора он может смениться
+   * в onTokenRefresh, и писать надо тот, который сейчас у устройства.
+   */
+  private pendingRegistration: { token: string; attempt: number } | null = null;
+  private registerRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private unsubRegisterAppState: (() => void) | null = null;
   /**
    * v4.32.496: запуск и разбор идут строго друг за другом. Оба вызываются из
    * эффекта личности огонь-и-забыли, а разбор внутри ждёт сеть — без очереди
@@ -363,8 +372,9 @@ export class PushNotificationService {
         log.info('push_fcm_token', { len: token?.length ?? 0 });
         // v4.32.733: исход записи адреса — в журнал. Уведомлений без неё не
         // будет до следующего запуска, и разбираться вслепую здесь уже не надо.
-        const reg = await this.registerTokenWithSignaling(options.peerId, token);
-        if (reg !== 'registered') log.warn('push_register_not_done', { reg });
+        // v4.32.734: и не только в журнал — сеть при запуске приложения как раз
+        // и отсутствует чаще всего. См. registerTokenTracked.
+        await this.registerTokenTracked(options.peerId, token, 'push_register_not_done');
       } catch (e) {
         log.warn('push_token_unavailable', { err: e instanceof Error ? e.message : String(e) });
       }
@@ -423,8 +433,7 @@ export class PushNotificationService {
         // closure — identity rotation mutates currentPeerId via dispose()+init().
         const peerId = this.currentPeerId;
         if (!peerId) return;
-        const reg = await this.registerTokenWithSignaling(peerId, t);
-        if (reg !== 'registered') log.warn('push_reregister_not_done', { reg });
+        await this.registerTokenTracked(peerId, t, 'push_reregister_not_done');
       });
 
       this.initialized = true;
@@ -444,6 +453,9 @@ export class PushNotificationService {
   }
 
   private async disposeLocked(): Promise<void> {
+    // v4.32.734: сначала повторы записи адреса — иначе таймер доживёт до
+    // срока уже после смены личности и запишет чужой токен на новый peerId.
+    this.clearRegisterRetry();
     try { this.unsubOnMessage?.(); } catch { /* best effort */ }
     try { this.unsubTokenRefresh?.(); } catch { /* best effort */ }
     try { this.unsubForeground?.(); } catch { /* best effort */ }
@@ -576,6 +588,78 @@ export class PushNotificationService {
       notifyDedup.release(cid);
       log.warn('push_local_notify_failed', { err: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  /**
+   * Записать адрес доставки и не бросить попытку на первом отказе (v4.32.734).
+   *
+   * `event` — под каким именем отказ попадёт в журнал: запуск, смена токена и
+   * повтор различаются только этим.
+   */
+  private async registerTokenTracked(peerId: string, token: string, event: string): Promise<void> {
+    const reg = await this.registerTokenWithSignaling(peerId, token);
+    if (reg === 'registered') {
+      this.clearRegisterRetry();
+      return;
+    }
+    log.warn(event, { reg });
+    // Писать некуда или нечем — повтор ничего не изменит, см. pushRegisterRetry.
+    if (reg === 'unsupported') {
+      this.clearRegisterRetry();
+      return;
+    }
+    this.armRegisterRetry(token);
+  }
+
+  /** Поставить следующий срок повтора и подписаться на возвращение в приложение. */
+  private armRegisterRetry(token: string): void {
+    const attempt = this.pendingRegistration?.token === token ? this.pendingRegistration.attempt + 1 : 0;
+    this.pendingRegistration = { token, attempt };
+    if (this.registerRetryTimer) clearTimeout(this.registerRetryTimer);
+    this.registerRetryTimer = null;
+    const delay = nextRetryDelayMs(attempt);
+    if (delay !== null) {
+      this.registerRetryTimer = setTimeout(() => {
+        this.registerRetryTimer = null;
+        void this.runRegisterRetry('push_register_retry_failed');
+      }, delay);
+    }
+    this.watchForegroundForRegister();
+  }
+
+  /** Попробовать ещё раз тем токеном, который ждёт записи. */
+  private async runRegisterRetry(event: string): Promise<void> {
+    const pending = this.pendingRegistration;
+    const peerId = this.currentPeerId;
+    if (!pending || !peerId) return;
+    await this.registerTokenTracked(peerId, pending.token, event);
+  }
+
+  /**
+   * Возвращение в приложение — повод начать лестницу заново.
+   *
+   * Лестница конечна, и после последней ступени ждать больше нечего. Но
+   * человек, открывший приложение, обычно как раз и принёс с собой сеть —
+   * поэтому счётчик сбрасывается в начало (`-1`, чтобы следующая ступень
+   * оказалась нулевой) и попытка идёт немедленно.
+   */
+  private watchForegroundForRegister(): void {
+    if (this.unsubRegisterAppState) return;
+    const sub = AppState.addEventListener('change', (state: string) => {
+      if (state !== 'active' || !this.pendingRegistration) return;
+      this.pendingRegistration = { token: this.pendingRegistration.token, attempt: -1 };
+      void this.runRegisterRetry('push_register_retry_failed');
+    });
+    this.unsubRegisterAppState = () => sub?.remove?.();
+  }
+
+  /** Записалось (или повторять незачем) — снять таймер и слушателя. */
+  private clearRegisterRetry(): void {
+    this.pendingRegistration = null;
+    if (this.registerRetryTimer) clearTimeout(this.registerRetryTimer);
+    this.registerRetryTimer = null;
+    try { this.unsubRegisterAppState?.(); } catch { /* best effort */ }
+    this.unsubRegisterAppState = null;
   }
 
   async registerTokenWithSignaling(peerId: string, token: string): Promise<PushTokenRegistration> {
