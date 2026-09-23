@@ -257,19 +257,31 @@ export async function loadComposeDraft(did: string): Promise<ComposeDraft | null
   }
 }
 
-export async function saveComposeDraft(did: string, snap: ComposeDraft): Promise<void> {
+/**
+ * Отвечает, лёг ли снимок. Спрашивать обязательно: смысл снимка в том, что
+ * следом запускается системный picker и активити может не вернуться, а без
+ * снимка возвращаться будет некуда — набранный пост исчезнет целиком.
+ *
+ * v4.32.727: ответ `kvSetSecret` выбрасывался, а тип был `Promise<void>` —
+ * снаружи неудача записи ничем не отличалась от удачи. Между тем отрицательный
+ * ответ здесь обычное дело: полный диск, отказ базы, а на первом запуске —
+ * профиль, которого ещё нет (`compose_draft_no_owner`). Экран ленты во всех
+ * трёх местах открывал picker следом, ничего человеку не сказав.
+ */
+export async function saveComposeDraft(did: string, snap: ComposeDraft): Promise<boolean> {
   try {
     const pid = ownerProfileId(did);
     if (pid == null) {
       log.warn('compose_draft_no_owner', { didLen: did.length });
-      return;
+      return false;
     }
-    await kvSetSecret(
+    return await kvSetSecret(
       profileScopedKey(pid, COMPOSE_DRAFT_KEY),
       JSON.stringify({ ...snap, ts: Date.now() })
     );
   } catch (e) {
     log.warn('compose_draft_save_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 

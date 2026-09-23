@@ -2146,8 +2146,14 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     return result;
   }, [allPosts, feedSearch, activeHashtag, bookmarkFilter, bookmarkedPosts, archiveFilter, archivedPosts]);
 
-  const persistComposeDraft = useCallback(async () => {
-    await saveComposeDraft(did, {
+  // v4.32.727: снимок отвечает, лёг ли он. Раньше ответ пропадал: снимок не
+  // записался (полный диск, отказ базы, профиля ещё нет) — picker всё равно
+  // открывался, и активити, убитая под ним, уносила весь набранный пост. Picker
+  // при этом не отменяем: выбрать фото человек хотел, и запретить ему это
+  // из-за базы было бы хуже потери — но предупредить обязаны, пока текст ещё
+  // перед глазами и его можно скопировать.
+  const persistComposeDraft = useCallback(async (): Promise<boolean> => {
+    return await saveComposeDraft(did, {
       draft,
       uris,
       pickedDocs,
@@ -2177,7 +2183,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       return;
     }
     try {
-      await persistComposeDraft();
+      if (!(await persistComposeDraft())) showError(t('feed.draftNotKept'));
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
         multiple: true,
@@ -2223,7 +2229,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         showPermissionDeniedAlert(t('feed.cameraPermTitle'), t('feed.cameraPermMsg'));
         return;
       }
-      await persistComposeDraft();
+      if (!(await persistComposeDraft())) showError(t('feed.draftNotKept'));
       // v4.32.54: quality 1 — см. pickImages, избегаем CompressionImageExporter crash.
       const res = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -2277,7 +2283,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       }
       // v4.32.73: persist draft до вызова picker'а — если host-activity будет
       // recreated (realme/Android 15), мы восстановим состояние на следующем mount'е.
-      await persistComposeDraft();
+      if (!(await persistComposeDraft())) showError(t('feed.draftNotKept'));
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsMultipleSelection: true,
