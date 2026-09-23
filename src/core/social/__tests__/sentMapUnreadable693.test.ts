@@ -72,7 +72,6 @@ jest.mock('../messaging', () => ({
   }),
 }));
 jest.mock('../sendGate', () => ({ canReachPeer: async () => true }));
-jest.mock('../controlWatermark', () => ({ acceptControlTs: async () => true }));
 jest.mock('../../logger', () => ({
   log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 }));

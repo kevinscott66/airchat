@@ -87,7 +87,6 @@ jest.mock('../../storage/local', () => ({
 }));
 
 jest.mock('../controlWatermark', () => ({
-  acceptGroupControlTs: jest.fn(async () => true),
   commitGroupControlTs: jest.fn(async () => {}),
   commitGroupMessageTs: jest.fn(async () => {}),
   groupControlTsFresh: jest.fn(async () => true),

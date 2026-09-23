@@ -95,8 +95,6 @@ jest.mock('../../logger', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
-  acceptControlTs,
-  acceptGroupControlTs,
   commitControlTs,
   commitGroupControlTs,
   controlTsFresh,
@@ -104,7 +102,38 @@ import {
   groupWatermarkKey,
   watermarkKey,
   WATERMARK_PREFIX,
+  type ControlKind,
+  type GroupControlSlot,
 } from '../controlWatermark';
+
+/**
+ * Прежняя слитная форма «проверить и сразу сдвинуть». С v4.32.778 её в
+ * приложении нет — осталась только здесь, чтобы проверять сами правила отметки
+ * (монотонность, окно будущего, раздельность ячеек) в одну строку. В приёмниках
+ * такая форма запрещена: см. комментарий у `controlTsFresh`.
+ */
+async function acceptControlTs(
+  kind: ControlKind,
+  peerPubB64: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  if (!(await controlTsFresh(kind, peerPubB64, pid, ts))) return false;
+  await commitControlTs(kind, peerPubB64, pid, ts);
+  return true;
+}
+
+/** Та же слитная форма для слотов группы — тоже только для этих проверок. */
+async function acceptGroupControlTs(
+  slot: GroupControlSlot,
+  groupId: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  if (!(await groupControlTsFresh(slot, groupId, pid, ts))) return false;
+  await commitGroupControlTs(slot, groupId, pid, ts);
+  return true;
+}
 import { handleIncomingDisappear, encodeDisappearEnvelope } from '../disappearSync';
 import { handleIncomingCopyGuard, encodeCopyGuardEnvelope } from '../copyGuardSync';
 import { handleIncomingLastSeenPref } from '../presencePrefSync';
@@ -227,7 +256,7 @@ describe('во всех трёх обработчиках знак двигае�
       .join('\n');
   }
 
-  // Общая форма всех трёх: acceptControlTs делает проверку и сдвиг одним
+  // Общая форма всех трёх: слитная проверка делала проверку и сдвиг одним
   // движением, и применить между ними нечего. Там, где применение умеет
   // отказать, это делало отказ вечным — v4.32.655 (запрет копирования),
   // v4.32.750 (таймер) и v4.32.751 (время входа). Поведение каждого проверено
@@ -245,6 +274,23 @@ describe('во всех трёх обработчиках знак двигае�
     expect(fresh).toBeGreaterThan(0);
     expect(applyAt).toBeGreaterThan(fresh);
     expect(commit).toBeGreaterThan(applyAt);
+  });
+
+  it('слитной формы в самом модуле знака больше нет (v4.32.778)', () => {
+    // Позвать её было неоткуда: производственных вызовов не осталось ещё после
+    // v4.32.774, а экспорт остался — и это мина. Любой следующий приёмник,
+    // написанный «по образцу», получил бы ровно тот дефект, который с v4.32.655
+    // по v4.32.777 разминировали по одному. Слитная форма живёт теперь только в
+    // этом файле, локальной обёрткой, и применять ей нечего.
+    const wm = code('controlWatermark.ts');
+    expect(wm).not.toContain('export async function acceptControlTs(');
+    expect(wm).not.toContain('export async function acceptGroupControlTs(');
+    expect(wm).not.toContain('async function acceptTs(');
+    // ПРОВЕРКА НЕ ПУСТАЯ: раздельная пара на месте, и обе её половины.
+    expect(wm).toContain('export async function controlTsFresh(');
+    expect(wm).toContain('export async function commitControlTs(');
+    expect(wm).toContain('export async function groupControlTsFresh(');
+    expect(wm).toContain('export async function commitGroupControlTs(');
   });
 });
 

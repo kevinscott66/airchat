@@ -66,11 +66,11 @@ export function watermarkKey(kind: ControlKind, peerPubB64: string): string {
 }
 
 /**
- * Принять решение по метке времени служебного конверта.
+ * Свежее ли решение служебного конверта. Отметку НЕ двигает.
  *
  * Возвращает true, если конверт свежее всего, что уже применено к этой паре
- * (профиль, вид состояния, собеседник), и отметка сдвинута вперёд. false —
- * если это повтор, откат или заведомо испорченная метка.
+ * (профиль, вид состояния, собеседник). false — если это повтор, откат или
+ * заведомо испорченная метка.
  *
  * Метку из будущего дальше допуска на часы отвергаем: честный отправитель
  * такую не поставит (внешняя проверка конверта отсекает его же по
@@ -81,28 +81,14 @@ export function watermarkKey(kind: ControlKind, peerPubB64: string): string {
  * доступа к базе не должно молча переставать применять настройки собеседника.
  * Отказ здесь стоил бы больше, чем окно для повтора, который и так требует
  * перехваченного кадра.
- */
-export async function acceptControlTs(
-  kind: ControlKind,
-  peerPubB64: string,
-  pid: number,
-  ts: number
-): Promise<boolean> {
-  return acceptTs(watermarkKey(kind, peerPubB64), kind, pid, ts);
-}
-
-/**
- * Та же проверка для личной переписки, но БЕЗ сдвига отметки (v4.32.655).
  *
- * Ровно та же пара, что `groupControlTsFresh` и `commitGroupControlTs` в
- * группе, и заведена по той же причине: `acceptControlTs` двигает знак ДО
- * применения, а применение умеет не удаться. Тогда изменение не применено, но
- * знак уже стоит, и повторная присылка того же конверта отвергается как
- * повтор — отказ становится вечным. Пара «проверить свежесть → применить →
- * сдвинуть» оставляет отправителю возможность повторить.
- *
- * Пара к ней — {@link commitControlTs}; её вызывают ровно тогда, когда
- * изменение действительно применено.
+ * Пара к ней — {@link commitControlTs}, и порядок между ними обязателен:
+ * проверить свежесть → применить → сдвинуть. Слитная форма «проверить и сразу
+ * сдвинуть» жила тут до v4.32.778 и была ровно той миной, которую с v4.32.655
+ * по v4.32.777 разминировали по одному приёмнику: применение умеет не удаться,
+ * а знак уже стоит — и повтор того же конверта отвергается как старый. Повтора
+ * же у служебного конверта нет вовсе, так что отказ становился вечным. Из
+ * приложения слитную форму убрали целиком, чтобы её некому было позвать снова.
  */
 export async function controlTsFresh(
   kind: ControlKind,
@@ -149,7 +135,8 @@ export function groupWatermarkKey(slot: GroupControlSlot, groupId: string): stri
 }
 
 /**
- * То же решение, что и `acceptControlTs`, но для управляющих конвертов группы.
+ * Свежее ли решение управляющего конверта группы. Отметку НЕ двигает
+ * (v4.32.618).
  *
  * Повтор здесь стоит дороже, чем в личной переписке: конверт применяется от
  * имени того, кто подписал ОРИГИНАЛ, а его права проверяются по текущему
@@ -162,18 +149,6 @@ export function groupWatermarkKey(slot: GroupControlSlot, groupId: string): stri
  * Хуже того, повтор проходил молча: идентификатор системной строки собирается
  * из `ts` операции, при повторе он тот же, INSERT OR IGNORE ничего не пишет —
  * роль менялась, а строки «X назначен(а) администратором» на экране не было.
- */
-export async function acceptGroupControlTs(
-  slot: GroupControlSlot,
-  groupId: string,
-  pid: number,
-  ts: number
-): Promise<boolean> {
-  return acceptTs(groupWatermarkKey(slot, groupId), groupKindLabel(slot), pid, ts);
-}
-
-/**
- * Та же проверка, но БЕЗ сдвига отметки (v4.32.618).
  *
  * Нужна там, где решение «применить» принимается уже после проверки прав и
  * может кончиться ничем: ban по уже забаненному, role с той же ролью, add по
@@ -240,11 +215,6 @@ function groupKindLabel(slot: GroupControlSlot): string {
   return `grp:${slot.split(':')[0]}`;
 }
 
-async function acceptTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
-  if (!(await freshTs(key, kind, pid, ts))) return false;
-  await commitTs(key, kind, pid, ts);
-  return true;
-}
 
 async function freshTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
   if (!Number.isFinite(ts) || ts <= 0) {

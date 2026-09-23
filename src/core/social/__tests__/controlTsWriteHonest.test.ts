@@ -37,13 +37,30 @@ jest.mock('../../logger', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
-  acceptControlTs,
   commitControlTs,
   commitGroupControlTs,
   commitGroupMessageTs,
   controlTsFresh,
   groupMessageTsFresh,
+  type ControlKind,
 } from '../controlWatermark';
+
+/**
+ * Прежняя слитная форма «проверить и сразу сдвинуть». С v4.32.778 её в
+ * приложении нет — осталась только здесь, чтобы проверять сами правила отметки
+ * (монотонность, окно будущего, раздельность ячеек) в одну строку. В приёмниках
+ * такая форма запрещена: см. комментарий у `controlTsFresh`.
+ */
+async function acceptControlTs(
+  kind: ControlKind,
+  peerPubB64: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  if (!(await controlTsFresh(kind, peerPubB64, pid, ts))) return false;
+  await commitControlTs(kind, peerPubB64, pid, ts);
+  return true;
+}
 
 const PEER = 'сосед-открытый-ключ==';
 const PID = 1;

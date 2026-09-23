@@ -80,7 +80,6 @@ jest.mock('../presenceService', () => ({
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryGetFor: jest.fn(async () => ({ value: 'nobody' })),
 }));
-jest.mock('../controlWatermark', () => ({ acceptControlTs: jest.fn(async () => true) }));
 jest.mock('../../logger', () => ({
   log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 }));

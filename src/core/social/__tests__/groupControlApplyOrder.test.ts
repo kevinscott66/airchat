@@ -152,7 +152,24 @@ import * as path from 'path';
 import { fanoutGroupMessage, handleIncomingGroupControl } from '../groupMessaging';
 import { groupSendProblem } from '../groupSendOutcome';
 import { encodeGroupCtlEnvelope } from '../groupControlEnvelope';
-import { acceptGroupControlTs, groupWatermarkKey } from '../controlWatermark';
+import {
+  commitGroupControlTs,
+  groupControlTsFresh,
+  groupWatermarkKey,
+  type GroupControlSlot,
+} from '../controlWatermark';
+/** Та же слитная форма для слотов группы — тоже только для этих проверок. */
+async function acceptGroupControlTs(
+  slot: GroupControlSlot,
+  groupId: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  if (!(await groupControlTsFresh(slot, groupId, pid, ts))) return false;
+  await commitGroupControlTs(slot, groupId, pid, ts);
+  return true;
+}
+
 import { acceptJoinRequest } from '../groupJoinPolicy';
 import type { GroupRecipient } from '../groupRecipient';
 
