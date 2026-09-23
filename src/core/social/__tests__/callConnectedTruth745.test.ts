@@ -195,7 +195,7 @@ function fireIce(state: string): void {
 
 /** Исходящий звонок до обмена SDP включительно — звука ещё нет. */
 async function handshakeOutgoing(): Promise<void> {
-  await expect(initiateCall(PEER, 'сосед', false)).resolves.toBe(true);
+  await expect(initiateCall(PEER, 'сосед', false)).resolves.toBe('started');
   await settle();
   const answer = await sealAnswer(peer, ME, { callId: lastOfferCallId() });
   mockAnswerHandler.current?.({ fromPeerId: PEER, sdp: answer });
@@ -343,7 +343,7 @@ describe('журнал не выдаёт несостоявшийся разго
   });
 
   it('никто не брал трубку — по-прежнему «пропущен»', async () => {
-    await expect(initiateCall(PEER, 'сосед', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'сосед', false)).resolves.toBe('started');
     await settle();
     await hangupCall();
     await settle();

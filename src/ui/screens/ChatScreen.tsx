@@ -120,7 +120,8 @@ import { usePresence } from '../hooks/usePresence';
 import { setActiveChatDid } from '../../notifications/pushNotifications';
 import { NOTIFICATION_SMALL_ICON } from '../../notifications/notificationIcon';
 import { publicKeyToDidKey, didFromPubB64 } from '../../core/identity/did';
-import { initiateCall, getCurrentCall } from '../../core/social/callService';
+import { initiateCall } from '../../core/social/callService';
+import { callStartText } from '../callStartText';
 import { GifPickerModal, isGifMessage, parseGifUrl, GifBubble, isGifSearchAvailable } from '../components/GifPicker';
 import { getActiveLiveLoc, isLiveLocMessage, makeLiveLocText, startLiveLocSession, stopLiveLocSession } from '../../core/social/liveLocationService';
 import { liveLocBannerFor } from '../../core/social/liveLocSelect';
@@ -3282,10 +3283,9 @@ function ChatThreadView({
                 accessibilityRole="button"
                 accessibilityLabel="Видеозвонок"
                 onPress={() => {
-                  if (getCurrentCall()) { showError('Уже активен звонок'); return; }
                   void initiateCall(peerB64, localDisplayName, true)
-                    .then((ok) => { if (!ok) showError('Не удалось начать видеозвонок'); })
-                    .catch(() => showError('Не удалось начать видеозвонок'));
+                    .then((result) => { const say = callStartText(result, true); if (say) showError(say); })
+                    .catch(() => showError(callStartText('failed', true) ?? ''));
                 }}
               >
                 <Ionicons name="videocam-outline" size={20} color={colors.text} />
@@ -3295,10 +3295,9 @@ function ChatThreadView({
                 accessibilityRole="button"
                 accessibilityLabel="Позвонить"
                 onPress={() => {
-                  if (getCurrentCall()) { showError('Уже активен звонок'); return; }
                   void initiateCall(peerB64, localDisplayName)
-                    .then((ok) => { if (!ok) showError('Не удалось начать звонок'); })
-                    .catch(() => showError('Не удалось начать звонок'));
+                    .then((result) => { const say = callStartText(result, false); if (say) showError(say); })
+                    .catch(() => showError(callStartText('failed', false) ?? ''));
                 }}
               >
                 <Ionicons name="call-outline" size={20} color={colors.text} />

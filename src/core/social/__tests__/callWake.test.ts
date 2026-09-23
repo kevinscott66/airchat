@@ -192,7 +192,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('исходящий звонок будит устройство push-ом', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
 
     expect(mockSendCallPush).toHaveBeenCalledTimes(1);
@@ -207,7 +207,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('sdp по дороге push не едет', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
 
     // Три аргумента и ни одного лишнего: адреса устройства на сервере не оседают.
@@ -219,7 +219,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('«нет в сети» больше не обрывает звонок', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await peerOffline();
 
     // Ровно эта строчка и была дефектом: раньше здесь было 'ended'/«Недоступен».
@@ -228,7 +228,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('предложение повторяется, пока телефон не появится', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await peerOffline();
     const sentAtStart = mockSendOffer.mock.calls.length;
 
@@ -243,7 +243,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('повторы кончаются вместе со звонком', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await peerOffline();
 
     await jest.advanceTimersByTimeAsync(OUTGOING_RINGING_TIMEOUT_MS);
@@ -305,7 +305,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('не дозвонились — звонящий оставляет серверу подписанную расписку', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
     await peerOffline();
 
@@ -321,7 +321,7 @@ describe('дозвон до телефона, которого нет в сет�
   });
 
   it('повторы «нет в сети» идут каждые три секунды — расписка одна', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
     await peerOffline();
     await peerOffline();

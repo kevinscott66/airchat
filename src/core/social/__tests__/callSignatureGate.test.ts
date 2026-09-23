@@ -164,7 +164,7 @@ describe('предложение без подписи собеседника н
 
 describe('ответ без подписи собеседника не рвёт звонок', () => {
   async function callOut(): Promise<string> {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
     return String(envelopeBody(mockSendOffer.mock.calls.at(-1)?.[2]).callId);
   }

@@ -179,7 +179,7 @@ describe('сигнальный сервер не кончает чужой ра�
 
   /** Довести исходящий звонок до разговора. */
   async function connectOutgoing(): Promise<void> {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
     const answer = await sealAnswer(peer, ME, { callId: lastOfferCallId() });
     mockAnswerHandler.current?.({ fromPeerId: PEER, sdp: answer });
@@ -216,7 +216,7 @@ describe('сигнальный сервер не кончает чужой ра�
   });
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: отказ с номером текущего звонка звонок кончает', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
 
     const decline = await sealAnswer(peer, ME, {
@@ -241,7 +241,7 @@ describe('сигнальный сервер не кончает чужой ра�
       return mockLocalStream;
     });
 
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await settle();
 
     expect(getCurrentCall()?.state).toBe('outgoing');

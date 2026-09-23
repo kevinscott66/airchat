@@ -156,7 +156,7 @@ describe('начало исходящего звонка', () => {
   it('ПРОВЕРКА НЕ ПУСТАЯ: на свободной линии звонок по-прежнему заводится', async () => {
     // Здесь ничего из починки не участвует: проверка обязана проходить и до
     // неё, и после — иначе «до правки всё красное» ничего не значит.
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     expect(getCurrentCall()?.state).toBe('outgoing');
     expect(getCurrentCall()?.direction).toBe('outgoing');
     expect(SRC.length).toBeGreaterThan(20000);
@@ -175,7 +175,7 @@ describe('начало исходящего звонка', () => {
 
     gate.hold = false;
     gate.release?.();
-    await expect(started).resolves.toBe(false);
+    await expect(started).resolves.toBe('busy');
 
     // Вот это и есть починка: раньше здесь стоял `outgoing`, а входящий звонок
     // исчезал без следа — ни экрана, ни «Пропущен» в списке.
@@ -189,18 +189,18 @@ describe('начало исходящего звонка', () => {
   it('уже идущий разговор не перебивается и без всякого ожидания', async () => {
     await receiveOffer();
     expect(getCurrentCall()?.state).toBe('incoming');
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(false);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('busy');
     expect(getCurrentCall()?.state).toBe('incoming');
   });
 
   it('неудачная попытка из окна после отбоя не оставляет «Завершён» навсегда', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await hangupCall();
     expect(getCurrentCall()?.state).toBe('ended');
 
     // Сигнальный сервер отвалился — звонок не начнётся.
     gate.fail = true;
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(false);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('no-signaling');
 
     // Раньше отмену сброса делали до ожиданий: сброс уже не приходил, а новое
     // состояние записать было некому — «Завершён» висел до перезапуска.

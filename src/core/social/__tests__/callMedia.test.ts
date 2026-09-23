@@ -154,7 +154,7 @@ describe('call identity form', () => {
   // никогда — и `initiateCall` всегда возвращал false на `call_no_signaling`,
   // то есть звонки по интернету были мертвы целиком, а не изредка.
   it('registers under the base64 public key of its own pair, never a DID', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     const [roomId, peerId, pair] = mockRegister.mock.calls[0] as [string, string, unknown];
     expect(peerId).toBe(Buffer.from(TEST_PAIR.publicKey).toString('base64'));
     expect(roomId).toBe(peerId);
@@ -169,7 +169,9 @@ describe('call identity form', () => {
     mockRegister.mockClear();
     await initCallService({ publicKey: new Uint8Array(8), secretKey: new Uint8Array(32) });
     expect(mockRegister).not.toHaveBeenCalled();
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(false);
+    // Негодный ключ — это отсутствие личности, а не отсутствие сервера:
+    // `myPubB64Global` при таком запуске вообще не выставляется.
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('no-identity');
   });
 });
 
@@ -178,7 +180,7 @@ describe('call media layer', () => {
     const snapshots: ReturnType<typeof getCallMedia>[] = [];
     const unsubscribe = subscribeCallMedia((media) => snapshots.push(media));
 
-    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe('started');
     expect(mockGetUserMedia).toHaveBeenCalledWith({ audio: true, video: true });
     expect(mockRegister).toHaveBeenCalledTimes(1);
     expect(mockRegister).toHaveBeenCalledWith(ME, ME, TEST_PAIR);
@@ -214,7 +216,7 @@ describe('call media layer', () => {
   });
 
   it('sends first-class and legacy hangup signals, then stops both streams', async () => {
-    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe('started');
     const remoteTrack = { stop: jest.fn() };
     const remoteStream = { getTracks: () => [remoteTrack] };
     mockPeerConnections[0]?.ontrack?.({ streams: [remoteStream] });
@@ -243,7 +245,7 @@ describe('call media layer', () => {
     await settle();
     expect(getCallMedia()).toMatchObject({ localStream: null, remoteStream: null });
 
-    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', true)).resolves.toBe('started');
     const remoteTrack = { stop: jest.fn() };
     mockPeerConnections[mockPeerConnections.length - 1]?.ontrack?.({ streams: [{ getTracks: () => [remoteTrack] }] });
     disposeCallService();

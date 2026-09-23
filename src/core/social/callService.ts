@@ -1620,32 +1620,64 @@ async function sendCallWake(myPub: string, peerPubB64: string, callId: string): 
 }
 
 /**
+ * Чем кончилась попытка позвонить (v4.32.747).
+ *
+ * Метод отвечал `boolean`, и все пять мест, откуда звонят, писали на этот
+ * `false` одно и то же: «Не удалось начать звонок». А отказов здесь девять, и
+ * они требуют от человека разного. Микрофон запрещён — надо идти в настройки
+ * телефона. Собеседник заблокирован — надо снять блокировку. Нет связи с
+ * сигнальным сервером — надо проверить интернет и повторить. Уже идёт другой
+ * звонок — надо сначала его закончить. Приложение ещё запускается — надо
+ * подождать секунду. Ни одного из этих действий фраза «Не удалось» не
+ * подсказывала, а половина из них ничем другим и не подсказывается: экрана,
+ * где видно, что микрофон запрещён, в приложении нет.
+ *
+ * Два исхода нарочно без надписи. `'started'` — звонок пошёл. `'cancelled'` —
+ * пока прогревался микрофон, человек сам нажал отбой (или пришло переключение
+ * профиля); показывать ему ошибку на его же действие незачем.
+ *
+ * Строки, а не числа и не объект: их видно в журнале как есть, и добавление
+ * нового отказа ломает сборку в том месте, где его забыли назвать словами
+ * (`callStartText` разбирает союз целиком).
+ */
+export type CallStartResult =
+  | 'started'
+  | 'busy'
+  | 'blocked'
+  | 'no-identity'
+  | 'no-webrtc'
+  | 'no-signaling'
+  | 'no-permission'
+  | 'cancelled'
+  | 'failed';
+
+/**
  * Initiate an outgoing call to a peer.
  */
-export async function initiateCall(peerPubB64: string, peerName: string, isVideo = false): Promise<boolean> {
+export async function initiateCall(peerPubB64: string, peerName: string, isVideo = false): Promise<CallStartResult> {
   const myPub = myPubB64Global;
-  if (!myPub) { log.warn('call_no_my_pub'); return false; }
+  if (!myPub) { log.warn('call_no_my_pub'); return 'no-identity'; }
   // v4.32.318: заблокированному не пишут (sendMessage возвращает отказ) —
   // значит и не звонят. Иначе разговор с тем, кого сам же и заблокировал,
   // начинался бы с половины, которую он не услышит: его ответ не дойдёт.
   await rateLimiter.whenReady();
   if (rateLimiter.isBlocked(peerPubB64)) {
     log.info('call_out_blocked', { to: peerPubB64.slice(0, 8) });
-    return false;
+    return 'blocked';
   }
   if (callInProgress()) {
     log.warn('call_already_active');
-    return false;
+    return 'busy';
   }
 
   const wrtc = loadWebRtc();
   if (!wrtc) {
     log.warn('call_webrtc_unavailable');
-    return false;
+    return 'no-webrtc';
   }
 
   const sig = await ensureRegistered(myPub);
-  if (!sig) { log.warn('call_no_signaling'); return false; }
+  if (!sig) { log.warn('call_no_signaling'); return 'no-signaling'; }
 
   // v4.32.124 (AUDIT P0 #4): verify RECORD_AUDIO / CAMERA BEFORE state flips.
   // Denial used to crash inside getUserMedia; now we fail fast with no
@@ -1653,7 +1685,7 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
   const permsOk = await ensureCallPermissions(isVideo);
   if (!permsOk) {
     log.warn('call_permissions_denied', { isVideo });
-    return false;
+    return 'no-permission';
   }
 
   // v4.32.740: занятость спрашивается ещё раз — теперь перед самой записью.
@@ -1668,7 +1700,7 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
   // виденные. Звонок исчезал для обеих сторон и не оставлял следа.
   if (callInProgress()) {
     log.warn('call_already_active_late', { incoming: currentCall?.direction === 'incoming' });
-    return false;
+    return 'busy';
   }
 
   // v4.32.142 (AUDIT P1 T2): if a user initiates a new call during the
@@ -1720,14 +1752,14 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
         (freshStream as { getTracks(): Array<{ stop(): void }> }).getTracks().forEach((t) => { try { t.stop(); } catch { /* ignore */ } });
       } catch { /* ignore */ }
       log.info('call_initiate_stale_abort');
-      return false;
+      return 'cancelled';
     }
     localStream = freshStream as CallMediaStream;
     emitMedia();
     const createdPc = await _createPc(myPub, peerPubB64);
     if (callGeneration !== generation || !currentCall || currentCall.state !== 'outgoing') {
       try { createdPc?.close(); } catch { /* ignore */ }
-      return false;
+      return 'cancelled';
     }
     pc = createdPc;
     if (!pc) throw new Error('no_pc');
@@ -1741,14 +1773,14 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
 
     // Create offer
     const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: isVideo });
-    if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'outgoing') return false;
+    if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'outgoing') return 'cancelled';
     await pc.setLocalDescription(offer);
-    if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'outgoing') return false;
+    if (callGeneration !== generation || pc !== createdPc || currentCall?.state !== 'outgoing') return 'cancelled';
 
     // The signaling server authorizes offers against the sender's registered
     // room. Each peer is registered in its own room, so using the target's
     // room here makes the server reject every offer with room_mismatch.
-    if (!mySigningPair) { log.warn('call_no_signing_key'); return false; }
+    if (!mySigningPair) { log.warn('call_no_signing_key'); return 'no-identity'; }
     // v4.32.585: предложение уходит подписанным — отпечаток DTLS внутри SDP
     // тем самым привязан к ключу личности звонящего.
     const offerBody = await sealCallEnvelope(mySigningPair, myPub, {
@@ -1770,11 +1802,11 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
       }
     }, ringingTimeoutMs('outgoing') ?? OUTGOING_RINGING_TIMEOUT_MS);
 
-    return true;
+    return 'started';
   } catch (e) {
     log.warn('call_initiate_failed', { err: e instanceof Error ? e.message : String(e) });
     void _hangup('unanswered', 'initiate_failed');
-    return false;
+    return 'failed';
   }
 }
 

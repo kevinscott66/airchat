@@ -81,7 +81,8 @@ import { GlassSurface } from '../components/GlassSurface';
 import { useIpfsGateway, useResolvedMediaUrl } from './chat-components/useResolvedMediaUrls';
 import { usePresence } from '../hooks/usePresence';
 import NetInfo from '@react-native-community/netinfo';
-import { initiateCall, getCurrentCall } from '../../core/social/callService';
+import { initiateCall } from '../../core/social/callService';
+import { callStartText } from '../callStartText';
 import { contactLabel, nameInitial } from '../../core/social/contactLabel';
 import { avatarShape, badgeDigit, contrastingInk, elevation, font, identityAvatar, inkOn, radius, scrim, spacing } from '../theme';
 import { formatListTime, formatSearchTime } from '../time/listTime';
@@ -869,19 +870,17 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         {
           text: '📞 Позвонить',
           onPress: () => {
-            if (getCurrentCall()) { showError('Уже активен звонок'); return; }
             void initiateCall(item.contactPubB64, item.displayName, false)
-              .then((ok) => { if (!ok) showError('Не удалось начать звонок'); })
-              .catch(() => showError('Не удалось начать звонок'));
+              .then((result) => { const say = callStartText(result, false); if (say) showError(say); })
+              .catch(() => showError(callStartText('failed', false) ?? ''));
           },
         },
         {
           text: '🎥 Видеозвонок',
           onPress: () => {
-            if (getCurrentCall()) { showError('Уже активен звонок'); return; }
             void initiateCall(item.contactPubB64, item.displayName, true)
-              .then((ok) => { if (!ok) showError('Не удалось начать видеозвонок'); })
-              .catch(() => showError('Не удалось начать видеозвонок'));
+              .then((result) => { const say = callStartText(result, true); if (say) showError(say); })
+              .catch(() => showError(callStartText('failed', true) ?? ''));
           },
         },
         {

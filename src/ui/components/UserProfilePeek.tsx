@@ -138,7 +138,8 @@ import {
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { setDisappearAndSync } from '../../core/social/disappearSync';
 import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
-import { getCurrentCall, initiateCall } from '../../core/social/callService';
+import { initiateCall } from '../../core/social/callService';
+import { callStartText } from '../callStartText';
 import { copyGuardState } from '../../core/social/copyGuard';
 import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
@@ -644,8 +645,6 @@ export function UserProfilePeek({
   // ─── Быстрые действия ───────────────────────────────────────────────────
   const startCall = useCallback((video: boolean) => {
     if (!resolved) return;
-    if (getCurrentCall()) { showError('Уже активен звонок'); return; }
-    const what = video ? 'видеозвонок' : 'звонок';
     void (async () => {
       try {
         // v4.32.623: второй параметр initiateCall — имя СОБЕСЕДНИКА, оно ложится
@@ -653,11 +652,15 @@ export function UserProfilePeek({
         // («const myName = await getOwnDisplayName()»), и в журнале исходящих
         // все звонки подряд оказывались от самого себя. Правильное имя —
         // displayName, ровно то же, с которым отсюда открывают переписку.
-        const ok = await initiateCall(resolved.pubB64, displayName, video);
-        if (!ok) showError(`Не удалось начать ${what}`);
-        else onClose();
+        const result = await initiateCall(resolved.pubB64, displayName, video);
+        const say = callStartText(result, video);
+        if (say) showError(say);
+        // Карточка закрывается только если звонок пошёл: на отказ она должна
+        // остаться, иначе надпись всплывёт над экраном, с которого её нечем
+        // связать, а повторить попытку будет неоткуда.
+        else if (result === 'started') onClose();
       } catch {
-        showError(`Не удалось начать ${what}`);
+        showError(callStartText('failed', video) ?? '');
       }
     })();
   }, [resolved, displayName, onClose]);

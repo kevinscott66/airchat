@@ -268,7 +268,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('исходящий, на который не ответили, гасит звонок и НА ТОМ КОНЦЕ ТОЖЕ', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     expect(getCurrentCall()?.state).toBe('outgoing');
     mockSendHangup.mockClear();
 
@@ -287,14 +287,14 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('раньше срока исходящий звонок никто не рвёт', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     await jest.advanceTimersByTimeAsync(OUTGOING_RINGING_TIMEOUT_MS - 1000);
     expect(getCurrentCall()?.state).toBe('outgoing');
     expect(mockSendHangup).not.toHaveBeenCalled();
   });
 
   it('трубку положил собеседник — сигнал ему назад не летит', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     // Номер звонка знает только конверт своего предложения.
     const callId = String(envelopeBody(mockSendOffer.mock.calls.at(-1)?.[2]).callId);
     mockSendHangup.mockClear();
@@ -317,7 +317,7 @@ describe('поведение сервиса звонков', () => {
   // (`fromPeerId: registration.peerId`), поэтому событие без отправителя или с
   // чужим — это не старый сервер, а подделка, и разговор она трогать не должна.
   it('«положили трубку» без отправителя разговор не рвёт', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
 
     mockHangupHandler.current?.({});
     await settle();
@@ -326,7 +326,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('«положили трубку» от постороннего разговор не рвёт', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
 
     mockHangupHandler.current?.({ fromPeerId: makePeer().pub });
     mockHangupHandler.current?.({ fromPeerId: 'не ключ' });
@@ -336,7 +336,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('ответ без отправителя до setRemoteDescription не доходит', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     const pc = mockPeerConnections[mockPeerConnections.length - 1];
     expect(pc).toBeDefined();
     expect(pc.remoteDescription).toBeNull();
@@ -358,7 +358,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('нажатие «положить трубку» по-прежнему доходит до собеседника', async () => {
-    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe(true);
+    await expect(initiateCall(PEER, 'peer', false)).resolves.toBe('started');
     mockSendHangup.mockClear();
 
     await hangupCall();
@@ -404,7 +404,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('встречный звонок: чей ключ меньше, тот уступает и принимает входящий', async () => {
-    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe(true);
+    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe('started');
     expect(getCurrentCall()?.state).toBe('outgoing');
     mockSendAnswer.mockClear();
     mockSendHangup.mockClear();
@@ -423,7 +423,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('встречный звонок: чей ключ больше, тот держит свой исходящий', async () => {
-    await expect(initiateCall(lesser.pub, 'lesser', false)).resolves.toBe(true);
+    await expect(initiateCall(lesser.pub, 'lesser', false)).resolves.toBe('started');
     mockSendAnswer.mockClear();
     mockSendHangup.mockClear();
 
@@ -435,7 +435,7 @@ describe('поведение сервиса звонков', () => {
   });
 
   it('звонок от третьего во время исходящего по-прежнему получает «занято»', async () => {
-    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe(true);
+    await expect(initiateCall(greater.pub, 'greater', false)).resolves.toBe('started');
     mockSendAnswer.mockClear();
 
     await deliverOfferFrom(peer, testCallId('e'));

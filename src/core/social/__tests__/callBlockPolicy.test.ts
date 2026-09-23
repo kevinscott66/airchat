@@ -117,7 +117,7 @@ describe('входящий звонок от заблокированного', 
 describe('исходящий звонок заблокированному', () => {
   it('не начинается — писать ему тоже нельзя', async () => {
     mockBlocked.add(PEER);
-    await expect(initiateCall(PEER, 'кто-то', false)).resolves.toBe(false);
+    await expect(initiateCall(PEER, 'кто-то', false)).resolves.toBe('blocked');
     expect(mockSendOffer).not.toHaveBeenCalled();
   });
 });
