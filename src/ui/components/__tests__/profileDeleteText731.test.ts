@@ -62,19 +62,35 @@ describe('окно подтверждения говорит правду', () =
 describe('ответ на удаление читают', () => {
   it('результат забирают в переменную, а не выбрасывают', () => {
     expect(confirmDelete()).toContain(
-      'const removed = await profileManager.deleteProfile(profile.id);',
+      'const result = await profileManager.deleteProfile(profile.id);',
     );
   });
 
+  // v4.32.741: ответ стал различающим, и проверок теперь две. «Профиль удалён»
+  // говорится после обеих: отказ — строка на месте, данные тоже; остатки —
+  // строки нет, а файлы лежат. Выдавать любой из этих исходов за успех значит
+  // сказать человеку, что его переписки на устройстве больше нет, когда она там.
   it('«Профиль удалён» показывают только после проверки ответа', () => {
     const body = confirmDelete();
-    const checked = body.indexOf('if (!removed) {');
+    const refused = body.indexOf('if (!result.removed) {');
+    const leftovers = body.indexOf('if (result.leftovers.length > 0) {');
     const success = body.indexOf("showSuccess('Профиль удалён')");
-    expect(checked).toBeGreaterThan(0);
-    expect(success).toBeGreaterThan(checked);
+    expect(refused).toBeGreaterThan(0);
+    expect(leftovers).toBeGreaterThan(refused);
+    expect(success).toBeGreaterThan(leftovers);
   });
 
   it('на отказ говорят, что данные на месте, — иначе человек решит, что их нет', () => {
     expect(confirmDelete()).toContain('Данные остались на месте');
+  });
+
+  it('неудача уборки отличается от «такой строки нет»: её можно повторить', () => {
+    const body = confirmDelete();
+    expect(body).toContain("result.reason === 'cleanup_failed'");
+    expect(body).toContain('он остался на месте');
+  });
+
+  it('про оставшиеся файлы сказано, а не проглочено', () => {
+    expect(confirmDelete()).toContain('часть его файлов стереть не вышло');
   });
 });

@@ -176,16 +176,18 @@ describe('непрочитанный снимок профилей пережи�
 describe('удаление профиля отпускает его имя в реестре', () => {
   it('имя отпускают, и именно у удаляемого профиля', async () => {
     await bootWith(GOOD);
-    const ok = await profileManager.deleteProfile(1);
-    expect(ok).toBe(true);
+    // v4.32.741: ответ — исход, а не «да/нет»; здесь важно, что он успешный и
+    // без остатков: уборки замоканы удачными.
+    const res = await profileManager.deleteProfile(1);
+    expect(res).toEqual({ removed: true, leftovers: [] });
     // Не активного (2), а того, кого удалили.
     expect(released).toEqual([1]);
   });
 
   it('несуществующий профиль ничего не отпускает', async () => {
     await bootWith(GOOD);
-    const ok = await profileManager.deleteProfile(77);
-    expect(ok).toBe(false);
+    const res = await profileManager.deleteProfile(77);
+    expect(res).toEqual({ removed: false, reason: 'not_found' });
     expect(released).toEqual([]);
   });
 

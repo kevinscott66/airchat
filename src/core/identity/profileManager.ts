@@ -55,6 +55,27 @@ export type Profile = {
   lastUsed: number;
 };
 
+/**
+ * Что осталось на устройстве от профиля, которого удалили (v4.32.741).
+ *
+ * Обе эти уборки идут «от живых»: собирают файлы, принадлежащие оставшимся
+ * профилям, и сносят всё прочее. Работать до вычёркивания строки они не умеют,
+ * поэтому их отказ удаление уже не отменяет — но и молчать о нём нельзя: на
+ * устройстве остаётся снимок лица и копии историй удалённого аккаунта.
+ */
+export type ProfileLeftover = 'avatars' | 'albums';
+
+/**
+ * Исход удаления профиля (v4.32.741). Прежний `boolean` сводил к одному `false`
+ * «такой строки нет» и «нечего удалять», а успех говорил только о том, что
+ * строка вычеркнута, — про данные он не знал ничего и сообщал `true` даже
+ * тогда, когда на устройстве оставалась вся переписка.
+ */
+export type ProfileDeletion =
+  | { removed: true; leftovers: ProfileLeftover[] }
+  | { removed: false; reason: 'not_found' }
+  | { removed: false; reason: 'cleanup_failed'; err: string };
+
 type ProfileStateV1 = {
   v: 1;
   activeProfileId: number;
@@ -662,14 +683,42 @@ class ProfileManager {
     this.invalidateProfileCache();
   }
 
-  async deleteProfile(profileId: number): Promise<boolean> {
+  /**
+   * Удалить профиль вместе со всеми его данными на устройстве (v4.32.741).
+   *
+   * Порядок здесь и есть суть. До этой версии строка профиля вычёркивалась и
+   * записывалась на диск ПЕРВОЙ, а семь уборок шли следом, и каждая была
+   * обёрнута в `try/catch { log.warn }`. Функция после этого возвращала `true`
+   * безусловно, а экран говорил «Профиль удалён».
+   *
+   * Отказ любой из уборок — заблокированная база (SQLite lock от живого
+   * запроса UI), нехватка места, сбой файловой системы — означал, что вся
+   * переписка, копия диалогов, лента, файлы историй и снимок лица остаются
+   * лежать на устройстве. Узнать об этом было нельзя ничем: из списка профиль
+   * исчез, зайти в него нечем, повторить удаление невозможно (строки уже нет,
+   * `idx === -1`), фоновой уборки для таких остатков в приложении не
+   * существует. Удаляют профиль ровно затем, чтобы этого на телефоне не
+   * осталось, — и телефон отдают, продают, теряют.
+   *
+   * Теперь уборки, бьющие по номеру профиля, идут ДО вычёркивания строки и
+   * гасят удаление: не убралось — профиль остаётся в списке, человеку сказано,
+   * и повторить можно. Две оставшиеся — уборки файлов «от живых» (аватары,
+   * копии историй из альбомов) — работают только после того, как строки не
+   * стало, поэтому идут следом и удаление уже не отменяют; о них сообщается
+   * отдельно.
+   *
+   * Освобождение `@имени` в общем реестре остаётся необязательным: оно ходит в
+   * сеть, а профили удаляют и в самолёте. Его собственная беда — что отказ не
+   * переживает выход из функции — лечится не здесь.
+   */
+  async deleteProfile(profileId: number): Promise<ProfileDeletion> {
     await this.init();
-    if (!this.state || !this.mnemonicCache) return false;
+    if (!this.state || !this.mnemonicCache) return { removed: false, reason: 'not_found' };
     if (this.state.profiles.length <= 1) {
       throw new Error('Нельзя удалить единственный профиль');
     }
     const idx = this.state.profiles.findIndex((p) => p.id === profileId);
-    if (idx === -1) return false;
+    if (idx === -1) return { removed: false, reason: 'not_found' };
     // v4.32.49: если удаляем активный профиль — сначала переключаемся на
     // другой, ЗАТЕМ чистим данные. Иначе на момент cleanup ctx feedService
     // ещё указывает на удаляемую БД → возможна гонка SQLite lock при
@@ -687,20 +736,23 @@ class ProfileManager {
     } catch (e) {
       log.warn('delete_profile_did_failed', { profileId, err: e instanceof Error ? e.message : String(e) });
     }
-    this.state.profiles.splice(idx, 1);
+    // v4.32.741: активность уводится отдельно от вычёркивания строки. Причина
+    // прежняя (v4.32.49): пока профиль активен, feedService держит его базу, и
+    // уборка упрётся в SQLite lock. Но строка остаётся на месте до тех пор,
+    // пока данные не убраны, — иначе отменить неудавшееся удаление нечем.
     if (wasActive) {
-      this.state.activeProfileId = this.state.profiles[0].id;
+      const next = this.state.profiles.find((p) => p.id !== profileId);
+      if (!next) return { removed: false, reason: 'not_found' };
+      this.state.activeProfileId = next.id;
+      await this.persistState();
     }
-    await this.persistState();
     const active = this.rowById(this.state.activeProfileId);
     if (active) {
-      // v4.32.637: сюда нельзя ронять весь deleteProfile. Строка профиля уже
-      // вычеркнута и записана, а ниже идут уборки — база, лента, копия
-      // диалогов, файлы аватаров и историй. Исключение отсюда пропускало их
-      // все разом, и данные удалённого аккаунта оставались на устройстве
-      // навсегда: адресов их больше нигде нет, подобрать некому. Ключ же
-      // приведёт к активному профилю следующий запуск (App.tsx,
-      // applyActiveKeyPairToDevice), как и любое другое расхождение.
+      // v4.32.637: сюда нельзя ронять весь deleteProfile. Ниже идут уборки —
+      // база, лента, копия диалогов, файлы аватаров и историй, — и исключение
+      // отсюда пропускало их все разом. Ключ же приведёт к активному профилю
+      // следующий запуск (App.tsx, applyActiveKeyPairToDevice), как и любое
+      // другое расхождение.
       try {
         const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, active.derivationIndex);
         await persistKeyPair(pair);
@@ -727,50 +779,50 @@ class ProfileManager {
         err: e instanceof Error ? e.message : String(e),
       });
     }
-    // v4.32.49: очистка данных удалённого профиля. Если тут упадёт — профиль
-    // уже исключён из state, поэтому orphaned данные не приведут к UI-регрессу
-    // (ни один код их больше не прочтёт), но место на диске будет занято до
-    // следующего ручного cleanup'а / переустановки.
+    // v4.32.49: очистка данных удалённого профиля.
+    // v4.32.741: и она же — условие удаления. Все четыре уборки бьют по номеру
+    // профиля (или по его did), то есть работают, пока строка на месте, и
+    // сообщают об отказе: `deleteProfileDataFromLocalDb` и
+    // `deleteFeedDbForProfile` умели это и раньше, остальные научились в этой
+    // же версии. Не убралось — профиль остаётся в списке целиком, и человек
+    // может повторить; повторный проход безвреден, все четыре идемпотентны.
+    //
+    // Одно исключение внутри уборки ленты оставлено намеренно: неудача обхода
+    // kv-вложений там по-прежнему только пишется в журнал (см. её докблок) —
+    // байты без поста подберёт сверка сирот на ближайшей привязке личности,
+    // так что гасить удаление из-за них значило бы звать человека чинить то,
+    // что чинится само. Отказ удаления самого файла базы оттуда доходит сюда.
     try {
       const { deleteProfileDataFromLocalDb } = await import('../storage/local');
       await deleteProfileDataFromLocalDb(profileId);
-    } catch (e) {
-      log.warn('delete_profile_local_cleanup_failed', {
-        profileId,
-        err: e instanceof Error ? e.message : String(e),
-      });
-    }
-    if (removedDid) {
-      try {
+      if (removedDid) {
         const { deleteLegacyComposeDraft } = await import('../social/composeDraft');
         await deleteLegacyComposeDraft(removedDid);
-      } catch (e) {
-        log.warn('delete_profile_compose_draft_failed', {
-          profileId,
-          err: e instanceof Error ? e.message : String(e),
-        });
       }
-    }
-    try {
       const { cleanupFeedStorageForProfile } = await import('../social/feedService');
       await cleanupFeedStorageForProfile(profileId);
-    } catch (e) {
-      log.warn('delete_profile_feed_cleanup_failed', {
-        profileId,
-        err: e instanceof Error ? e.message : String(e),
-      });
-    }
-    // v4.32.309: файлы на диске уборка выше не трогает — она про базу.
-    try {
+      // v4.32.309: файлы на диске уборка базы не трогает.
       const { deleteDialogBackupForProfile } = await import('../storage/dialogBackup');
       await deleteDialogBackupForProfile(profileId);
     } catch (e) {
-      log.warn('delete_profile_backup_cleanup_failed', {
-        profileId,
-        err: e instanceof Error ? e.message : String(e),
-      });
+      const err = e instanceof Error ? e.message : String(e);
+      log.warn('delete_profile_cleanup_failed', { profileId, err });
+      return { removed: false, reason: 'cleanup_failed', err };
     }
-    await this.sweepOrphanedAvatars();
+
+    // Данных профиля на устройстве больше нет — теперь можно вычеркнуть строку.
+    // Позицию ищем заново: выше был `await`, и хотя список между ними никто не
+    // трогает, полагаться на старый номер в массиве незачем.
+    const at = this.state.profiles.findIndex((p) => p.id === profileId);
+    if (at !== -1) this.state.profiles.splice(at, 1);
+    await this.persistState();
+
+    // Уборки «от живых»: собирают то, что принадлежит оставшимся профилям, и
+    // сносят остальное. Работать до вычёркивания строки они не могут — файлы
+    // удаляемого профиля выглядели бы нужными, — поэтому удаление уже не
+    // отменяют. Об их отказе человеку говорится отдельно.
+    const leftovers: ProfileLeftover[] = [];
+    if (!(await this.sweepOrphanedAvatars())) leftovers.push('avatars');
     // v4.32.576: копии историй из альбомов. Строки удалённого профиля ушли
     // вместе с базой, а файлы лежат в общем каталоге, и адресов их больше нет
     // нигде — как и с аватарами до v4.32.309.
@@ -782,8 +834,9 @@ class ProfileManager {
         profileId,
         err: e instanceof Error ? e.message : String(e),
       });
+      leftovers.push('albums');
     }
-    return true;
+    return { removed: true, leftovers };
   }
 
   /**
@@ -807,16 +860,30 @@ class ProfileManager {
    * открылось» к «записи нет», и правило не действовало ровно тогда, когда
    * было нужно.
    */
-  private async sweepOrphanedAvatars(): Promise<void> {
+  private async sweepOrphanedAvatars(): Promise<boolean> {
+    // v4.32.741: список профилей берётся различающей формой. `collectAvatarsToKeep`
+    // закрывает нечитаемую ячейку и пустой список, но не третий случай: снимок
+    // профилей умеет молча укорачиваться — невалидную строку разбор отбрасывает
+    // и поднимает `snapshotIncomplete` (runInitOnce). Урезанный список тут
+    // неотличим от «этих аватаров больше нет», и уборка снесла бы лицо живого
+    // профиля — ровно то, что запрещает докблок выше. Так же поступают
+    // ownProfile, profileSharedKv и сверка сирот ленты.
+    const { ids, complete } = this.getProfileIdsComplete();
+    if (!complete) {
+      log.warn('avatar_sweep_profile_list_incomplete', { ids: ids.length });
+      return false;
+    }
     try {
       const { collectAvatarsToKeep } = await import('./avatarKeep');
       const { sweepAvatarFiles } = await import('../media/avatarFiles');
-      const keep = await collectAvatarsToKeep((this.state?.profiles ?? []).map((p) => p.id));
+      const keep = await collectAvatarsToKeep(ids);
       await sweepAvatarFiles(keep);
+      return true;
     } catch (e) {
       log.warn('delete_profile_avatar_sweep_failed', {
         err: e instanceof Error ? e.message : String(e),
       });
+      return false;
     }
   }
 }

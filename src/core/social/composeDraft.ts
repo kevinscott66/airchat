@@ -303,6 +303,11 @@ export async function deleteLegacyComposeDraft(did: string): Promise<void> {
   try {
     await kvDelete(legacyComposeDraftKey(did));
   } catch (e) {
+    // v4.32.741: отказ уходил в журнал и дальше не шёл. Зовут эту уборку из
+    // одного места — удаления профиля, — и оно на основании её молчания
+    // говорило «Профиль удалён» поверх недописанного поста, оставшегося лежать
+    // на устройстве под ключом с did.
     log.warn('compose_draft_legacy_delete_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }

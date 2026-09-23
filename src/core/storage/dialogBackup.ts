@@ -145,6 +145,11 @@ export async function deleteDialogBackupForProfile(profileId: number): Promise<v
     const legacy = legacyBackupUri();
     if (legacy) uris.push(legacy);
   }
+  // v4.32.741: отказ удаления гасился здесь, а строка «копия удалена» писалась
+  // в журнал безусловно — и то и другое неправда. Копия диалогов это вся
+  // переписка профиля одним файлом; зовут эту уборку только при удалении
+  // профиля, и по её молчанию человеку говорили «Профиль удалён».
+  let failure: unknown = null;
   for (const uri of uris) {
     try {
       await FileSystem.deleteAsync(uri, { idempotent: true });
@@ -153,8 +158,10 @@ export async function deleteDialogBackupForProfile(profileId: number): Promise<v
         profileId,
         err: e instanceof Error ? e.message : String(e),
       });
+      failure = failure ?? e;
     }
   }
+  if (failure) throw failure;
   log.info('dialog_backup_deleted', { profileId });
 }
 

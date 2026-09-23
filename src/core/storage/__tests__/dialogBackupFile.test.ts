@@ -93,6 +93,8 @@ import {
 } from '../dialogBackup';
 
 const fsMock = jest.requireMock('expo-file-system/legacy') as { __files: Record<string, string> };
+/** Те же функции, но как jest.fn: нужны, чтобы подставить отказ файловой системы. */
+const fsFns = jest.requireMock('expo-file-system/legacy') as { deleteAsync: jest.Mock };
 const LEGACY_URI = '/doc/airchat_dialogs_backup_v1.json';
 /** Тот же ключ, что выдаёт фейк deriveKeyPairFromMnemonicForProfile. */
 const WALLET_PUB = Buffer.from(new Uint8Array(32).fill(7)).toString('base64');
@@ -164,6 +166,28 @@ describe('удаление копии удалённого профиля (v4.32
     fsMock.__files[LEGACY_URI] = 'old';
     await deleteDialogBackupForProfile(2);
     expect(fsMock.__files[LEGACY_URI]).toBe('old');
+  });
+
+  // v4.32.741: отказ удаления гасился здесь, а в журнал безусловно писалась
+  // строка «копия удалена». Зовут эту уборку из одного места — удаления
+  // профиля, — и по её молчанию человеку говорили «Профиль удалён», пока файл
+  // со всей его перепиской лежал на диске.
+  it('неудача удаления доходит до вызывающего, а не тонет в логе', async () => {
+    const P2 = '/doc/airchat_dialogs_backup_v1_p2.json';
+    fsMock.__files[P2] = 'x';
+    fsFns.deleteAsync.mockRejectedValueOnce(new Error('EPERM'));
+    await expect(deleteDialogBackupForProfile(2)).rejects.toThrow('EPERM');
+    expect(fsMock.__files[P2]).toBe('x');
+  });
+
+  it('первый отказ не отменяет удаление остальных файлов', async () => {
+    // У первого профиля их два: свой и общий до v4.32.280. Оставить второй
+    // из-за первого значило бы потерять половину уборки молча.
+    fsMock.__files['/doc/airchat_dialogs_backup_v1_p1.json'] = 'x';
+    fsMock.__files[LEGACY_URI] = 'old';
+    fsFns.deleteAsync.mockRejectedValueOnce(new Error('EPERM'));
+    await expect(deleteDialogBackupForProfile(1)).rejects.toThrow('EPERM');
+    expect(fsMock.__files[LEGACY_URI]).toBeUndefined();
   });
 });
 

@@ -59,6 +59,7 @@ import {
 const mockLocal = jest.requireMock('../../storage/local') as {
   __kv: Record<string, string>;
   kvSet: jest.Mock;
+  kvDelete: jest.Mock;
 };
 
 const DID_A = 'did:key:zAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -142,6 +143,16 @@ describe('черновик из версий до v4.32.292', () => {
     mockLocal.__kv[legacyKey(DID_B)] = JSON.stringify({ draft: 'удаляемого', ts: Date.now() });
     await deleteLegacyComposeDraft(DID_B);
     expect(mockLocal.__kv[legacyKey(DID_B)]).toBeUndefined();
+  });
+
+  // v4.32.741: отказ уходил в журнал и дальше не шёл. Зовут эту уборку из
+  // одного места — удаления профиля, — и оно по её молчанию говорило «Профиль
+  // удалён» поверх недописанного поста, оставшегося лежать на устройстве.
+  it('не убралось — вызывающий об этом узнаёт', async () => {
+    mockLocal.__kv[legacyKey(DID_B)] = JSON.stringify({ draft: 'удаляемого', ts: Date.now() });
+    mockLocal.kvDelete.mockRejectedValueOnce(new Error('database is locked'));
+    await expect(deleteLegacyComposeDraft(DID_B)).rejects.toThrow('database is locked');
+    expect(mockLocal.__kv[legacyKey(DID_B)]).toBeDefined();
   });
 });
 

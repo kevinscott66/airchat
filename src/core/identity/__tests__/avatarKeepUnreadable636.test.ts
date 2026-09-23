@@ -75,10 +75,12 @@ describe('удаление профиля собирает список имен
     path.join(__dirname, '..', 'profileManager.ts'),
     'utf8',
   );
-  const body = source
-    .slice(source.indexOf('private async sweepOrphanedAvatars('))
-    .slice(0, 700)
-    .replace(/^\s*\/\/.*$/gm, '');
+  // v4.32.741: тело режется по закрывающей скобке метода, а не по первым 700
+  // символам. Отсчёт в символах ловил не функцию, а её длину: дописанный к ней
+  // комментарий выталкивал `sweepAvatarFiles` за окно, и проверка падала на
+  // изменении, которого не касается.
+  const fn = source.slice(source.indexOf('private async sweepOrphanedAvatars('));
+  const body = fn.slice(0, fn.indexOf('\n  }\n') + 4).replace(/^\s*\/\/.*$/gm, '');
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: уборка файлов по-прежнему вызывается', () => {
     expect(source).toContain('private async sweepOrphanedAvatars(');
