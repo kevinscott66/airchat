@@ -31,7 +31,7 @@ import {
 import {
   envelopeBody,
   makePeer,
-  makePeerRelativeTo,
+  makePeerLadder,
   sealAnswer,
   sealHangup,
   sealOffer,
@@ -138,14 +138,14 @@ jest.mock('../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-const me = makePeer();
+// v4.32.615: встречный звонок разрешается сравнением ключей, поэтому обе
+// стороны спора нужны обе — и та, что уступает, и та, что держит своё.
+// v4.32.724: лесенка выдаёт их вместе со «мной» посередине — прежний подбор
+// наугад падал разбором файла примерно раз в двести прогонов.
+const { lesser, me, greater } = makePeerLadder();
 const peer = makePeer();
 const ME = me.pub;
 const PEER = peer.pub;
-// v4.32.615: встречный звонок разрешается сравнением ключей, поэтому обе
-// стороны спора нужны обе — и та, что уступает, и та, что держит своё.
-const greater = makePeerRelativeTo(ME, 'above');
-const lesser = makePeerRelativeTo(ME, 'below');
 
 /** Прокрутить очередь микрозадач, не двигая часы. */
 function settle(): Promise<void> {
