@@ -444,6 +444,20 @@ let pendingOffer: { fromPubB64: string; fromName: string; sdp: string; isVideo: 
 let endedResetTimer: ReturnType<typeof setTimeout> | null = null;
 let outgoingTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 /**
+ * Идёт ли сейчас звонок, который нельзя перебивать (v4.32.740).
+ *
+ * Условие одно и то же у входящего и у исходящего, но записано было дважды —
+ * а с v4.32.740 спрашивается трижды: исходящий проверяет занятость ещё раз
+ * перед самой записью состояния. Правило, размноженное по местам вызова,
+ * расходится молча, поэтому оно здесь одно.
+ *
+ * `idle` и `ended` заняты не считаются: первое — отсутствие звонка, второе —
+ * короткое окно после отбоя, из которого следующий звонок начинается штатно.
+ */
+function callInProgress(): boolean {
+  return !!currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended';
+}
+/**
  * Повтор предложения звонка, пока телефон не появится в сети (v4.32.573).
  *
  * Раньше сервер отвечал звонящему `peer_unavailable`, и звонок обрывался на
@@ -845,7 +859,7 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
       yieldOutgoingToGlare();
     }
 
-    if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
+    if (callInProgress()) {
       // Busy — decline automatically
       try {
         sig.sendAnswer(fromPubB64, await sealCallEnvelope(pair, myPub, {
@@ -1532,16 +1546,9 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
     log.info('call_out_blocked', { to: peerPubB64.slice(0, 8) });
     return false;
   }
-  if (currentCall && currentCall.state !== 'idle' && currentCall.state !== 'ended') {
+  if (callInProgress()) {
     log.warn('call_already_active');
     return false;
-  }
-  // v4.32.142 (AUDIT P1 T2): if a user initiates a new call during the
-  // post-hangup 'ended' window, cancel the pending reset timer so it doesn't
-  // fire later and null out the freshly-installed `currentCall`.
-  if (endedResetTimer) {
-    clearTimeout(endedResetTimer);
-    endedResetTimer = null;
   }
 
   const wrtc = loadWebRtc();
@@ -1560,6 +1567,32 @@ export async function initiateCall(peerPubB64: string, peerName: string, isVideo
   if (!permsOk) {
     log.warn('call_permissions_denied', { isVideo });
     return false;
+  }
+
+  // v4.32.740: занятость спрашивается ещё раз — теперь перед самой записью.
+  // Первая проверка стоит до трёх ожиданий: `rateLimiter.whenReady`,
+  // `ensureRegistered` (ходит в сеть) и `ensureCallPermissions` (может показать
+  // системное окно разрешений и висеть, пока человек не ответит). Входящий
+  // звонок, доехавший в это окно, успевал установиться целиком: `onOffer`
+  // записывал `incoming`, гасил баннер из шторки и сжигал номер звонка в списке
+  // виденных предложений. Здешняя запись `outgoing` затирала его молча —
+  // `recordCallEnd` при этом не звали, так что в списке звонков не появлялось
+  // даже «Пропущен», а повторы предложения от звонящего отбрасывались как уже
+  // виденные. Звонок исчезал для обеих сторон и не оставлял следа.
+  if (callInProgress()) {
+    log.warn('call_already_active_late', { incoming: currentCall?.direction === 'incoming' });
+    return false;
+  }
+
+  // v4.32.142 (AUDIT P1 T2): if a user initiates a new call during the
+  // post-hangup 'ended' window, cancel the pending reset timer so it doesn't
+  // fire later and null out the freshly-installed `currentCall`.
+  // v4.32.740: отмена переехала сюда, вплотную к записи. Раньше таймер гасили
+  // до ожиданий — и отказ в разрешениях оставлял состояние `ended` навсегда:
+  // отменённый сброс уже не приходил, а ставить `null` было некому.
+  if (endedResetTimer) {
+    clearTimeout(endedResetTimer);
+    endedResetTimer = null;
   }
 
   // v4.32.573: номер звонка. Он ничего не значит и ни с чем не связан — он
