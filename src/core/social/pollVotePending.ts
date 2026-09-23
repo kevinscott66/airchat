@@ -31,6 +31,9 @@
  * прежний, а не ложится второй строкой, — иначе передумавший («поставил,
  * снял») дважды применялся бы в неизвестном порядке.
  *
+ * v4.32.764: рядом — такая же полка для конвертов завершения опроса, см.
+ * {@link ParkedClose}. Границы и правила у неё те же самые.
+ *
  * Модуль без импортов: полка проверяется без базы, сети и часов.
  */
 
@@ -62,6 +65,73 @@ export type ParkedVote = {
  */
 export function isRetriablePollVoteCode(code: string): boolean {
   return code === 'unknown_message';
+}
+
+/**
+ * Отложенное завершение: конверт как пришёл, плюс профиль-владелец и время.
+ *
+ * v4.32.764. У голоса полка есть с v4.32.573, а у завершения не было, хотя
+ * обгоняет оно свой опрос по той же самой причине и с теми же шансами: оба
+ * едут служебным конвертом, сам опрос — обычным сообщением, и порядок между
+ * этими двумя дорогами не гарантирован ничем.
+ *
+ * Цена пропажи у завершения выше, чем у голоса. Потерянный голос — одна
+ * строка, разошедшиеся счётчики. Потерянное завершение оставляет опрос
+ * открытым НАВСЕГДА: второй посылки у этого конверта нет (закрыть опрос можно
+ * один раз), повторить его автору нечем. Получатель продолжает голосовать в
+ * опросе, который для всех остальных давно закрыт, а его голоса на той стороне
+ * отбрасываются как «в закрытый опрос» — расход, которого не видит ни одна из
+ * сторон.
+ *
+ * Дедупликация по паре «сообщение + отправитель»: второй конверт завершения от
+ * того же человека — это повтор, а не второе событие.
+ */
+export type ParkedClose = {
+  readonly pid: number;
+  readonly msgId: string;
+  readonly senderPubB64: string;
+  readonly groupId?: string;
+  readonly ts: number;
+};
+
+export type PendingPollCloses = {
+  /** Отложить завершение. false — полка отказалась (негодный конверт). */
+  park(close: ParkedClose): boolean;
+  /** Снять все завершения по этому сообщению; просроченные не отдаются. */
+  take(msgId: string, pid: number, now: number): ParkedClose[];
+  size(): number;
+};
+
+export function createPendingPollCloses(
+  max: number = PENDING_VOTE_MAX,
+  ttlMs: number = PENDING_VOTE_TTL_MS
+): PendingPollCloses {
+  const cap = typeof max === 'number' && Number.isFinite(max) && max >= 1 ? Math.floor(max) : PENDING_VOTE_MAX;
+  const ttl =
+    typeof ttlMs === 'number' && Number.isFinite(ttlMs) && ttlMs >= 0 ? ttlMs : PENDING_VOTE_TTL_MS;
+  let parked: ParkedClose[] = [];
+  const same = (a: ParkedClose, b: ParkedClose): boolean =>
+    a.pid === b.pid && a.msgId === b.msgId && a.senderPubB64 === b.senderPubB64;
+  return {
+    park(close: ParkedClose): boolean {
+      if (!close || typeof close.msgId !== 'string' || close.msgId.length === 0) return false;
+      if (typeof close.senderPubB64 !== 'string' || close.senderPubB64.length === 0) return false;
+      if (!Number.isFinite(close.ts)) return false;
+      parked = parked.filter((p) => !same(p, close));
+      parked.push(close);
+      while (parked.length > cap) parked.shift();
+      return true;
+    },
+    take(msgId: string, pid: number, now: number): ParkedClose[] {
+      const fresh = parked.filter((p) => now - p.ts <= ttl);
+      const mine = fresh.filter((p) => p.msgId === msgId && p.pid === pid);
+      parked = fresh.filter((p) => !(p.msgId === msgId && p.pid === pid));
+      return mine;
+    },
+    size(): number {
+      return parked.length;
+    },
+  };
 }
 
 export type PendingPollVotes = {

@@ -141,7 +141,10 @@ describe('одно сообщение — одно уведомление', () =
 
   it('повтор не двигает счётчик непрочитанного и не показывает плашку', () => {
     const at = MESSAGING.indexOf('const alreadyStored =');
-    const body = MESSAGING.slice(at, at + 1600);
+    // Окно с запасом: между чтением и второй проверкой лежит разгрузка полок
+    // опроса, и она растёт (v4.32.764). Смысл проверки — обе ветки стоят
+    // рядом с чтением, а не точное число символов между ними.
+    const body = MESSAGING.slice(at, at + 2200);
     expect(body).toContain('if (!alreadyStored) {\n      void touchConversation(');
     expect(body).toContain('if (!alreadyStored) {\n        log.info(\'dm_incoming_saved\'');
   });

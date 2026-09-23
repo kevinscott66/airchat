@@ -1494,9 +1494,11 @@ export class MessagingService {
     // v4.32.573: голос в опросе едет отдельным служебным конвертом и обгоняет
     // сам опрос. Такой голос ждал на полке — теперь опрос есть, и его можно
     // применить (см. pollVotePending).
+    // v4.32.764: и завершение опроса тоже — оно обгоняет свой опрос по той же
+    // причине, а стоит его пропажа дороже: опрос остаётся открытым навсегда.
     if (inbound && !alreadyStored && isPollMessage(row.text)) {
       void import('./pollVoteSync')
-        .then(({ flushPendingPollVotes }) => flushPendingPollVotes(row.id, ownerPid))
+        .then(({ flushPendingPollEnvelopes }) => flushPendingPollEnvelopes(row.id, ownerPid))
         .catch((e) => log.warn('poll_vote_flush_failed', { err: e instanceof Error ? e.message : String(e) }));
     }
     await maybeSetTip();

@@ -41,6 +41,13 @@ jest.mock('../pollVotePending', () => ({
     take: jest.fn(() => mockTaken.splice(0, mockTaken.length)),
     size: jest.fn(() => mockTaken.length),
   }),
+  // v4.32.764: рядом появилась такая же полка для завершений опроса. Этот тест
+  // про голоса, поэтому она заглушена пустой.
+  createPendingPollCloses: () => ({
+    park: jest.fn(),
+    take: jest.fn(() => []),
+    size: jest.fn(() => 0),
+  }),
   isRetriablePollVoteCode: jest.fn(() => false),
 }));
 

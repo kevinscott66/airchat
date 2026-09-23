@@ -25,6 +25,7 @@ import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScop
 import { pollClosedKey } from '../storage/kvKeys';
 import { checkIncomingPollVote, type PollMessageFacts } from './pollVoteGuard';
 import {
+  createPendingPollCloses,
   createPendingPollVotes,
   isRetriablePollVoteCode,
   type ParkedVote,
@@ -418,6 +419,66 @@ export async function flushPendingPollVotes(
 }
 
 /**
+ * Снимает с полки завершения, ждавшие это сообщение, и применяет их
+ * (v4.32.764).
+ *
+ * Права проверяются заново, как и у голосов. Второй раз на полку конверт не
+ * ложится: сообщение есть, а любой другой отказ со временем не меняется.
+ */
+export async function flushPendingPollCloses(
+  msgId: string,
+  pid: number,
+  now: number = Date.now()
+): Promise<number> {
+  const closes = pendingCloses.take(msgId, pid, now);
+  if (closes.length === 0) return 0;
+  let applied = 0;
+  let failed = 0;
+  for (const c of closes) {
+    // Отказ на одном конверте не уносит остальные — то же правило, что у
+    // голосов в v4.32.623: сняты они уже все и обратно не лягут.
+    try {
+      const intake = await applyIncomingPollClose(
+        { msgId: c.msgId, ts: c.ts, ...(c.groupId ? { groupId: c.groupId } : {}) },
+        c.senderPubB64,
+        pid,
+        now,
+        false
+      );
+      if (intake === 'deferred') failed += 1;
+      else applied += 1;
+    } catch (e) {
+      failed += 1;
+      log.warn('poll_close_apply_failed', {
+        msgId: c.msgId.slice(0, 8),
+        from: c.senderPubB64.slice(0, 12),
+        err: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  log.info('poll_closes_flushed', { count: applied, failed, msgId: msgId.slice(0, 8) });
+  return applied;
+}
+
+/**
+ * Разобрать полки обоих видов для только что записанного сообщения-опроса
+ * (v4.32.764).
+ *
+ * Порядок не произволен: сперва голоса, потом завершение. Голоса отправлены
+ * раньше завершения — иначе автор не смог бы его отправить, — и применённое
+ * первым завершение отбросило бы их все как «в закрытый опрос». Обратный
+ * порядок повторяет то, как события шли у отправителя.
+ */
+export async function flushPendingPollEnvelopes(
+  msgId: string,
+  pid: number,
+  now: number = Date.now()
+): Promise<void> {
+  await flushPendingPollVotes(msgId, pid, now);
+  await flushPendingPollCloses(msgId, pid, now);
+}
+
+/**
  * v4.32.763: обе читают различающей обёрткой. Прежние отдавали `null` и на
  * «такого сообщения нет», и на «базу не удалось спросить», а здесь из этого
  * `null` делался вывод `missing` — то есть «голос обогнал свой опрос, положить
@@ -515,7 +576,56 @@ export async function handleIncomingPollClose(
   const env = decodePollCloseEnvelope(text);
   if (!env || !senderPubB64) return 'consumed';
   // Профиль-владелец — от службы переписки (v4.32.481).
-  const pid = ownerPid;
+  return await applyIncomingPollClose(env, senderPubB64, ownerPid, Date.now(), true);
+}
+
+/**
+ * v4.32.764: полка для завершений, обогнавших свой опрос, — см.
+ * pollVotePending. Одна на процесс, как и полка голосов.
+ */
+const pendingCloses = createPendingPollCloses();
+
+/**
+ * Общее тело применения завершения: и для только что пришедшего конверта, и
+ * для снятого с полки. `canPark` не даёт снятому лечь обратно.
+ *
+ * v4.32.764. До этой версии завершение, для которого сообщения-опроса ещё нет,
+ * отбрасывалось навсегда (`poll_close_unknown_message` в группе,
+ * `poll_close_not_author_drop` в личном) — ровно та же ошибка, которую у голоса
+ * исправили в v4.32.573, только дороже: опрос оставался открытым у получателя
+ * до конца времён. Теперь конверт ждёт своё сообщение на полке, а все проверки
+ * прав проходят заново при снятии: на полке лежит конверт, а не разрешение.
+ */
+async function applyIncomingPollClose(
+  env: PollCloseEnvelope,
+  senderPubB64: string,
+  pid: number,
+  now: number,
+  canPark: boolean
+): Promise<EnvelopeIntake> {
+  /**
+   * Отложить конверт до прихода самого опроса. Не вышло отложить — значит
+   * конверт негоден, и держать его незачем: кадр разобран.
+   */
+  const parkOrDrop = (where: string): EnvelopeIntake => {
+    if (canPark) {
+      const parked = pendingCloses.park({
+        pid,
+        msgId: env.msgId,
+        senderPubB64,
+        ...(env.groupId ? { groupId: env.groupId } : {}),
+        ts: now,
+      });
+      if (parked) {
+        log.info('poll_close_parked', { from: senderPubB64.slice(0, 12), group: !!env.groupId });
+        // Конверт лежит на полке и будет применён, когда придёт сам опрос:
+        // держать за него ещё и метку «докуда прочитано» незачем.
+        return 'consumed';
+      }
+    }
+    log.debug(where, { from: senderPubB64.slice(0, 12), group: !!env.groupId });
+    return 'consumed';
+  };
 
   if (env.groupId) {
     // v4.32.755: различающее чтение — см. голос выше.
@@ -539,11 +649,12 @@ export async function handleIncomingPollClose(
       log.warn('poll_close_message_unreadable', { gid: env.groupId.slice(0, 8) });
       return 'deferred';
     }
-    // Сообщения нет — закрывать нечего; иначе конвертами с выдуманными id
-    // можно было бы засорять kv ключами poll_closed_*.
+    // Сообщения нет — либо конверт обогнал свой опрос (тогда полка), либо id
+    // выдуман (тогда полка его отсеет по сроку). Записывать флаг вслепую
+    // по-прежнему нельзя: конвертами с выдуманными id засоряли бы kv ключами
+    // poll_closed_*.
     if (targetRead.state === 'missing') {
-      log.debug('poll_close_unknown_message', { gid: env.groupId.slice(0, 8) });
-      return 'consumed';
+      return parkOrDrop('poll_close_unknown_message');
     }
     const target = targetRead.value;
     // v4.32.342: сообщение обязано быть из названной группы. Права проверялись
@@ -590,7 +701,13 @@ export async function handleIncomingPollClose(
       return 'deferred';
     }
     const author = lookupValue(authorRead);
-    if (!author || author.direction !== 'in' || author.contactPubB64 !== senderPubB64) {
+    // v4.32.764: «строки ещё нет» и «прислал не автор» — разные вещи, а
+    // отбрасывались они одинаково. Первое проходит само собой через секунду
+    // (конверт обогнал свой опрос), второе не изменится никогда.
+    if (!author) {
+      return parkOrDrop('poll_close_unknown_message');
+    }
+    if (author.direction !== 'in' || author.contactPubB64 !== senderPubB64) {
       log.warn('poll_close_not_author_drop', { from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }

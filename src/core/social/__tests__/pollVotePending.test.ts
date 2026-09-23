@@ -216,7 +216,8 @@ describe('приём сообщения разгружает полку', () => 
     expect(at).toBeGreaterThan(0);
     const after = s.slice(at, at + 700);
     expect(after).toContain('isPollMessage(row.text)');
-    expect(after).toContain('flushPendingPollVotes(row.id, ownerPid)');
+    // v4.32.764: снятие общее — у завершения опроса появилась своя полка рядом.
+    expect(after).toContain('flushPendingPollEnvelopes(row.id, ownerPid)');
     // Не для своего же отправленного и не для повторной доставки.
     expect(after).toContain('inbound && !alreadyStored');
   });
@@ -227,7 +228,7 @@ describe('приём сообщения разгружает полку', () => 
     expect(at).toBeGreaterThan(0);
     const after = s.slice(at, at + 700);
     expect(after).toContain('isPollMessage(env.text)');
-    expect(after).toContain('flushPendingPollVotes(env.msgId, pid)');
+    expect(after).toContain('flushPendingPollEnvelopes(env.msgId, pid)');
   });
 
   it('оба места грузят pollVoteSync динамически — иначе замкнётся круг импортов', () => {

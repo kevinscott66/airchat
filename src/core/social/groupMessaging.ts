@@ -678,9 +678,10 @@ export async function handleIncomingGroupEnvelope(
     }
     // v4.32.573: голос, обогнавший свой опрос, ждал на полке — см.
     // pollVotePending. Сообщение записано, значит его можно применить.
+    // v4.32.764: там же ждёт и конверт завершения опроса.
     if (isPollMessage(env.text)) {
       void import('./pollVoteSync')
-        .then(({ flushPendingPollVotes }) => flushPendingPollVotes(env.msgId, pid))
+        .then(({ flushPendingPollEnvelopes }) => flushPendingPollEnvelopes(env.msgId, pid))
         .catch((e) => log.warn('poll_vote_flush_failed', { err: e instanceof Error ? e.message : String(e) }));
     }
     // v4.32.478: имя владельца сообщения (pid), а не того профиля, что открыт
