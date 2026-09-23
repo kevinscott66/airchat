@@ -82,7 +82,9 @@ describe('решение уходит собеседнику', () => {
     // при отказе базы собеседник получал конверт про решение, которого на
     // устройстве нет.
     const local = sync.indexOf('if (!(await setCopyGuard(peerPubB64, on))) {');
-    const row = sync.indexOf('await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true });');
+    // v4.32.777: строка отвечает исходом записи, и её отказ назван в журнале —
+    // но своё уже записанное решение она не отменяет.
+    const row = sync.indexOf('await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true })');
     const send = sync.indexOf('fanoutControlEnvelope(');
     expect(local).toBeGreaterThan(-1);
     expect(row).toBeGreaterThan(local);

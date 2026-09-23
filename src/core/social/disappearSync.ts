@@ -13,7 +13,11 @@
  *     включения таймера, — прошлая история под чужую команду не попадает.
  * Плюс обе стороны видят системную строку «кто и что включил».
  */
-import { setConversationDisappearTimer, saveChatMessage } from '../storage/local';
+import {
+  setConversationDisappearTimer,
+  saveChatMessageChecked,
+  type ChatMessageWrite,
+} from '../storage/local';
 import { commitControlTs, controlTsFresh } from './controlWatermark';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
@@ -50,6 +54,10 @@ function sysText(ms: number, byMe: boolean): string {
 /**
  * Системная строка с детерминированным id (INSERT OR IGNORE ⇒ повтор
  * конверта не плодит дубликатов).
+ *
+ * v4.32.777: отвечает исходом записи, а не `void`. Прежний `saveChatMessage`
+ * свой отказ гасил сам, и занятая база съедала единственное объяснение тому,
+ * что переписка вдруг стала исчезать: настройка вставала молча.
  */
 async function insertSysRow(params: {
   peerPubB64: string;
@@ -59,9 +67,9 @@ async function insertSysRow(params: {
   key: number;
   createdAt: number;
   byMe: boolean;
-}): Promise<void> {
+}): Promise<ChatMessageWrite> {
   const { peerPubB64, ownerProfileId, ms, key, createdAt, byMe } = params;
-  await saveChatMessage({
+  return saveChatMessageChecked({
     id: `dis-${byMe ? 'me' : 'peer'}-${key}-${ms}`,
     contactPubB64: peerPubB64,
     cid: null,
@@ -139,7 +147,13 @@ export async function setDisappearAndSync(params: {
     log.warn('disappear_local_write_failed', { to: peerPubB64.slice(0, 12), ms });
     return { synced: false, applied: false, warning: disappearLocalWarning(ms) };
   }
-  await insertSysRow({ peerPubB64, ownerProfileId: pid, ms, key: ts, createdAt: ts, byMe: true });
+  // v4.32.777: строку объяснения тоже умеет не пустить занятая база. Отменять
+  // из-за неё уже вставший таймер нечестно — решение применено и уходит
+  // собеседнику, — но и молчать нельзя: без записи в журнале никто потом не
+  // поймёт, почему у человека сообщения исчезают без единого слова об этом.
+  if ((await insertSysRow({ peerPubB64, ownerProfileId: pid, ms, key: ts, createdAt: ts, byMe: true })) === 'failed') {
+    log.warn('disappear_sys_row_failed', { to: peerPubB64.slice(0, 12), ms, byMe: true });
+  }
 
   // v4.32.448: рассылка — общая воронка служебных конвертов, и её отказ
   // возвращается наверх. Таймер уже стоит у себя; у собеседника — нет, и
@@ -197,11 +211,17 @@ export async function handleIncomingDisappear(
     log.warn('disappear_apply_failed', { from: senderPubB64.slice(0, 12), ms: env.ms });
     return 'deferred';
   }
-  await commitControlTs('disappear', senderPubB64, pid, env.ts);
   // Место в ленте — по своему времени: по чужому ts строка легла бы куда
   // угодно, в том числе в будущее. А id считается от ts отправителя, чтобы
   // повторная доставка того же конверта не добавляла вторую строку.
-  await insertSysRow({
+  //
+  // v4.32.777: строка пишется ДО сдвига знака — по той же причине, по которой
+  // до него применяется сам таймер (v4.32.750). Сдвинутый знак отвергает
+  // повтор как старый, а повтора у служебного конверта и так нет: отказ базы
+  // на этой строке оставлял собеседника с молча исчезающей перепиской
+  // навсегда. Ни таймер, ни повторный проход дубликата не создадут: id
+  // детерминирован, а INSERT OR IGNORE второй строки не положит.
+  const sysRow = await insertSysRow({
     peerPubB64: senderPubB64,
     ownerProfileId: pid,
     ms: env.ms,
@@ -209,6 +229,11 @@ export async function handleIncomingDisappear(
     createdAt: Date.now(),
     byMe: false,
   });
+  if (sysRow === 'failed') {
+    log.warn('disappear_sys_row_failed', { from: senderPubB64.slice(0, 12), ms: env.ms });
+    return 'deferred';
+  }
+  await commitControlTs('disappear', senderPubB64, pid, env.ts);
   log.info('disappear_applied_remote', { from: senderPubB64.slice(0, 12), ms: env.ms });
   return 'consumed';
 }

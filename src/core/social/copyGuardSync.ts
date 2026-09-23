@@ -26,7 +26,7 @@
  * и снимок вторым телефоном не остановит ничто — от этого работает водяной
  * знак, а не переключатель.
  */
-import { saveChatMessage } from '../storage/local';
+import { saveChatMessageChecked, type ChatMessageWrite } from '../storage/local';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
@@ -60,6 +60,11 @@ function sysText(on: boolean, byMe: boolean): string {
 /**
  * Системная строка с детерминированным id: повторная доставка того же
  * конверта не добавит вторую строку (INSERT OR IGNORE).
+ *
+ * v4.32.777: отвечает исходом записи, а не `void`. Прежний `saveChatMessage`
+ * свой отказ гасил сам — и занятая база съедала единственное объяснение тому,
+ * что «Копировать» и «Переслать» вдруг пропали: без строки это выглядит
+ * поломкой приложения, а не решением собеседника.
  */
 async function insertSysRow(params: {
   peerPubB64: string;
@@ -68,9 +73,9 @@ async function insertSysRow(params: {
   /** Время автора решения — от него считается id. */
   key: number;
   byMe: boolean;
-}): Promise<void> {
+}): Promise<ChatMessageWrite> {
   const { peerPubB64, ownerProfileId, on, key, byMe } = params;
-  await saveChatMessage({
+  return saveChatMessageChecked({
     id: `cg-${byMe ? 'me' : 'peer'}-${key}-${on ? '1' : '0'}`,
     contactPubB64: peerPubB64,
     cid: null,
@@ -123,7 +128,13 @@ export async function setCopyGuardAndSync(params: {
   if (!(await setCopyGuard(peerPubB64, on))) {
     return { synced: false, warning: copyGuardLocalFailText(on) };
   }
-  await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true });
+  // v4.32.777: строку объяснения тоже умеет не пустить занятая база. Отменять
+  // из-за неё уже записанный запрет нечестно — решение применено и уходит
+  // собеседнику, — но и молчать нельзя: без записи в журнале потом не понять,
+  // почему у человека в переписке пропали «Копировать» и «Переслать».
+  if ((await insertSysRow({ peerPubB64, ownerProfileId: pid, on, key: ts, byMe: true })) === 'failed') {
+    log.warn('copy_guard_sys_row_failed', { to: peerPubB64.slice(0, 12), on, byMe: true });
+  }
 
   const delivery = await fanoutControlEnvelope('copy_guard', encodeCopyGuardEnvelope({ on, ts }), {
     kind: 'dm',
@@ -174,14 +185,24 @@ export async function handleIncomingCopyGuard(
     log.warn('copy_guard_apply_failed', { from: senderPubB64.slice(0, 12), on: env.on });
     return 'deferred';
   }
-  await commitControlTs('copyguard', senderPubB64, ownerPid, env.ts);
-  await insertSysRow({
+  // v4.32.777: строка пишется ДО сдвига знака — по той же причине, по которой
+  // до него применяется сам запрет (v4.32.655). Сдвинутый знак отвергает
+  // повтор как старый, а повтора у служебного конверта и так нет: отказ базы
+  // на этой строке оставлял собеседника с молча отключённым копированием
+  // навсегда. Ни запрет, ни повторный проход дубликата не создадут: id
+  // детерминирован, а INSERT OR IGNORE второй строки не положит.
+  const sysRow = await insertSysRow({
     peerPubB64: senderPubB64,
     ownerProfileId: ownerPid,
     on: env.on,
     key: env.ts,
     byMe: false,
   });
+  if (sysRow === 'failed') {
+    log.warn('copy_guard_sys_row_failed', { from: senderPubB64.slice(0, 12), on: env.on });
+    return 'deferred';
+  }
+  await commitControlTs('copyguard', senderPubB64, ownerPid, env.ts);
   log.info('copy_guard_applied_remote', { from: senderPubB64.slice(0, 12), on: env.on });
   return 'consumed';
 }
