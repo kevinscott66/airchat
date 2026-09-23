@@ -103,7 +103,9 @@ describe('приём: строка складывается по номеру с
     // v4.32.763: та же строка, но читается различающей обёрткой — отказ базы
     // здесь заводил вторую живую геолокацию вместо обновления первой.
     expect(branch).toContain('getChatMessageAuthorRead(rowId, ownerPid)');
-    expect(branch).toContain('updateChatMessageText(rowId, rawText, ownerPid)');
+    // v4.32.771: та же строка, но запись тоже различающая — её отказ прежде
+    // терял посылку молча.
+    expect(branch).toContain('updateChatMessageTextChecked(rowId, rawText, ownerPid)');
     expect(branch).not.toContain('em.messageId');
   });
 

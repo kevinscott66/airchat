@@ -4595,6 +4595,23 @@ async function deletePollArtifactsBySelect(
  * вас» независимо от того, ушла ли строка из базы.
  */
 export async function deleteChatMessage(id: string, ownerProfileId: number): Promise<boolean> {
+  return (await deleteChatMessageChecked(id, ownerProfileId)) === 'deleted';
+}
+
+/**
+ * Исход удаления строки тремя словами (v4.32.771).
+ *
+ * `deleteChatMessage` отвечает булевым, и `false` у него значит сразу две
+ * разные вещи: «ни одной строки не подошло» и «база отказала». Первое
+ * окончательно — строки нет и не будет; второе проходит само, стоит повторить.
+ * Приёмник «удалить у всех» не читал даже булев ответ.
+ */
+export type ChatDeleteWrite = 'deleted' | 'missing' | 'failed';
+
+export async function deleteChatMessageChecked(
+  id: string,
+  ownerProfileId: number
+): Promise<ChatDeleteWrite> {
   try {
     const d = await db();
     // v4.32.272: удаление одного сообщения тоже обязано уносить его вложение из
@@ -4638,13 +4655,13 @@ export async function deleteChatMessage(id: string, ownerProfileId: number): Pro
     );
     if (!removed) {
       log.warn('chat_message_delete_no_row', { id: id.slice(0, 8), pid: ownerProfileId });
-      return false;
+      return 'missing';
     }
     emitChatWrites();
-    return true;
+    return 'deleted';
   } catch (e) {
     log.warn('chat_message_delete_failed', { err: e instanceof Error ? e.message : String(e) });
-    return false;
+    return 'failed';
   }
 }
 
@@ -4781,6 +4798,22 @@ export async function updateChatMessageText(
   newText: string,
   ownerProfileId: number
 ): Promise<boolean> {
+  return (await updateChatMessageTextChecked(id, newText, ownerProfileId)) === 'updated';
+}
+
+/**
+ * Исход правки текста тремя словами (v4.32.771). Та же беда, что у удаления
+ * рядом: `false` означал и «строки нет», и «база отказала». Приёмник чужой
+ * правки ответа не читал вовсе — правка собеседника пропадала насовсем, а у
+ * него самого она применена и повтора не будет.
+ */
+export type ChatTextWrite = 'updated' | 'missing' | 'failed';
+
+export async function updateChatMessageTextChecked(
+  id: string,
+  newText: string,
+  ownerProfileId: number
+): Promise<ChatTextWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -4797,13 +4830,13 @@ export async function updateChatMessageText(
     // удалось» показывалось и тогда, когда у себя не изменилось ничего.
     if (!anyChanged(res)) {
       log.warn('chat_message_edit_no_row', { id: id.slice(0, 8), pid: ownerProfileId });
-      return false;
+      return 'missing';
     }
     emitChatWrites();
-    return true;
+    return 'updated';
   } catch (e) {
     log.warn('chat_message_edit_failed', { err: e instanceof Error ? e.message : String(e) });
-    return false;
+    return 'failed';
   }
 }
 

@@ -34,8 +34,11 @@ it('групповое сообщение: строка и следы опрос
   expect(b).toContain('() => dropOrphanBlobCache(doomed)');
 });
 
-it('личное сообщение: то же, и «строки не было» по-прежнему возвращает false', () => {
-  const b = body('deleteChatMessage');
+it('личное сообщение: то же, и «строки не было» по-прежнему отличимо', () => {
+  // v4.32.771: тело переехало в различающую форму, а прежнее имя стало её
+  // однострочной обёрткой. Тот же порядок записей проверяется там, где он
+  // теперь живёт.
+  const b = body('deleteChatMessageChecked');
   const tx = b.indexOf("'delete_chat_message',");
   expect(tx).toBeGreaterThan(0);
   expect(b.indexOf("'DELETE FROM chat_messages WHERE id = ? AND owner_profile_id = ?'")).toBeGreaterThan(tx);
@@ -44,6 +47,7 @@ it('личное сообщение: то же, и «строки не было�
   expect(b).toContain('if (!anyChanged(res)) return;');
   expect(b).toContain("log.warn('chat_message_delete_no_row'");
   expect(b).toContain('if (!removed) {');
+  expect(b).toContain("return 'missing';");
   // Кэш вложений сносим только если строка правда ушла.
   expect(b).toContain('if (removed) await dropOrphanBlobCache(doomed);');
 });

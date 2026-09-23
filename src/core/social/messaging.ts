@@ -13,6 +13,7 @@ import { log } from '../logger';
 import {
   chatMessageExists,
   deleteChatMessage,
+  deleteChatMessageChecked,
   getChatMessageAuthorRead,
   getChatMessageTexts,
   listChatMessages,
@@ -22,6 +23,7 @@ import {
   saveChatMessageChecked,
   updateChatMessageStatusChecked,
   updateChatMessageText,
+  updateChatMessageTextChecked,
   touchConversation,
   type ChatMessageRow,
 } from '../storage/local';
@@ -1133,7 +1135,15 @@ export class MessagingService {
         log.warn('delete_payload_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
         return 'consumed';
       }
-      await deleteChatMessage(payload.targetMessageId, ownerPid);
+      // v4.32.771: отказ самой записи откладывает кадр. Прежде ответ не читался
+      // вовсе: секунда занятой базы — и «удалить у всех» пропадало навсегда.
+      // Собеседник у себя стёр и уверен, что стёр у обоих; у нас сообщение
+      // остаётся. Второго такого конверта не будет — он помнит, что прислал.
+      const removed = await deleteChatMessageChecked(payload.targetMessageId, ownerPid);
+      if (removed === 'failed') {
+        log.warn('delete_payload_write_failed', { from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
       await maybeSetTip();
       await saveChatMessage({
         id: em.messageId,
@@ -1170,7 +1180,17 @@ export class MessagingService {
       // было в два шага: прислать обычное сообщение, а следом правку на
       // '\x0bsys:Исчезающие сообщения включены'. В группах ту же дыру на
       // op='edit' уже закрыли (см. groupControlEnvelope).
-      await updateChatMessageText(payload.targetMessageId, stripSpoofedSysPrefix(payload.newText), ownerPid);
+      // v4.32.771: то же, что у удаления выше. «Строки нет» повтором не
+      // исправить — это разобрано; отказ базы исправится сам.
+      const edited = await updateChatMessageTextChecked(
+        payload.targetMessageId,
+        stripSpoofedSysPrefix(payload.newText),
+        ownerPid
+      );
+      if (edited === 'failed') {
+        log.warn('edit_payload_write_failed', { from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
       await maybeSetTip();
       return 'consumed';
     }
@@ -1443,7 +1463,13 @@ export class MessagingService {
           log.warn('liveloc_update_skipped', { code: verdict.code, from: peerPubKeyB64.slice(0, 8) });
           return 'consumed';
         }
-        await updateChatMessageText(rowId, rawText, ownerPid);
+        // v4.32.771: живая геолокация чинится следующей посылкой сама, но кадр
+        // всё равно стоит перезапросить: посылка может оказаться последней.
+        const moved = await updateChatMessageTextChecked(rowId, rawText, ownerPid);
+        if (moved === 'failed') {
+          log.warn('liveloc_update_write_failed', { from: peerPubKeyB64.slice(0, 8) });
+          return 'deferred';
+        }
         await maybeSetTip();
         return 'consumed';
       }

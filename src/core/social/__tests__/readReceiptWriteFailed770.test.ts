@@ -37,6 +37,7 @@ const mockEnvelope: { current: unknown } = { current: null };
 jest.mock('../../storage/local', () => ({
   chatMessageExists: async () => false,
   deleteChatMessage: async () => true,
+  deleteChatMessageChecked: async () => 'deleted',
   getChatMessageAuthorRead: async () => mockAuthor,
   getChatMessageTexts: async () => new Map(),
   listChatMessages: async () => [],
@@ -49,6 +50,7 @@ jest.mock('../../storage/local', () => ({
     return mockStatusWrite;
   },
   updateChatMessageText: async () => true,
+  updateChatMessageTextChecked: async () => 'updated',
   touchConversation: async () => {},
 }));
 

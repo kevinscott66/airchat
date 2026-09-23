@@ -248,12 +248,14 @@ describe('отсев повторов спрашивает про свой ак�
 });
 
 describe('удаление сообщения — только своя строка', () => {
-  const body = bodyOf(LOCAL, 'export async function deleteChatMessage(');
+  // v4.32.771: запросы переехали в различающую форму; прежнее имя — обёртка.
+  const body = bodyOf(LOCAL, 'export async function deleteChatMessageChecked(');
 
   it('профиль стал обязательным аргументом', () => {
     expect(LOCAL).toContain(
       'export async function deleteChatMessage(id: string, ownerProfileId: number)',
     );
+    expect(LOCAL).toContain('  ownerProfileId: number\n): Promise<ChatDeleteWrite> {');
     expect(LOCAL).not.toContain('deleteChatMessage(id: string, ownerProfileId?: number)');
   });
 
