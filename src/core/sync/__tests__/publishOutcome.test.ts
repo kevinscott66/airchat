@@ -21,6 +21,9 @@ import {
 const ATTEMPTS: BroadcastAttempt[] = [
   'skipped-offline',
   'no-recipients',
+  // v4.32.752: «адресатов выяснить не удалось» — отдельный исход, не пустой
+  // список. Судьба у него как у «нет сети»: повторять.
+  'unknown-recipients',
   'failed',
   'partial',
   'complete',
@@ -52,7 +55,12 @@ describe('исход попытки рассылки', () => {
   });
 
   it('очередь нужна ровно там, где остались неполучившие', () => {
-    expect(ATTEMPTS.filter(needsRetryQueue)).toEqual(['skipped-offline', 'failed', 'partial']);
+    expect(ATTEMPTS.filter(needsRetryQueue)).toEqual([
+      'skipped-offline',
+      'unknown-recipients',
+      'failed',
+      'partial',
+    ]);
   });
 
   it('очередь и доставка никогда не совпадают', () => {

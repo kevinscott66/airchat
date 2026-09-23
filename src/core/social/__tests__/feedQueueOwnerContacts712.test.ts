@@ -55,6 +55,12 @@ jest.mock('../contacts', () => ({
     mockBareCalls.push(1);
     return mockContactsByPid.get(mockActivePid) ?? [];
   },
+  // v4.32.752: тем же кругом (открытый профиль) отвечает и различающее
+  // чтение — его спрашивает сама рассылка в feedTransport.
+  listContactsRead: async () => {
+    mockBareCalls.push(1);
+    return mockContactsByPid.get(mockActivePid) ?? [];
+  },
 }));
 
 /** Профиль, открытый на экране. Меняется прямо в тесте. */
@@ -328,6 +334,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   test('круг адресатов самой рассылки остаётся за feedTransport', () => {
     // Он помечен как неизменяемый без отдельной просьбы, поэтому правка тут и
     // остановилась на подсчёте: он решает судьбу записи в очереди.
-    expect(TRANSPORT).toContain('const contacts = (await listContacts()).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));');
+    // v4.32.752: там же круг и уточнён — различающим чтением, чтобы отказ
+    // базы не выглядел как «адресатов нет».
+    expect(TRANSPORT).toContain('const contactsRead = await listContactsRead();');
+    expect(TRANSPORT).toContain(
+      'const contacts = contactsRead.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));'
+    );
   });
 });

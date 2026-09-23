@@ -28,6 +28,8 @@ jest.mock('../../transport/multiTransport', () => ({
 // проверяемый код, каким из них он пользуется.
 jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => []),
+  // v4.32.752: сама рассылка читает справочник различающим чтением.
+  listContactsRead: jest.fn(async () => []),
   listContactsFor: jest.fn(async () => []),
   listContactsReadFor: jest.fn(async () => []),
 }));

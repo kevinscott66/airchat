@@ -37,6 +37,9 @@ import {
 const ATTEMPTS: BroadcastAttempt[] = [
   'skipped-offline',
   'no-recipients',
+  // v4.32.752: «адресатов выяснить не удалось» — отдельный исход, не пустой
+  // список. Судьба у него как у «нет сети»: повторять.
+  'unknown-recipients',
   'failed',
   'partial',
   'complete',
@@ -173,7 +176,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
     // Всё здесь — то, чего правка не касалась: обязано проходить и до неё.
     expect(FEED.length).toBeGreaterThan(10000);
     expect(SCREEN.length).toBeGreaterThan(10000);
-    expect(ATTEMPTS).toHaveLength(5);
+    expect(ATTEMPTS).toHaveLength(6);
     expect(needsRetryQueue('partial')).toBe(true);
     expect(needsRetryQueue('no-recipients')).toBe(false);
     expect(RU.feed.published).toBe('Публикация отправлена');

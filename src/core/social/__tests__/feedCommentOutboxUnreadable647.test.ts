@@ -38,6 +38,8 @@ jest.mock('../../transport/multiTransport', () => ({
 const mockPeerPk = Buffer.from(new Uint8Array(32).fill(7)).toString('base64');
 jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => [{ peerPublicKey: mockPeerPk }]),
+  // v4.32.752: рассылка кадра спрашивает различающее чтение.
+  listContactsRead: jest.fn(async () => [{ peerPublicKey: mockPeerPk }]),
 }));
 jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 

@@ -50,7 +50,11 @@ jest.mock('../../transport/ipfs/pubsub', () => ({
 jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn(async () => false), hasLocalPath: jest.fn(async () => false) },
 }));
-jest.mock('../../social/contacts', () => ({ listContacts: jest.fn(async () => []) }));
+// v4.32.752: рассылка кадра читает справочник различающим чтением.
+jest.mock('../../social/contacts', () => ({
+  listContacts: jest.fn(async () => []),
+  listContactsRead: jest.fn(async () => []),
+}));
 jest.mock('../../social/mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 
 import { readFileSync } from 'fs';

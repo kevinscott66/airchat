@@ -78,6 +78,7 @@ import { classifyBroadcast, dispositionOf, needsRetryQueue, reportOf, type Publi
 import { Buffer } from 'buffer';
 import {
   signAndBroadcastFeedEnvelope,
+  feedBroadcastNeedsRetry,
   parseAndVerifyFeedEnvelope,
   parseAndVerifyRelayedFeedEnvelope,
   publishToPostCommentsTopic,
@@ -1754,7 +1755,15 @@ async function tryPublishFeedPostComplete(
 
   // Успешной считаем публикацию если контактов нет (локальная лента) или хоть один транспорт сработал.
   const contactsCount = result.delivered.total;
-  const attempt = classifyBroadcast(true, contactsCount, result.delivered.success);
+  // v4.32.752: нечитаемый список контактов — не «контактов нет». Раньше он
+  // приходил сюда как `no-recipients`, и пост оставался «только у вас» без
+  // единой попытки повтора, хотя адресаты никуда не делись.
+  const attempt = classifyBroadcast(
+    true,
+    contactsCount,
+    result.delivered.success,
+    result.delivered.contactsUnreadable,
+  );
   if (attempt === 'no-recipients') {
     log.info('feed_publish_local_only', { postId });
     // v4.32.739: «отправлять некому» — не «отправлено». Так и написано в
@@ -2045,7 +2054,12 @@ export async function publishRepost(
     ? await signAndBroadcastFeedEnvelope(pair, payload)
     : null;
   const attempt = result
-    ? classifyBroadcast(true, result.delivered.total, result.delivered.success)
+    ? classifyBroadcast(
+        true,
+        result.delivered.total,
+        result.delivered.success,
+        result.delivered.contactsUnreadable,
+      )
     : classifyBroadcast(shouldAttemptBroadcast(online.ok), 0, 0);
   if (shouldAttemptBroadcast(online.ok) && !result) {
     // Конверт не собрался — репост в ленте есть, но повторять нечего.
@@ -3815,7 +3829,7 @@ export async function addAndBroadcastComment(
   }
   // v4.32.164 P1#2: если доставка не удалась (нет контактов в сети / serialization failed /
   // частичная), — кладём envelope в outbox для retry. Логика drain — в scheduleCommentOutboxRetry.
-  if (!res || res.delivered.success < res.delivered.total) {
+  if (feedBroadcastNeedsRetry(res)) {
     try {
       await enqueueCommentOutboxItem(pair, {
         kind: 'comment',
@@ -3897,7 +3911,7 @@ export async function deleteFeedComment(pair: KeyPairBytes, commentId: string): 
   }
   // v4.32.164 P1#2: delete без retry = вечно-живой коммент у оффлайн-получателей.
   // Аналогично addAndBroadcastComment — enqueue если доставка неполная.
-  if (!res || res.delivered.success < res.delivered.total) {
+  if (feedBroadcastNeedsRetry(res)) {
     try {
       await enqueueCommentOutboxItem(pair, {
         kind: 'comment_delete',
@@ -4776,7 +4790,7 @@ export function toggleCommentReaction(
     } else {
       log.info('feed_comment_reaction_queued_offline', { reachability: online.reachability });
     }
-    if (!res || res.delivered.success < res.delivered.total) {
+    if (feedBroadcastNeedsRetry(res)) {
       try {
         await enqueueCommentOutboxItem(pair, {
           kind: 'comment_reaction',

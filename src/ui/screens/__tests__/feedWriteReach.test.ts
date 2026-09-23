@@ -22,7 +22,11 @@ jest.mock('../../../core/transport/ipfs/pubsub', () => ({
 jest.mock('../../../core/transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn(async () => undefined) },
 }));
-jest.mock('../../../core/social/contacts', () => ({ listContacts: jest.fn(async () => []) }));
+// v4.32.752: рассылка кадра читает справочник различающим чтением.
+jest.mock('../../../core/social/contacts', () => ({
+  listContacts: jest.fn(async () => []),
+  listContactsRead: jest.fn(async () => []),
+}));
 jest.mock('../../../core/social/mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 
 const mockPosts = new Map<string, { id: string; authorDid: string; text: string }>();

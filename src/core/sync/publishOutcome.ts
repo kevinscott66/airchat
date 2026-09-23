@@ -13,12 +13,19 @@
  * называем, чем закончилась попытка рассылки, и только потом — что делать с
  * записью, которая в базе уже есть.
  *
- * Пять исходов попытки:
- *  - `skipped-offline` — рассылку не начинали, сети нет;
- *  - `no-recipients`   — рассылать некому, контактов нет;
- *  - `failed`          — отправили всем, не дошло никому;
- *  - `partial`         — дошло не до всех;
- *  - `complete`        — дошло до всех.
+ * Шесть исходов попытки:
+ *  - `skipped-offline`    — рассылку не начинали, сети нет;
+ *  - `no-recipients`      — рассылать некому, контактов нет;
+ *  - `unknown-recipients` — кому рассылать, выяснить не удалось;
+ *  - `failed`             — отправили всем, не дошло никому;
+ *  - `partial`            — дошло не до всех;
+ *  - `complete`           — дошло до всех.
+ *
+ * `unknown-recipients` появился в v4.32.752. Список контактов читается из базы,
+ * и отказ чтения приходил сюда неотличимым от пустого списка — то есть как
+ * `no-recipients`, судьба которого «повторять нечего». Пост оставался в своей
+ * ленте с пометкой «только у вас», хотя контакты никуда не делись и не узнали
+ * о нём никогда: следующей попытки у записи уже не было.
  *
  * И три судьбы записи: `queue-retry` (лежит в очереди, попытки продолжатся),
  * `local-only` (адресатов нет, повторять нечего) и `done` (доставлена).
@@ -31,6 +38,7 @@
 export type BroadcastAttempt =
   | 'skipped-offline'
   | 'no-recipients'
+  | 'unknown-recipients'
   | 'failed'
   | 'partial'
   | 'complete';
@@ -42,13 +50,18 @@ export type PublishDisposition = 'queue-retry' | 'local-only' | 'done';
  * Разобрать исход попытки. `attempted` — пробовали ли вообще (без сети не
  * пробуем: ответ известен заранее, а сетевой стек будет молотить впустую).
  * `total` — сколько адресатов было, `success` — до скольких дошло.
+ * `recipientsUnknown` (v4.32.752) — список адресатов не прочитался; тогда
+ * `total: 0` означает не «некому», а «неизвестно кому», и молчать об этом
+ * нельзя: в ноль адресатов не отправляют ни одного из настоящих.
  */
 export function classifyBroadcast(
   attempted: boolean,
   total: number,
   success: number,
+  recipientsUnknown = false,
 ): BroadcastAttempt {
   if (!attempted) return 'skipped-offline';
+  if (recipientsUnknown) return 'unknown-recipients';
   if (total <= 0) return 'no-recipients';
   if (success <= 0) return 'failed';
   return success < total ? 'partial' : 'complete';
@@ -58,6 +71,7 @@ export function classifyBroadcast(
 export function dispositionOf(attempt: BroadcastAttempt): PublishDisposition {
   switch (attempt) {
     case 'skipped-offline':
+    case 'unknown-recipients':
     case 'failed':
     case 'partial':
       return 'queue-retry';

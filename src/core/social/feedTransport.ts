@@ -37,7 +37,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyToDidKey, parseDidKey } from '../identity/did';
 import { log } from '../logger';
-import { listContacts } from './contacts';
+import { listContactsRead } from './contacts';
 import { rateLimiter } from '../security/rateLimiter';
 import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { multiTransportRouter } from '../transport/multiTransport';
@@ -449,6 +449,36 @@ export async function parseAndVerifyFeedEnvelope(
 }
 
 /**
+ * Итог попытки разослать кадр (v4.32.752).
+ *
+ * `contactsUnreadable` отличает «адресатов нет» от «список адресатов не
+ * прочитался». Снаружи оба выглядели как `total: 0`, и это одно поле решает
+ * судьбу записи: в первом случае повторять нечего, во втором — обязательно.
+ */
+export type FeedBroadcastResult = {
+  total: number;
+  success: number;
+  successDids: string[];
+  contactsUnreadable: boolean;
+};
+
+/**
+ * Нужен ли повтор этой рассылки (v4.32.752).
+ *
+ * `null` — кадр не собрался вовсе. Дальше — неполная доставка, очевидный повод.
+ * И третий, до этой версии не замеченный: список контактов не прочитался.
+ * Тогда `success < total` считается как `0 < 0`, то есть ложно, и слепая
+ * рассылка выглядела как «дошло до всех, кто был». Комментарий, его удаление и
+ * реакция на него уходили из очереди повторов, не уйдя никуда.
+ */
+export function feedBroadcastNeedsRetry(
+  res: { delivered: FeedBroadcastResult } | null
+): boolean {
+  if (!res) return true;
+  return res.delivered.contactsUnreadable || res.delivered.success < res.delivered.total;
+}
+
+/**
  * Разослать кадр всем контактам через multiTransportRouter.
  * Результат: сколько успешных доставок + список DID'ов, которым успешно доставили.
  *
@@ -461,15 +491,26 @@ export async function parseAndVerifyFeedEnvelope(
 export async function broadcastFeedEnvelope(
   frame: Uint8Array,
   opts?: { skipDids?: Set<string>; onlyDids?: Set<string> },
-): Promise<{ total: number; success: number; successDids: string[] }> {
+): Promise<FeedBroadcastResult> {
   // v4.32.617: заблокированный человек оставался в списке контактов (блок —
   // это запрет, а не уборка списка), и каждая моя публикация, правка, реакция
   // и комментарий по-прежнему адресовались ему поимённо. Запрет обязан быть
   // двухсторонним: он молчит их трафик ко мне и мой к ним. Так же устроена
   // рассылка сторис (storyService, v4.32.615).
   await rateLimiter.whenReady();
-  const contacts = (await listContacts()).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
-  if (contacts.length === 0) return { total: 0, success: 0, successDids: [] };
+  // v4.32.752: `listContacts` сводит «контактов нет» и «список не прочитался» в
+  // один пустой массив. Для рассылки это разные вещи: пустой список — законный
+  // конец («писать некому»), отказ базы — временная слепота, после которой пост
+  // обязан уйти в очередь повторов. Отличаем их так же, как сторис (v4.32.724).
+  const contactsRead = await listContactsRead();
+  if (contactsRead === null) {
+    log.warn('feed_broadcast_contacts_unreadable');
+    return { total: 0, success: 0, successDids: [], contactsUnreadable: true };
+  }
+  const contacts = contactsRead.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
+  if (contacts.length === 0) {
+    return { total: 0, success: 0, successDids: [], contactsUnreadable: false };
+  }
 
   const skipDids = opts?.skipDids;
   const onlyDids = opts?.onlyDids;
@@ -487,7 +528,7 @@ export async function broadcastFeedEnvelope(
   }
   if (targets.length === 0) {
     log.info('feed_broadcast_done', { total: 0, success: 0, filtered: true });
-    return { total: 0, success: 0, successDids: [] };
+    return { total: 0, success: 0, successDids: [], contactsUnreadable: false };
   }
 
   let success = 0;
@@ -504,7 +545,7 @@ export async function broadcastFeedEnvelope(
   });
 
   log.info('feed_broadcast_done', { total: targets.length, success });
-  return { total: targets.length, success, successDids };
+  return { total: targets.length, success, successDids, contactsUnreadable: false };
 }
 
 /**
@@ -518,7 +559,7 @@ export async function signAndBroadcastFeedEnvelope(
   pair: KeyPairBytes,
   payload: FeedEnvelopePayload,
   opts?: { skipDids?: Set<string>; onlyDids?: Set<string> },
-): Promise<{ frame: Uint8Array; delivered: { total: number; success: number; successDids: string[] } } | null> {
+): Promise<{ frame: Uint8Array; delivered: FeedBroadcastResult } | null> {
   const frame = await serializeFeedEnvelope(pair, payload);
   if (!frame) return null;
   const delivered = await broadcastFeedEnvelope(frame, opts);
