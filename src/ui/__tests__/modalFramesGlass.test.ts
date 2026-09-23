@@ -85,7 +85,9 @@ describe('подложка окон в настройках', () => {
   });
 
   it('плёнка под размытием остаётся — контраст листа держит она', () => {
-    expect(src).toContain('backgroundColor: scrim.modal');
+    // Сама плёнка — это заливка подложки, и живёт она в таблице стилей экрана,
+    // вынесенной отдельным файлом; разметка выше знает только её имя.
+    expect(read('ui/screens/settings/settingsStyles.ts')).toContain('backgroundColor: scrim.modal');
   });
 });
 

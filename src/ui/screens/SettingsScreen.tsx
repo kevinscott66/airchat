@@ -53,6 +53,10 @@ import { OpenFluxSettingsSection } from '../components/OpenFluxSettingsSection';
 import { AgentBridgeSettingsSection } from '../components/AgentBridgeSettingsSection';
 import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAILABLE } from '../platformCapabilities';
 import { settingsVisibility } from './settingsVisibility';
+import { makeStyles } from './settings/settingsStyles';
+import { createSettingsChrome } from './settings/settingsChrome';
+import { autoDeleteLabel, sessionDeviceName, sessionLocation } from './settings/settingsLabels';
+import { HourStepper } from './settings/HourStepper';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
 import { HelpScreen } from './HelpScreen';
@@ -65,7 +69,7 @@ import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
-import { ACCENT_SWATCHES, avatarShape, badgeTint, colorsForScheme, contrastingInk, font, mono, radius, scrim, tintedIcon, TOUCH_TARGET_MIN, type AppColors, type BadgeTone, type MenuIconHue } from '../theme';
+import { ACCENT_SWATCHES, avatarShape, colorsForScheme, contrastingInk, font, radius, TOUCH_TARGET_MIN } from '../theme';
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import {
@@ -171,49 +175,6 @@ type Props = {
 };
 
 const appVersion = Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? '1.0.0';
-
-const COUNTRY_NAMES: Record<string, string> = {
-  RU: 'Россия', UA: 'Украина', KZ: 'Казахстан', BY: 'Беларусь', DE: 'Германия',
-  US: 'США', TR: 'Турция', AM: 'Армения', GE: 'Грузия',
-};
-
-/**
- * Название страны по её коду.
- *
- * v4.32.595: список выше знал девять стран, а сервер с этой версии отвечает
- * кодом для любого выделенного блока адресов. Всё остальное показывалось как
- * «AE» или «NL» — формально верно и человеку бесполезно. Intl.DisplayNames
- * знает их все и склоняет по-русски, но собран он не в каждой сборке Hermes,
- * поэтому обращение к нему обёрнуто: не вышло — остаётся прежний список, за
- * ним сам код.
- */
-let countryNamer: Intl.DisplayNames | null | undefined;
-
-function countryName(code: string): string {
-  if (countryNamer === undefined) {
-    try {
-      countryNamer = new Intl.DisplayNames(['ru'], { type: 'region', fallback: 'none' });
-    } catch {
-      countryNamer = null;
-    }
-  }
-  try {
-    const named = countryNamer?.of(code);
-    if (named && named !== code) return named;
-  } catch {
-    // Код не из ISO 3166 — ниже отработает запасной список.
-  }
-  return COUNTRY_NAMES[code] ?? code;
-}
-
-function sessionLocation(device: SyncDevice): string {
-  const country = device.countryCode ? countryName(device.countryCode) : '';
-  return [device.city, country].filter(Boolean).join(', ') || 'Регион не определён';
-}
-
-function sessionDeviceName(device: SyncDevice): string {
-  return device.deviceModel || device.label || 'Неизвестное устройство';
-}
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -1208,88 +1169,16 @@ function SettingsScreenImpl({
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  const autoDeleteLabel = (ms: number | null) => {
-    if (!ms) return 'Выкл';
-    if (ms >= 86_400_000 * 7) return '7 дней';
-    if (ms >= 86_400_000) return '1 день';
-    if (ms >= 3_600_000) return '1 час';
-    return '1 мин';
-  };
-
   const cacheSizeLabel = cacheSize !== null ? formatByteSize(cacheSize) : 'Вычисляется…';
 
-  // ── Sub-screen header (instant back navigation) ────────────────────────────
-
-  const SubHeader = ({ title }: { title: string }) => (
-    <View style={styles.subHeader}>
-      <AppPressable
-        onPress={() => setSubScreen(null)}
-        style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 20 }}
-        android_ripple={{ color: colors.ripple, borderless: true, radius: 24 }}
-      >
-        <Ionicons name="chevron-back" size={24} color={colors.accent} />
-        <Text style={styles.backBtnText}>Назад</Text>
-      </AppPressable>
-      <Text style={styles.subTitle} numberOfLines={1}>{title}</Text>
-      <View style={{ width: 36 }} />
-    </View>
-  );
-
   /**
-   * Плашка состояния справа в строке: «Вкл» / «Выкл» / счётчик.
-   *
-   * v4.32.396: подложка была одна на все состояния и вписана в StyleSheet
-   * ('#1a3d2e'), а рядом с ней жили ещё два правила — тон с прозрачностью на
-   * месте вызова и пара литералов '#2196f3' / '#2196f322'. Теперь строка
-   * называет ТОН, а подложка с надписью считаются из него парой.
+   * Шапка, строка меню и плашка — стабильные между рендерами, см.
+   * settingsChrome. Пересобираются только при смене темы.
    */
-  const StatusBadge = ({ tone, text }: { tone: BadgeTone; text: string }) => {
-    const tint = badgeTint(colors, tone);
-    return (
-      <View style={[styles.badge, { backgroundColor: tint.fill }]}>
-        <Text style={[styles.badgeText, { color: tint.ink }]}>{text}</Text>
-      </View>
-    );
-  };
-
-  // ── Menu row helper ────────────────────────────────────────────────────────
-
-  const MenuRow = ({
-    iconName,
-    hue,
-    label,
-    badge,
-    onPress,
-    testID,
-  }: {
-    iconName: React.ComponentProps<typeof Ionicons>['name'];
-    /** v4.32.392: ИМЯ тона, а не пара «цвет + тот же цвет с суффиксом 22». */
-    hue: MenuIconHue;
-    label: string;
-    badge?: string;
-    onPress: () => void;
-    testID?: string;
-  }) => {
-    const tint = tintedIcon(hue, colors);
-    return (
-    <AppPressable
-      style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
-      onPress={onPress}
-      testID={testID}
-      android_ripple={{ color: colors.ripple }}
-    >
-      <View style={[styles.menuIcon, { backgroundColor: tint.fill }]}>
-        <Ionicons name={iconName} size={20} color={tint.ink} />
-      </View>
-      <View style={styles.rowBody}>
-        <Text style={styles.label}>{label}</Text>
-        {badge ? <Text style={styles.desc}>{badge}</Text> : null}
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-    </AppPressable>
-    );
-  };
+  const { SubHeader, MenuRow, StatusBadge } = useMemo(
+    () => createSettingsChrome(styles, colors, () => setSubScreen(null)),
+    [styles, colors],
+  );
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ── MAIN MENU ──────────────────────────────────────────────────────────────
@@ -2890,23 +2779,9 @@ function SettingsScreenImpl({
             <Text style={styles.modalTitle}>Расписание ночного режима</Text>
             <Text style={[styles.desc, { textAlign: 'center', marginBottom: 4 }]}>Тёмная тема будет активна в выбранный период</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, justifyContent: 'center' }}>
-              <View style={{ alignItems: 'center' }}>
-                <Text style={[styles.desc, { marginBottom: 4 }]}>Начало</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <AppPressable onPress={() => setNightStartTmp((h) => (h - 1 + 24) % 24)} style={styles.hourBtn}><Ionicons name="chevron-down" size={18} color={colors.text} /></AppPressable>
-                  <Text style={[styles.label, { minWidth: 44, textAlign: 'center' }]}>{String(nightStartTmp).padStart(2, '0')}:00</Text>
-                  <AppPressable onPress={() => setNightStartTmp((h) => (h + 1) % 24)} style={styles.hourBtn}><Ionicons name="chevron-up" size={18} color={colors.text} /></AppPressable>
-                </View>
-              </View>
+              <HourStepper styles={styles} colors={colors} caption="Начало" a11yName="начало ночного режима" hour={nightStartTmp} onChange={setNightStartTmp} />
               <Text style={[styles.label, { paddingHorizontal: 4 }]}>—</Text>
-              <View style={{ alignItems: 'center' }}>
-                <Text style={[styles.desc, { marginBottom: 4 }]}>Конец</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <AppPressable onPress={() => setNightEndTmp((h) => (h - 1 + 24) % 24)} style={styles.hourBtn}><Ionicons name="chevron-down" size={18} color={colors.text} /></AppPressable>
-                  <Text style={[styles.label, { minWidth: 44, textAlign: 'center' }]}>{String(nightEndTmp).padStart(2, '0')}:00</Text>
-                  <AppPressable onPress={() => setNightEndTmp((h) => (h + 1) % 24)} style={styles.hourBtn}><Ionicons name="chevron-up" size={18} color={colors.text} /></AppPressable>
-                </View>
-              </View>
+              <HourStepper styles={styles} colors={colors} caption="Конец" a11yName="конец ночного режима" hour={nightEndTmp} onChange={setNightEndTmp} />
             </View>
             <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 8 }]} onPress={() => { void setAutoNight(true, nightStartTmp, nightEndTmp); setNightTimeModal(false); }}>
               <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
@@ -2923,9 +2798,15 @@ function SettingsScreenImpl({
           <AppPressable style={[styles.pwdModalBox, { gap: 12 }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>{dndTimeModal === 'start' ? 'Начало тихих часов' : 'Конец тихих часов'}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              <AppPressable onPress={() => setDndTimeTmp((h) => (h - 1 + 24) % 24)} style={styles.hourBtn}><Ionicons name="chevron-down" size={18} color={colors.text} /></AppPressable>
-              <Text style={[styles.label, { minWidth: 60, textAlign: 'center', fontSize: scaleFont(28) }]}>{String(dndTimeTmp).padStart(2, '0')}:00</Text>
-              <AppPressable onPress={() => setDndTimeTmp((h) => (h + 1) % 24)} style={styles.hourBtn}><Ionicons name="chevron-up" size={18} color={colors.text} /></AppPressable>
+              <HourStepper
+                styles={styles}
+                colors={colors}
+                a11yName={dndTimeModal === 'start' ? 'начало тихих часов' : 'конец тихих часов'}
+                hour={dndTimeTmp}
+                onChange={setDndTimeTmp}
+                minWidth={60}
+                fontSize={scaleFont(28)}
+              />
             </View>
             <AppPressable style={styles.pwdPrimaryBtn} onPress={() => {
               if (dndTimeModal === 'start') { setDndStart(dndTimeTmp); void kvSet('dnd_start', String(dndTimeTmp)); }
@@ -3083,178 +2964,6 @@ function SettingsScreenImpl({
       {renderModals()}
     </SafeScreen>
   );
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────────
-
-function makeStyles(c: AppColors, sf: (base: number) => number) {
-  return StyleSheet.create({
-    // Layout
-    container: { flex: 1 },
-    content: { padding: 16, paddingBottom: 40 },
-    h1: { fontSize: sf(22), fontWeight: '700', color: c.text, marginBottom: 16 },
-    sectionTitle: { color: c.textSecondary, fontSize: sf(12), fontWeight: '700', marginTop: 20, marginBottom: 8, letterSpacing: 0.5 },
-    hint: { color: c.textMuted, fontSize: sf(12), marginBottom: 8, lineHeight: sf(16) },
-
-    // Cards
-    card: {
-      backgroundColor: c.surface,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      borderColor: c.border,
-      paddingHorizontal: 12,
-      marginBottom: 8,
-    },
-    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
-    rowBody: { flex: 1, paddingRight: 8 },
-    label: { color: c.text, fontSize: sf(16), fontWeight: '600' },
-    desc: { color: c.textMuted, fontSize: sf(12), marginTop: 4, lineHeight: sf(16) },
-    // Подложки и цвета надписи здесь нет: они зависят от состояния и
-    // считаются парой на месте вызова (v4.32.396).
-    badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.md },
-    badgeText: { fontSize: sf(12), fontWeight: '600' },
-
-    // Switch rows
-    switchRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: c.border,
-    },
-    switchRowLast: { borderBottomWidth: 0 },
-
-    // Link rows
-    linkRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: c.surface,
-      padding: 14,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      borderColor: c.border,
-      gap: 10,
-      marginBottom: 8,
-    },
-
-    /** Напоминание о непроверенной записи слов: кромка цвета предупреждения. */
-    seedReminder: { borderColor: c.warning },
-
-    // Press feedback
-    pressed: { opacity: 0.7 },
-
-    // Menu card (grouped rows)
-    menuCard: {
-      backgroundColor: c.surface,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: c.border,
-      overflow: 'hidden',
-      marginBottom: 8,
-    },
-    menuRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 14,
-      gap: 12,
-    },
-    menuDivider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: c.border,
-      marginLeft: 54,
-    },
-    menuIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: radius.md,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-
-    // Sub-screen header
-    subHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 16,
-      paddingTop: 4,
-    },
-    backBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 2,
-      paddingVertical: 6,
-      paddingRight: 8,
-      minWidth: 80,
-    },
-    backBtnText: { color: c.accent, fontSize: sf(16), fontWeight: '500' },
-    subTitle: {
-      flex: 1,
-      textAlign: 'center',
-      color: c.text,
-      fontSize: sf(16),
-      fontWeight: '700',
-      paddingHorizontal: 4,
-    },
-
-    // Misc
-    listWrap: { flex: 1, minHeight: 100, marginHorizontal: 16, marginBottom: 8 },
-    logoutRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: c.surface,
-      padding: 14,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      // v4.32.400: было '#4a2a2a' — тёмно-бурый, подобранный под тёмную тему;
-      // на белой карточке светлой темы это просто грязная рамка мимо палитры.
-      borderColor: c.error,
-      gap: 10,
-    },
-    logoutLabel: { color: c.error, fontSize: sf(16), fontWeight: '600' },
-    versionTap: { alignSelf: 'center', marginTop: 20, paddingVertical: 6, paddingHorizontal: 10 },
-    versionText: { color: c.textMuted, fontSize: sf(font.xs), textAlign: 'center' },
-
-    // Theme / appearance
-    themeRow: { flexDirection: 'row', gap: 8, paddingTop: 10, paddingBottom: 12 },
-    themeBtn: {
-      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-      paddingVertical: 9, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceHigh,
-    },
-    themeBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
-    themeBtnText: { color: c.textSecondary, fontSize: sf(12), fontWeight: '500' },
-    // Выбор кегля (v4.32.594). Две вещи, из-за которых «Очень крупный» и его
-    // «А» вылезали за плашку, и обе исправлены здесь, а не подрезкой строки:
-    //
-    // 1. Кнопки стояли строкой — «А» и подпись бок о бок. На четверть ширины
-    //    экрана этого хватало только самой короткой подписи. Теперь колонка:
-    //    образец сверху, слово под ним, и на слово работает вся ширина кнопки.
-    // 2. Подпись масштабировалась выбранным кеглем — то есть на «Очень
-    //    крупном» разрасталась ровно та надпись, которая этот выбор называет.
-    //    Орган управления не меняет собственный размер от того, чем управляет:
-    //    подписи здесь — font.xs без множителя, как деления на линейке.
-    //
-    // Две строки разрешены намеренно: подпись переносится, а не обрезается —
-    // «Очень кру…» не называет размер.
-    fontBtn: { flexDirection: 'column', gap: 3, flex: 1, minWidth: 0, paddingHorizontal: 4 },
-    fontBtnSample: { fontWeight: '700' },
-    fontBtnLabel: { color: c.textSecondary, fontSize: font.xs, fontWeight: '500', textAlign: 'center' },
-    themeBtnTextActive: { color: contrastingInk(c.primary), fontWeight: '700' },
-    hourBtn: { padding: 8, borderRadius: radius.md, backgroundColor: c.surfaceHigh },
-
-    // Modals
-    pwdModalKav: { flex: 1, justifyContent: 'center' },
-    pwdModalBg: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 20 },
-    pwdModalBox: { backgroundColor: c.surface, borderRadius: radius.lg, padding: 16, borderWidth: 1, borderColor: c.border },
-    pwdInput: { borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: 12, fontSize: sf(16), color: c.text, marginBottom: 10 },
-    pwdPrimaryBtn: { backgroundColor: c.primary, padding: 14, borderRadius: radius.md, alignItems: 'center', marginTop: 8 },
-    pwdPrimaryBtnText: { color: contrastingInk(c.primary), fontSize: sf(16), fontWeight: '600' },
-    pwdCancel: { color: c.accent, textAlign: 'center', marginTop: 14, fontSize: sf(16) },
-    modalTitle: { fontSize: sf(18), fontWeight: '700', color: c.text, marginBottom: 8 },
-
-    // Seed
-    seedBox: { backgroundColor: c.surfaceHigh, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: c.border },
-    seedText: { color: c.text, fontSize: sf(15), lineHeight: sf(24), fontFamily: mono },
-  });
 }
 
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.
