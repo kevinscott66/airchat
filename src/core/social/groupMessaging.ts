@@ -19,7 +19,7 @@ import {
   getGroup,
   getGroupRead,
   getGroupMessageTexts,
-  getGroupMessageTarget,
+  getGroupMessageTargetRead,
   insertGroupMessage,
   insertGroupMessageChecked,
   updateGroupMessageText,
@@ -1753,7 +1753,19 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // конверт. Права считались по env.groupId, а правилось и удалялось по
     // env.msgId, и связи между ними не было никакой: администратор своей группы
     // стирал или переписывал любое сообщение в любой чужой, зная только его id.
-    const target = await getGroupMessageTarget(env.msgId, pid);
+    //
+    // v4.32.766: чтение различающее. Схлопывающая форма отдавала один и тот же
+    // null и на «такого сообщения нет», и на отказ базы, а отказ уходил в
+    // 'consumed' — то есть секунда занятой базы стоила удаления «у всех»
+    // навсегда: повтора у служебного конверта нет, автор свою копию уже стёр, и
+    // у этого одного участника сообщение остаётся видимым, пока он сам его не
+    // удалит. То же и с правкой: у него навсегда остаётся старый текст.
+    const targetRead = await getGroupMessageTargetRead(env.msgId, pid);
+    if (targetRead.state === 'failed') {
+      log.warn('group_ctl_msgop_target_unreadable', { msgId: env.msgId.slice(0, 8) });
+      return 'deferred';
+    }
+    const target = lookupValue(targetRead);
     if (target == null || target.groupId !== env.groupId) {
       log.debug('group_ctl_msgop_unknown_msg', { msgId: env.msgId.slice(0, 8) });
       return 'consumed';
@@ -1837,7 +1849,17 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // заполнялся текстом сообщения из чужой переписки: у каждого получателя
     // resolvePinned берёт текст по id из его собственной БД, и тем, кто состоит
     // в обеих группах, показывалось бы содержимое второй.
-    const pinTarget = await getGroupMessageTarget(env.msgId, pid);
+    //
+    // v4.32.766: чтение различающее — по тому же доводу, что и у правки с
+    // удалением. Ниже по этой же ветке отказ ЗАПИСИ закрепления уже откладывает
+    // кадр (v4.32.758); отказ ЧТЕНИЯ цели до сих пор съедал его молча, хотя
+    // беда та же и проходит она сама.
+    const pinTargetRead = await getGroupMessageTargetRead(env.msgId, pid);
+    if (pinTargetRead.state === 'failed') {
+      log.warn('group_ctl_pin_target_unreadable', { msgId: env.msgId.slice(0, 8) });
+      return 'deferred';
+    }
+    const pinTarget = lookupValue(pinTargetRead);
     if (pinTarget == null || pinTarget.groupId !== env.groupId) {
       log.debug('group_ctl_pin_unknown_msg', { msgId: env.msgId.slice(0, 8) });
       return 'consumed';
