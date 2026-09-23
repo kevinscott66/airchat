@@ -55,6 +55,17 @@ jest.mock('../../storage/local', () => ({
   getGroupMessageTarget: jest.fn(async () => mockGroupTarget),
   getChatMessageTarget: jest.fn(async () => mockDmTarget),
   getChatMessageAuthor: jest.fn(async () => mockDmAuthor),
+  // v4.32.763: тот же набор в различающей форме. Здесь база исправна, поэтому
+  // `null` означает ровно «такой строки нет» — 'missing', не 'failed'.
+  getGroupMessageTargetRead: jest.fn(async () =>
+    mockGroupTarget ? { state: 'found', value: mockGroupTarget } : { state: 'missing' }
+  ),
+  getChatMessageTargetRead: jest.fn(async () =>
+    mockDmTarget ? { state: 'found', value: mockDmTarget } : { state: 'missing' }
+  ),
+  getChatMessageAuthorRead: jest.fn(async () =>
+    mockDmAuthor ? { state: 'found', value: mockDmAuthor } : { state: 'missing' }
+  ),
   listGroupMembers: jest.fn(async () => mockMembers ?? []),
   listGroupMembersRead: jest.fn(async () => mockMembers),
   notifyChatStorageChanged: jest.fn(),

@@ -96,7 +96,9 @@ describe('приём: строка складывается по номеру с
     const at = s.indexOf('if (inbound && liveNext) {');
     expect(at).toBeGreaterThan(-1);
     const branch = s.slice(at, s.indexOf('\n    }\n', at));
-    expect(branch).toContain('getChatMessageAuthor(rowId, ownerPid)');
+    // v4.32.763: та же строка, но читается различающей обёрткой — отказ базы
+    // здесь заводил вторую живую геолокацию вместо обновления первой.
+    expect(branch).toContain('getChatMessageAuthorRead(rowId, ownerPid)');
     expect(branch).toContain('updateChatMessageText(rowId, rawText, ownerPid)');
     expect(branch).not.toContain('em.messageId');
   });

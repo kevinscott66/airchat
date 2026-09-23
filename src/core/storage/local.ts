@@ -4625,16 +4625,38 @@ export async function getChatMessageAuthor(
   id: string,
   ownerProfileId: number,
 ): Promise<{ contactPubB64: string; direction: string } | null> {
+  return lookupValue(await getChatMessageAuthorRead(id, ownerProfileId));
+}
+
+/**
+ * То же чтение, отличающее «такой строки нет» от «прочитать не вышло»
+ * (v4.32.763).
+ *
+ * Разница здесь дороже, чем где бы то ни было: по этому чтению решается, ЧЬЁ
+ * сообщение правит входящий конверт. Сплющенный ответ `null` на все пять мест
+ * значил одно и то же — «строка не твоего собеседника», — и конверт молча
+ * объявлялся разобранным. То есть секунда занятой базы стоила собеседнику
+ * удаления «у всех», правки текста, отметки о прочтении и обновления живой
+ * геолокации: повтора у этих конвертов нет, метка «докуда прочитано»
+ * перешагивает кадр, и удалённое у отправителя сообщение остаётся у нас
+ * навсегда — а он уверен, что стёр его у обоих.
+ */
+export async function getChatMessageAuthorRead(
+  id: string,
+  ownerProfileId: number,
+): Promise<LookupResult<{ contactPubB64: string; direction: string }>> {
   try {
     const d = await db();
     const row = await d.getFirstAsync<{ contact_pub_b64: string; direction: string }>(
       'SELECT contact_pub_b64, direction FROM chat_messages WHERE id = ? AND owner_profile_id = ? LIMIT 1',
       [id, ownerProfileId]
     );
-    return row ? { contactPubB64: row.contact_pub_b64, direction: row.direction } : null;
+    return row
+      ? foundResult({ contactPubB64: row.contact_pub_b64, direction: row.direction })
+      : missingResult();
   } catch (e) {
     log.warn('get_chat_message_author_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return failedResult();
   }
 }
 
@@ -7644,22 +7666,40 @@ export async function getGroupMessageTarget(
   messageId: string,
   ownerProfileId: number
 ): Promise<{ groupId: string; senderPubB64: string; text: string | null } | null> {
+  return lookupValue(await getGroupMessageTargetRead(messageId, ownerProfileId));
+}
+
+/**
+ * То же чтение, отличающее «такого сообщения нет» от «прочитать не вышло»
+ * (v4.32.763).
+ *
+ * Разница решает судьбу конверта. «Сообщения ещё нет» — законный случай:
+ * служебный конверт обгоняет сам опрос, и его кладут на полку до прихода
+ * сообщения (pollVotePending). «Не прочиталось» — секунда занятой базы, и
+ * полка тут не поможет: сообщение УЖЕ лежит в базе, второй раз его никто не
+ * запишет, полку никто не разберёт, и конверт тихо умрёт по сроку. Такому
+ * кадру нужна не полка, а вторая попытка приёмника ('deferred').
+ */
+export async function getGroupMessageTargetRead(
+  messageId: string,
+  ownerProfileId: number
+): Promise<LookupResult<{ groupId: string; senderPubB64: string; text: string | null }>> {
   try {
     const d = await db();
     const row = await d.getFirstAsync<{ group_id: string; sender_pub_b64: string; text: string }>(
       'SELECT group_id, sender_pub_b64, text FROM group_messages WHERE id = ? AND owner_profile_id = ? LIMIT 1',
       [messageId, ownerProfileId]
     );
-    if (!row) return null;
+    if (!row) return missingResult();
     const dek = await getOrCreateDataEncryptionKey();
-    return {
+    return foundResult({
       groupId: row.group_id,
       senderPubB64: row.sender_pub_b64,
       text: cellTextOrNull(readAtRestCell(row.text, dek)),
-    };
+    });
   } catch (e) {
     log.warn('get_group_message_target_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return failedResult();
   }
 }
 
@@ -7673,21 +7713,29 @@ export async function getChatMessageTarget(
   messageId: string,
   ownerProfileId: number
 ): Promise<{ contactPubB64: string; text: string | null } | null> {
+  return lookupValue(await getChatMessageTargetRead(messageId, ownerProfileId));
+}
+
+/** Личный близнец getGroupMessageTargetRead — и по той же причине (v4.32.763). */
+export async function getChatMessageTargetRead(
+  messageId: string,
+  ownerProfileId: number
+): Promise<LookupResult<{ contactPubB64: string; text: string | null }>> {
   try {
     const d = await db();
     const row = await d.getFirstAsync<{ contact_pub_b64: string; text: string }>(
       'SELECT contact_pub_b64, text FROM chat_messages WHERE id = ? AND owner_profile_id = ? LIMIT 1',
       [messageId, ownerProfileId]
     );
-    if (!row) return null;
+    if (!row) return missingResult();
     const dek = await getOrCreateDataEncryptionKey();
-    return {
+    return foundResult({
       contactPubB64: row.contact_pub_b64,
       text: cellTextOrNull(readAtRestCell(row.text, dek)),
-    };
+    });
   } catch (e) {
     log.warn('get_chat_message_target_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return failedResult();
   }
 }
 

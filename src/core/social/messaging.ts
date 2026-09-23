@@ -14,6 +14,7 @@ import {
   chatMessageExists,
   deleteChatMessage,
   getChatMessageAuthor,
+  getChatMessageAuthorRead,
   getChatMessageTexts,
   listChatMessages,
   readChatMessageWindow,
@@ -24,6 +25,7 @@ import {
   touchConversation,
   type ChatMessageRow,
 } from '../storage/local';
+import { lookupValue } from '../utils/lookupResult';
 import { compareChatRows, oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { checkOnlineWrite, requireOnlineWrite } from '../sync/cachePolicy';
@@ -1117,7 +1119,16 @@ export class MessagingService {
       // v4.32.186 (Round-16 #1): a peer may only delete messages they
       // authored. Verify the target row was sent BY this peer (direction=in,
       // contactPubB64===sender) before deleting.
-      const auth = await getChatMessageAuthor(payload.targetMessageId, ownerPid);
+      // v4.32.763: чтение различающее. Прежнее отдавало `null` и на отказ базы
+      // тоже, и секунда занятой базы читалась как «строка не его» — удаление
+      // «у всех» объявлялось разобранным и пропадало навсегда. Собеседник при
+      // этом видит у себя пустое место и уверен, что стёр сообщение у обоих.
+      const authRead = await getChatMessageAuthorRead(payload.targetMessageId, ownerPid);
+      if (authRead.state === 'failed') {
+        log.warn('delete_payload_author_unreadable', { from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
+      const auth = lookupValue(authRead);
       if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
         log.warn('delete_payload_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
         return 'consumed';
@@ -1140,7 +1151,15 @@ export class MessagingService {
 
     if (payload.kind === 'edit' && 'targetMessageId' in payload && 'newText' in payload) {
       // v4.32.186 (Round-16 #2): edit authorship check.
-      const auth = await getChatMessageAuthor(payload.targetMessageId, ownerPid);
+      // v4.32.763: и то же различающее чтение, что у удаления выше. Потерянная
+      // правка хуже потерянного удаления: у нас навсегда остаётся прежний
+      // текст, а собеседник видит новый и считает, что исправил его у обоих.
+      const authRead = await getChatMessageAuthorRead(payload.targetMessageId, ownerPid);
+      if (authRead.state === 'failed') {
+        log.warn('edit_payload_author_unreadable', { from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
+      const auth = lookupValue(authRead);
       if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
         log.warn('edit_payload_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
         return 'consumed';
@@ -1166,14 +1185,29 @@ export class MessagingService {
       const ids = sanitizeReceiptIds(payload.messageIds);
       const dropped = receiptOverflowCount(payload.messageIds, ids.length);
       let applied = 0;
+      // v4.32.763: нечитаемые строки считаем отдельно. Прежде отказ базы был
+      // неотличим от «это не моё исходящее», отметка пропускалась молча — и
+      // галочка «прочитано» не появлялась уже никогда: второй отметки по тому
+      // же сообщению собеседник не шлёт. Применить отметку дважды безвредно
+      // (status пишется в то же значение), поэтому кадр честнее повторить.
+      let unreadable = 0;
       for (const msgId of ids) {
-        const auth = await getChatMessageAuthor(msgId, ownerPid);
+        const authRead = await getChatMessageAuthorRead(msgId, ownerPid);
+        if (authRead.state === 'failed') {
+          unreadable++;
+          continue;
+        }
+        const auth = lookupValue(authRead);
         if (!auth || auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'out') continue;
         await updateChatMessageStatus(msgId, 'read', ownerPid);
         applied++;
       }
       if (dropped > 0) log.warn('read_receipts_oversized_drop', { dropped, from: peerPubKeyB64.slice(0, 8) });
       log.info('read_receipts_applied', { count: applied, from: peerPubKeyB64.slice(0, 8) });
+      if (unreadable > 0) {
+        log.warn('read_receipts_author_unreadable', { unreadable, from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
       return 'consumed';
     }
 
@@ -1355,7 +1389,17 @@ export class MessagingService {
       // моё собственное отправленное: в моей же переписке появлялся мой текст,
       // которого я не писал. Проверка та же, что у правки сообщения (Round-16):
       // строка обязана быть входящей и от этого же собеседника.
-      const auth = await getChatMessageAuthor(rowId, ownerPid);
+      // v4.32.763: различающее чтение. «Строки нет» — первая посылка живой
+      // геолокации, её и полагается записать новой строкой. «Не прочитали» —
+      // занятая база, и прежний сплющенный `null` уводил очередную посылку в
+      // ту же ветку: вместо обновления метки на месте в переписке появлялась
+      // вторая живая геолокация того же человека, и обе продолжали идти.
+      const authRead = await getChatMessageAuthorRead(rowId, ownerPid);
+      if (authRead.state === 'failed') {
+        log.warn('liveloc_author_unreadable', { from: peerPubKeyB64.slice(0, 8) });
+        return 'deferred';
+      }
+      const auth = lookupValue(authRead);
       if (auth) {
         if (auth.contactPubB64 !== peerPubKeyB64 || auth.direction !== 'in') {
           log.warn('liveloc_update_rejected_authorship', { from: peerPubKeyB64.slice(0, 8) });
@@ -1438,6 +1482,13 @@ export class MessagingService {
     // повторялось: счётчик непрочитанного рос на каждую копию, а плашка внутри
     // приложения показывалась столько раз, сколькими путями сообщение пришло.
     // Спрашиваем базу ДО записи: была ли уже такая строка.
+    // v4.32.763: здесь сплющенное чтение оставлено намеренно — единственное в
+    // файле. Отказ базы тут не отменяет ничьё действие, он лишь выбирает, каким
+    // из двух перекосов ошибиться: счётчик непрочитанного вырастет на копию
+    // («строки ещё не было») или новое сообщение вовсе не поднимет счётчик и не
+    // покажет плашку («строка уже была»). Второе — потерянное уведомление,
+    // первое — лишняя единица, которую снимает открытие чата. Откладывать кадр
+    // здесь тоже нельзя: строка ниже уже записана, и повтор ничего не изменит.
     const alreadyStored = (await getChatMessageAuthor(rowId, ownerPid)) != null;
     await saveChatMessage(row);
     // v4.32.573: голос в опросе едет отдельным служебным конвертом и обгоняет

@@ -69,6 +69,19 @@ jest.mock('../../storage/local', () => ({
   getChatMessageTarget: async () => ({ contactPubB64: mockPeer, text: mockPollText }),
   getGroupMessageTarget: async () => ({ groupId: mockGroup, text: mockPollText }),
   getChatMessageAuthor: async () => ({ direction: 'in', contactPubB64: mockPeer }),
+  // v4.32.763: те же строки в различающей форме — база здесь исправна.
+  getChatMessageTargetRead: async () => ({
+    state: 'found',
+    value: { contactPubB64: mockPeer, text: mockPollText },
+  }),
+  getGroupMessageTargetRead: async () => ({
+    state: 'found',
+    value: { groupId: mockGroup, text: mockPollText },
+  }),
+  getChatMessageAuthorRead: async () => ({
+    state: 'found',
+    value: { direction: 'in', contactPubB64: mockPeer },
+  }),
   listGroupMembers: async () => [
     { peerPubB64: mockMe, role: 'owner' },
     { peerPubB64: mockPeer, role: 'member' },

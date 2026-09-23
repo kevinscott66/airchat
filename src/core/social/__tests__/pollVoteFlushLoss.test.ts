@@ -14,6 +14,11 @@ jest.mock('../../storage/local', () => ({
   getChatMessageAuthor: jest.fn(),
   getChatMessageTarget: jest.fn(),
   getGroupMessageTarget: jest.fn(),
+  // v4.32.763: набор читается различающими обёртками. Здесь предмет набора —
+  // потеря хвоста очереди, а не судьба строки: «такого сообщения нет».
+  getChatMessageAuthorRead: jest.fn(async () => ({ state: 'missing' })),
+  getChatMessageTargetRead: jest.fn(async () => ({ state: 'missing' })),
+  getGroupMessageTargetRead: jest.fn(async () => ({ state: 'missing' })),
   listGroupMembers: jest.fn(async () => []),
   notifyChatStorageChanged: jest.fn(),
   setPollVote: jest.fn(),

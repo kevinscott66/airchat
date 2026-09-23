@@ -13,13 +13,14 @@
 import { profileManager } from '../identity/profileManager';
 import {
   deletePollVote,
-  getChatMessageAuthor,
-  getChatMessageTarget,
-  getGroupMessageTarget,
+  getChatMessageAuthorRead,
+  getChatMessageTargetRead,
+  getGroupMessageTargetRead,
   listGroupMembersRead,
   notifyChatStorageChanged,
   setPollVote,
 } from '../storage/local';
+import { lookupValue } from '../utils/lookupResult';
 import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { pollClosedKey } from '../storage/kvKeys';
 import { checkIncomingPollVote, type PollMessageFacts } from './pollVoteGuard';
@@ -330,7 +331,9 @@ async function applyIncomingPollVote(
       group: !!env.groupId,
       code: target.code,
     });
-    return 'consumed';
+    // v4.32.763: «базу не спросили» — единственный из шести отказов, который
+    // проходит сам. Остальные пять постоянны, и вторая попытка их не изменит.
+    return target.code === 'read_failed' ? 'deferred' : 'consumed';
   }
 
   // Автор голоса берётся из ПОДПИСАННОГО отправителя DM, а не из конверта —
@@ -414,14 +417,26 @@ export async function flushPendingPollVotes(
   return applied;
 }
 
+/**
+ * v4.32.763: обе читают различающей обёрткой. Прежние отдавали `null` и на
+ * «такого сообщения нет», и на «базу не удалось спросить», а здесь из этого
+ * `null` делался вывод `missing` — то есть «голос обогнал свой опрос, положить
+ * на полку». Полка в этом случае — худший из возможных исходов: сообщение уже
+ * лежит в базе, второй раз его никто не запишет, разбирать полку некому, и
+ * голос умирает по сроку, но уже молча и с отметкой «конверт разобран».
+ */
 async function groupFacts(msgId: string, pid: number): Promise<PollMessageFacts> {
-  const row = await getGroupMessageTarget(msgId, pid);
-  return row ? { kind: 'group', groupId: row.groupId, text: row.text } : { kind: 'missing' };
+  const read = await getGroupMessageTargetRead(msgId, pid);
+  if (read.state === 'failed') return { kind: 'failed' };
+  if (read.state === 'missing') return { kind: 'missing' };
+  return { kind: 'group', groupId: read.value.groupId, text: read.value.text };
 }
 
 async function dmFacts(msgId: string, pid: number): Promise<PollMessageFacts> {
-  const row = await getChatMessageTarget(msgId, pid);
-  return row ? { kind: 'dm', contactPubB64: row.contactPubB64, text: row.text } : { kind: 'missing' };
+  const read = await getChatMessageTargetRead(msgId, pid);
+  if (read.state === 'failed') return { kind: 'failed' };
+  if (read.state === 'missing') return { kind: 'missing' };
+  return { kind: 'dm', contactPubB64: read.value.contactPubB64, text: read.value.text };
 }
 
 /**
@@ -516,13 +531,21 @@ export async function handleIncomingPollClose(
     // Закрыть можно свой опрос либо любой, если ты админ группы — те же права,
     // что даёт кнопку в GroupsScreen. Без этой проверки рядовой участник гасил
     // бы чужой опрос всей группе одним конвертом.
-    const target = await getGroupMessageTarget(env.msgId, pid);
+    const targetRead = await getGroupMessageTargetRead(env.msgId, pid);
+    // v4.32.763: отказ базы отвечал тем же `null`, что и «сообщения нет», и
+    // завершение опроса терялось навсегда — ровно тот случай, ради которого в
+    // v4.32.755 эта функция и начала отвечать словом.
+    if (targetRead.state === 'failed') {
+      log.warn('poll_close_message_unreadable', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     // Сообщения нет — закрывать нечего; иначе конвертами с выдуманными id
     // можно было бы засорять kv ключами poll_closed_*.
-    if (!target) {
+    if (targetRead.state === 'missing') {
       log.debug('poll_close_unknown_message', { gid: env.groupId.slice(0, 8) });
       return 'consumed';
     }
+    const target = targetRead.value;
     // v4.32.342: сообщение обязано быть из названной группы. Права проверялись
     // по env.groupId, а закрывался опрос по env.msgId — то есть админ своей
     // группы гасил любой опрос в любой чужой, зная только id сообщения.
@@ -558,7 +581,15 @@ export async function handleIncomingPollClose(
   } else {
     // Личный опрос: закрыть его вправе только тот, кто его создал. direction
     // 'in' — сообщение пришло от собеседника, значит автор он.
-    const author = await getChatMessageAuthor(env.msgId, pid);
+    const authorRead = await getChatMessageAuthorRead(env.msgId, pid);
+    // v4.32.763: «не прочитали строку» — не «прислал не автор». Сплющенное
+    // чтение уравнивало эти два случая, и занятая база отказывала в завершении
+    // теми же словами, что и подделке, — навсегда и без следа для человека.
+    if (authorRead.state === 'failed') {
+      log.warn('poll_close_author_unreadable', { from: senderPubB64.slice(0, 12) });
+      return 'deferred';
+    }
+    const author = lookupValue(authorRead);
     if (!author || author.direction !== 'in' || author.contactPubB64 !== senderPubB64) {
       log.warn('poll_close_not_author_drop', { from: senderPubB64.slice(0, 12) });
       return 'consumed';

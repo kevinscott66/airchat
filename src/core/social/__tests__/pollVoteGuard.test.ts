@@ -160,10 +160,12 @@ describe('checkIncomingPollVote', () => {
 });
 
 describe('источник фактов различает «пусто» и «не открылось»', () => {
+  // v4.32.763: само чтение переехало в различающие обёртки, а прежние имена
+  // остались их однострочными оболочками. Проверяем там, где теперь код.
   it('групповой читатель отдаёт null вместо пустой строки', () => {
     const body = slice(
       LOCAL(),
-      'export async function getGroupMessageTarget(',
+      'export async function getGroupMessageTargetRead(',
       '\nexport async function getChatMessageTarget('
     );
     expect(body).toContain('text: string | null');
@@ -174,7 +176,7 @@ describe('источник фактов различает «пусто» и «�
   it('личный читатель — так же', () => {
     const body = slice(
       LOCAL(),
-      'export async function getChatMessageTarget(',
+      'export async function getChatMessageTargetRead(',
       '\n/**'
     );
     expect(body).toContain('text: string | null');

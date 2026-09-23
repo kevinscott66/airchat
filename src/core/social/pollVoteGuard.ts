@@ -47,8 +47,18 @@ import { parsePollText } from './pollEnvelope';
  * Это не то же самое, что пустой текст: пустой текст — честный ответ «это не
  * опрос», нечитаемая копия — «мы не знаем, опрос это или нет».
  */
+/**
+ * `failed` — базу вообще не удалось спросить (v4.32.763).
+ *
+ * Прежде этот случай приходил сюда как `missing`, и разница между ними не
+ * косметическая: «сообщения ещё нет» лечится полкой (голос ждёт опрос,
+ * pollVotePending), «не прочиталось» — не лечится ею никак. Сообщение УЖЕ в
+ * базе, второй раз его никто не запишет, полку никто не разберёт, и голос
+ * тихо умрёт по сроку. Такому кадру нужна не полка, а вторая попытка приёмника.
+ */
 export type PollMessageFacts =
   | { kind: 'missing' }
+  | { kind: 'failed' }
   | { kind: 'dm'; contactPubB64: string; text: string | null }
   | { kind: 'group'; groupId: string; text: string | null };
 
@@ -58,6 +68,7 @@ export type PollVoteVerdict =
 
 export type PollVoteRejectCode =
   | 'unknown_message'
+  | 'read_failed'
   | 'unreadable_message'
   | 'wrong_group'
   | 'not_in_chat'
@@ -79,6 +90,9 @@ export function checkIncomingPollVote(
   senderPubB64: string
 ): PollVoteVerdict {
   if (facts.kind === 'missing') return { ok: false, code: 'unknown_message' };
+  // v4.32.763: отказ базы — не «выдуманный id». Полка его не спасёт (см.
+  // PollMessageFacts), поэтому у него свой код: вызывающий откладывает кадр.
+  if (facts.kind === 'failed') return { ok: false, code: 'read_failed' };
 
   if (env.groupId) {
     // Сообщение обязано лежать именно в той группе, которую назвал конверт.
