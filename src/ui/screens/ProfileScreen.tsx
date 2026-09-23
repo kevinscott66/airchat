@@ -23,6 +23,7 @@ import { runSyncIfOnline } from '../../core/storage/sync';
 import { ipfsId } from '../../core/transport/ipfs/node';
 import { deleteContact, listContacts, subscribeContactsChanged } from '../../core/social/contacts';
 import { ContactsScreen } from './ContactsScreen';
+import { isCloudVaultConfigured } from '../../core/backup/cloudVault';
 import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { loadFeedPosts } from '../../core/social/feedService';
 import {
@@ -767,9 +768,14 @@ function ProfileScreenImpl({
           </Text>
           {/* v4.32.594: одной строки про шифрование уже мало. Аккаунт уехал на
               сервер, и человек должен знать это отсюда, а не догадываться по
-              тому, что переписка сама появилась на втором телефоне. */}
+              тому, что переписка сама появилась на втором телефоне.
+              v4.32.723: но только если хранилище в сборке задано — иначе эта
+              строка обещает синхронизацию, которой нет, и человек узнаёт об
+              этом уже после переустановки. См. isCloudVaultConfigured. */}
           <Text style={styles.infoText}>
-            Аккаунт хранится на сервере в зашифрованном виде и открывается на других ваших устройствах.
+            {isCloudVaultConfigured()
+              ? 'Аккаунт хранится на сервере в зашифрованном виде и открывается на других ваших устройствах.'
+              : 'Аккаунт хранится только на этом телефоне: синхронизации с другими устройствами в этой сборке нет.'}
           </Text>
           {/* v4.32.528: в браузере эта строка была неправдой. Wi-Fi LAN держится
               на слушающем сокете и mDNS — странице не дают ни того, ни другого,

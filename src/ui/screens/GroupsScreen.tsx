@@ -2326,8 +2326,10 @@ function GroupChatScreen({
           } else {
             showError(translateFailureMessage(out.reason));
           }
-        } catch {
-          showError('Ошибка перевода');
+        } catch (e) {
+          // См. ChatScreen: причина отказа человеку нужна — «нет сети» и «сервис
+          // не ответил» чинятся по-разному.
+          showError(userErrorText(e, 'Не удалось перевести сообщение'));
         } finally { clearTimeout(to); }
       })();
     };
@@ -2382,7 +2384,7 @@ function GroupChatScreen({
       textRef.current = t;
       setText(t);
     } else if (t === '/magic' || t === '/шар') {
-      const answers = ['Несомненно', 'Это точно', 'Без сомнений', 'Да', 'Скорее да', 'Не предсказуемо', 'Не уверен', 'Сомнительно', 'Нет', 'Определённо нет'];
+      const answers = ['Несомненно', 'Это точно', 'Без сомнений', 'Да', 'Скорее да', 'Непредсказуемо', 'Не уверен', 'Сомнительно', 'Нет', 'Определённо нет'];
       t = `🔮 Магический шар: ${answers[Math.floor(Math.random() * answers.length)]}`;
       textRef.current = t;
       setText(t);
@@ -3688,7 +3690,7 @@ function GroupChatScreen({
           const shared = await shareTextExport('group', txt, 'Экспорт группы', Date.now());
           if (!shared) Alert.alert('Экспорт', 'Системное «Поделиться» недоступно на этом устройстве');
         } catch (e) {
-          Alert.alert('Ошибка', userErrorText(e, 'Не удалось выгрузить переписку'));
+          showError(userErrorText(e, 'Не удалось выгрузить переписку'));
         }
         })(); });
         return;

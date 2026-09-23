@@ -2371,7 +2371,7 @@ function ChatThreadView({
     } else if (text === '/coin' || text === '/монета') {
       text = `🪙 Монета: ${Math.random() < 0.5 ? 'Орёл' : 'Решка'}`;
     } else if (text === '/magic' || text === '/шар') {
-      const answers = ['Несомненно', 'Это точно', 'Без сомнений', 'Да', 'Скорее да', 'Не предсказуемо', 'Не уверен', 'Сомнительно', 'Нет', 'Определённо нет'];
+      const answers = ['Несомненно', 'Это точно', 'Без сомнений', 'Да', 'Скорее да', 'Непредсказуемо', 'Не уверен', 'Сомнительно', 'Нет', 'Определённо нет'];
       text = `🔮 Магический шар: ${answers[Math.floor(Math.random() * answers.length)]}`;
     } else if (text === '/random' || text === '/рандом') {
       text = `🎰 Случайное число: ${Math.floor(Math.random() * 100)}`;
@@ -2770,7 +2770,12 @@ function ChatThreadView({
         } else {
           showError(translateFailureMessage(out.reason));
         }
-      } catch { showError('Ошибка перевода'); } finally { clearTimeout(to); }
+      } catch (e) {
+        // Причину не глотаем: «нет сети» и «сервис не ответил» человек чинит
+        // по-разному, а `translateFailureMessage` рядом уже разбирает отказы
+        // самого перевода — сюда попадает только то, что упало до ответа.
+        showError(userErrorText(e, 'Не удалось перевести сообщение'));
+      } finally { clearTimeout(to); }
     })();
   }, []);
 

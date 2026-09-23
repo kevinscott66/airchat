@@ -978,7 +978,7 @@ function SettingsScreenImpl({
         await Share.share({ url: uri, title: 'Резервная копия AirChat' });
       }
     } catch (e) {
-      showError(userErrorText(e, 'Ошибка экспорта'));
+      showError(userErrorText(e, 'Не удалось сохранить резервную копию'));
     } finally { setBackupBusy(false); }
   }, []);
 
@@ -1965,9 +1965,20 @@ function SettingsScreenImpl({
         <View style={styles.row}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Распределённое облако</Text>
-            <Text style={styles.desc}>Сообщения синхронизируются через защищённое хранилище</Text>
+            {/* Состояние спрашиваем, а не рисуем: сборка без адреса хранилища
+                собирается молча и работает без облака (config.ts пишет
+                config_cloud_backup_placeholder). Зелёная галочка в такой
+                сборке сказала бы человеку, что копии уходят, — а их нет. */}
+            <Text style={styles.desc}>
+              {isCloudVaultConfigured()
+                ? 'Сообщения синхронизируются через защищённое хранилище'
+                : 'Хранилище не задано в этой сборке — синхронизации нет'}
+            </Text>
           </View>
-          <StatusBadge tone="success" text="Вкл" />
+          <StatusBadge
+            tone={isCloudVaultConfigured() ? 'success' : 'muted'}
+            text={isCloudVaultConfigured() ? 'Вкл' : 'Не настроено'}
+          />
         </View>
       </View>
 

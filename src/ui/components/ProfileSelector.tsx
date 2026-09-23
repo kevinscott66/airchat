@@ -219,7 +219,7 @@ export function ProfileSelector({
       onIdentityUpdated();
       showSuccess('Профиль создан и активирован');
     } catch (error) {
-      showError(userErrorText(error, 'Ошибка создания'));
+      showError(userErrorText(error, 'Не удалось создать профиль'));
     } finally {
       setIsCreating(false);
     }

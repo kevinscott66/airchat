@@ -23,6 +23,7 @@ import { classifyShareUrl, type ShareUrlVerdict } from '../../core/media/mediaUr
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mediaScrim } from '../theme';
+import { showError } from './userFeedback';
 import { userErrorText } from './userErrorText';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -231,7 +232,7 @@ function SingleImageView({
       if (!canShare) { Alert.alert('AirChat', 'Нет приложений для шаринга'); return; }
       await Sharing.shareAsync(localUri, { mimeType });
     } catch (e) {
-      Alert.alert('Ошибка', userErrorText(e, 'Не удалось поделиться файлом'));
+      showError(userErrorText(e, 'Не удалось поделиться файлом'));
     } finally {
       setSharing(false);
     }

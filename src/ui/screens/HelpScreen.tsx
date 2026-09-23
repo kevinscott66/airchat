@@ -4,6 +4,7 @@ import { AppPressable } from '../components/AppPressable';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeScreen } from '../components/SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
+import { isCloudVaultConfigured } from '../../core/backup/cloudVault';
 import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { radius } from '../theme';
 
@@ -67,14 +68,20 @@ export function HelpScreen({ onClose }: Props): React.ReactElement {
           </Text>
         </View>
 
+        {/* Обещание про сервер проверяем, а не печатаем. Сборка без адреса
+            хранилища собирается молча (см. config.ts,
+            config_cloud_backup_placeholder) и работает без облака: человек,
+            прочитавший здесь «ничего не нужно переносить руками», переустановил
+            бы приложение и потерял переписку. */}
         <View style={styles.card}>
           <Ionicons name="cloud-outline" size={32} color={colors.accent} />
-          <Text style={styles.cardTitle}>Аккаунт хранится на сервере</Text>
+          <Text style={styles.cardTitle}>
+            {isCloudVaultConfigured() ? 'Аккаунт хранится на сервере' : 'Аккаунт хранится на этом телефоне'}
+          </Text>
           <Text style={styles.cardText}>
-            Переписка, контакты, публикации и настройки уходят на сервер и возвращаются на любое ваше
-            устройство — после переустановки или на новом телефоне ничего не нужно переносить руками.
-            Уходят они зашифрованными ключом вашего аккаунта: сервер видит, что запись изменилась, и не
-            видит, что в ней написано.
+            {isCloudVaultConfigured()
+              ? 'Переписка, контакты, публикации и настройки уходят на сервер и возвращаются на любое ваше устройство — после переустановки или на новом телефоне ничего не нужно переносить руками. Уходят они зашифрованными ключом вашего аккаунта: сервер видит, что запись изменилась, и не видит, что в ней написано.'
+              : 'В этой сборке хранилище не задано: переписка, контакты и настройки лежат только здесь и никуда не уходят. Перед переустановкой и переездом на новый телефон сделайте резервную копию в настройках — иначе восстановить будет не из чего.'}
           </Text>
         </View>
 
