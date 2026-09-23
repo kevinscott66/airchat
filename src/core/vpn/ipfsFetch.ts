@@ -37,31 +37,94 @@ export function isPrivateOrLoopbackHost(hostname: string): boolean {
   return false;
 }
 
+/** Логгер тут поднимают лениво: модуль работает и до его готовности. */
+function warn(event: string, data: Record<string, unknown>): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { log } = require('../logger');
+    log.warn(event, data);
+  } catch {
+    /* logger import optional at early-init paths */
+  }
+}
+
+/** Имя хоста для записи в журнал — без пути и параметров. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '?';
+  }
+}
+
+/**
+ * Куда отправлять запрос: напрямую, через канал — или «выяснить не удалось».
+ *
+ * v4.32.725: третье значение появилось не для красоты. Раньше решение было
+ * булевым и весь разбор стоял под одним `catch { return false; }`, то есть
+ * «спросить не смогли» превращалось в «через канал не надо». А «не надо» в
+ * `fetchWithEmbeddedVpnIfNeeded` значит обычный fetch — тот самый, про который
+ * ниже написано, что он не знает о SOCKS и открывает настоящий адрес человека.
+ * Канал при этом включён и в интерфейсе о нём сказано «включён».
+ */
+export type VpnRoutingDecision = 'direct' | 'vpn' | 'unknown';
+
 /**
  * Маршрутизация известного HTTP(S)-трафика приложения через локальный SOCKS.
  * Это не системный VPN: сокеты сторонних библиотек и трафик устройства этот
  * модуль перехватить не может.
  */
-export async function shouldRouteUrlThroughVpn(url: string): Promise<boolean> {
-  if (Platform.OS !== 'android') return false;
+export async function vpnRoutingDecision(url: string): Promise<VpnRoutingDecision> {
+  if (Platform.OS !== 'android') return 'direct';
   const mod = AirChatVpn;
-  if (!mod) return false;
+  if (!mod) return 'direct';
+
+  let cfg;
   try {
-    const cfg = await loadConfig();
-    if (!cfg.vpn?.enabled || cfg.vpn.routeHttp === false) return false;
-    if (!(await mod.isRunning())) return false;
-    const u = new URL(url);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    return !isPrivateOrLoopbackHost(u.hostname);
-  } catch {
-    return false;
+    cfg = await loadConfig();
+  } catch (e) {
+    warn('vpn_route_config_unreadable', { host: hostOf(url), err: e instanceof Error ? e.message : String(e) });
+    return 'unknown';
   }
+  // Канал выключен самим человеком — прямое соединение и есть его выбор.
+  if (!cfg.vpn?.enabled || cfg.vpn.routeHttp === false) return 'direct';
+
+  // Метода нет вовсе — перед нами не тот нативный модуль, проксировать нечем.
+  if (typeof mod.isRunning !== 'function') return 'direct';
+  let running: boolean;
+  try {
+    running = await mod.isRunning();
+  } catch (e) {
+    warn('vpn_route_state_unknown', { host: hostOf(url), err: e instanceof Error ? e.message : String(e) });
+    return 'unknown';
+  }
+  // Канал включён, но не поднялся: про это в интерфейсе сказано отдельно
+  // («Прямое подключение (ограниченная работа)»), и это осознанный режим.
+  if (!running) return 'direct';
+
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return 'direct';
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'direct';
+  return isPrivateOrLoopbackHost(u.hostname) ? 'direct' : 'vpn';
+}
+
+export async function shouldRouteUrlThroughVpn(url: string): Promise<boolean> {
+  return (await vpnRoutingDecision(url)) === 'vpn';
 }
 
 export async function fetchWithEmbeddedVpnIfNeeded(url: string, init?: RequestInit): Promise<Response> {
-  const use = await shouldRouteUrlThroughVpn(url);
+  const decision = await vpnRoutingDecision(url);
   const mod = AirChatVpn;
-  if (!use || !mod) {
+  // Не знаем, идёт ли трафик через канал, — не отправляем мимо него.
+  if (decision === 'unknown') {
+    warn('vpn_route_undecided_blocked', { host: hostOf(url) });
+    return new Response(new Uint8Array(0), { status: 503, statusText: 'VPN routing state unknown' });
+  }
+  if (decision === 'direct' || !mod) {
     return fetch(url, init);
   }
 
@@ -72,13 +135,7 @@ export async function fetchWithEmbeddedVpnIfNeeded(url: string, init?: RequestIn
   // A real solution for arbitrary requests needs Android VpnService +
   // tun2socks; until then fail closed.
   if (method !== 'GET') {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { log } = require('../logger');
-      log.warn('vpn_method_blocked', { method, host: (() => { try { return new URL(url).hostname; } catch { return '?'; } })() });
-    } catch {
-      /* logger import optional at early-init paths */
-    }
+    warn('vpn_method_blocked', { method, host: hostOf(url) });
     return new Response(new Uint8Array(0), { status: 503, statusText: 'VPN cannot proxy this request method' });
   }
 
