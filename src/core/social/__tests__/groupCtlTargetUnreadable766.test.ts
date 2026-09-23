@@ -66,7 +66,8 @@ jest.mock('../../storage/local', () => ({
         ? { state: 'missing' }
         : { state: 'found', value: { groupId: 'g-766', senderPubB64: 'P'.repeat(43), text: 'старый текст' } }),
   updateGroupMessageText: jest.fn(async () => { mockApplied.push('edit'); return true; }),
-  deleteGroupMessage: jest.fn(async () => { mockApplied.push('del'); }),
+  deleteGroupMessage: jest.fn(async () => {}),
+  deleteGroupMessageChecked: jest.fn(async () => { mockApplied.push('del'); return 'deleted'; }),
   insertGroupMessage: jest.fn(async () => true),
   insertGroupMessageChecked: jest.fn(async () => 'inserted'),
   touchGroupConversation: jest.fn(async () => {}),

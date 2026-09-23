@@ -23,7 +23,7 @@ import {
   insertGroupMessage,
   insertGroupMessageChecked,
   updateGroupMessageText,
-  deleteGroupMessage,
+  deleteGroupMessageChecked,
   touchGroupConversation,
   markGroupMessageSeenChecked,
   insertGroupJoinRequest,
@@ -1830,7 +1830,25 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         });
         return 'consumed';
       }
-    } else await deleteGroupMessage(env.msgId, pid);
+    } else {
+      // v4.32.772: удаление вызывалось вслепую, а отметка времени сдвигалась
+      // следом безусловно. Занятая база — и чужое «удалить у всех» пропадало
+      // навсегда: тот же кадр, принесённый relay заново, отвергался уже как
+      // устаревший (group_ctl_msgop_stale_drop выше). Отправитель при этом
+      // уверен, что стёр у всех. Теперь исход читается — ровно так же, как у
+      // правки рядом с v4.32.530.
+      const removed = await deleteGroupMessageChecked(env.msgId, pid);
+      if (removed !== 'deleted') {
+        log.warn('group_ctl_delete_not_applied', {
+          gid: env.groupId.slice(0, 8),
+          msgId: env.msgId.slice(0, 8),
+          why: removed,
+        });
+        // Знак не двигаем по той же причине, что и у неприменившейся правки:
+        // сдвинутый вперёд, он отверг бы следующий законный конверт.
+        return removed === 'failed' ? 'deferred' : 'consumed';
+      }
+    }
     await commitGroupMessageTs(env.msgId, pid, env.ts);
     log.info('group_ctl_msgop_applied', { op: env.op, gid: env.groupId.slice(0, 8) });
     return 'consumed';

@@ -116,13 +116,14 @@ describe('порядок «проверить — применить — отм�
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     expect(branch).toContain('updateGroupMessageText(env.msgId, env.text, pid)');
-    expect(branch).toContain('deleteGroupMessage(env.msgId, pid)');
+    // v4.32.772: удаление зовётся различающей формой — её исход читается.
+    expect(branch).toContain('deleteGroupMessageChecked(env.msgId, pid)');
   });
 
   it('свежесть спрашивается до применения, а отметка двигается после', () => {
     const gate = branch.indexOf('groupMessageTsFresh(env.msgId, pid, env.ts)');
     const apply = branch.indexOf('updateGroupMessageText(');
-    const del = branch.indexOf('deleteGroupMessage(');
+    const del = branch.indexOf('deleteGroupMessageChecked(');
     const commit = branch.indexOf('commitGroupMessageTs(env.msgId, pid, env.ts)');
     expect(gate).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(-1);

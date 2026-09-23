@@ -25,13 +25,15 @@ function body(name: string): string {
 }
 
 it('групповое сообщение: строка и следы опроса внутри одной транзакции', () => {
-  const b = body('deleteGroupMessage');
+  // v4.32.772: тело переехало в различающую форму, прежнее имя — её обёртка.
+  const b = body('deleteGroupMessageChecked');
   const tx = b.indexOf("'delete_group_message',");
   expect(tx).toBeGreaterThan(0);
   expect(b.indexOf('await deletePollArtifacts(d, [messageId], ownerProfileId);')).toBeGreaterThan(tx);
   expect(b.indexOf("'DELETE FROM group_messages WHERE id = ? AND owner_profile_id = ?'")).toBeGreaterThan(tx);
   // Файлы — после фиксации, вторым обработчиком eraseAtomically.
-  expect(b).toContain('() => dropOrphanBlobCache(doomed)');
+  expect(b).toContain('dropOrphanBlobCache(doomed)');
+  expect(b).toContain("return 'missing';");
 });
 
 it('личное сообщение: то же, и «строки не было» по-прежнему отличимо', () => {

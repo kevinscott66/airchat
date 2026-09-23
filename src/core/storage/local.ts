@@ -7972,6 +7972,24 @@ export async function deleteGroupMessage(
   messageId: string,
   ownerProfileId: number
 ): Promise<void> {
+  await deleteGroupMessageChecked(messageId, ownerProfileId);
+}
+
+/**
+ * Исход удаления строки группы тремя словами (v4.32.772).
+ *
+ * Прежняя форма отвечала `void` и гасила свой отказ сама. Приёмник «удалить у
+ * всех» вызывал её вслепую и тут же двигал отметку времени вперёд: занятая
+ * база стоила чужого удаления навсегда, а повтор того же кадра отвергался уже
+ * как устаревший. Близнец по ветке (`updateGroupMessageText`) исход читает с
+ * v4.32.530.
+ */
+export type GroupDeleteWrite = 'deleted' | 'missing' | 'failed';
+
+export async function deleteGroupMessageChecked(
+  messageId: string,
+  ownerProfileId: number
+): Promise<GroupDeleteWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -7989,21 +8007,31 @@ export async function deleteGroupMessage(
     // варианты ответа и голоса остаются в базе навсегда, привязанные к id,
     // которого больше не существует. Ровно так — и по той же причине — уже
     // написан clearGroupMessages ниже.
+    // v4.32.772: строки считаются. «Ни одной не подошло» — не отказ: строку
+    // либо уже стёрли, либо она к нам не дошла, и повтор кадра её не заведёт.
+    let removed = false;
     await eraseAtomically(
       d,
       'delete_group_message',
       async () => {
         await deletePollArtifacts(d, [messageId], ownerProfileId);
-        await d.runAsync(
+        const res = await d.runAsync(
           'DELETE FROM group_messages WHERE id = ? AND owner_profile_id = ?',
           [messageId, ownerProfileId]
         );
+        removed = anyChanged(res);
       },
-      () => dropOrphanBlobCache(doomed)
+      () => (removed ? dropOrphanBlobCache(doomed) : Promise.resolve())
     );
+    if (!removed) {
+      log.warn('delete_group_message_no_row', { id: messageId.slice(0, 8), pid: ownerProfileId });
+      return 'missing';
+    }
     emitChatWrites();
+    return 'deleted';
   } catch (e) {
     log.warn('delete_group_message_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
   }
 }
 
