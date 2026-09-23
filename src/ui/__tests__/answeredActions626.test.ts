@@ -49,10 +49,11 @@ it('истории: видео в полосе показывается виде
 
 it('профили: отказ переименования называется вслух', () => {
   const s = bare('components/ProfileSelector.tsx');
-  const at = s.indexOf('const ok = await profileManager.renameProfile(renameId, renameText);');
+  const at = s.indexOf('const res = await profileManager.renameProfile(renameId, renameText);');
   expect(at).toBeGreaterThan(0);
   const tail = s.slice(at, at + 600);
-  const guard = tail.indexOf("showError('Имя пустое или уже занято другим профилем');");
+  // v4.32.743: фраза берётся по причине отказа, а не одна на все четыре.
+  const guard = tail.indexOf('showError(profileRenameErrorText(res));');
   const ret = tail.indexOf('return;', guard);
   const success = tail.indexOf("showSuccess('Имя обновлено');");
   expect(guard).toBeGreaterThan(0);

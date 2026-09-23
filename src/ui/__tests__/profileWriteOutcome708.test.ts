@@ -86,15 +86,19 @@ describe('отказ записи больше не выдаётся за усп
     expect(s.indexOf('if (writeFailed) {')).toBeLessThan(s.indexOf('if (touchedProfile) void publish();'));
   });
 
-  it('правка профиля: отказ на имени останавливает переименование и переиздание', () => {
+  it('правка профиля: отказ на имени останавливает переиздание карточки', () => {
     const s = ui('components/modals/profile/ProfileEditModal.tsx');
     const guard = s.indexOf('if (!(await put(OWN_DISPLAY_NAME_KEY, name))) {');
     expect(guard).toBeGreaterThan(0);
-    expect(s.indexOf('await profileManager.renameProfile(ap.id, name);')).toBeGreaterThan(guard);
-    const tail = s.slice(guard, guard + 300);
-    expect(tail).toContain("showError('Не удалось сохранить имя. Попробуйте ещё раз');");
+    const tail = s.slice(guard, guard + 600);
+    expect(tail).toContain('showError(back.renamed');
     expect(tail.indexOf('return;')).toBeGreaterThan(0);
-    expect(tail.indexOf('return;')).toBeLessThan(tail.indexOf('await profileManager.init();'));
+    // v4.32.743: строка профиля переименовывается ДО базы (иначе отказ по
+    // занятому имени оставлял бы их разъехавшимися), а рассылка карточки
+    // по-прежнему стоит после проверки базы — она читает именно её.
+    expect(tail.indexOf('return;')).toBeLessThan(tail.indexOf('const kp = await loadKeyPair();'));
+    expect(s.indexOf('const renamed = await profileManager.renameProfile(ap.id, name);'))
+      .toBeLessThan(guard);
   });
 });
 

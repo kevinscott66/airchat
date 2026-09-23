@@ -25,6 +25,7 @@
  * «занято кем-то» от «свободно, но запрещено». Поэтому все три отказа говорят
  * одной строкой — `USERNAME_TAKEN`.
  */
+import type { ProfileRename } from '../../../../core/identity/profileManager';
 import type { UsernameRejection } from '../../../../core/identity/reservedUsernames';
 import { USERNAME_MIN_SELF_SERVICE } from '../../../../core/identity/reservedUsernames';
 
@@ -67,6 +68,25 @@ export function usernameSaveErrorText(reason: 'taken' | 'rejected' | 'local'): s
     // Свой же второй аккаунт на этом телефоне — не чужая тайна, а причина,
     // которую человек может устранить сам, и она остаётся названной.
     case 'local': return 'Юзернейм уже используется другим аккаунтом на этом устройстве';
+  }
+}
+
+/**
+ * Почему профиль не переименовался (v4.32.743).
+ *
+ * Здесь разные фразы — в отличие от юзернейма: имя профиля живёт только на
+ * этом телефоне, соседний профиль на нём завёл сам человек, и скрывать от
+ * него, что имя занято его же вторым аккаунтом, не от кого. А главное —
+ * причины требуют разного. «Не легло на диск» стоит повторить тем же самым
+ * именем, «занято» — только другим, и одна фраза на всех половину людей
+ * отправляла придумывать новое имя там, где хватило бы второго нажатия.
+ */
+export function profileRenameErrorText(res: Extract<ProfileRename, { renamed: false }>): string {
+  switch (res.reason) {
+    case 'empty': return 'Имя не может быть пустым';
+    case 'name_taken': return 'Это имя уже занято другим профилем на этом устройстве';
+    case 'not_found': return 'Профиль не найден — возможно, он уже удалён';
+    case 'save_failed': return 'Не удалось сохранить имя. Попробуйте ещё раз';
   }
 }
 

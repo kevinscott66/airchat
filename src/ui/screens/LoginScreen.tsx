@@ -93,7 +93,12 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
         await profileManager.init();
         const active = profileManager.getActiveProfile();
         if (active && active.name.trim().toLowerCase() !== uname.toLowerCase()) {
-          await profileManager.renameProfile(active.id, uname);
+          // v4.32.743: отказ больше не проходит совсем молча. Останавливать
+          // регистрацию из-за него незачем — имя в базе есть, а под таб-баром
+          // на этот случай стоит подстановка, — но в списке аккаунтов строка
+          // так и осталась «Личный», и найти потом причину было нечем.
+          const renamed = await profileManager.renameProfile(active.id, uname);
+          if (!renamed.renamed) log.warn('login_profile_rename_refused', { reason: renamed.reason });
         }
       } catch (e) {
         // Не блокирующая операция — если что-то пошло не так, user_username

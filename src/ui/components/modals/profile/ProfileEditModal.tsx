@@ -43,6 +43,7 @@ import { font, glass, radius, spacing, withAlpha } from '../../../theme';
 import {
   PRONOUNS_MAX,
   profileCompletionPct,
+  profileRenameErrorText,
   usernameClaimErrorText,
   usernameSavedText,
   usernameSaveErrorText,
@@ -296,17 +297,41 @@ export function ProfileEditModal({
         return;
       }
       if (name !== saved.name) {
-        // Имя — единственное поле, ради которого стоит остановиться сразу:
-        // сразу за ним переименовывается профиль и переиздаётся карточка, и
-        // делать это под именем, которого в базе нет, значит развести их
-        // насовсем.
-        if (!(await put(OWN_DISPLAY_NAME_KEY, name))) {
-          showError('Не удалось сохранить имя. Попробуйте ещё раз');
-          return;
-        }
+        // Имя лежит в двух местах: в базе — то, что уезжает контактам, и в
+        // строке профиля — то, что видно под таб-баром и в списке аккаунтов.
+        // Разъехаться им нельзя, поэтому обе записи идут вместе и любая
+        // неудача останавливает сохранение целиком.
+        //
+        // v4.32.743: первой идёт строка профиля. Она единственная умеет
+        // отказать по содержимому — это же имя уже носит соседний профиль на
+        // этом телефоне, — и узнать об этом надо ДО того, как новое имя легло
+        // в базу. Прежде порядок был обратный, а ответ переименования просто
+        // выбрасывался: база принимала новое имя, строка оставалась прежней,
+        // и человеку говорилось «Профиль сохранён». Он видел под таб-баром
+        // старое имя, у контактов — новое, и ни одного слова о том, почему.
         await profileManager.init();
         const ap = profileManager.getActiveProfile();
-        if (ap) await profileManager.renameProfile(ap.id, name);
+        const previousRowName = ap?.name ?? '';
+        if (ap) {
+          const renamed = await profileManager.renameProfile(ap.id, name);
+          if (!renamed.renamed) {
+            showError(profileRenameErrorText(renamed));
+            return;
+          }
+        }
+        if (!(await put(OWN_DISPLAY_NAME_KEY, name))) {
+          // База отказала — возвращаем строку профиля обратно, иначе они
+          // разойдутся тем же самым образом, только наоборот. Откат местный и
+          // почти не умеет отказывать (прежнее имя заведомо не занято и не
+          // пустое), но если уж отказал — об этом сказано, а не проглочено.
+          const back = ap
+            ? await profileManager.renameProfile(ap.id, previousRowName)
+            : ({ renamed: true } as const);
+          showError(back.renamed
+            ? 'Не удалось сохранить имя. Попробуйте ещё раз'
+            : 'Не удалось сохранить имя. Попробуйте ещё раз — в списке профилей пока показано новое');
+          return;
+        }
         const kp = await loadKeyPair();
         if (kp) void republishProfileFromKv(kp).catch(() => { /* офлайн: облако необязательно */ });
         touchedProfile = true;

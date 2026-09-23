@@ -17,6 +17,7 @@ import {
   type Profile,
   MAX_PROFILES,
 } from '../../core/identity/profileManager';
+import { profileRenameErrorText } from './modals/profile/ownProfileEditModel';
 import { showError, showSuccess } from './userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { font, inkOn, primaryInk, radius, scrim, tintedPlate } from '../theme';
@@ -285,12 +286,16 @@ export function ProfileSelector({
 
   const submitRename = async (): Promise<void> => {
     if (renameId == null) return;
-    const ok = await profileManager.renameProfile(renameId, renameText);
-    if (!ok) {
+    const res = await profileManager.renameProfile(renameId, renameText);
+    if (!res.renamed) {
       // v4.32.626: без этой ветки нажатие «Сохранить» на пустом или уже
       // занятом имени не делало вовсе ничего — окно оставалось открытым
       // молча, и отличить «не сохранилось» от «не нажалось» было нечем.
-      showError('Имя пустое или уже занято другим профилем');
+      //
+      // v4.32.743: причина называется своя. Прежде на все отказы говорилось
+      // «пустое или занято» — в том числе когда имя просто не легло на диск,
+      // и человек уходил придумывать новое вместо второго нажатия.
+      showError(profileRenameErrorText(res));
       return;
     }
     loadProfiles();

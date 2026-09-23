@@ -76,6 +76,20 @@ export type ProfileDeletion =
   | { removed: false; reason: 'not_found' }
   | { removed: false; reason: 'cleanup_failed'; err: string };
 
+/**
+ * Исход переименования профиля (v4.32.743).
+ *
+ * Прежний `boolean` сводил к одному `false` четыре разные беды: менеджер не
+ * поднялся, строки с таким номером нет, имя пустое, имя уже носит соседний
+ * профиль. Человеку они говорят противоположное — одно имя надо дозаполнить,
+ * другое поменять, а третье сохранить ровно тем же самым ещё раз, — и экран,
+ * получивший одно «нет», выбирал одну фразу на все случаи.
+ */
+export type ProfileRename =
+  | { renamed: true }
+  | { renamed: false; reason: 'not_found' | 'empty' | 'name_taken' }
+  | { renamed: false; reason: 'save_failed'; err: string };
+
 type ProfileStateV1 = {
   v: 1;
   activeProfileId: number;
@@ -640,26 +654,50 @@ class ProfileManager {
     return toProfile(row, pair);
   }
 
-  async renameProfile(profileId: number, newName: string): Promise<boolean> {
+  /**
+   * Переименовать профиль.
+   *
+   * v4.32.743: отвечает исходом, а не «да/нет», — см. `ProfileRename`.
+   *
+   * И запись состояния больше не оставляет менеджер с именем, которого на
+   * диске нет. Имя в памяти менялось ДО `persistState`, а его отказ уходил
+   * наверх исключением: список профилей уже показывал новое имя, экран
+   * говорил про ошибку — и до ближайшего запуска приложения оба были правы,
+   * каждый о своём. После запуска возвращалось прежнее имя, и о том, что
+   * переименование не состоялось, не оставалось никакого следа.
+   */
+  async renameProfile(profileId: number, newName: string): Promise<ProfileRename> {
     await this.init();
-    if (!this.state) return false;
+    // Строки нет и не поднялась — для вызывающего это одно и то же: имени,
+    // которое просили сменить, в списке профилей не существует.
+    if (!this.state) return { renamed: false, reason: 'not_found' };
     const row = this.rowById(profileId);
-    if (!row) return false;
+    if (!row) return { renamed: false, reason: 'not_found' };
     // v4.32.187 (Round-17 #9): mirror `addProfile` validation — empty name
     // silently keeps the old name (expected), but duplicates (regardless of
     // case) and multi-KB paste should be rejected, otherwise the profile
     // selector shows indistinguishable entries.
     const trimmed = newName.trim();
-    if (!trimmed) return false;
+    if (!trimmed) return { renamed: false, reason: 'empty' };
     const capped = trimmed.slice(0, 64);
     const lower = capped.toLowerCase();
     const collision = this.state.profiles.some(
       (p) => p.id !== profileId && p.name.trim().toLowerCase() === lower
     );
-    if (collision) return false;
+    if (collision) return { renamed: false, reason: 'name_taken' };
+    const previous = row.name;
     row.name = capped;
-    await this.persistState();
-    return true;
+    try {
+      await this.persistState();
+    } catch (e) {
+      row.name = previous;
+      const err = e instanceof Error ? e.message : String(e);
+      log.warn('rename_profile_persist_failed', { profileId, err });
+      return { renamed: false, reason: 'save_failed', err };
+    }
+    // Снимок активного профиля сбрасывать не нужно: `persistState` делает это
+    // сам, и новое имя видно под таб-баром сразу, а не через пять секунд.
+    return { renamed: true };
   }
 
   /** После удаления seed/ключей на устройстве — сброс кэша и состояния профилей. */
