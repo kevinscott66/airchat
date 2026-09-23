@@ -340,11 +340,18 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     // Keep the existing relay/LAN behavior responsive. The VPS receives the
     // same ciphertext asynchronously and never sees the per-blob key.
     void uploadCloudMediaCopy(idHex, cipher, mime, generation);
-    // LAN-доставка пиру (fire-and-forget): на одном WiFi байты доедут даже без
-    // интернета/relay; на разных сетях canReach=false и push мгновенно скипается.
-    if (targetDid) {
-      void lanBlobPush(targetDid, idHex, cipher);
-    }
+    // LAN-доставка пиру: на одном WiFi байты доедут даже без интернета/relay;
+    // на разных сетях canReach=false и push мгновенно отвечает отказом.
+    //
+    // v4.32.726: ответ push'а больше не выбрасывается. Ждать его здесь нельзя —
+    // загрузка на relay не должна стоять в очереди за локальной сетью, — но он
+    // нужен ниже: ветка «relay недоступен» отдаёт дескриптор БЕЗ адреса, и
+    // тогда единственный путь к байтам — этот самый push. Сорвись он посреди
+    // передачи (`lan.send` отвечает отказом на любом куске), у получателя
+    // остаётся дескриптор, по которому нечего скачивать: адреса нет, куски не
+    // собрались, а попросить недостающее нечем — обратного запроса в протоколе
+    // нет. Вложение выглядело отправленным и не открывалось никогда.
+    const lanPush = targetDid ? lanBlobPush(targetDid, idHex, cipher).catch(() => false) : null;
     const body = Buffer.from(cipher).toString('base64');
     // Random hosting topic — nobody subscribes to it; it is pure blob storage.
     const topic = `airchat-blob-${Buffer.from(randomBytes(9)).toString('hex')}`;
@@ -377,16 +384,16 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     } finally {
       clearTimeout(timeout);
     }
-    // Relay недоступен (оффлайн). Если есть LAN-путь к получателю — отдаём
-    // ref без url: ciphertext уедет (или уже уехал) по LAN, ключ — в E2E-конверте.
-    if (targetDid) {
-      const { getLanTransportSingleton } = await import('../transport/lan/lanTransport');
-      const lan = getLanTransportSingleton();
-      if (lan.isActive() && lan.canReach(targetDid)) {
-        log.info('blob_upload_lan_only', { id: idHex.slice(0, 8), bytes: plain.length });
-        return { k: Buffer.from(key).toString('base64'), m: mime, i: idHex };
-      }
+    // Relay недоступен (оффлайн). Дескриптор без адреса отдаём, только если
+    // ciphertext ВПРАВДУ уехал по LAN: ключ поедет в E2E-конверте, а байты
+    // получателю больше взять неоткуда. Прежде здесь спрашивали лишь, был ли
+    // путь к получателю в принципе (isActive && canReach) — то есть ровно то,
+    // с чего push начинает сам, и что ничего не говорит о его исходе.
+    if (lanPush && (await lanPush)) {
+      log.info('blob_upload_lan_only', { id: idHex.slice(0, 8), bytes: plain.length });
+      return { k: Buffer.from(key).toString('base64'), m: mime, i: idHex };
     }
+    log.warn('blob_upload_no_route', { id: idHex.slice(0, 8), bytes: plain.length });
     return null;
   } catch (e) {
     log.warn('blob_upload_failed', { err: e instanceof Error ? e.message : String(e) });

@@ -10,6 +10,11 @@
  *    `blob_upload_cloud_ok` — «долговечная копия есть», когда её нет.
  * 3. lanBlobCacheWrite отдавала Promise<void>: неудача записи была не видна
  *    ни отправителю (нет кэша — нет повторной отправки), ни приёмнику.
+ * 4. (v4.32.726) Ответ lanBlobPush отбрасывался, а ветка «relay недоступен»
+ *    отдавала дескриптор БЕЗ адреса, спросив лишь, есть ли путь к получателю в
+ *    принципе. Сорвись push посреди передачи — у получателя дескриптор, по
+ *    которому нечего скачивать: адреса нет, куски не собрались, попросить
+ *    недостающее нечем. Вложение выглядело отправленным и не открывалось.
  */
 const mockRelay = 'https://ntfy.sh';
 /** Виртуальный размер файла в байтах; null — система размер не сообщает. */
@@ -20,6 +25,8 @@ let mockFileBytes = 0;
 let mockReads: Array<Record<string, unknown> | undefined> = [];
 let mockCloudOk = true;
 let mockCacheWriteOk = true;
+/** Довёз ли LAN-push ciphertext получателю. */
+let mockLanPushOk = true;
 
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
@@ -62,7 +69,7 @@ jest.mock('../../sync/syncApi', () => ({
 }));
 jest.mock('../../transport/lan/lanBlob', () => ({
   lanBlobCacheWrite: jest.fn(async () => mockCacheWriteOk),
-  lanBlobPush: jest.fn(async () => true),
+  lanBlobPush: jest.fn(async () => mockLanPushOk),
   lanBlobCachedPath: jest.fn(async () => null),
   lanBlobCacheDelete: jest.fn(async () => undefined),
 }));
@@ -89,6 +96,7 @@ beforeEach(() => {
   mockReads = [];
   mockCloudOk = true;
   mockCacheWriteOk = true;
+  mockLanPushOk = true;
   globalThis.fetch = jest.fn(async () => ({
     ok: true,
     json: async () => ({ attachment: { url: `${mockRelay}/file/aa.bin` } }),
@@ -153,5 +161,47 @@ describe('неудачная запись кэша видна', () => {
     mockCacheWriteOk = true;
     await uploadEncryptedBlob('file:///doc/a.bin');
     expect(times(warn, 'blob_cache_write_failed')).toBe(0);
+  });
+});
+
+describe('дескриптор без адреса — только когда байты вправду уехали (v4.32.726)', () => {
+  const PEER = 'did:key:zPeer';
+  /** Relay недоступен: остаётся единственный путь — локальная сеть. */
+  const relayDown = (): void => {
+    globalThis.fetch = jest.fn(async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+  };
+
+  it('push сорвался — вложения нет вовсе, а не дескриптор в никуда', async () => {
+    relayDown();
+    mockLanPushOk = false;
+    const ref = await uploadEncryptedBlob('file:///doc/a.bin', 'image/jpeg', PEER);
+    expect(ref).toBeNull();
+    expect(times(info, 'blob_upload_lan_only')).toBe(0);
+    expect(times(warn, 'blob_upload_no_route')).toBe(1);
+  });
+
+  it('проверка не пустая: push дошёл — дескриптор без адреса законен', async () => {
+    relayDown();
+    mockLanPushOk = true;
+    const ref = await uploadEncryptedBlob('file:///doc/a.bin', 'image/jpeg', PEER);
+    expect(ref).not.toBeNull();
+    expect(ref?.u).toBeUndefined();
+    expect(typeof ref?.i).toBe('string');
+    expect(typeof ref?.k).toBe('string');
+    expect(times(info, 'blob_upload_lan_only')).toBe(1);
+  });
+
+  it('получателя нет — ждать нечего и отдавать нечего', async () => {
+    relayDown();
+    mockLanPushOk = true;
+    expect(await uploadEncryptedBlob('file:///doc/a.bin')).toBeNull();
+  });
+
+  it('relay ответил — адрес важнее локальной сети, push его не задерживает', async () => {
+    mockLanPushOk = false;
+    const ref = await uploadEncryptedBlob('file:///doc/a.bin', 'image/jpeg', PEER);
+    expect(ref?.u).toBe(`${mockRelay}/file/aa.bin`);
   });
 });
