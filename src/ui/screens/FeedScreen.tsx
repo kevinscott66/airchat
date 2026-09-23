@@ -81,6 +81,7 @@ import {
   listFeedPostViewers,
   receiveFeedEnvelope,
   type FeedCommentRow,
+  type PublishFeedResult,
 } from '../../core/social/feedService';
 import { subscribeToPostCommentsTopic } from '../../core/social/feedTransport';
 import type { FeedViewerRow } from '../../core/storage/feedStorage';
@@ -859,6 +860,37 @@ function runGuardedOp(op: () => Promise<unknown>, fallback: string): void {
       showError(userErrorText(e, fallback));
     }
   })();
+}
+
+/**
+ * Что сказать человеку о его публикации (v4.32.739).
+ *
+ * Четыре исхода сходились в два текста, и «Публикация отправлена» показывалось
+ * в трёх случаях из четырёх — включая тот, где пост не получил никто, а повтор
+ * не завёлся. Разбор исходов живёт в `publishOutcome.ts`, здесь только слова.
+ */
+function announcePublishResult(
+  result: Extract<PublishFeedResult, { ok: true }>,
+  t: (key: string) => string,
+): void {
+  switch (result.report) {
+    case 'delivered':
+      showSuccess(t('feed.published'));
+      return;
+    case 'local-only':
+      showSuccess(t('feed.publishedLocalOnly'));
+      return;
+    case 'queued':
+      // Повтор заведён в обоих случаях, но ждать человеку предстоит разного:
+      // «пост никуда не ушёл» и «ушёл не всем» — это не одно ожидание.
+      showSuccess('cid' in result ? t('feed.publishedPartialQueued') : t('feed.publishedQueued'));
+      return;
+    case 'stranded':
+      // Не ошибка публикации: пост сохранён и виден у себя. Но и не успех —
+      // до части контактов он не дойдёт, пока человек не опубликует снова.
+      showError(t('feed.publishedStranded'));
+      return;
+  }
 }
 
 function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwnProfile, postJump }: Props): React.ReactElement {
@@ -1963,9 +1995,21 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         setPollOptions(['', '']);
         setPollAnonymous(false);
         setPollMultiSelect(false);
-        void publishFeedPost(pair, { text: pollText }).then(() => {
+        // v4.32.739: ответ публикации читается. Раньше он выбрасывался целиком,
+        // а publishFeedPost на неудаче не бросает — возвращает `ok: false`.
+        // Оптимистичный опрос просто исчезал с экрана, и человек не узнавал
+        // ничего: ни что опрос слишком велик, ни что он не ушёл никому.
+        void publishFeedPost(pair, { text: pollText }).then((result) => {
           setOptimisticPosts((p) => p.filter((x) => x.id !== optimisticId));
           publishLockRef.current = false;
+          if (result.ok) {
+            announcePublishResult(result, t);
+            void loadFeed();
+          } else if (result.reason === 'too_large') {
+            showError(t('feed.postTooLargeDetail'));
+          } else if (result.reason !== 'empty') {
+            showError(t('feed.publishFailed'));
+          }
         }).catch((e: unknown) => {
           setOptimisticPosts((p) => p.filter((x) => x.id !== optimisticId));
           showError(userErrorText(e, 'Не удалось опубликовать опрос'));
@@ -2038,11 +2082,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           );
           setOptimisticPosts((prev) => prev.filter((p) => p.id !== tempId));
           if (result.ok) {
-            if ('queued' in result && result.queued) {
-              showSuccess(t('feed.publishedQueued'));
-            } else {
-              showSuccess(t('feed.published'));
-            }
+            announcePublishResult(result, t);
             // v4.32.48: предупреждение если часть фото была дропнута из-за размера,
             // но пост всё же опубликовался (текст + остальные фото).
             if (result.mediaDropped && result.mediaDropped > 0) {

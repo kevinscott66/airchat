@@ -74,7 +74,7 @@ import {
 import { multiTransportRouter } from '../transport/multiTransport';
 import { checkOnlineWrite } from '../sync/cachePolicy';
 import { offlineAction, shouldAttemptBroadcast } from '../sync/localFirstWrite';
-import { classifyBroadcast, dispositionOf, needsRetryQueue } from '../sync/publishOutcome';
+import { classifyBroadcast, dispositionOf, needsRetryQueue, reportOf, type PublishReport } from '../sync/publishOutcome';
 import { Buffer } from 'buffer';
 import {
   signAndBroadcastFeedEnvelope,
@@ -184,9 +184,19 @@ type QueuedFeedItem = {
   authorDid?: string;
 };
 
+/**
+ * Итог публикации (v4.32.739).
+ *
+ * `report` обязателен у каждого успеха — и это главное в типе. Раньше успехов
+ * было два: «опубликовано» и «в очереди», и в первый сваливались три разных
+ * исхода. Лента говорила «Публикация отправлена» и когда контактов нет вовсе,
+ * и когда пост дошёл до половины, и когда очередь повторов запись не приняла —
+ * то есть когда недоставленные не получат её уже никогда. Разбор исходов — в
+ * `publishOutcome.ts`, тут только форма ответа наружу.
+ */
 export type PublishFeedResult =
-  | { ok: true; cid: string; mediaDropped?: number }
-  | { ok: true; queued: true; mediaDropped?: number }
+  | { ok: true; cid: string; report: PublishReport; mediaDropped?: number }
+  | { ok: true; queued: true; report: 'queued'; mediaDropped?: number }
   | { ok: false; reason?: 'empty' | 'too_large' | 'offline' | 'other'; mediaDropped?: number };
 
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1521,13 +1531,23 @@ async function _flushFeedQueueForPeerImpl(pair: KeyPairBytes, peerDid: string): 
  * v4.32.29: опционально заполняет `outMedia` — caller использует их при enqueue
  * (идемпотентный retry без повторного чтения файлов).
  */
-type TryPublishResult = {
-  postId: string | null;
-  tooLarge?: boolean;
-  // v4.32.48: число фото, которые были выбраны, но отброшены из-за превышения
-  // FEED_MEDIA_MAX_BASE64_BYTES. UI покажет предупреждение пользователю.
-  mediaDropped?: number;
-};
+/**
+ * v4.32.739: у сохранённого поста исход рассылки назван обязательно.
+ *
+ * Прежняя форма была одна на оба случая — `postId: string | null` плюс
+ * необязательные поля, — и «пост есть» ничего не говорило о том, дошёл ли он
+ * хоть кому-нибудь. Разделение на два варианта заставляет каждую ветку,
+ * возвращающую postId, сказать это словом: забыть `report` теперь нельзя.
+ */
+type TryPublishResult =
+  | {
+      postId: null;
+      tooLarge?: boolean;
+      // v4.32.48: число фото, которые были выбраны, но отброшены из-за превышения
+      // FEED_MEDIA_MAX_BASE64_BYTES. UI покажет предупреждение пользователю.
+      mediaDropped?: number;
+    }
+  | { postId: string; tooLarge?: false; report: PublishReport; mediaDropped?: number };
 
 async function tryPublishFeedPostComplete(
   pair: KeyPairBytes,
@@ -1737,7 +1757,10 @@ async function tryPublishFeedPostComplete(
   const attempt = classifyBroadcast(true, contactsCount, result.delivered.success);
   if (attempt === 'no-recipients') {
     log.info('feed_publish_local_only', { postId });
-    return { postId, mediaDropped };
+    // v4.32.739: «отправлять некому» — не «отправлено». Так и написано в
+    // docblock publishOutcome.ts с самого его появления, но исход сюда не
+    // доходил, и лента поздравляла с отправкой человека без единого контакта.
+    return { postId, report: reportOf(attempt, false), mediaDropped };
   }
   if (attempt !== 'failed') {
     // v4.32.47: partial delivery → ставим в очередь для последующего ретрая.
@@ -1750,6 +1773,11 @@ async function tryPublishFeedPostComplete(
         delivered: result.delivered.success,
         total: contactsCount,
       });
+      // v4.32.739: приняла ли очередь запись — это и есть ответ человеку.
+      // Очередь у публикации единственная: её отказ значит, что до
+      // недоставленных пост не дойдёт уже никогда. Раньше отказ уходил в
+      // журнал, а наружу шло то же самое «опубликовано», что и при удаче.
+      let queueAccepted = false;
       try {
         await enqueuePendingFeedPost(pair, {
           postId,
@@ -1761,15 +1789,16 @@ async function tryPublishFeedPostComplete(
           // нацелится только на недоставленных, без повторных envelope к онлайн-контактам.
           deliveredTo: result.delivered.successDids,
         });
+        queueAccepted = true;
         // Запускаем retry в фоне — caller получит postId как успех.
         scheduleFeedPublishRetry(pair, RETRY_DELAY_MS);
       } catch (e) {
         log.warn('feed_publish_partial_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
       }
-    } else {
-      log.info('feed_publish_ok', { postId: postId.slice(0, 24), delivered: result.delivered.success, total: contactsCount });
+      return { postId, report: reportOf(attempt, queueAccepted), mediaDropped };
     }
-    return { postId, mediaDropped };
+    log.info('feed_publish_ok', { postId: postId.slice(0, 24), delivered: result.delivered.success, total: contactsCount });
+    return { postId, report: reportOf(attempt, false), mediaDropped };
   }
   log.warn('feed_publish_no_delivery', { postId, contacts: contactsCount });
   return { postId: null, mediaDropped };
@@ -1815,7 +1844,10 @@ export async function publishFeedPost(
   }
   if (tryResult.postId) {
     emitFeedUpdate();
-    return { ok: true, cid: tryResult.postId, mediaDropped: tryResult.mediaDropped };
+    // v4.32.739: исход рассылки доносится как есть. Здесь он и терялся: три
+    // разных ответа сходились в один `{ ok: true, cid }`, и лента печатала
+    // «Публикация отправлена» над постом, которого не получил никто.
+    return { ok: true, cid: tryResult.postId, report: tryResult.report, mediaDropped: tryResult.mediaDropped };
   }
   try {
     await enqueuePendingFeedPost(pair, {
@@ -1829,7 +1861,7 @@ export async function publishFeedPost(
     emitFeedUpdate();
     // v4.32.554: mediaDropped доносим и здесь — иначе человек, у которого часть
     // фотографий не влезла, узнавал об этом только при удачной отправке.
-    return { ok: true, queued: true, mediaDropped: tryResult.mediaDropped };
+    return { ok: true, queued: true, report: 'queued', mediaDropped: tryResult.mediaDropped };
   } catch (e) {
     log.warn('feed_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, reason: 'other' };
@@ -2046,12 +2078,17 @@ export async function publishRepost(
       // отказах. Теперь попасть можно, и говорить «в очереди» нельзя: записи в
       // очереди нет, повтора не будет, а репост уже виден у себя в ленте.
       log.warn('feed_repost_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
-      return { ok: true, cid: newPostId, ...dropped };
+      // v4.32.739: и «отправлено» тут говорить нельзя по той же причине.
+      // v4.32.645 сняла с этой ветки ложное «в очереди», но оставила её в
+      // общей куче успехов — а повтора у репоста нет ровно так же.
+      return { ok: true, cid: newPostId, report: reportOf(attempt, false), ...dropped };
     }
-    return { ok: true, cid: newPostId, queued: true, ...dropped };
+    return { ok: true, cid: newPostId, queued: true, report: reportOf(attempt, true), ...dropped };
   }
   log.info('feed_repost_ok', { postId: newPostId.slice(0, 24), delivered: result?.delivered.success ?? 0 });
-  return { ok: true, cid: newPostId, ...dropped };
+  // v4.32.739: сюда доходят два исхода — «дошло до всех» и «репостить некому,
+  // контактов нет». Очереди у обоих нет, и внешне они были неразличимы.
+  return { ok: true, cid: newPostId, report: reportOf(attempt, false), ...dropped };
 }
 
 /**

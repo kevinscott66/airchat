@@ -80,3 +80,34 @@ export function needsRetryQueue(attempt: BroadcastAttempt): boolean {
 export function isDelivered(attempt: BroadcastAttempt): boolean {
   return dispositionOf(attempt) === 'done';
 }
+
+/**
+ * Что сказать человеку о его записи (v4.32.739).
+ *
+ * `PublishDisposition` отвечает на вопрос «что делать дальше» и до этой версии
+ * был единственным разбором исхода. Человеку же нужен другой ответ, и в двух
+ * местах он расходился с первым:
+ *
+ *  - `local-only` показывался как «отправлено». Отправлять было некому, и
+ *    docblock этого модуля прямо запрещал так говорить — но запрет остался
+ *    словами: `isDelivered` не звали ниоткуда, кроме собственного теста.
+ *  - `queue-retry` показывался как «отправлено» и тогда, когда очередь запись
+ *    не приняла. Очередь — единственный повтор у публикации; её отказ значит,
+ *    что до недоставленных контактов запись не дойдёт уже никогда, и сказать
+ *    об этом некому, кроме как здесь.
+ *
+ * `queueAccepted` спрашивается только у `queue-retry`: у остальных исходов
+ * очереди нет и быть не должно.
+ */
+export type PublishReport = 'delivered' | 'local-only' | 'queued' | 'stranded';
+
+export function reportOf(attempt: BroadcastAttempt, queueAccepted: boolean): PublishReport {
+  switch (dispositionOf(attempt)) {
+    case 'done':
+      return 'delivered';
+    case 'local-only':
+      return 'local-only';
+    case 'queue-retry':
+      return queueAccepted ? 'queued' : 'stranded';
+  }
+}

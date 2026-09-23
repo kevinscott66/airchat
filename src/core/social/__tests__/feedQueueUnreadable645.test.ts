@@ -276,12 +276,17 @@ describe('форма источника: отказ очереди виден в
     // v4.32.703: у возврата появился хвост `...dropped` — сколько снимков оригинала
     // перенести не вышло. Само утверждение прежнее: сорвавшаяся постановка в очередь
     // не смеет назвать себя очередью.
-    expect(branch).toContain('return { ok: true, cid: newPostId, ...dropped };');
+    // v4.32.739: у возврата появился исход, который человеку и показывают.
+    // Утверждение то же самое, просто теперь оно сказано словом: `stranded` —
+    // «до части контактов не дошло, и повтора не будет», а не «в очереди».
+    expect(branch).toContain('return { ok: true, cid: newPostId, report: reportOf(attempt, false), ...dropped };');
     expect(branch).not.toContain('queued: true');
   });
 
   test('ПРОВЕРКА НЕ ПУСТАЯ: удачная постановка в очередь как раз и говорит про очередь', () => {
-    expect(CODE).toContain('return { ok: true, cid: newPostId, queued: true, ...dropped };');
+    expect(CODE).toContain(
+      'return { ok: true, cid: newPostId, queued: true, report: reportOf(attempt, true), ...dropped };'
+    );
   });
 
   test('ПРОВЕРКА НЕ ПУСТАЯ: потерянные снимки досчитываются до самого возврата', () => {
