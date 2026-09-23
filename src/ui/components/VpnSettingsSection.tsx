@@ -18,6 +18,7 @@ import { contrastingInk, radius } from '../theme';
 import { useThemedStyles } from '../ThemeContext';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
+import { userErrorText } from './userErrorText';
 import { loadConfig, saveConfigOverride, getConfigSync, type AppConfig } from '../../core/config';
 import {
   retryEmbeddedVpn,
@@ -140,14 +141,25 @@ export function VpnSettingsSection(): React.ReactElement {
   const saveBtn = useAsyncButton(async () => {
     const vpn = buildVpnConfig(true);
     if (!vpn) return;
-    await saveConfigOverride({ vpn } as Partial<AppConfig>);
+    try {
+      await saveConfigOverride({ vpn } as Partial<AppConfig>);
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось сохранить настройки VPN'));
+      return;
+    }
     showSuccess('Настройки VPN сохранены');
   });
 
   const connectBtn = useAsyncButton(async () => {
     const vpn = buildVpnConfig(true);
     if (!vpn) return;
-    const cfg = await saveConfigOverride({ vpn } as Partial<AppConfig>);
+    let cfg: AppConfig;
+    try {
+      cfg = await saveConfigOverride({ vpn } as Partial<AppConfig>);
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось сохранить настройки VPN'));
+      return;
+    }
     setStatus('starting');
     const s = await retryEmbeddedVpn(cfg);
     setStatus(s);

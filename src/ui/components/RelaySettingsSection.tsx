@@ -22,6 +22,7 @@ import { contrastingInk, radius } from '../theme';
 import { AppSwitch } from './AppSwitch';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
+import { userErrorText } from './userErrorText';
 import { loadConfig, saveConfigOverride, type AppConfig } from '../../core/config';
 import { loadKeyPair } from '../../core/crypto/keyManager';
 import {
@@ -111,9 +112,22 @@ export function RelaySettingsSection(): React.ReactElement {
       showError(res.error);
       return;
     }
-    const cfg = await saveConfigOverride({
-      internet: { enabled, relayBase: parsed.endpoints.relayBase, wsBase: parsed.endpoints.wsBase },
-    } as Partial<AppConfig>);
+    // v4.32.729: сохранение теперь вправе отказаться — когда прежние
+    // переопределения не прочитались, слить с ними патч не с чем, а положить
+    // на место файла один патч значило бы стереть настройки VPN и туннеля.
+    // Отказ надо показать: без него «Сохранить» молчит, и человек уверен, что
+    // адрес записан.
+    let cfg: AppConfig;
+    try {
+      cfg = await saveConfigOverride({
+        internet: { enabled, relayBase: parsed.endpoints.relayBase, wsBase: parsed.endpoints.wsBase },
+      } as Partial<AppConfig>);
+    } catch (e) {
+      const text = userErrorText(e, 'Не удалось сохранить адрес сервера');
+      setCheck({ kind: 'err', text });
+      showError(text);
+      return;
+    }
     setActiveBase(parsed.endpoints.relayBase);
     setCheck(
       parsed.warning ? { kind: 'warn', text: parsed.warning } : { kind: 'ok', text: res.detail },
@@ -123,9 +137,15 @@ export function RelaySettingsSection(): React.ReactElement {
   });
 
   const resetBtn = useAsyncButton(async () => {
-    const cfg = await saveConfigOverride({
-      internet: { enabled, relayBase: DEFAULT_RELAY_BASE, wsBase: DEFAULT_WS_BASE },
-    } as Partial<AppConfig>);
+    let cfg: AppConfig;
+    try {
+      cfg = await saveConfigOverride({
+        internet: { enabled, relayBase: DEFAULT_RELAY_BASE, wsBase: DEFAULT_WS_BASE },
+      } as Partial<AppConfig>);
+    } catch (e) {
+      showError(userErrorText(e, 'Не удалось вернуть общий сервер'));
+      return;
+    }
     setInput('');
     setActiveBase(DEFAULT_RELAY_BASE);
     setCheck(null);
@@ -138,10 +158,18 @@ export function RelaySettingsSection(): React.ReactElement {
     (next: boolean) => {
       setEnabled(next);
       void (async () => {
-        const cfg = await saveConfigOverride({
-          internet: { enabled: next, relayBase: activeBase },
-        } as Partial<AppConfig>);
-        await restartTransport(cfg);
+        try {
+          const cfg = await saveConfigOverride({
+            internet: { enabled: next, relayBase: activeBase },
+          } as Partial<AppConfig>);
+          await restartTransport(cfg);
+        } catch (e) {
+          // Настройка не легла — рычажок возвращаем: оставить его в новом
+          // положении значило бы показывать не то, что записано. Ловим здесь
+          // и потому, что отсюда некому: обещание запущено через `void`.
+          setEnabled(!next);
+          showError(userErrorText(e, 'Не удалось сохранить настройку'));
+        }
       })();
     },
     [activeBase, restartTransport],

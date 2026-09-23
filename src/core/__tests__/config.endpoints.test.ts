@@ -17,6 +17,14 @@ jest.mock('expo-file-system/legacy', () => {
     getInfoAsync: jest.fn(async (uri: string) => ({ exists: uri in files, size: (files[uri] ?? '').length })),
     readAsStringAsync: jest.fn(async (uri: string) => files[uri] ?? ''),
     writeAsStringAsync: jest.fn(async (uri: string, data: string) => { files[uri] = data; }),
+    // v4.32.729: запись переопределения идёт через временный файл — иначе
+    // обрыв оставлял бы обрывок вместо настроек. Фейку нужны обе операции.
+    deleteAsync: jest.fn(async (uri: string) => { delete files[uri]; }),
+    moveAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
+      if (!(from in files)) throw new Error('ENOENT');
+      files[to] = files[from];
+      delete files[from];
+    }),
   };
 });
 jest.mock('../logger', () => ({

@@ -692,22 +692,44 @@ function documentConfigOverrideUri(): string {
   return `${FileSystem.documentDirectory ?? ''}airchat-config.json`;
 }
 
-async function readConfigOverride(): Promise<Partial<AppConfig>> {
+/**
+ * @returns `{}` — файла нет, переопределять нечего; объект — то, что в нём
+ * лежит; `null` — файл есть, но прочитать его не удалось.
+ *
+ * v4.32.729: третий ответ появился ради того, кто пишет. Прежде любая беда
+ * чтения сводилась к `{}`, а `saveConfigOverride` сливает патч именно с этим
+ * ответом и результат кладёт на место файла. То есть сбой чтения — база занята,
+ * обрывок после прерванной записи, подложенный файл сверх потолка — превращал
+ * сохранение ОДНОЙ настройки в стирание ВСЕХ остальных: адрес своего
+ * ретранслятора, настройки VPN и туннеля исчезали молча, а устройство
+ * возвращалось на общий ntfy.sh (ровно та беда, от которой в loadConfig завели
+ * послойное слияние). Тому, кто только читает конфиг при старте, разница
+ * по-прежнему безразлична: у него `null` равен `{}` — один запуск на
+ * умолчаниях обратим, а стёртый файл нет.
+ */
+async function readConfigOverride(): Promise<Partial<AppConfig> | null> {
   try {
     const uri = documentConfigOverrideUri();
     const info = await FileSystem.getInfoAsync(uri);
+    if (!info.exists) return {};
     // v4.32.581. Тот же потолок, что и у readUserOverride: файл один и тот же,
     // а читателей у него два, и второй читал без ограничения — подложенный
-    // многомегабайтный override вешал JS-поток на старте.
-    if (!info.exists || (info.size ?? 0) > 256 * 1024) return {};
+    // многомегабайтный override вешал JS-поток на старте. Для пишущего это не
+    // «пусто», а «не прочитали»: под потолком может лежать чужая настройка.
+    if ((info.size ?? 0) > 256 * 1024) {
+      log.warn('config_override_too_big', { bytes: info.size ?? 0 });
+      return null;
+    }
     const raw = await FileSystem.readAsStringAsync(uri);
     const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Partial<AppConfig>)
-      : {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Partial<AppConfig>;
+    }
+    log.warn('config_override_not_object');
+    return null;
   } catch (e) {
     log.warn('config_override_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return {};
+    return null;
   }
 }
 
@@ -722,13 +744,35 @@ async function readConfigOverride(): Promise<Partial<AppConfig>> {
  */
 export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<AppConfig> {
   const existingOverride = await readConfigOverride();
+  // Не прочитали — не пишем. Слить патч не с чем, а положить на место файла
+  // один патч значит стереть всё остальное, что человек там настроил.
+  // Отказаться хуже для одной настройки и лучше для всех: прежние целы, и
+  // попытку можно повторить.
+  if (existingOverride === null) {
+    throw new Error(
+      'Не удалось прочитать текущие настройки. Изменение не сохранено, прежние настройки целы',
+    );
+  }
   const mergedOverride = deepMerge(
     existingOverride as Record<string, unknown>,
     patch as Record<string, unknown>,
   ) as Partial<AppConfig>;
 
+  // v4.32.729: запись через временный файл. Прямая перезапись открывала файл
+  // на усечение до того, как новое содержимое оказывалось на диске, и обрыв
+  // оставлял обрывок JSON — то есть следующий запуск уходил на умолчания, а
+  // следующее сохранение (см. выше) прежде затирало бы остальное начисто.
   const uri = documentConfigOverrideUri();
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify(mergedOverride, null, 2));
+  const temporary = `${uri}.tmp-${Date.now()}`;
+  try {
+    await FileSystem.writeAsStringAsync(temporary, JSON.stringify(mergedOverride, null, 2));
+    await FileSystem.deleteAsync(uri, { idempotent: true });
+    await FileSystem.moveAsync({ from: temporary, to: uri });
+  } catch (e) {
+    await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => {});
+    log.warn('config_override_write_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
 
   let bundled: Partial<AppConfig> = {};
   try {
