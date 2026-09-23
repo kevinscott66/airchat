@@ -779,15 +779,47 @@ export async function setPeerProfileFor(
   peerPublicKeyB64: string,
   profile: PeerProfilePatch
 ): Promise<boolean> {
-  const changed = await withContactLock(pid, async () => {
+  return (await setPeerProfileForChecked(pid, peerPublicKeyB64, profile)) === 'applied';
+}
+
+/**
+ * Исход применения присланного профиля пятью словами (v4.32.768).
+ *
+ * До этого круга ответом было «изменилось ли что-нибудь», и `false` значил
+ * сразу пять разных вещей: строки контакта нет; строка не прочиталась; конверт
+ * старше сохранённого; всё совпало и писать нечего; запись не легла на диск.
+ * Четыре из пяти окончательны, пятая — заминка на секунду занятой базы.
+ *
+ * Разница видна снаружи. `handleIncomingPeerProfile` объявлял такой кадр
+ * разобранным, метка «докуда прочитано» у ретранслятора уходила вперёд, а
+ * второго конверта не будет: отправителю его профиль «уже доставлен». Имя,
+ * фото и «О себе» собеседника застывали до следующей его правки — то есть
+ * могли не обновиться никогда. Ветка отсрочки там была, но зажигалась
+ * исключением, которого эта функция не бросает: свой `catch` у неё внутри.
+ */
+export type PeerProfileWrite = 'applied' | 'unchanged' | 'stale' | 'no-contact' | 'failed';
+
+export async function setPeerProfileForChecked(
+  pid: number,
+  peerPublicKeyB64: string,
+  profile: PeerProfilePatch
+): Promise<PeerProfileWrite> {
+  const outcome = await withContactLock(pid, async (): Promise<PeerProfileWrite> => {
     try {
-      const row = await contactRowGet(pid, peerPublicKeyB64);
-      if (!row) return false;
+      // Читаем различающей формой: «строки нет» и «строка не прочиталась» —
+      // разные беды. Вторую лечит вторая попытка, первую — нет.
+      const cell = await contactRowCell(pid, peerPublicKeyB64);
+      if (cell.state === 'unreadable') {
+        log.warn('contact_peer_profile_row_unreadable', { peer: peerPublicKeyB64.slice(0, 12) });
+        return 'failed';
+      }
+      const row = cellTextOrNull(cell) || null;
+      if (!row) return 'no-contact';
       const j = JSON.parse(row) as Record<string, unknown>;
       // Устаревший конверт: сообщения могут прийти не в том порядке, в каком
       // отправлялись, и старое имя не должно возвращаться поверх нового.
       const prevTs = typeof j.profileTs === 'number' ? j.profileTs : 0;
-      if (profile.ts < prevTs) return false;
+      if (profile.ts < prevTs) return 'stale';
       const next = {
         peerName: profile.name ?? '',
         ...(profile.username !== undefined ? { peerUsername: profile.username ?? '' } : {}),
@@ -825,19 +857,19 @@ export async function setPeerProfileFor(
       // имя, а отправитель считал профиль доставленным.
       if (!stored) {
         log.warn('contact_peer_profile_write_failed', { peer: peerPublicKeyB64.slice(0, 12) });
-        return false;
+        return 'failed';
       }
-      return !same;
+      return same ? 'unchanged' : 'applied';
     } catch (e) {
       log.warn('contact_peer_profile_failed', { err: e instanceof Error ? e.message : String(e) });
-      return false;
+      return 'failed';
     }
   });
-  if (changed) {
+  if (outcome === 'applied') {
     notifyChatStorageChanged();
     emitContactsChanged();
   }
-  return changed;
+  return outcome;
 }
 
 /** Rename a contact's display name. */

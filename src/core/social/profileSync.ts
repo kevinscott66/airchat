@@ -16,7 +16,7 @@
 import { scopedKvGetFor, scopedKvSet, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
 import { ownAvatarNameFor, ownAvatarUriFor } from '../identity/ownAvatar';
-import { listContactsFor, setPeerProfileFor } from './contacts';
+import { listContactsFor, setPeerProfileForChecked } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
 import { getMessagingService } from './messaging';
@@ -571,11 +571,16 @@ export async function handleIncomingPeerProfile(
   // подписано это сообщение, и с тем именем, которое приехало этим же
   // конвертом. Не сойдётся — контакт запишется без галочки, а не с чужой.
   const verified = await badgeFor(env.badge, didFromPubB64(senderPubB64), env.username);
-  try {
-    await setPeerProfileFor(ownerPid, senderPubB64, { ...env, verified });
-  } catch (e) {
+  // v4.32.768: ветка отсрочки ниже ждала исключения, а запись профиля его не
+  // бросает — свой `catch` у неё внутри, и наружу шло `false`. То есть ветка
+  // не зажигалась никогда, и занятая база съедала профиль ровно так же, как до
+  // v4.32.759. Теперь исход назван словом, и откладывается ровно тот из пяти,
+  // что пройдёт со второй попытки: «строки контакта нет», «конверт старее
+  // сохранённого» и «всё и так совпало» повтором кадра не исправить.
+  const applied = await setPeerProfileForChecked(ownerPid, senderPubB64, { ...env, verified });
+  if (applied === 'failed') {
     // Упавший запрос к базе пройдёт сам — а вот второго конверта не будет.
-    log.warn('profile_apply_failed', { err: e instanceof Error ? e.message : String(e) });
+    log.warn('profile_apply_failed', { from: senderPubB64.slice(0, 12) });
     return 'deferred';
   }
   log.info('profile_applied', { from: senderPubB64.slice(0, 12), verified: verified ?? '' });

@@ -20,16 +20,22 @@
  * всех четырёх.
  */
 
-/** Что сделает запись профиля контакта: true — бросит, как занятая база. */
+/** Что сделает запись профиля контакта: true — ответит отказом, как занятая база. */
 let mockContactWriteFails = false;
+/** Что ответит запись, когда отказа нет: один из пяти исходов (v4.32.768). */
+let mockWriteOutcome: 'applied' | 'unchanged' | 'stale' | 'no-contact' = 'applied';
 /** Что записано в контакты — по порядку. */
 const mockWrites: { pid: number; peer: string; name: string | null }[] = [];
 
 jest.mock('../contacts', () => ({
   listContactsFor: async () => [],
-  setPeerProfileFor: async (pid: number, peer: string, env: { name: string | null }) => {
-    if (mockContactWriteFails) throw new Error('database is locked');
-    mockWrites.push({ pid, peer, name: env.name });
+  // v4.32.768: запись отвечает словом, а не бросает. Прежний мок бросал
+  // исключение — настоящая функция его никогда не бросала, свой `catch` у неё
+  // внутри, и ветка отсрочки в profileSync не зажигалась ни разу.
+  setPeerProfileForChecked: async (pid: number, peer: string, env: { name: string | null }) => {
+    if (mockContactWriteFails) return 'failed';
+    if (mockWriteOutcome === 'applied') mockWrites.push({ pid, peer, name: env.name });
+    return mockWriteOutcome;
   },
 }));
 
@@ -90,6 +96,7 @@ const read = (...p: string[]): string =>
 
 beforeEach(() => {
   mockContactWriteFails = false;
+  mockWriteOutcome = 'applied';
   mockWrites.length = 0;
 });
 
@@ -131,6 +138,19 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: негодное не отклад
     expect(await handleIncomingPeerProfile('\x14prof:{не json', PEER, PID)).toBe('consumed');
     expect(mockWrites).toEqual([]);
   });
+
+  it.each(['unchanged', 'stale', 'no-contact'] as const)(
+    'исход «%s» — «разобрано»: повтором кадра его не исправить',
+    async (outcome) => {
+      // v4.32.768: откладывается ровно отказ записи. Совпавший, устаревший и
+      // ничейный профиль годными от второго захода не станут, а отсрочка стоит
+      // разбора кадра заново.
+      mockWriteOutcome = outcome;
+      expect(await handleIncomingPeerProfile(profileEnv('Мария', Date.now()), PEER, PID)).toBe(
+        'consumed'
+      );
+    }
+  );
 
   it('конверт без отправителя — «разобрано»: чей он, узнать неоткуда', async () => {
     mockContactWriteFails = true;
