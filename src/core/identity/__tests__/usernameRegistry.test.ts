@@ -29,13 +29,28 @@ jest.mock('../profileManager', () => ({
 jest.mock('../ownBadge', () => ({
   ownBadgeGrantFor: jest.fn(),
 }));
+jest.mock('../../storage/local', () => {
+  const kv: Record<string, string> = {};
+  return {
+    __kv: kv,
+    kvSet: jest.fn(async (k: string, v: string) => { kv[k] = v; }),
+    kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
+    kvTryListKeysByPrefix: jest.fn(async (p: string) => Object.keys(kv).filter((k) => k.startsWith(p))),
+  };
+});
 
 import { getStoredMnemonic } from '../../backup/seedPhrase';
 import { claimSyncUsername } from '../../sync/syncApi';
 import { ownBadgeGrantFor } from '../ownBadge';
 import { getOwnDisplayNameFor, getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from '../ownProfile';
 import { profileManager } from '../profileManager';
-import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../usernameRegistry';
+import { releaseSyncUsername } from '../../sync/syncApi';
+import {
+  releaseOwnUsernameGlobally,
+  republishOwnUsernameToDirectory,
+  retryPendingUsernameReleases,
+  saveOwnUsernameGlobally,
+} from '../usernameRegistry';
 
 const mnemonic = getStoredMnemonic as jest.MockedFunction<typeof getStoredMnemonic>;
 const claim = claimSyncUsername as jest.MockedFunction<typeof claimSyncUsername>;
@@ -44,6 +59,12 @@ const saveLocal = setOwnUsername as jest.MockedFunction<typeof setOwnUsername>;
 const badge = ownBadgeGrantFor as jest.MockedFunction<typeof ownBadgeGrantFor>;
 const ownName = getOwnDisplayNameFor as jest.MockedFunction<typeof getOwnDisplayNameFor>;
 const ownUsername = getOwnUsernameFor as jest.MockedFunction<typeof getOwnUsernameFor>;
+const release = releaseSyncUsername as jest.MockedFunction<typeof releaseSyncUsername>;
+const localKv = jest.requireMock('../../storage/local') as {
+  __kv: Record<string, string>;
+  kvTryListKeysByPrefix: jest.Mock;
+};
+const PENDING = 'airchat_username_release_pending:';
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -54,6 +75,8 @@ beforeEach(() => {
   badge.mockResolvedValue(null);
   ownName.mockResolvedValue('Рита');
   ownUsername.mockResolvedValue('margarita');
+  release.mockResolvedValue({ ok: true });
+  for (const k of Object.keys(localKv.__kv)) delete localKv.__kv[k];
 });
 
 test('занимает имя в реестре и только потом пишет его локально', async () => {
@@ -138,4 +161,80 @@ test('недоступный реестр не засчитывается как
   await republishOwnUsernameToDirectory();
   await republishOwnUsernameToDirectory();
   expect(claim).toHaveBeenCalledTimes(2);
+});
+
+/**
+ * v4.32.742. Имя удалённого профиля отпускалось одним запросом, и его отказ
+ * глотался молча. Профили удаляют и в самолёте: имя оставалось в реестре
+ * навсегда — указывало на ключ, которым больше никто не пользуется, письма на
+ * него уходили в никуда, а вернуть его себе было нельзя. Само оно не
+ * освобождалось: сервер снимает старую запись профиля только когда тот же
+ * номер занимает другое имя, а номера не переиспользуются.
+ */
+describe('имя удалённого профиля отпускается даже с третьего раза', () => {
+  it('ПРОВЕРКА НЕ ПУСТАЯ: при живой сети имя отпускается сразу и заметки не остаётся', async () => {
+    await releaseOwnUsernameGlobally(3);
+    expect(release).toHaveBeenCalledWith(expect.any(String), expect.anything(), 3);
+    expect(Object.keys(localKv.__kv)).toEqual([]);
+  });
+
+  it('сеть не ответила — заметка остаётся на диске', async () => {
+    release.mockRejectedValueOnce(new Error('offline'));
+    await releaseOwnUsernameGlobally(3);
+    expect(localKv.__kv[`${PENDING}3`]).toBeDefined();
+  });
+
+  it('следующий заход добирает: имя всё-таки отпускается', async () => {
+    release.mockRejectedValueOnce(new Error('offline'));
+    await releaseOwnUsernameGlobally(3);
+    release.mockClear();
+    await retryPendingUsernameReleases();
+    expect(release).toHaveBeenCalledWith(expect.any(String), expect.anything(), 3);
+    expect(localKv.__kv[`${PENDING}3`]).toBeUndefined();
+  });
+
+  it('и разбирается он сам, с открытия экрана профиля', async () => {
+    release.mockRejectedValueOnce(new Error('offline'));
+    await releaseOwnUsernameGlobally(3);
+    release.mockClear();
+    await republishOwnUsernameToDirectory();
+    // Экран профиля — единственное место, откуда этот разбор вообще делается:
+    // своего повода сходить в сеть у брошенной заметки нет.
+    expect(release).toHaveBeenCalledWith(expect.any(String), expect.anything(), 3);
+    expect(localKv.__kv[`${PENDING}3`]).toBeUndefined();
+  });
+
+  it('сервер ответил «такой записи не было» — заметка снимается, а не висит вечно', async () => {
+    release.mockResolvedValueOnce({ ok: false });
+    await releaseOwnUsernameGlobally(3);
+    expect(localKv.__kv[`${PENDING}3`]).toBeUndefined();
+  });
+
+  it('без seed-фразы заметка остаётся: отпустить имя нечем', async () => {
+    mnemonic.mockResolvedValue(null);
+    await releaseOwnUsernameGlobally(3);
+    expect(release).not.toHaveBeenCalled();
+    expect(localKv.__kv[`${PENDING}3`]).toBeDefined();
+  });
+
+  it('нечитаемый список заметок — не «заметок нет»', async () => {
+    release.mockRejectedValueOnce(new Error('offline'));
+    await releaseOwnUsernameGlobally(3);
+    localKv.kvTryListKeysByPrefix.mockResolvedValueOnce(null);
+    release.mockClear();
+    await retryPendingUsernameReleases();
+    expect(release).not.toHaveBeenCalled();
+    expect(localKv.__kv[`${PENDING}3`]).toBeDefined();
+  });
+
+  it('связи нет — остальные заметки не тратятся впустую и остаются на месте', async () => {
+    release.mockRejectedValue(new Error('offline'));
+    await releaseOwnUsernameGlobally(3);
+    await releaseOwnUsernameGlobally(4);
+    release.mockClear();
+    await retryPendingUsernameReleases();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(Object.keys(localKv.__kv).sort()).toEqual([`${PENDING}3`, `${PENDING}4`]);
+    release.mockResolvedValue({ ok: true });
+  });
 });

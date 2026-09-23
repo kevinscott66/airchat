@@ -33,6 +33,7 @@
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../backup/seedPhrase';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
+import { kvDelete, kvSet, kvTryListKeysByPrefix } from '../storage/local';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
 import { ownBadgeGrantFor } from './ownBadge';
 import { getOwnDisplayNameFor, getOwnUsernameFor, isUsernameTakenByAnotherProfile, setOwnUsername } from './ownProfile';
@@ -121,6 +122,13 @@ function activeProfilePair(): KeyPairBytes | null {
 const republished = new Map<number, string>();
 
 export async function republishOwnUsernameToDirectory(): Promise<void> {
+  // v4.32.742: заодно добираются имена, которые не вышло отпустить при
+  // удалении профиля. Своего повода сходить в сеть у них нет, а этот вызов
+  // делается при каждом открытии экрана профиля и после переименования.
+  // Ожидается, а не запускается фоном: обе стороны здесь и так фоновые (оба
+  // вызывающих зовут эту функцию через `void`), а порядок сетевых запросов
+  // предсказуем только у последовательного кода.
+  await retryPendingUsernameReleases();
   const pid = ownerProfileId();
   let sent: string | null = null;
   try {
@@ -156,8 +164,54 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
 }
 
 /**
- * Отпустить имя профиля в реестре. Вызывается при удалении профиля; сбой
- * глотается — брошенная запись безвредна, а падать на удалении нельзя.
+ * Заметка «имя этого профиля ещё не отпущено» (v4.32.742).
+ *
+ * По ключу на профиль, а не одним списком: список пришлось бы читать, менять и
+ * класть обратно целиком, и нечитаемая запись стирала бы чужие заметки.
+ * Префикс не профильный (`p<id>:`) намеренно — уборка базы удаляемого профиля
+ * такие ключи сметает, а этот обязан её пережить.
+ */
+const RELEASE_PENDING_PREFIX = 'airchat_username_release_pending:';
+
+/**
+ * Одна попытка отпустить имя. `true` — заявка дошла до сервера: либо запись
+ * удалена, либо её там и не было (обе — «больше не занято»). `false` — до
+ * сервера не добрались, и заметка остаётся на месте.
+ */
+async function tryReleaseUsernameOnce(profileId: number): Promise<boolean> {
+  try {
+    const mnemonic = await getStoredMnemonic();
+    if (!mnemonic) return false;
+    const res = await releaseSyncUsername(mnemonic, deriveKeyPairFromMnemonic(mnemonic), profileId);
+    // `ok: false` — записи в реестре не было. Ответ пришёл, повторять нечего.
+    if (!res.ok) log.info('username_release_nothing_to_free', { profileId });
+  } catch (error) {
+    log.info('username_release_deferred', {
+      profileId,
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+  await kvDelete(`${RELEASE_PENDING_PREFIX}${profileId}`);
+  return true;
+}
+
+/**
+ * Отпустить имя профиля в реестре. Вызывается при удалении профиля.
+ *
+ * v4.32.742: неудача больше не значит «навсегда занято». Прежде запрос делался
+ * один раз и его отказ глотался молча — а профили удаляют и в самолёте, и на
+ * неоплаченном интернете. Имя оставалось в реестре навсегда: оно указывало на
+ * ключ, которым больше никто не пользуется, письма на `@имя` уходили в никуда,
+ * а вернуть себе это имя было нельзя — ни этому человеку, ни любому другому.
+ * Само оно не освобождалось: сервер снимает старую запись профиля только когда
+ * ТОТ ЖЕ номер профиля занимает другое имя, а номера не переиспользуются
+ * (`nextProfileId` растёт монотонно).
+ *
+ * Поэтому сперва — заметка на диске, и только потом сеть. Заметку разбирает
+ * `retryPendingUsernameReleases` при каждом заходе на экран профиля.
+ * Падать на удалении по-прежнему нельзя: неудача записи заметки — это ровно
+ * прежнее поведение, не хуже.
  */
 export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): Promise<void> {
   // v4.32.731: память о «уже опубликовано» сбрасывается вместе с именем.
@@ -166,9 +220,27 @@ export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): 
   // то есть заявку в реестр не отправлял вовсе. Имя на сервере при этом было
   // отпущено: `@имя` не вело никуда, а приложение считало его опубликованным.
   republished.delete(profileId);
-  try {
-    const mnemonic = await getStoredMnemonic();
-    if (!mnemonic) return;
-    await releaseSyncUsername(mnemonic, deriveKeyPairFromMnemonic(mnemonic), profileId);
-  } catch { /* реестр подождёт: имя освободится при следующем захвате */ }
+  await kvSet(`${RELEASE_PENDING_PREFIX}${profileId}`, String(Date.now()));
+  await tryReleaseUsernameOnce(profileId);
+}
+
+/**
+ * Добрать имена, которые не отпустились с первого раза (v4.32.742).
+ *
+ * Нечитаемый список ключей — не «заметок нет»: тогда просто ничего не делаем,
+ * повторим в следующий раз. Заметка снимается только после ответа сервера.
+ */
+export async function retryPendingUsernameReleases(): Promise<void> {
+  const keys = await kvTryListKeysByPrefix(RELEASE_PENDING_PREFIX);
+  if (keys === null || keys.length === 0) return;
+  for (const key of keys) {
+    const profileId = Number(key.slice(RELEASE_PENDING_PREFIX.length));
+    if (!Number.isInteger(profileId)) {
+      // Ключ битый: разобрать его нечем, а держать вечно незачем.
+      await kvDelete(key);
+      continue;
+    }
+    // Первый же отказ — связи нет; остальные в этот раз не тревожим.
+    if (!(await tryReleaseUsernameOnce(profileId))) return;
+  }
 }
