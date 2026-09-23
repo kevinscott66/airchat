@@ -169,7 +169,7 @@ describe('проверка не пустая: при читаемом списк
       PEER,
       PID
     );
-    expect(applied).toBe(true);
+    expect(applied).toBe('consumed');
     expect(await loadDmPinnedIds(PEER, PID)).toEqual(['m3', 'm1', 'm2']);
     expect(mockNotifies).toBe(1);
   });
@@ -181,7 +181,7 @@ describe('список не прочитался', () => {
     mockFailPinList = true;
     expect(
       await applyLocalDmPin({ peerPubB64: PEER, ownerProfileId: PID, msgId: 'm3', on: true })
-    ).toBeNull();
+    ).toEqual({ ok: false, reason: 'read_failed' });
     // Запись не тронута — ни своим значением, ни пустым списком.
     expect(mockKv.get(DM_KEY)).toBe(before);
     mockFailPinList = false;
@@ -208,7 +208,7 @@ describe('список не прочитался', () => {
     expect(/[А-Яа-я]/.test(text)).toBe(true);
   });
 
-  it('личка: входящий конверт съеден, но ничего не записал', async () => {
+  it('личка: входящий конверт откладывается и ничего не записывает', async () => {
     const before = mockKv.get(DM_KEY);
     mockFailPinList = true;
     const applied = await handleIncomingDmPin(
@@ -216,8 +216,10 @@ describe('список не прочитался', () => {
       PEER,
       PID
     );
-    // Служебную строку обычным сообщением сохранять нельзя в любом случае.
-    expect(applied).toBe(true);
+    // v4.32.757: «отложен». Служебную строку обычным сообщением сохранять
+    // нельзя в любом случае, но и метку «докуда прочитано» двигать за кадр,
+    // который ничего не записал, нельзя: повтора у конверта нет.
+    expect(applied).toBe('deferred');
     expect(mockKv.get(DM_KEY)).toBe(before);
     // И «закреплено» экрану не объявляем: в шапке этого нет.
     expect(mockNotifies).toBe(0);

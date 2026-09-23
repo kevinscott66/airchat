@@ -1283,12 +1283,11 @@ export class MessagingService {
 
     // v4.32.235: закрепление в личке — меняет только баннер, своего пузыря в
     // чате не создаёт (иначе в переписке появился бы сырой JSON).
+    // v4.32.757: ответ обработчика — наш ответ, как у реакции и опроса выше.
     if (textPayload.text?.startsWith(DM_PIN_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingDmPin } = await import('./dmPinSync');
-        await handleIncomingDmPin(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingDmPin } = await import('./dmPinSync');
+      return await handleIncomingDmPin(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.237: таймер исчезающих сообщений. Сам конверт пузырём не

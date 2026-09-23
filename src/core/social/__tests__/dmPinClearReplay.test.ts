@@ -11,6 +11,12 @@
  * Ячейка знака своя (`dmpin_clear`) и намеренно отдельная от закреплений
  * отдельных сообщений: у тех состояние привязано к msgId, общий знак на пару
  * выбрасывал бы законное закрепление сообщения B из-за более поздней метки у A.
+ *
+ * v4.32.757: обработчик отвечает словом EnvelopeIntake вместо «конверт наш», а
+ * знак сдвигается ПОСЛЕ применения (controlTsFresh → clearDmPinned →
+ * commitControlTs). Прежний acceptControlTs ставил его до: стирание могло не
+ * лечь, знак уже стоял, и повтор того же конверта отвергался как устаревший —
+ * отказ становился вечным.
  */
 
 const mockKv = new Map<string, string>();
@@ -80,13 +86,13 @@ describe('повтор «открепить всё»', () => {
     expect(await loadDmPinnedIds(PEER, PID)).toEqual(['m1']);
 
     // Первое применение — законное: список стирается.
-    expect(await handleIncomingDmPin(clearEnv(ts), PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(clearEnv(ts), PEER, PID)).toBe('consumed');
     expect(await loadDmPinnedIds(PEER, PID)).toEqual([]);
 
     // Человек закрепил заново — и тут приходит ТОТ ЖЕ кадр ещё раз.
     await applyLocalDmPin({ peerPubB64: PEER, ownerProfileId: PID, msgId: 'm2', on: true });
     const notifiesBefore = mockNotifies;
-    expect(await handleIncomingDmPin(clearEnv(ts), PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(clearEnv(ts), PEER, PID)).toBe('consumed');
 
     expect(await loadDmPinnedIds(PEER, PID)).toEqual(['m2']);
     // Отброшенный повтор не должен и будить открытый чат на перерисовку.
@@ -99,7 +105,7 @@ describe('повтор «открепить всё»', () => {
 
     await applyLocalDmPin({ peerPubB64: PEER, ownerProfileId: PID, msgId: 'm2', on: true });
     const notifiesBefore = mockNotifies;
-    expect(await handleIncomingDmPin(clearEnv(ts + 1), PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(clearEnv(ts + 1), PEER, PID)).toBe('consumed');
 
     expect(await loadDmPinnedIds(PEER, PID)).toEqual([]);
     // Закрепления строк в переписке не создают — без этого сигнала открытый
@@ -112,7 +118,7 @@ describe('повтор «открепить всё»', () => {
     await handleIncomingDmPin(clearEnv(ts), PEER, PID);
 
     await applyLocalDmPin({ peerPubB64: PEER, ownerProfileId: PID, msgId: 'm3', on: true });
-    expect(await handleIncomingDmPin(clearEnv(ts - 5000), PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(clearEnv(ts - 5000), PEER, PID)).toBe('consumed');
 
     expect(await loadDmPinnedIds(PEER, PID)).toEqual(['m3']);
   });
@@ -135,7 +141,7 @@ describe('закрепление отдельного сообщения зна�
     // Метка МЕНЬШЕ, чем у уже применённого clear: будь знак общим на пару,
     // законное закрепление отвергалось бы.
     const pin = encodeDmPinEnvelope({ msgId: 'mX', on: true, ts: now - 5000 });
-    expect(await handleIncomingDmPin(pin, PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(pin, PEER, PID)).toBe('consumed');
 
     expect(await loadDmPinnedIds(PEER, PID)).toEqual(['mX']);
   });
@@ -148,7 +154,7 @@ describe('закрепление отдельного сообщения зна�
     expect(mockKv.get(`p${PID}:${watermarkKey('dmpin_clear', PEER)}`)).toBeUndefined();
 
     // Значит clear со СВОЕЙ, меньшей меткой всё ещё применим.
-    expect(await handleIncomingDmPin(clearEnv(now - 3000), PEER, PID)).toBe(true);
+    expect(await handleIncomingDmPin(clearEnv(now - 3000), PEER, PID)).toBe('consumed');
     expect(await loadDmPinnedIds(PEER, PID)).toEqual([]);
   });
 });

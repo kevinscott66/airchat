@@ -73,7 +73,7 @@ beforeEach(() => {
 describe('закрепление в личке', () => {
   it('пишет закрепление владельцу, а не активному профилю', async () => {
     const env = encodeDmPinEnvelope({ msgId: 'm1', on: true, ts: 1000 });
-    expect(await handleIncomingDmPin(env, PEER, OWNER)).toBe(true);
+    expect(await handleIncomingDmPin(env, PEER, OWNER)).toBe('consumed');
     expect(mockSetPinned).toHaveBeenCalledWith(PEER, OWNER, 'm1');
   });
 
@@ -85,18 +85,21 @@ describe('закрепление в личке', () => {
 
   it('«открепить всё» тоже адресовано владельцу', async () => {
     const env = encodeDmPinEnvelope({ msgId: '', on: false, ts: 1000, all: true });
-    expect(await handleIncomingDmPin(env, PEER, OWNER)).toBe(true);
+    expect(await handleIncomingDmPin(env, PEER, OWNER)).toBe('consumed');
     expect(mockSetPinned).toHaveBeenCalledWith(PEER, OWNER, null);
   });
 
   it('чужой префикс не трогает базу', async () => {
-    expect(await handleIncomingDmPin('обычный текст', PEER, OWNER)).toBe(false);
+    // v4.32.757: слово отвечает на «двигать ли метку», а не на «конверт наш»:
+    // префикс проверяет и единственный вызывающий, так что сюда чужой текст
+    // не доходит, а разбирать в нём всё равно нечего.
+    expect(await handleIncomingDmPin('обычный текст', PEER, OWNER)).toBe('consumed');
     expect(mockSetPinned).not.toHaveBeenCalled();
   });
 
   it('конверт без отправителя не применяется', async () => {
     const env = encodeDmPinEnvelope({ msgId: 'm1', on: true, ts: 1000 });
-    expect(await handleIncomingDmPin(env, undefined, OWNER)).toBe(true);
+    expect(await handleIncomingDmPin(env, undefined, OWNER)).toBe('consumed');
     expect(mockSetPinned).not.toHaveBeenCalled();
   });
 });

@@ -85,12 +85,16 @@ describe('v4.32.454 — отправка закрепления в личке н
     const toggle = bodyOf(PIN, 'export async function toggleDmPinAndSync(');
     expect(toggle).toContain('): Promise<DmPinSyncResult> {');
     expect(toggle).toContain("const sync = sendDmPin(on ? 'pin' : 'unpin', peerPubB64,");
-    expect(toggle).toContain('return { ok: true, entries, sync };');
-    expect(toggle).toContain("if (entries === null) return { ok: false, reason: 'read_failed' };");
+    expect(toggle).toContain('return { ok: true, entries: write.entries, sync };');
+    // v4.32.757: отказов у записи стало два, и вызывающий передаёт наверх тот,
+    // который случился, а не один заранее известный.
+    expect(toggle).toContain("if (!write.ok) return { ok: false, reason: write.reason };");
     const clear = bodyOf(PIN, 'export async function clearDmPinnedAndSync(');
     expect(clear).toContain('): Promise<DmPinSyncResult> {');
     expect(clear).toContain("const sync = sendDmPin('clear', peerPubB64,");
     expect(clear).toContain('return { ok: true, entries: [], sync };');
+    // «Открепить всё» тоже умеет не лечь, и тогда рассылать нечего.
+    expect(clear).toContain("return { ok: false, reason: 'write_failed' };");
   });
 
   it('все три места закрепления в чате объявляют исход', () => {

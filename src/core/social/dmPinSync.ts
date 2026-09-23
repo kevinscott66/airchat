@@ -26,12 +26,13 @@ import {
   getChatMessageTexts,
   notifyChatStorageChanged,
 } from '../storage/local';
-import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope } from './controlFanout';
 import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import { log } from '../logger';
-import { acceptControlTs } from './controlWatermark';
+import { commitControlTs, controlTsFresh } from './controlWatermark';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import type { DmPinOp, DmPinOutcome } from './dmPinOutcome';
 import {
   DM_PIN_PREFIX,
@@ -145,13 +146,26 @@ export async function resolveDmPinned(
  */
 const dmPinWrites = createSerialRunner();
 
+/**
+ * Что вышло из записи закрепления.
+ *
+ * v4.32.757: раньше отсюда возвращалось `DmPinnedEntry[] | null`, и `null`
+ * значил ровно один отказ — список не прочитался. Сама запись при этом шла
+ * немым `scopedKvSetFor`, который о провале не сообщает никому: вызывающий
+ * получал список закреплённых, перечитанный из kv уже ПОСЛЕ неудачной записи,
+ * то есть прежний, и считал, что всё применилось.
+ */
+export type DmPinWrite =
+  | { ok: true; entries: DmPinnedEntry[] }
+  | { ok: false; reason: DmPinRefusal };
+
 /** Пишет закрепление в kv + conversations.pinned_message_id. */
 export async function applyLocalDmPin(params: {
   peerPubB64: string;
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<DmPinnedEntry[] | null> {
+}): Promise<DmPinWrite> {
   return dmPinWrites(() => applyLocalDmPinSerial(params));
 }
 
@@ -160,29 +174,45 @@ async function applyLocalDmPinSerial(params: {
   ownerProfileId: number;
   msgId: string;
   on: boolean;
-}): Promise<DmPinnedEntry[] | null> {
+}): Promise<DmPinWrite> {
   const { peerPubB64, ownerProfileId, msgId, on } = params;
   // v4.32.643: список не прочитался — не пишем ничего. Прежде сюда приходил
   // пустой массив, и запись сводила все закрепления переписки к одному.
   const current = await readDmPinnedIds(peerPubB64, ownerProfileId);
   if (current === null) {
     log.warn('dm_pin_list_read_failed', { pid: ownerProfileId });
-    return null;
+    return { ok: false, reason: 'read_failed' };
   }
   const nextIds = on
     ? [msgId, ...current.filter((id) => id !== msgId)].slice(0, MAX_PINNED)
     : current.filter((id) => id !== msgId);
-  await scopedKvSetFor(ownerProfileId, pinListKey(peerPubB64), JSON.stringify(nextIds));
+  // v4.32.757: запись проверяется. Прежде она уходила немым scopedKvSetFor, и
+  // занятая база означала «ничего не записано» при полном молчании: список
+  // ниже перечитывался из kv и приходил прежним, а вызывающий объявлял
+  // закрепление применённым — и своё нажатие, и конверт собеседника.
+  if (!(await scopedKvSetCheckedFor(ownerProfileId, pinListKey(peerPubB64), JSON.stringify(nextIds)))) {
+    log.warn('dm_pin_list_write_failed', { pid: ownerProfileId });
+    return { ok: false, reason: 'write_failed' };
+  }
   const entries = await resolveDmPinned(peerPubB64, ownerProfileId);
   await setConversationPinnedMessage(peerPubB64, ownerProfileId, entries[0]?.id ?? null);
-  return entries;
+  return { ok: true, entries };
 }
 
-/** Убирает из закреплённых всё. По той же дорожке, что и запись. */
-export async function clearDmPinned(peerPubB64: string, ownerProfileId: number): Promise<void> {
-  await dmPinWrites(async () => {
-    await scopedKvSetFor(ownerProfileId, pinListKey(peerPubB64), '[]');
+/**
+ * Убирает из закреплённых всё. По той же дорожке, что и запись.
+ *
+ * v4.32.757: отвечает, легло ли. «Открепить всё» — единственная операция,
+ * которую нельзя доделать следующим нажатием: список уже показан пустым.
+ */
+export async function clearDmPinned(peerPubB64: string, ownerProfileId: number): Promise<boolean> {
+  return dmPinWrites(async () => {
+    if (!(await scopedKvSetCheckedFor(ownerProfileId, pinListKey(peerPubB64), '[]'))) {
+      log.warn('dm_pin_clear_write_failed', { pid: ownerProfileId });
+      return false;
+    }
     await setConversationPinnedMessage(peerPubB64, ownerProfileId, null);
+    return true;
   });
 }
 
@@ -217,14 +247,16 @@ export type DmPinSyncResult =
   | { ok: false; reason: DmPinRefusal };
 
 /**
- * Почему закрепление не состоялось (v4.32.643). Пока причина одна, но Record
- * ниже не даст завести вторую без фразы для человека — ровно как у группы.
+ * Почему закрепление не состоялось (v4.32.643). Record ниже не даёт завести
+ * причину без фразы для человека — ровно как у группы. Вторая причина
+ * появилась в v4.32.757: до неё провал самой записи не считался отказом.
  */
-export type DmPinRefusal = 'read_failed';
+export type DmPinRefusal = 'read_failed' | 'write_failed';
 
 /** Record по всем причинам: новая не соберётся, пока ей не написали фразу. */
 const DM_PIN_REFUSAL: Record<DmPinRefusal, string> = {
   read_failed: 'Не удалось прочитать закреплённые в этой переписке — попробуйте ещё раз.',
+  write_failed: 'Не удалось сохранить закреплённые в этой переписке — попробуйте ещё раз.',
 };
 
 /** Текст отказа для человека. */
@@ -240,35 +272,47 @@ export async function toggleDmPinAndSync(params: {
 }): Promise<DmPinSyncResult> {
   const { peerPubB64, msgId, on } = params;
   const pid = profileManager.getActiveProfile()?.id ?? 1;
-  const entries = await applyLocalDmPin({ peerPubB64, ownerProfileId: pid, msgId, on });
+  const write = await applyLocalDmPin({ peerPubB64, ownerProfileId: pid, msgId, on });
   // Ничего не записано — и рассылать нечего: у собеседника закрепление
   // появилось бы, а у себя нет.
-  if (entries === null) return { ok: false, reason: 'read_failed' };
+  if (!write.ok) return { ok: false, reason: write.reason };
   const sync = sendDmPin(on ? 'pin' : 'unpin', peerPubB64, { msgId, on, ts: Date.now() });
-  return { ok: true, entries, sync };
+  return { ok: true, entries: write.entries, sync };
 }
 
 /** «Открепить всё» локально + у собеседника. */
 export async function clearDmPinnedAndSync(peerPubB64: string): Promise<DmPinSyncResult> {
   const pid = profileManager.getActiveProfile()?.id ?? 1;
-  await clearDmPinned(peerPubB64, pid);
+  // v4.32.757: не легло — не рассылаем. Иначе у собеседника закрепления
+  // стёрты, у себя остались, а экран в обоих случаях показывал пустую шапку.
+  if (!(await clearDmPinned(peerPubB64, pid))) return { ok: false, reason: 'write_failed' };
   const sync = sendDmPin('clear', peerPubB64, { msgId: '', on: false, ts: Date.now(), all: true });
   return { ok: true, entries: [], sync };
 }
 
 /**
- * Применяет входящий конверт. Возвращает true, если конверт наш (независимо
- * от того, применился он или был отброшен) — вызывающий не должен сохранять
- * его как обычное DM-сообщение.
+ * Применяет входящий конверт.
+ *
+ * v4.32.757: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш, обычным сообщением его не сохраняйте», и вызывающий его не читал вовсе:
+ * `await handleIncomingDmPin(...)` и сразу `return 'consumed'`. «Разобрано»
+ * значит «метку докуда прочитано можно двигать», а relay отдаёт накопленное
+ * только по метке — значит занятая база стоила закрепления навсегда: кадр
+ * лежит ещё тридцать суток, но его больше никогда не запросят, а повтора у
+ * служебного конверта нет. У собеседника закрепление есть, у нас нет, и узнать
+ * об этом неоткуда — строки в переписке закрепление не создаёт.
  */
 export async function handleIncomingDmPin(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(DM_PIN_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  // Префикс проверяет и единственный вызывающий (messaging.ts). Слово здесь
+  // отвечает не на «конверт наш», а на «двигать ли метку»: чужой текст сюда
+  // не попадает, а если попадёт — разбирать в нём нечего.
+  if (!text.startsWith(DM_PIN_PREFIX)) return 'consumed';
   const env = decodeDmPinEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Профиль-владелец — от службы переписки (v4.32.481).
   const pid = ownerPid;
   // Чат определяется ПОДПИСАННЫМ отправителем DM, а не полем конверта: иначе
@@ -279,18 +323,27 @@ export async function handleIncomingDmPin(
     // накопленное 30 суток, тема выводится из DID, так что один и тот же
     // подписанный конверт можно подать снова через месяц и заново стереть
     // список закреплений. Водяной знак на пару отсекает и повтор, и откат.
-    if (!(await acceptControlTs('dmpin_clear', senderPubB64, pid, env.ts))) {
+    //
+    // v4.32.757: знак проверяется до применения и сдвигается после. Прежний
+    // acceptControlTs делал и то и другое разом, а применение умеет не
+    // удаться: знак вставал, стирание не проходило, и ПОВТОР того же конверта
+    // отвергался как устаревший — отказ становился вечным.
+    if (!(await controlTsFresh('dmpin_clear', senderPubB64, pid, env.ts))) {
       log.info('dm_pin_clear_stale_drop', { from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
-    await clearDmPinned(senderPubB64, pid);
+    if (!(await clearDmPinned(senderPubB64, pid))) {
+      log.warn('dm_pin_clear_not_applied', { from: senderPubB64.slice(0, 12) });
+      return 'deferred';
+    }
+    await commitControlTs('dmpin_clear', senderPubB64, pid, env.ts);
     // Строки сообщения закрепление не создаёт, поэтому открытый чат сам о нём
     // не узнает — будим подписчиков явно.
     notifyChatStorageChanged();
     log.info('dm_pin_cleared_remote', { from: senderPubB64.slice(0, 12) });
-    return true;
+    return 'consumed';
   }
-  const entries = await applyLocalDmPin({
+  const write = await applyLocalDmPin({
     peerPubB64: senderPubB64,
     ownerProfileId: pid,
     msgId: env.msgId,
@@ -299,11 +352,17 @@ export async function handleIncomingDmPin(
   // v4.32.643: конверт наш в любом случае — обычным сообщением его сохранять
   // нельзя, человек увидел бы служебную строку. Но применить его не вышло, и
   // молчать об этом в логе не о чем: у собеседника закрепление есть, у нас нет.
-  if (entries === null) {
-    log.warn('dm_pin_not_applied', { from: senderPubB64.slice(0, 12) });
-    return true;
+  // v4.32.757: и метку за него двигать нельзя — обе причины отказа (список не
+  // прочитался, запись не легла) пройдут сами, а второй посылки не будет.
+  if (!write.ok) {
+    log.warn('dm_pin_not_applied', { from: senderPubB64.slice(0, 12), reason: write.reason });
+    return 'deferred';
   }
   notifyChatStorageChanged();
-  log.info('dm_pin_applied', { from: senderPubB64.slice(0, 12), on: env.on, total: entries.length });
-  return true;
+  log.info('dm_pin_applied', {
+    from: senderPubB64.slice(0, 12),
+    on: env.on,
+    total: write.entries.length,
+  });
+  return 'consumed';
 }

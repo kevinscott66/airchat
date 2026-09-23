@@ -136,8 +136,18 @@ describe('форма исходников', () => {
       // к одному.
       expect(s).toContain('scopedKvTryGetFor(ownerProfileId, pinListKey(');
       expect(s).not.toContain('scopedKvGetFor(ownerProfileId, pinListKey(');
-      expect(s).toContain('scopedKvSetFor(ownerProfileId, pinListKey(');
     }
+    // v4.32.757: в личке запись стала проверяемой — немая о своём провале
+    // молчала, и список перечитывался из kv уже после неудачи, то есть
+    // прежним. В группе она пока немая: там у входящего конверта своя дорожка
+    // (groupMessaging), и переводить её нужно вместе с ней. Пока строка ниже
+    // держит этот долг на виду.
+    expect(src('core/social/dmPinSync.ts')).toContain(
+      'scopedKvSetCheckedFor(ownerProfileId, pinListKey('
+    );
+    expect(src('core/social/groupPinSync.ts')).toContain(
+      'scopedKvSetFor(ownerProfileId, pinListKey('
+    );
   });
 
   it('отметка «опрос завершён» — тоже в namespace профиля', () => {
