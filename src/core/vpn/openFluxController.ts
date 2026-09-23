@@ -100,6 +100,7 @@ export async function maybeStartOpenFlux(
       dns: o.dns ?? '1.1.1.1:53',
     });
     log.info('openflux_started', { socks: addr });
+    await noteHttpLayer();
     return 'on';
   } catch (e) {
     // Текст ядра (документ недоступен, старый редактор выключен, нет прав на
@@ -111,7 +112,45 @@ export async function maybeStartOpenFlux(
   }
 }
 
+/**
+ * Довозит ли туннель HTTP-трафик приложения, или слой перехвата в этот раз мимо.
+ *
+ * `null` — вопрос не задавали или задавать некому (web, Android, старая iOS).
+ * Это НЕ то же самое, что `false`: «не знаем» и «точно мимо» человеку означают
+ * разное.
+ */
+let httpLayer: boolean | null = null;
+
+/**
+ * Спросить у платформы, попал ли перехват HTTP в поднятое ядро.
+ *
+ * Зачем это отдельным вопросом. На iOS перехват HTTP-стека React Native
+ * ставится один раз за жизнь процесса и на заранее зарезервированный порт —
+ * переставить его потом нельзя, RN спрашивает конфигурацию сессии ровно один
+ * раз. Если к моменту старта этот порт кто-то занял, ядро поднимается на любом
+ * свободном (туннель важнее второго слоя), и перехват остаётся нацелен в порт,
+ * где никого нет. А поскольку у этого слоя намеренно включён failover — иначе
+ * приложение с выключенным туннелем вообще не ходило бы в сеть, — запросы не
+ * падают, а тихо уходят напрямую.
+ *
+ * Снаружи это выглядело как «Канал поднят». Человек, который включил туннель
+ * ровно затем, чтобы трафик шёл не напрямую, узнать об этом мог только одним
+ * способом: семь раз нажать на номер версии, включить счётчик соединений и
+ * прочитать строку в инженерном разделе. То есть практически никак.
+ */
+async function noteHttpLayer(): Promise<void> {
+  const stats = await getOpenFluxTunnelStats();
+  httpLayer = stats ? stats.httpProxy : null;
+  if (httpLayer === false) log.warn('openflux_http_layer_bypassed');
+}
+
+/** См. `httpLayer`. `null` — неизвестно, а не «нет». */
+export function getOpenFluxHttpLayerActive(): boolean | null {
+  return httpLayer;
+}
+
 export async function stopOpenFlux(): Promise<void> {
+  httpLayer = null;
   if (!openFluxAvailable()) return;
   const mod = AirChatOpenFlux;
   if (!mod) return;

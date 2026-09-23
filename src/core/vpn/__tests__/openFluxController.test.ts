@@ -37,6 +37,7 @@ import AirChatOpenFlux from 'airchat-openflux';
 import type { AppConfig } from '../../config';
 import {
   enableOpenFluxTunnelStats,
+  getOpenFluxHttpLayerActive,
   getOpenFluxTunnelStats,
   maybeStartOpenFlux,
   openFluxConfigured,
@@ -239,5 +240,68 @@ describe('счётчик соединений', () => {
   it('упавший счётчик не выдаёт за отсутствие соединений', async () => {
     mockNative.tunnelStats = jest.fn().mockRejectedValue(new Error('no core'));
     await expect(getOpenFluxTunnelStats()).resolves.toBeNull();
+  });
+});
+
+/**
+ * Перехват HTTP мог и не встать, хотя ядро поднялось.
+ *
+ * На iOS перехват сетевого стека React Native ставится один раз за жизнь
+ * процесса и на заранее зарезервированный порт. Занял этот порт кто-то другой —
+ * ядро поднимается на любом свободном (туннель важнее второго слоя), а перехват
+ * остаётся нацелен в пустоту. Failover у него включён намеренно, поэтому
+ * запросы не падают с ошибкой, а тихо уходят напрямую.
+ *
+ * Снаружи это выглядело как «Канал поднят», и другого признака у человека не
+ * было: строка про прямой трафик жила в инженерном разделе, за семью нажатиями
+ * по номеру версии и вручную включаемым счётчиком. Различимость этих двух
+ * состояний и проверяется ниже.
+ */
+describe('перехват HTTP после подъёма', () => {
+  afterEach(async () => {
+    delete mockNative.tunnelStats;
+    await stopOpenFlux();
+  });
+
+  it('перехват встал — говорим «да»', async () => {
+    mockNative.tunnelStats = jest.fn().mockResolvedValue({
+      counting: false, connections: 0, failures: 0, lastTarget: null, lastAt: null,
+      systemProxy: true, httpProxy: true,
+    });
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('on');
+    expect(getOpenFluxHttpLayerActive()).toBe(true);
+  });
+
+  it('перехват мимо — говорим «нет», а не «канал поднят»', async () => {
+    mockNative.tunnelStats = jest.fn().mockResolvedValue({
+      counting: false, connections: 0, failures: 0, lastTarget: null, lastAt: null,
+      systemProxy: true, httpProxy: false,
+    });
+    // Статус остаётся `on`, и это правильно: ядро действительно поднялось, а
+    // трафик действительно идёт — просто не туда, куда человек рассчитывал.
+    // Поэтому ответ на «куда идёт» и живёт отдельным вопросом.
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('on');
+    expect(getOpenFluxHttpLayerActive()).toBe(false);
+  });
+
+  it('спросить некого — отвечает «не знаю», а не «нет»', async () => {
+    // Android и web: счётчика нет вовсе. Выдать здесь `false` значило бы
+    // повесить предупреждение о прямом трафике там, где никакого прямого
+    // трафика нет.
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('on');
+    expect(getOpenFluxHttpLayerActive()).toBeNull();
+  });
+
+  it('после остановки прошлый ответ не держится', async () => {
+    mockNative.tunnelStats = jest.fn().mockResolvedValue({
+      counting: false, connections: 0, failures: 0, lastTarget: null, lastAt: null,
+      systemProxy: true, httpProxy: false,
+    });
+    await maybeStartOpenFlux(cfg());
+    expect(getOpenFluxHttpLayerActive()).toBe(false);
+    await stopOpenFlux();
+    // Иначе выключенный туннель продолжал бы пугать предупреждением о прямом
+    // трафике — при том что прямой трафик в этот момент и есть норма.
+    expect(getOpenFluxHttpLayerActive()).toBeNull();
   });
 });

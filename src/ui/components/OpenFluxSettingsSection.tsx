@@ -27,6 +27,7 @@ import { getConfigSync, loadConfig, saveConfigOverride, type AppConfig } from '.
 import { restartInternetTransport } from '../../core/transport/internet/restartInternetTransport';
 import {
   enableOpenFluxTunnelStats,
+  getOpenFluxHttpLayerActive,
   getOpenFluxRunning,
   getOpenFluxSocksAddr,
   getOpenFluxTunnelStats,
@@ -80,6 +81,8 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
   const [enabled, setEnabled] = useState(false);
   const [status, setStatus] = useState<OpenFluxUiStatus>('off');
   const [socks, setSocks] = useState<string | null>(null);
+  /** См. `getOpenFluxHttpLayerActive`. `null` — неизвестно, а не «нет». */
+  const [httpLayer, setHttpLayer] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   /** `null` — счётчика на этой платформе нет, весь блок ниже не показываем. */
   const [stats, setStats] = useState<OpenFluxTunnelStats | null>(null);
@@ -104,6 +107,14 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
       alive = false;
     };
   }, []);
+
+  // Попал ли перехват HTTP в поднятое ядро — вопрос отдельный от «поднялось
+  // ли», и ответ на него меняется на каждом подъёме: порт резервируется
+  // заранее, и занять его мог кто угодно. Поэтому спрашиваем на каждую смену
+  // статуса и адреса, а не один раз при открытии.
+  useEffect(() => {
+    setHttpLayer(status === 'on' ? getOpenFluxHttpLayerActive() : null);
+  }, [status, socks]);
 
   // Счётчик спрашиваем только тогда, когда его есть кому показать: без режима
   // разработчика весь блок не рисуется, и опрос ядра был бы работой в стол.
@@ -342,6 +353,20 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
 
         {socks && status === 'on' ? (
           <Text style={styles.socks}>Локальный SOCKS5: {socks}</Text>
+        ) : null}
+
+        {/*
+          Строка не для инженеров, поэтому и стоит здесь, а не в блоке ниже за
+          режимом разработчика. Туннель поднят, но перехват HTTP нацелен в порт,
+          который к моменту старта успели занять, — и запросы приложения тихо
+          идут напрямую. Человек включал туннель ровно затем, чтобы этого не
+          было; молчать об этом и показывать «Канал поднят» — врать.
+        */}
+        {status === 'on' && httpLayer === false ? (
+          <Text style={[styles.socks, styles.errColor]}>
+            Перехват запросов не встал: их порт заняли раньше нас, и запросы приложения идут
+            напрямую, мимо туннеля. Перезапуск приложения обычно это чинит.
+          </Text>
         ) : null}
 
         {canRetry ? (

@@ -108,6 +108,7 @@ import {
   startOpenFluxNetworkGuard,
   stopOpenFluxNetworkGuard,
 } from './core/vpn/openFluxNetworkGuard';
+import { startOpenFluxDegradedNotice } from './ui/openFluxDegradedNotice';
 import { authGuard } from './core/security/authGuard';
 import { PasswordScreen } from './ui/screens/PasswordScreen';
 import { ForgotPasswordScreen } from './ui/screens/ForgotPasswordScreen';
@@ -752,6 +753,7 @@ function MainTabs({
     let alive = true;
     let purgeTimer: ReturnType<typeof setInterval> | null = null;
     let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopOpenFluxNotice: (() => void) | null = null;
     const deferredCleanups: Array<() => void> = [];
     const deferAfterFirstFrame = (task: () => Promise<void> | void): void => {
       // v4.32.557: ждать кадра — да, ждать его вечно — нет. В фоне кадров не
@@ -887,6 +889,11 @@ function MainTabs({
           // человек в этот момент видит лишь молчащее приложение — см.
           // openFluxNetworkGuard.
           startOpenFluxNetworkGuard();
+          // Сторож чинит туннель молча, и до сих пор о неудаче узнавал только
+          // тот, у кого открыт экран настроек OpenFlux. Включают туннель ради
+          // того, каким путём идёт трафик, — значит про переход на прямой надо
+          // говорить.
+          stopOpenFluxNotice = startOpenFluxDegradedNotice();
           void getStoredMnemonic().then((storedMnemonic) => {
             if (!alive || !storedMnemonic) return;
             syncMnemonic = storedMnemonic;
@@ -999,6 +1006,8 @@ function MainTabs({
       stopInternetTransportStack();
       stopNetworkReconnectWatcher();
       stopOpenFluxNetworkGuard();
+      stopOpenFluxNotice?.();
+      stopOpenFluxNotice = null;
       getMessagingService()?.dispose();
       // Таблица лиц привязана к аккаунту: при смене профиля чужие снимки
       // не должны пережить того, кому они принадлежали.

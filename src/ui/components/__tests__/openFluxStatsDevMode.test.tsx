@@ -10,8 +10,9 @@
  */
 import React from 'react';
 
-import { queryByTestId, render, unmount } from '../../__tests__/support/renderA11y';
+import { queryByTestId, render, textOf, unmount } from '../../__tests__/support/renderA11y';
 import { OpenFluxSettingsSection } from '../OpenFluxSettingsSection';
+import { getOpenFluxHttpLayerActive } from '../../../core/vpn/openFluxController';
 
 jest.mock('../../../core/config', () => ({
   loadConfig: jest.fn(async () => ({ openflux: { enabled: true } })),
@@ -34,6 +35,7 @@ jest.mock('../../../core/vpn/openFluxController', () => ({
     httpProxy: true,
   })),
   enableOpenFluxTunnelStats: jest.fn(async () => true),
+  getOpenFluxHttpLayerActive: jest.fn(() => true),
   retryOpenFlux: jest.fn(async () => 'on'),
   stopOpenFlux: jest.fn(async () => undefined),
 }));
@@ -57,6 +59,46 @@ describe('OpenFluxSettingsSection: счётчик за режимом разра
   it('в режиме разработчика кнопка появляется', async () => {
     const r = await render(<OpenFluxSettingsSection devMode />);
     expect(queryByTestId(r.root, 'openflux_count')).toBeTruthy();
+    await unmount(r);
+  });
+});
+
+/**
+ * Перехват HTTP мог не встать, хотя ядро поднялось, — и сказать об этом надо
+ * всем, а не только тому, кто семь раз нажал по номеру версии.
+ *
+ * На iOS перехват сетевого стека ставится один раз за процесс и на заранее
+ * зарезервированный порт; занял его кто-то другой — ядро поднимается на любом
+ * свободном, а перехват остаётся нацелен в пустоту. Failover у него включён
+ * намеренно, поэтому запросы не падают, а тихо уходят напрямую. Человек при
+ * этом читает «Канал поднят» и включал туннель ровно затем, чтобы прямого
+ * трафика не было.
+ */
+describe('OpenFluxSettingsSection: перехват не встал', () => {
+  const layer = getOpenFluxHttpLayerActive as unknown as jest.Mock;
+
+  afterEach(() => layer.mockReturnValue(true));
+
+  it('молчит, пока перехват на месте', async () => {
+    const r = await render(<OpenFluxSettingsSection />);
+    expect(textOf(r.root)).not.toContain('мимо туннеля');
+    await unmount(r);
+  });
+
+  it('предупреждает без всякого режима разработчика', async () => {
+    layer.mockReturnValue(false);
+    const r = await render(<OpenFluxSettingsSection />);
+    expect(textOf(r.root)).toContain('мимо туннеля');
+    await unmount(r);
+  });
+
+  it('на платформе без ответа не выдумывает предупреждение', async () => {
+    // `null` — «не спрашивали или спрашивать некому» (Android, web, старая
+    // iOS). Показать здесь предупреждение значило бы пугать прямым трафиком
+    // там, где его нет.
+    layer.mockReturnValue(null);
+    const r = await render(<OpenFluxSettingsSection />);
+    expect(textOf(r.root)).not.toContain('мимо туннеля');
     await unmount(r);
   });
 });
