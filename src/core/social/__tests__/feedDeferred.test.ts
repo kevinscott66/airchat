@@ -182,10 +182,20 @@ describe('feedDeferred: проводка в feedService', () => {
   const CODE = SRC.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
   it('все четыре места, где событие пропадало, кладут его на полку', () => {
-    expect(CODE).toMatch(/if \(!stored\) await deferFeedEvent\(payload, envelopePid\);/);
-    expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_edit_unknown_post'/);
-    expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_poll_vote_unknown_post'/);
-    expect(CODE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_comment_rejected_orphan'/);
+    // v4.32.783: у откладывания появился исход, и он читается прямо на месте —
+    // не легло на полку, значит конверт не разобран (`'deferred'`).
+    expect(CODE).toMatch(
+      /if \(!stored && \(await deferFeedEvent\(payload, envelopePid\)\) === 'failed'\) return 'deferred';/
+    );
+    expect(CODE).toMatch(
+      /if \(\(await deferFeedEvent\(payload, envelopePid\)\) === 'failed'\) return 'deferred';\n\s*log\.info\('feed_edit_unknown_post'/
+    );
+    expect(CODE).toMatch(
+      /if \(\(await deferFeedEvent\(payload, envelopePid\)\) === 'failed'\) return 'deferred';\n\s*log\.info\('feed_poll_vote_unknown_post'/
+    );
+    expect(CODE).toMatch(
+      /if \(\(await deferFeedEvent\(payload, envelopePid\)\) === 'failed'\) return 'deferred';\n\s*log\.info\('feed_comment_rejected_orphan'/
+    );
   });
 
   it('обе точки прихода публикации разгребают полку', () => {

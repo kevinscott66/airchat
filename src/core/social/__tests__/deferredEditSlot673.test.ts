@@ -65,7 +65,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(SERVICE).toMatch(/log\.warn\('feed_edit_auth_mismatch'/);
     // ...а до выхода она обязана была куда-то лечь: правка без публикации
     // откладывается, а не отбрасывается.
-    expect(SERVICE).toMatch(/await deferFeedEvent\(payload, envelopePid\);\n\s*log\.info\('feed_edit_unknown_post'/);
+    // v4.32.783: у откладывания появился исход — не легло на полку, значит
+    // конверт не разобран, и метка ретранслятора не двигается.
+    expect(SERVICE).toMatch(
+      /if \(\(await deferFeedEvent\(payload, envelopePid\)\) === 'failed'\) return 'deferred';\n\s*log\.info\('feed_edit_unknown_post'/
+    );
   });
 
   it('время в конверте разрешено уводить вперёд — это и есть бюджет занявшего ячейку', () => {

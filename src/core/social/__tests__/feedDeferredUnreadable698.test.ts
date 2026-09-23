@@ -74,6 +74,7 @@ jest.mock('../../storage/local', () => ({
   kvSet: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); }),
   kvSetChecked: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
+  kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
@@ -255,7 +256,10 @@ describe('исходник: чтение полки объявлено двой�
 
   test('оба откладывающих места отказ чтения признают', () => {
     expect(SRC).toContain("    log.warn('feed_deferred_unreadable', { pid, type: payload.type });");
-    expect(SRC).toContain('  if (store === null || !store[payload.postId]) return;');
+    // v4.32.783: строка разошлась надвое — у откладывания теперь есть исход.
+    // Нечитаемая полка отвечает 'failed' (конверт не разобран), а пустая по
+    // этой публикации — 'shelved' (откладывать нечего, и это не отказ).
+    expect(SRC).toContain("    return 'failed';\n  }\n  if (!store[payload.postId]) return 'shelved';");
     // Применение отложенного тоже не считает несостоявшееся чтение пустотой.
     expect(SRC).toContain('  const store = await loadDeferred(pid);\n  if (store === null) return;');
   });

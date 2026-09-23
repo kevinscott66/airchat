@@ -38,7 +38,7 @@ import {
   takeDeferred,
   type DeferredStore,
 } from './feedDeferred';
-import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
+import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvDeleteChecked, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
 import {
   INLINE_MEDIA_PREFIX,
   INLINE_DOC_PREFIX,
@@ -2660,11 +2660,36 @@ export async function deleteFeedPostLocal(postId: string): Promise<void> {
  * на всех запись означала бы, что реакция из одного аккаунта применится в
  * другом при первом же совпадении номера публикации.
  *
- * Отказ записи здесь ничего не ломает: полка — не данные, а вторая попытка.
- * Худшее, что бывает при отказе, — событие потеряно ровно так же, как теряется
- * сейчас, до этой полки.
+ * v4.32.783: «отказ записи здесь ничего не ломает» — так тут было написано, и
+ * это было неправдой. Полка и есть единственная вторая попытка: событие на неё
+ * кладётся ровно потому, что применить его сейчас некуда, а второй раз оно не
+ * придёт. Повторов у реакции нет вовсе, у комментария очередь наполняется
+ * только при неудаче доставки — а здесь конверт дошёл. Ретранслятор хранит его
+ * тридцать суток, но отдаёт только по метке «докуда прочитано», и метку эту
+ * двигал тот же разбор, который полку не записал. Не легло на полку — конверт
+ * не разобран, и сказать об этом надо словом `'deferred'`: тогда метка
+ * останется на месте и кадр придёт ещё раз.
  */
 const DEFERRED_KEY_PREFIX = 'feed_deferred_v1:p';
+
+/**
+ * Легло ли событие на полку отложенных (v4.32.783).
+ *
+ * `'failed'` снаружи означает «конверт не разобран»: ни применить, ни отложить
+ * не вышло, и потерять его молча нельзя.
+ */
+type DeferWrite = 'shelved' | 'failed';
+
+/**
+ * Чем кончился разбор конверта ленты (v4.32.783).
+ *
+ * `'applied'` — разобрано, экран пора обновить. `'unknown'` — род конверта нам
+ * неизвестен: обновлять нечего, но и возвращаться к нему незачем.
+ * `'deferred'` — конверт НЕ разобран: применить событие было некуда, а
+ * отложить не вышло. Прежде обоих последних случаев не различали вовсе —
+ * ответ был `boolean`, и оба читались снаружи как «конверт взят».
+ */
+type FeedApply = 'applied' | 'unknown' | 'deferred';
 
 /**
  * `null` — полка не прочиталась. v4.32.698: здесь стоял kvGet, а он отвечает
@@ -2679,29 +2704,50 @@ async function loadDeferred(pid: number): Promise<DeferredStore | null> {
   return read === null ? null : parseDeferredStore(read.value);
 }
 
-async function saveDeferred(pid: number, store: DeferredStore): Promise<void> {
+/**
+ * v4.32.783: пишет проверяемыми формами и отвечает исходом.
+ *
+ * Прежде здесь стояли `kvSet` и `kvDelete` — обе гасят отказ базы внутри себя
+ * и возвращают `void`, так что ловушка вокруг них не срабатывала никогда:
+ * бросать было нечему. Полка молча не записывалась, а разбор шёл дальше и
+ * отвечал «разобрано».
+ */
+async function saveDeferred(pid: number, store: DeferredStore): Promise<DeferWrite> {
   const key = `${DEFERRED_KEY_PREFIX}${pid}`;
   try {
-    if (Object.keys(store).length === 0) await kvDelete(key);
-    else await kvSet(key, JSON.stringify(store));
+    // Пустая полка — не «нечего писать», а «стереть»: полка кладётся целиком.
+    if (Object.keys(store).length === 0) {
+      await kvDeleteChecked(key);
+      return 'shelved';
+    }
+    if (await kvSetChecked(key, JSON.stringify(store))) return 'shelved';
+    log.warn('feed_deferred_save_failed', { pid, reason: 'kv_write_failed' });
+    return 'failed';
   } catch (e) {
-    log.warn('feed_deferred_save_failed', { err: e instanceof Error ? e.message : String(e) });
+    log.warn('feed_deferred_save_failed', { pid, err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
   }
 }
 
 /** Отложить событие, для которого публикации ещё нет. */
-async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promise<void> {
+async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promise<DeferWrite> {
   const event = deferredFromPayload(payload);
-  if (!event) return;
+  // Событие такого вида не откладывается вовсе — откладывать нечего, и это не
+  // отказ: возвращать сюда конверт второй раз незачем.
+  if (!event) return 'shelved';
   const store = await loadDeferred(pid);
   if (store === null) {
     // Не прочитали — не пишем: иначе это одно событие легло бы поверх всей
-    // полки. Само событие теряется так же, как терялось до появления полки.
+    // полки. v4.32.783: но и «разобрано» тут сказать нельзя — событие не
+    // применено и не отложено, значит конверт не разобран.
     log.warn('feed_deferred_unreadable', { pid, type: payload.type });
-    return;
+    return 'failed';
   }
-  await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
-  log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+  const wrote = await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
+  if (wrote === 'shelved') {
+    log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+  }
+  return wrote;
 }
 
 /**
@@ -2714,13 +2760,24 @@ async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promis
  * применится, и получатель увидит реакцию, которой автор уже нет. Если полка
  * по публикации пуста, откладывать нечего.
  */
-async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number): Promise<void> {
+async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number): Promise<DeferWrite> {
   const store = await loadDeferred(pid);
-  if (store === null || !store[payload.postId]) return;
+  if (store === null) {
+    // v4.32.783: нечитаемая полка — не пустая. Ровно на этой разнице стоит
+    // v4.32.698, и здесь она значит «неизвестно, ждёт ли по этой публикации
+    // поставленная реакция». Ответить «разобрано» — значит согласиться, что
+    // получатель увидит реакцию, которую автор уже снял, и навсегда.
+    log.warn('feed_deferred_unreadable', { pid, type: payload.type });
+    return 'failed';
+  }
+  if (!store[payload.postId]) return 'shelved';
   const event = deferredFromPayload(payload);
-  if (!event) return;
-  await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
-  log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+  if (!event) return 'shelved';
+  const wrote = await saveDeferred(pid, addDeferred(store, payload.postId, event, Date.now()));
+  if (wrote === 'shelved') {
+    log.info('feed_event_deferred', { type: payload.type, postId: payload.postId.slice(0, 24) });
+  }
+  return wrote;
 }
 
 /**
@@ -2762,14 +2819,14 @@ async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promi
  * заглушённым авторам и пересылка по цепочке остаются снаружи: у отложенного
  * события всё это уже было пройдено, когда оно приехало впервые.
  *
- * `false` — род конверта неизвестен; вызывающий в этом случае не трогает UI,
- * ровно как и до выделения.
+ * `'unknown'` — род конверта неизвестен; вызывающий в этом случае не трогает
+ * UI, ровно как и до выделения (v4.32.783: было `false`).
  */
 async function applyFeedEnvelope(
   payload: FeedEnvelopePayload,
   s: FeedStorage,
   envelopePid: number,
-): Promise<boolean> {
+): Promise<FeedApply> {
   switch (payload.type) {
     case 'feed_post': {
       const d = feedEnvelopeData<FeedPostData>(payload);
@@ -2871,7 +2928,8 @@ async function applyFeedEnvelope(
       if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
       if (d.remove) {
         await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
-        await deferFeedEventIfPending(payload, envelopePid);
+        // v4.32.783: снятие не легло на полку — конверт не разобран.
+        if ((await deferFeedEventIfPending(payload, envelopePid)) === 'failed') return 'deferred';
         log.info('feed_unreaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
       } else {
         const stored = await s.addReaction(payload.postId, d.emoji, payload.authorDid);
@@ -2879,7 +2937,7 @@ async function applyFeedEnvelope(
         // Повторов у реакции нет вовсе (см. addAndBroadcastReaction), а порядок
         // доставки не гарантирован: публикация может идти к третьему лицу по
         // цепочке пересылок, а реакция на неё — напрямую от поставившего.
-        if (!stored) await deferFeedEvent(payload, envelopePid);
+        if (!stored && (await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
         log.info('feed_reaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji, stored });
       }
       break;
@@ -2953,7 +3011,7 @@ async function applyFeedEnvelope(
           // доставки, а здесь конверт дошёл — и был отвергнут. Полка
           // ограничена и числом записей, и объёмом, поэтому засыпать её
           // ссылками на несуществующие публикации по-прежнему бесполезно.
-          await deferFeedEvent(payload, envelopePid);
+          if ((await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
           log.info('feed_comment_rejected_orphan', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
           break;
         }
@@ -3147,7 +3205,7 @@ async function applyFeedEnvelope(
       // v4.32.29: auth-check — редактировать можно только свой пост.
       const existing = await s.getPost(payload.postId);
       if (!existing) {
-        await deferFeedEvent(payload, envelopePid);
+        if ((await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
         log.info('feed_edit_unknown_post', { postId: payload.postId.slice(0, 24) });
         break;
       }
@@ -3199,7 +3257,7 @@ async function applyFeedEnvelope(
       if (!d) break;
       const existing = await s.getPost(payload.postId);
       if (!existing) {
-        await deferFeedEvent(payload, envelopePid);
+        if ((await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
         log.info('feed_poll_vote_unknown_post', { postId: payload.postId.slice(0, 24) });
         break;
       }
@@ -3266,9 +3324,9 @@ async function applyFeedEnvelope(
     }
     default:
       log.warn('feed_envelope_unknown_type', { type: (payload as FeedEnvelopePayload).type });
-      return false;
+      return 'unknown';
   }
-  return true;
+  return 'applied';
 }
 
 export async function receiveFeedEnvelope(
@@ -3412,7 +3470,16 @@ export async function receiveFeedEnvelope(
       return 'deferred';
     }
 
-    if (!(await applyFeedEnvelope(payload, s, envelopePid))) return 'consumed';
+    const applied = await applyFeedEnvelope(payload, s, envelopePid);
+    if (applied === 'deferred') {
+      // v4.32.783: событие некуда было ни применить, ни отложить. Метку
+      // «докуда прочитано» двигать нельзя — ретранслятор хранит конверт ещё
+      // тридцать суток, и это единственный способ получить его снова.
+      feedSeenForget(dedupKey);
+      log.warn('feed_envelope_shelf_failed', { type: payload.type });
+      return 'deferred';
+    }
+    if (applied === 'unknown') return 'consumed';
 
     emitFeedUpdate();
     return 'consumed';

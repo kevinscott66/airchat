@@ -75,6 +75,7 @@ jest.mock('../../storage/local', () => ({
     return true;
   }),
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
+  kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
