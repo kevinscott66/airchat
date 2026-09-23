@@ -21,6 +21,7 @@ import {
   initiateCall,
 } from '../callService';
 import { envelopeBody, makePeer, sealMissed, sealOffer, testCallId } from './callTestPeers';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../../storage/readRetry';
 
 type OfferMsg = { fromPeerId: string; sdp: string };
 type UnavailableMsg = { targetPeerId: string; roomId: string };
@@ -151,6 +152,15 @@ async function settle(): Promise<void> {
   // Push уходит через динамический import — до него очередь доходит не с
   // первого оборота, поэтому крутим её несколько раз.
   for (let i = 0; i < 8; i += 1) await jest.advanceTimersByTimeAsync(0);
+  // v4.32.749: журнал звонков берёт паузу перед повтором записи. В этой
+  // обвязке настоящей базы нет, и `kvSetSecret` отвечает «не смог» — разбор
+  // списка придержанных звонков упирался в невыстрелившую паузу и до
+  // уведомления не доходил. Прокручиваем ровно эти паузы, а потом ещё раз
+  // очередь: она их и ждала.
+  for (let i = 1; i <= READ_RETRY_ATTEMPTS; i += 1) {
+    await jest.advanceTimersByTimeAsync(readRetryDelayMs(i));
+  }
+  for (let i = 0; i < 8; i += 1) await jest.advanceTimersByTimeAsync(0);
 }
 
 /** Тело последнего ушедшего предложения. */
@@ -188,6 +198,12 @@ describe('дозвон до телефона, которого нет в сет�
 
   afterEach(async () => {
     await disposeCallService();
+    // v4.32.749: сначала догоняем паузы, которые ждут повторы записи журнала, и
+    // только потом снимаем поддельное время. Иначе невыстреливший таймер
+    // пропадает вместе с ним, обещание записи не завершается никогда — а
+    // очередь записи журнала общая на профиль, и следующий тест упирался в
+    // хвост предыдущего.
+    for (let i = 0; i < 4; i += 1) await jest.runOnlyPendingTimersAsync();
     jest.useRealTimers();
   });
 

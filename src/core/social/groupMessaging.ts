@@ -562,7 +562,18 @@ export async function handleIncomingGroupEnvelope(
   // в архиве, её сообщения съедались здесь как «неизвестная группа» — молча и
   // без следа, потому что архив в этой сборке скрывает строку, а не выводит из
   // группы.
-  const group = await getGroup(env.groupId, pid);
+  // v4.32.749: различающим чтением. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «такой группы нет», — и обычное сообщение живого участника
+  // объявлялось мусором из чужой группы. Ответ `'consumed'` двигает метку
+  // прочитанного, relay больше этот кадр не отдаст, а у отправителя стоит
+  // «Доставлено»: текст пропадает навсегда. Строкой ниже состав уже читается
+  // различающим `listGroupMembersRead` (v4.32.648) — здесь дочинили то же.
+  const groupRead = await getGroupRead(env.groupId, pid);
+  if (groupRead.state === 'failed') {
+    log.warn('group_msg_group_unreadable', { groupId: env.groupId.slice(0, 8) });
+    return 'deferred';
+  }
+  const group = lookupValue(groupRead);
   if (!group) {
     log.debug('group_msg_unknown_group', { groupId: env.groupId.slice(0, 8) });
     return 'consumed'; // still consumed — don't create a phantom DM
@@ -886,7 +897,17 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
     // Only store if we actually admin this group
     // v4.32.511: см. приём сообщения — архив не делает группу чужой, иначе
     // администратор терял заявки на вступление, пока группа скрыта.
-    const grp = await getGroup(env.groupId, pid);
+    // v4.32.749: различающим чтением — тот же шаг, что и у состава ниже.
+    // `getGroup` схлопывает отказ базы в тот же `null`, что и «группа не наша»,
+    // и заявка съедалась молча: повтора у неё нет, метка прочитанного уходит
+    // вперёд, а заявителю уже сказано «Запрос отправлен» — ответа он не
+    // дождётся никогда.
+    const grpRead = await getGroupRead(env.groupId, pid);
+    if (grpRead.state === 'failed') {
+      log.warn('group_join_request_group_unreadable', { groupId: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
+    const grp = lookupValue(grpRead);
     if (!grp) return 'consumed'; // not our group — consume silently
     /**
      * v4.32.512: «администратор ли я» спрашивается у group_members — той же

@@ -36,6 +36,12 @@ let mockOwnText: Map<string, string | null> = new Map();
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.749: приём различает «такой группы нет» и «строка не прочиталась» —
+  // здесь база отвечает всегда, поэтому третьего исхода не бывает.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const found = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return found ? { state: 'found', value: found } : { state: 'missing' };
+  }),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   // v4.32.648: приём различает «в группе никого» и «состав не прочитался».
