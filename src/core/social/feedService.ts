@@ -48,7 +48,7 @@ import {
 } from './feedOrphanScan';
 import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
-import { listContacts, listContactsFor } from './contacts';
+import { listContacts, listContactsReadFor } from './contacts';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
@@ -1133,7 +1133,23 @@ async function republishQueuedItem(
     // «доставлено всем» и запись удалялась из очереди, не дойдя ни до кого.
     // Разбор ниже (v4.32.615) для того и написан, чтобы такой потери не было.
     const ownerPid = ownerPidForPublicKey(pair.publicKey);
-    const contacts = await listContactsFor(ownerPid);
+    // v4.32.724: список берётся различающим чтением. listContactsFor сводит
+    // «контактов нет» и «прочитать не вышло» в один пустой массив, и разбор
+    // ниже — тот самый, что написан против потери записи, — на сорванном
+    // чтении срабатывал ровно наоборот: пустой набор DID означал «пост
+    // локальный, доставлять нечего», запись объявлялась доставленной всем и
+    // выбрасывалась из очереди, не дойдя ни до кого. Отказ чтения сюда не
+    // бросается (kvTryGet гасит его внутри), так что catch ниже этого случая
+    // не видел.
+    const contacts = await listContactsReadFor(ownerPid);
+    if (contacts === null) {
+      log.warn('feed_queue_contacts_unreadable_kept', {
+        id: item.id,
+        deliveredNow: res.delivered.success,
+        deliveredTotal: item.deliveredTo?.length ?? 0,
+      });
+      return { fullyDelivered: false };
+    }
     const allContactDids = new Set<string>();
     for (const c of contacts) {
       // v4.32.427: try/catch здесь был мёртвым — Buffer.from не бросает, а

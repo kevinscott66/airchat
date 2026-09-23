@@ -19,6 +19,14 @@ export type StoryPublishOutcome = {
   contacts: number;
   /** Скольким конверт удалось отправить. */
   delivered: number;
+  /**
+   * Список получателей не прочитался (v4.32.724).
+   *
+   * Отличать обязательно: без этого признака сорванное чтение справочника
+   * приходило сюда неотличимым от «контактов нет вовсе» — нулём, — и автор не
+   * слышал ни слова о сторис, которую не получил никто.
+   */
+  contactsUnreadable?: boolean;
 };
 
 /**
@@ -32,6 +40,9 @@ export function storyPublishProblem(
   res: StoryPublishOutcome,
   mediaType: 'image' | 'video'
 ): string | null {
+  if (res.contactsUnreadable) {
+    return 'Сторис сохранена, но список контактов сейчас не прочитать — она никому не ушла. Попробуйте опубликовать снова';
+  }
   if (res.contacts > 0 && res.delivered === 0) {
     return 'Сторис сохранена, но не ушла ни одному контакту — нет связи. Попробуйте опубликовать снова';
   }

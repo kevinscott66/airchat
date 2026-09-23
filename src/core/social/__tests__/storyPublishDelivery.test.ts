@@ -28,12 +28,16 @@ const mockRefuse = new Set<string>();
 /** Кому sendMessage бросает исключение. */
 const mockThrow = new Set<string>();
 /** Контакты профиля. */
-let mockContacts: { peerPublicKey: string }[] = [];
+let mockContacts: { peerPublicKey: string }[] | null = [];
 /** Топики pubsub, куда что-то опубликовали. */
 const mockTopics: string[] = [];
 
 jest.mock('../contacts', () => ({
-  listContactsFor: async () => mockContacts,
+  // Сплющивающая обёртка оставлена рядом: прогон ДО правки должен идти по
+  // настоящему коду, а не спотыкаться об отсутствующее имя.
+  listContactsFor: async () => mockContacts ?? [],
+  // v4.32.724: null — «справочник не прочитался», как у настоящей функции.
+  listContactsReadFor: async () => mockContacts,
 }));
 
 jest.mock('../../security/rateLimiter', () => ({
@@ -132,6 +136,17 @@ describe('публикация сторис: счётчик доставки', (
     mockThrow.add(contact(1));
     const res = await publishStory(PAIR, null, 'привет');
     expect(res.delivered).toBe(1);
+  });
+
+  test('справочник не прочитался — автор об этом слышит (v4.32.724)', async () => {
+    // Сорванное чтение приходило сюда нулём контактов, неотличимым от «их нет»,
+    // и автор видел свою сторис на месте, не узнав, что её не получил никто.
+    mockContacts = null;
+    const res = await publishStory(PAIR, null, 'привет');
+    expect(res.contactsUnreadable).toBe(true);
+    expect(res.delivered).toBe(0);
+    expect(mockSent.length).toBe(0);
+    expect(storyPublishProblem(res, 'image')).toMatch(/список контактов сейчас не прочитать/);
   });
 
   test('контактов нет — молчим, а не жалуемся на связь', async () => {

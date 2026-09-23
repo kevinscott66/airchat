@@ -37,7 +37,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { publicKeyToDidKey } from '../identity/did';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
-import { listContactsFor } from './contacts';
+import { listContactsFor, listContactsReadFor } from './contacts';
 import { catFromIpfs } from '../transport/ipfs/node';
 import { insertStory, deleteExpiredStories, countActiveStoriesByAuthor, STORY_TTL_MS } from '../storage/local';
 import { decodeStoryEnvelope, encodeStoryEnvelope, type StoryEnvelope } from './storyEnvelope';
@@ -170,7 +170,14 @@ export async function publishStory(
   // блокировка — не сбой связи: если все получатели заблокированы, список
   // рассылки пуст, и говорить «сторис не ушла ни одному контакту» не о чем.
   await rateLimiter.whenReady();
-  const contacts = (await listContactsFor(pid)).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
+  // v4.32.724: чтение различающее. Сорванное чтение справочника приходило сюда
+  // пустым списком — тем же, что и «контактов нет», — и дальше всё сходилось
+  // одно к одному: рассылать некому, delivered ноль, contacts ноль, а по этим
+  // двум нулям экран решает, что сторис локальная и говорить не о чем. Автор
+  // видел свою сторис на месте (строка в базе создаётся до рассылки) и не
+  // узнавал, что её не получил никто.
+  const contactsRead = await listContactsReadFor(pid);
+  const contacts = (contactsRead ?? []).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
   const text2 = encodeStoryEnvelope(envelope);
   const { getMessagingService } = await import('./messaging');
   const svc = getMessagingService();
@@ -190,9 +197,20 @@ export async function publishStory(
     })
   );
 
-  log.info('story_published', { storyId: storyId.slice(0, 8), contacts: contacts.length, delivered });
+  log.info('story_published', {
+    storyId: storyId.slice(0, 8),
+    contacts: contacts.length,
+    delivered,
+    contactsUnreadable: contactsRead === null,
+  });
   notifyStoryListeners();
-  return { storyId, mediaFailure, contacts: contacts.length, delivered };
+  return {
+    storyId,
+    mediaFailure,
+    contacts: contacts.length,
+    delivered,
+    contactsUnreadable: contactsRead === null,
+  };
 }
 
 /**

@@ -44,6 +44,13 @@ jest.mock('../contacts', () => ({
     mockScopePids.push(pid);
     return mockContactsByPid.get(pid) ?? [];
   },
+  // v4.32.724: различающее чтение. null здесь — «справочник не прочитался»,
+  // как у настоящей listContactsReadFor; сплющивающая обёртка рядом оставлена,
+  // чтобы прогон ДО правки шёл по настоящему коду, а не по отсутствующему имени.
+  listContactsReadFor: async (pid: number) => {
+    mockScopePids.push(pid);
+    return mockContactsByPid.get(pid) ?? null;
+  },
   listContacts: async () => {
     mockBareCalls.push(1);
     return mockContactsByPid.get(mockActivePid) ?? [];
@@ -208,6 +215,23 @@ describe('подсчёт адресатов идёт по владельцу з�
   });
 });
 
+describe('справочник не прочитался — это не «контактов нет» (v4.32.724)', () => {
+  test('запись остаётся в очереди, а не объявляется доставленной всем', async () => {
+    // null — единственный ответ, которым различающее чтение говорит «не вышло».
+    mockContactsByPid.delete(OWNER);
+    seedQueue(['p1']);
+    await flushFeedPublishQueue(pair);
+    expect((storedQueue() ?? []).map((i) => i.id)).toEqual(['p1']);
+  });
+
+  test('попытка засчитана — очередь не крутится вхолостую', async () => {
+    mockContactsByPid.delete(OWNER);
+    seedQueue(['p1']);
+    await flushFeedPublishQueue(pair);
+    expect((storedQueue() ?? [])[0]?.retries).toBe(1);
+  });
+});
+
 describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы целы', () => {
   test('доставлено всем контактам владельца — запись снимают с очереди', async () => {
     seedQueue(['p1'], [PEER_DID]);
@@ -256,13 +280,13 @@ describe('форма исходников', () => {
 
   test('номер владельца считается из пары ключей и идёт в запрос списка', () => {
     const owner = BODY.indexOf('const ownerPid = ownerPidForPublicKey(pair.publicKey);');
-    const list = BODY.indexOf('const contacts = await listContactsFor(ownerPid);');
+    const list = BODY.indexOf('const contacts = await listContactsReadFor(ownerPid);');
     expect(owner).toBeGreaterThan(-1);
     expect(list).toBeGreaterThan(owner);
   });
 
   test('оба имени справочника ввезены явно', () => {
-    expect(SRC).toContain("import { listContacts, listContactsFor } from './contacts';");
+    expect(SRC).toContain("import { listContacts, listContactsReadFor } from './contacts';");
     expect(SRC).toContain("import { ownerPidForPublicKey } from '../identity/ownerPidLookup';");
   });
 

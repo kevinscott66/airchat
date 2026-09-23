@@ -62,17 +62,21 @@ describe('контакты берутся у владельца службы', (
     expect(code).toContain("import { getSymmetricKeyForPeer, listContactsFor,");
   });
 
-  it('все четыре чтения перешли на listContactsFor', () => {
+  it('все четыре чтения идут в справочник владельца', () => {
     const code = codeOnly(MSG());
-    expect(code.match(/\blistContactsFor\(/g)?.length).toBe(4);
+    // v4.32.724: два из четырёх перешли на различающее чтение
+    // (listContactsReadFor). Владелец у вопроса от этого не изменился —
+    // храповик считает оба имени вместе, чтобы правило 710 осталось под замком.
+    expect(code.match(/\blistContacts(?:Read)?For\(/g)?.length).toBe(4);
+    expect(code.match(/\blistContactsReadFor\(/g)?.length).toBe(2);
   });
 
   it('findContactPubKeyByDid получает профиль параметром, а не берёт активный', () => {
     const code = codeOnly(MSG());
     expect(code).toContain(
-      'async function findContactPubKeyByDid(did: string, ownerProfileId: number): Promise<string | null> {'
+      'async function findContactPubKeyByDid(did: string, ownerProfileId: number): Promise<ContactLookup> {'
     );
-    expect(code).toContain('const contacts = await listContactsFor(ownerProfileId);');
+    expect(code).toContain('const contacts = await listContactsReadFor(ownerProfileId);');
     expect(countOf(code, 'findContactPubKeyByDid(')).toBe(2);
     expect(code).toContain(
       'await findContactPubKeyByDid(em.senderDid, await this.ownerProfileId())'
@@ -85,7 +89,7 @@ describe('контакты берутся у владельца службы', (
     const listen = between(code, 'async startListening(): Promise<void> {', 'subscribedCount === 0');
     const push = between(code, 'async handlePushOpen(', 'push_no_contact_for_did');
     for (const body of [gossip, listen, push]) {
-      expect(body).toContain('await listContactsFor(await this.ownerProfileId())');
+      expect(body).toMatch(/await listContacts(?:Read)?For\(await this\.ownerProfileId\(\)\)/);
     }
   });
 });

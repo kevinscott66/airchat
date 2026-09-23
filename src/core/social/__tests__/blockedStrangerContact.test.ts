@@ -62,6 +62,8 @@ jest.mock('../contacts', () => ({
   // v4.32.710: служба берёт контакты у своего владельца, а не у активного
   // профиля, и номер, с которым её спрашивают, здесь записывается.
   listContactsFor: async (pid: number) => { mockScopePids.push(pid); return []; },
+  // v4.32.724: различающее чтение — пустой список, а не отказ.
+  listContactsReadFor: async (pid: number) => { mockScopePids.push(pid); return []; },
   listContacts: async () => [],
   ensureImplicitContact: (...a: unknown[]) => mockEnsure(...(a as [])),
   deriveSymmetricKeyForStranger: () => mockSym,

@@ -49,7 +49,7 @@ import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { isNbCid } from '../media/mediaBlob';
 import { isIpfsEnabled } from '../transport/ipfs/heliaNode';
 import { multiTransportRouter } from '../transport/multiTransport';
-import { getSymmetricKeyForPeer, listContactsFor, ensureImplicitContact, deriveSymmetricKeyForStranger, clearSymKeyCache } from './contacts';
+import { getSymmetricKeyForPeer, listContactsFor, listContactsReadFor, ensureImplicitContact, deriveSymmetricKeyForStranger, clearSymKeyCache } from './contacts';
 import {
   IPFSMessageStore,
   parseEnvelopeFromWire,
@@ -207,16 +207,29 @@ async function localPathTo(contactPubB64: string): Promise<boolean> {
  * настройка приватности — на номер профиля перешли ещё в v4.32.460, а этот,
  * самый первый, остался на активном.
  */
-async function findContactPubKeyByDid(did: string, ownerProfileId: number): Promise<string | null> {
+/**
+ * `null` — такого контакта нет. `'unreadable'` — справочник не прочитался.
+ *
+ * v4.32.724: разница здесь не косметическая. Не найденный отправитель
+ * считается незнакомцем, а для незнакомца ключ выводится другой формулой
+ * (deriveSymmetricKeyForStranger). Свой контакт, принятый за незнакомца, даёт
+ * ключ, которым его письмо не расшифровывается, — и следующая же строка
+ * отбрасывает его молча, как чужой мусор в эфире. Сорванное чтение базы
+ * превращалось в потерю входящего сообщения без единого следа.
+ */
+type ContactLookup = string | null | 'unreadable';
+
+async function findContactPubKeyByDid(did: string, ownerProfileId: number): Promise<ContactLookup> {
   try {
-    const contacts = await listContactsFor(ownerProfileId);
+    const contacts = await listContactsReadFor(ownerProfileId);
+    if (contacts === null) return 'unreadable';
     for (const c of contacts) {
       if (didFromPubB64(c.peerPublicKey) === did) return c.peerPublicKey;
     }
     return null;
   } catch (e) {
     log.warn('contact_find_did_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return 'unreadable';
   }
 }
 
@@ -564,8 +577,19 @@ export class MessagingService {
     // Выше уже был await за сетью (subscribeToSelfInbox), и активный профиль
     // за это время мог смениться: служба подписывалась на чужих собеседников
     // и не слышала своих.
-    const contacts = await listContactsFor(await this.ownerProfileId());
+    // v4.32.724: чтение различающее. Пустой список здесь означал «подписываться
+    // не на кого», и проверка внизу (`contacts.length > 0`) не возвращала
+    // `listening` в false: служба считала себя слушающей, не подписавшись ни на
+    // один топик. Сорванное чтение справочника на старте — SQLite занята,
+    // подъём до первой разблокировки — превращалось в тишину до перезапуска
+    // приложения, при живой сети и поднятом транспорте.
+    const contacts = await listContactsReadFor(await this.ownerProfileId());
     if (!stillFresh()) return;
+    if (contacts === null) {
+      log.warn('subscribe_contacts_unreadable');
+      this.listening = false;
+      return;
+    }
     let subscribedCount = 0;
     for (const c of contacts) {
       const peerDid = didFromPubB64(c.peerPublicKey);
@@ -740,7 +764,18 @@ export class MessagingService {
     // Sym-key derivation is deterministic (ECDH + canonical salt over sorted
     // pub keys) and purely in-memory — no side-effects. Only on decrypt
     // success do we commit the implicit contact row.
-    let peerPubKeyB64 = await findContactPubKeyByDid(em.senderDid, await this.ownerProfileId());
+    const lookup = await findContactPubKeyByDid(em.senderDid, await this.ownerProfileId());
+    // v4.32.724: справочник не прочитался — значит мы не знаем, знакомый это
+    // или нет. Ветка незнакомца взяла бы другую формулу ключа, письмо своего
+    // же контакта ею не расшифровывается, и строкой ниже оно уходит в корзину
+    // как чужой мусор — молча и навсегда. Гарантированной потере предпочтён
+    // отказ разбирать конверт: он оставляет след в журнале, а отправитель
+    // повтора в этот раз не дождётся ни при каком нашем решении.
+    if (lookup === 'unreadable') {
+      log.warn('lan_contacts_unreadable_envelope_left', { did: em.senderDid.slice(0, 20) });
+      return;
+    }
+    let peerPubKeyB64: string | null = lookup;
     let needsImplicitContact = false;
     let senderPk: Uint8Array | null = null;
     if (!peerPubKeyB64) {
