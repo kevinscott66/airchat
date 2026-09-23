@@ -95,27 +95,6 @@ export function EmojiPanel({
       }).slice(0, 80)
     : null;
 
-  const EmojiGrid = ({ emojis }: { emojis: string[] }) => (
-    <View style={epStyles.grid}>
-      {emojis.map((emoji) => {
-        const supportsSkin = SKIN_TONE_SUPPORT_RE.test(emoji);
-        return (
-          <AppPressable
-            key={emoji}
-            style={[epStyles.emojiCell, supportsSkin && { position: 'relative' }]}
-            onPress={() => handleEmoji(emoji)}
-            onLongPress={() => supportsSkin ? setSkinTarget(emoji) : handleEmoji(emoji)}
-          >
-            <Text style={epStyles.emojiGlyph}>{emoji}</Text>
-            {supportsSkin ? (
-              <View style={{ position: 'absolute', bottom: 2, right: 4, width: 4, height: 4, borderRadius: 2, backgroundColor: colors.textMuted, opacity: 0.5 }} />
-            ) : null}
-          </AppPressable>
-        );
-      })}
-    </View>
-  );
-
   return (
     <View style={[epStyles.root, { height: EMOJI_PANEL_HEIGHT + bottomInset, paddingBottom: bottomInset, backgroundColor: colors.surface, borderTopColor: colors.border }]}>
       {/* Skin tone picker popover */}
@@ -179,22 +158,66 @@ export function EmojiPanel({
           </ScrollView>
           <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always">
             {catIdx === -1 ? (
-              recentEmojis.length > 0 ? <EmojiGrid emojis={recentEmojis} /> : (
+              recentEmojis.length > 0 ? <EmojiGrid emojis={recentEmojis} mutedColor={colors.textMuted} onPick={handleEmoji} onSkinTarget={setSkinTarget} /> : (
                 <Text style={{ textAlign: 'center', color: colors.textMuted, marginTop: 20, fontSize: 13 }}>Ещё нет истории</Text>
               )
             ) : (
-              <EmojiGrid emojis={cat.emojis} />
+              <EmojiGrid emojis={cat.emojis} mutedColor={colors.textMuted} onPick={handleEmoji} onSkinTarget={setSkinTarget} />
             )}
           </ScrollView>
         </>
       ) : searchResults !== null ? (
         <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always">
           {searchResults.length > 0
-            ? <EmojiGrid emojis={searchResults} />
+            ? <EmojiGrid emojis={searchResults} mutedColor={colors.textMuted} onPick={handleEmoji} onSkinTarget={setSkinTarget} />
             : <Text style={{ textAlign: 'center', color: colors.textMuted, marginTop: 20, fontSize: 13 }}>Ничего не найдено</Text>
           }
         </ScrollView>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Сетка эмодзи.
+ *
+ * Объявлена на уровне модуля намеренно. Внутри EmojiPanel она была новым типом
+ * компонента на каждый рендер панели — а панель рендерится на каждый символ в
+ * поиске и на каждый тап по эмодзи (обновляется история). React на новый тип
+ * не обновляет поддерево, а сносит и строит заново: несколько сотен ячеек
+ * пересоздавались на каждое нажатие клавиши, и прокрутка списка съезжала в
+ * начало.
+ */
+function EmojiGrid({
+  emojis,
+  mutedColor,
+  onPick,
+  onSkinTarget,
+}: {
+  emojis: string[];
+  mutedColor: string;
+  onPick: (emoji: string) => void;
+  /** Долгое нажатие по эмодзи с тонами кожи — открыть выбор тона. */
+  onSkinTarget: (emoji: string) => void;
+}): React.ReactElement {
+  return (
+    <View style={epStyles.grid}>
+      {emojis.map((emoji) => {
+        const supportsSkin = SKIN_TONE_SUPPORT_RE.test(emoji);
+        return (
+          <AppPressable
+            key={emoji}
+            style={[epStyles.emojiCell, supportsSkin && { position: 'relative' }]}
+            onPress={() => onPick(emoji)}
+            onLongPress={() => supportsSkin ? onSkinTarget(emoji) : onPick(emoji)}
+          >
+            <Text style={epStyles.emojiGlyph}>{emoji}</Text>
+            {supportsSkin ? (
+              <View style={{ position: 'absolute', bottom: 2, right: 4, width: 4, height: 4, borderRadius: 2, backgroundColor: mutedColor, opacity: 0.5 }} />
+            ) : null}
+          </AppPressable>
+        );
+      })}
     </View>
   );
 }

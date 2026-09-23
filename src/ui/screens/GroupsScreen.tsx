@@ -130,6 +130,7 @@ import { ForwardModal } from '../components/modals/chat/ChatForwardModal';
 import { ScheduleModal } from '../components/modals/chat/ChatScheduleModal';
 import { WallpaperPickerModal } from '../components/modals/chat/ChatWallpaperPickerModal';
 import { EmojiPanel } from './chat-components/EmojiPanel';
+import { SwipeRow } from './chat-components/SwipeRow';
 import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
 import { SendEffectOverlay, detectSendEffect } from './chat-components/SendEffectOverlay';
 import { GifPickerModal, isGifMessage, parseGifUrl, GifBubble, isGifSearchAvailable } from '../components/GifPicker';
@@ -2796,50 +2797,6 @@ function GroupChatScreen({
     return map;
   }, [messages]);
 
-  // Wrap each message bubble with swipe gestures:
-  //   right-swipe (dx > 50) → reply
-  //   left-swipe (dx < -50) → star/unstar
-  const GrpSwipeRow = useCallback(
-    ({ item, children }: { item: GroupMessageRow; children: React.ReactNode }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const swipeAnim = useRef(new RNAnimated.Value(0)).current;
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const panResponder = useRef(
-        PanResponder.create({
-          onMoveShouldSetPanResponder: (_, g) =>
-            Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
-          onPanResponderMove: (_, g) => {
-            if (g.dx > 0 && g.dx < 80) swipeAnim.setValue(g.dx);
-            else if (g.dx < 0 && g.dx > -80) swipeAnim.setValue(g.dx);
-          },
-          onPanResponderRelease: (_, g) => {
-            if (g.dx > 50) {
-              Vibration.vibrate(20);
-              setReplyTo(item);
-            } else if (g.dx < -50) {
-              Vibration.vibrate(20);
-              const next = !item.starred;
-              runGuardedOp(async () => {
-                await setGroupMessageStarred(item.id, next);
-                await loadMessages();
-              }, next ? 'Не удалось добавить в избранное' : 'Не удалось убрать из избранного');
-            }
-            RNAnimated.spring(swipeAnim, { toValue: 0, useNativeDriver: true, tension: 200, friction: 20 }).start();
-          },
-          onPanResponderTerminate: () => {
-            RNAnimated.spring(swipeAnim, { toValue: 0, useNativeDriver: true, tension: 200, friction: 20 }).start();
-          },
-        })
-      ).current;
-      return (
-        <RNAnimated.View style={{ transform: [{ translateX: swipeAnim }] }} {...panResponder.panHandlers}>
-          {children}
-        </RNAnimated.View>
-      );
-    },
-    [setReplyTo, loadMessages]
-  );
-
   const scrollToReply = useCallback((replyToId: string) => {
     const list = displayGroupMessages;
     const idx = list.findIndex((it) => {
@@ -3057,7 +3014,16 @@ function GroupChatScreen({
       ? jumpHighlightAnim.interpolate({ inputRange: [0, 1], outputRange: [rowMark(colors, 'found', 0), rowMark(colors, 'found', 0.35)] })
       : null;
     return (
-      <GrpSwipeRow item={item}>
+      <SwipeRow
+        onReply={() => setReplyTo(item)}
+        onStar={() => {
+          const next = !item.starred;
+          runGuardedOp(async () => {
+            await setGroupMessageStarred(item.id, next);
+            await loadMessages();
+          }, next ? 'Не удалось добавить в избранное' : 'Не удалось убрать из избранного');
+        }}
+      >
       <AppPressable
         onLongPress={() => isGrpSelecting ? toggleGrpSelect(item) : (Platform.OS === 'ios' ? showMsgMenu(item) : setQuickReact(item))}
         onPress={() => {
@@ -3392,7 +3358,7 @@ function GroupChatScreen({
           <RNAnimated.View style={[StyleSheet.absoluteFill, { backgroundColor: highlightBgColor, borderRadius: radius.lg }]} pointerEvents="none" />
         ) : null}
       </AppPressable>
-      </GrpSwipeRow>
+      </SwipeRow>
     );
   };
 
