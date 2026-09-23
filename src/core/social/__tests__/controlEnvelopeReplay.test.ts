@@ -537,9 +537,14 @@ describe('проверка стоит в обработчике группы д�
   });
 
   it('«вышел сам» делит знак с составом, а не заводит свой', () => {
-    const at = SRC.indexOf('acceptGroupControlTs(`m:${senderPubB64}`');
+    // v4.32.774: знак тот же (`m:`), но спрашивается и двигается двумя
+    // действиями — как у ban/kick/role. Прежний accept сдвигал его ДО удаления
+    // из списка, и отказ базы в промежутке хоронил выход навсегда.
+    const at = SRC.indexOf('groupControlTsFresh(`m:${senderPubB64}`');
     expect(at).toBeGreaterThan(0);
-    expect(at).toBeLessThan(SRC.indexOf('removeGroupMember(env.groupId, senderPubB64, pid)'));
+    const removed = SRC.indexOf('removeGroupMember(env.groupId, senderPubB64, pid)');
+    expect(at).toBeLessThan(removed);
+    expect(SRC.indexOf('commitGroupControlTs(`m:${senderPubB64}`', removed)).toBeGreaterThan(removed);
   });
 
   it('каждое поле настроек спрашивает свой знак', () => {

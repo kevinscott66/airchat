@@ -57,7 +57,6 @@ import { isMentionOfAny } from './mentions';
 import { canModerate } from './groupModerationPolicy';
 import { rateLimiter } from '../security/rateLimiter';
 import {
-  acceptGroupControlTs,
   commitGroupControlTs,
   commitGroupMessageTs,
   groupControlTsFresh,
@@ -1494,6 +1493,18 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.warn('group_ctl_invite_after_leave_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }
+    /**
+     * v4.32.774: строка «вас добавили в группу» пишется ПЕРВОЙ, до createGroup.
+     *
+     * Иначе её отказ не починить ничем: повтор кадра упирается в
+     * `if (group) return 'consumed'` двумя десятками строк выше — группа-то уже
+     * заведена. Человек оказывался в группе, про которую ему не сказали, кто и
+     * когда его туда позвал. Строка без группы никому не видна и повтором
+     * перезапишется тем же id, а отказ уводит кадр в перезапрос с нетронутым
+     * устройством.
+     */
+    const said = await insertCtlSysMessage(env, pid, `${env.actorName || 'Администратор'} добавил(а) вас в группу`);
+    if (said === 'failed') return deferCtlSysRow(env, 'invite');
     const myPub = rcpt.myPub;
     const myName = (await getOwnDisplayNameFor(pid)) ?? 'Вы';
     // v4.32.615: владелец из конверта. Роль назначается ровно одному ключу и
@@ -1521,7 +1532,6 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // они и есть ответ.
     await recountGroupMembers(env.groupId, pid);
     if (env.avatarCid) await updateGroupMeta(env.groupId, pid, { avatarCid: env.avatarCid });
-    await insertCtlSysMessage(env, pid, `${env.actorName || 'Администратор'} добавил(а) вас в группу`);
     await kvDeleteScoped(pid, INVITE_PENDING_KEY_PREFIX + env.groupId);
     // Приглашение принято — прежний выход больше ничего не значит.
     await clearGroupLeft(env.groupId, pid);
@@ -1693,6 +1703,17 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.warn('group_ctl_join_stale', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }
+    /**
+     * v4.32.774: строка — до записи состава и до сдвига знака.
+     *
+     * Повторить её потом нечем сразу дважды: сдвинутый знак отвергает повтор
+     * как устаревший, а уже записанный участник уводит decideJoin в 'ignore'
+     * ещё раньше. Порядок безопасен — сверка свежести уже прошла, поэтому
+     * устаревший конверт сюда не доходит и лишней строки не пишет, а
+     * повторённый напишет ту же: идентификатор собирается из ts операции.
+     */
+    const said = await insertCtlSysMessage(env, pid, `${env.targetName || 'Участник'} вступил(а) в группу`);
+    if (said === 'failed') return deferCtlSysRow(env, 'join');
     await upsertGroupMember({
       groupId: env.groupId,
       peerPubB64: senderPubB64,
@@ -1706,7 +1727,6 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     });
     await recountGroupMembers(env.groupId, pid);
     await commitGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts);
-    await insertCtlSysMessage(env, pid, `${env.targetName || 'Участник'} вступил(а) в группу`);
     /**
      * v4.32.262: администратор пересказывает вступление остальным.
      *
@@ -1761,12 +1781,20 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // одного человека это один скаляр. Без него перехваченный старый «вышел»
     // выбрасывал из группы того, кто давно вернулся, и повторять это можно
     // было все тридцать суток, пока кадр не протухнет.
-    if (!(await acceptGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts))) return 'consumed';
-    await removeGroupMember(env.groupId, senderPubB64, pid);
-    await recountGroupMembers(env.groupId, pid);
+    // v4.32.774: знак СВЕРЯЕТСЯ здесь, а сдвигается после применения — как у
+    // слота `m:` в ban/kick/role (v4.32.618). Прежде это был accept, то есть
+    // проверка и сдвиг одним действием ДО удаления из списка: отказ базы в
+    // промежутке оставлял знак на ts конверта при не применённом выходе, и
+    // ушедший участник висел в моём списке навсегда. Проверка здесь же нужна и
+    // строке: без неё протухший кадр писал бы «покинул(а) группу» заново.
+    if (!(await groupControlTsFresh(`m:${senderPubB64}`, env.groupId, pid, env.ts))) return 'consumed';
     // v4.32.372: через `??` пустое имя из конверта вытесняло и подпись из
     // списка участников, и «Участник» — оставалась строка « покинул(а) группу».
-    await insertCtlSysMessage(env, pid, `${env.targetName || leaver.displayName || 'Участник'} покинул(а) группу`);
+    const said = await insertCtlSysMessage(env, pid, `${env.targetName || leaver.displayName || 'Участник'} покинул(а) группу`);
+    if (said === 'failed') return deferCtlSysRow(env, 'leave');
+    await removeGroupMember(env.groupId, senderPubB64, pid);
+    await recountGroupMembers(env.groupId, pid);
+    await commitGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts);
     log.info('group_ctl_leave_applied', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
     return 'consumed';
   }
@@ -1939,7 +1967,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       });
       return 'deferred';
     }
-    await insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено' : 'Сообщение откреплено');
+    // v4.32.774: и строка о закреплении — по тому же доводу, что запись самого
+    // закрепления строкой выше. Знака свежести у закрепления нет, applyLocalPin
+    // идемпотентен, поэтому повтор кадра просто напишет недостающую строку.
+    const said = await insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено' : 'Сообщение откреплено');
+    if (said === 'failed') return deferCtlSysRow(env, 'pin');
     log.info('group_ctl_pin_applied', { gid: env.groupId.slice(0, 8), on: env.on });
     return 'consumed';
   }
@@ -1961,7 +1993,9 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (env.op === 'joinres') {
     const myPubR = rcpt.myPub;
     if (!myPubR || env.target !== myPubR) return 'consumed';
-    await insertCtlSysMessage(
+    // v4.32.774: строка тут — всё событие целиком, больше ответ на заявку ничего
+    // не меняет. Её отказ и есть неразобранный кадр.
+    const said = await insertCtlSysMessage(
       env,
       pid,
       env.status === 'pending'
@@ -1972,6 +2006,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           ? 'Ссылка-приглашение больше не действует. Попросите у администратора новую.'
           : `${actorLabel} отклонил(а) заявку на вступление`
     );
+    if (said === 'failed') return deferCtlSysRow(env, 'joinres');
     log.info('group_ctl_joinres_applied', { gid: env.groupId.slice(0, 8), status: env.status });
     return 'consumed';
   }
@@ -2099,18 +2134,19 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       patch.inviteToken = env.inviteToken;
       events.push({ field: 'inviteToken', text: 'Пригласительная ссылка сброшена: прежние больше не действуют' });
     }
-    if (Object.keys(patch).length) await updateGroupMeta(env.groupId, pid, patch);
+    // Две последние настройки живут не в `patch`, а в своих запросах. Решение о
+    // них принимается здесь, а применяются они ниже — вместе со всем остальным.
+    let slowMode: number | null = null;
     if (env.slowModeSeconds != null && env.slowModeSeconds !== group.slowModeSeconds && (await fresh('slowModeSeconds'))) {
-      await setGroupSlowMode(env.groupId, pid, env.slowModeSeconds);
+      slowMode = env.slowModeSeconds;
       // v4.32.265: строку собирает slowModeSysLine — та же, что пишет себе
       // включивший. Раньше он видел «5 мин», а все остальные «300 сек».
       events.push({ field: 'slowModeSeconds', text: slowModeSysLine(env.slowModeSeconds) });
     }
+    let disappearMs: number | null = null;
     if (env.disappearMs != null && env.disappearMs !== (group.disappearAfterMs ?? 0) && (await fresh('disappearMs'))) {
       const { formatDisappearLabel } = await import('./disappearEnvelope');
-      // Своя переписка до этого момента не трогается: setGroupDisappearTimer
-      // записывает disappear_set_at, и удаление ограничено им.
-      await setGroupDisappearTimer(env.groupId, pid, env.disappearMs > 0 ? env.disappearMs : null);
+      disappearMs = env.disappearMs;
       events.push({
         field: 'disappearMs',
         text:
@@ -2119,9 +2155,30 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
             : 'Исчезающие сообщения выключены',
       });
     }
+    /**
+     * v4.32.774: строки о настройках пишутся ДО применения самих настроек.
+     *
+     * Порядок был обратный, и починить пропавшую строку было нечем: каждое поле
+     * выше сравнивается с текущим значением, и у повторно доставленного кадра
+     * сравнение уже совпадает — событие не собирается вовсе. Группа
+     * переименована, таймер автоудаления включён, «только для администраторов»
+     * включено, а в истории об этом ни слова, и спросить не у кого.
+     *
+     * Отказ любой из строк уводит кадр в перезапрос до единой записи: знаки
+     * полей не сдвинуты, настройки не тронуты, повтор проходит целиком.
+     */
+    for (const ev of events) {
+      if ((await insertCtlSysMessage(env, pid, ev.text, ev.field)) === 'failed') {
+        return deferCtlSysRow(env, `meta:${ev.field}`);
+      }
+    }
+    if (Object.keys(patch).length) await updateGroupMeta(env.groupId, pid, patch);
+    if (slowMode != null) await setGroupSlowMode(env.groupId, pid, slowMode);
+    // Своя переписка до этого момента не трогается: setGroupDisappearTimer
+    // записывает disappear_set_at, и удаление ограничено им.
+    if (disappearMs != null) await setGroupDisappearTimer(env.groupId, pid, disappearMs > 0 ? disappearMs : null);
     // Изменения применены — только теперь двигаем отметки принятых полей.
     for (const field of acceptedMeta) await commitGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts);
-    for (const ev of events) await insertCtlSysMessage(env, pid, ev.text, ev.field);
     log.info('group_ctl_meta_applied', { gid: env.groupId.slice(0, 8), events: events.length });
     return 'consumed';
   }
