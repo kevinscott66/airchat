@@ -177,7 +177,7 @@ describe('подсказка-маршрут цитирует существую�
   const HINTS: Array<{ file: string; marker: string }> = [
     { file: 'ui/screens/ChatListScreen.tsx', marker: 'вставьте ID собеседника' },
     { file: 'ui/screens/ContactsScreen.tsx', marker: 'Добавьте первый контакт' },
-    { file: 'ui/screens/ContactsScreen.tsx', marker: 'Вставьте его сюда' },
+    { file: 'ui/screens/ContactsScreen.tsx', marker: 'Вставьте сюда то, что он пришлёт' },
     { file: 'ui/screens/ProfileScreen.tsx', marker: 'Друг может отсканировать код' },
     { file: 'ui/screens/PrivacyPolicyScreen.tsx', marker: 'в настройках стирает эту копию' },
   ];
@@ -199,10 +199,10 @@ describe('проверка не пустая', () => {
   const BEFORE = {
     policy: 'Приложение не запрашивает и не использует данные о геолокации.',
     chatList: 'Откройте вкладку «Люди» чтобы найти собеседников',
-    // v4.32.469: кнопка теперь подписана «Копировать ID» — в образце стоит
-    // текущее её имя, чтобы ненайденной осталась ровно одна надпись,
-    // та самая «Найти людей», ради которой образец и заведён.
-    contacts: 'Попросите друга: «Профиль» → «Найти людей» → «Копировать ID».',
+    // v4.32.724: кнопка копирует ссылку и подписана «Копировать ссылку» —
+    // в образце стоит текущее её имя, чтобы ненайденной осталась ровно одна
+    // надпись, та самая «Найти людей», ради которой образец и заведён.
+    contacts: 'Попросите друга: «Профиль» → «Найти людей» → «Копировать ссылку».',
   };
 
   test('старая формулировка про геолокацию была бы поймана', () => {
@@ -220,14 +220,20 @@ describe('проверка не пустая', () => {
   });
 
   test('надпись из константы видна проверке — и только через константу', () => {
-    expect(LABEL_CONSTANTS.get('COPY_ID_ACTION')).toBe('Копировать ID');
-    expect(resolveLabel('{COPY_ID_ACTION}')).toBe('Копировать ID');
+    expect(LABEL_CONSTANTS.get('COPY_LINK_ACTION')).toBe('Копировать ссылку');
+    expect(resolveLabel('{COPY_LINK_ACTION}')).toBe('Копировать ссылку');
     expect(resolveLabel('{НЕТ_ТАКОЙ}')).toBe('{НЕТ_ТАКОЙ}');
     // Литерала в разметке больше нет — значит проверка нашла её развёрткой.
-    expect(ALL).not.toContain('>Копировать ID<');
-    expect(isRendered('Копировать ID')).toBe(true);
-    expect(isRendered('{COPY_ID_ACTION}')).toBe(true);
+    expect(ALL).not.toContain('>Копировать ссылку<');
+    expect(isRendered('Копировать ссылку')).toBe(true);
+    expect(isRendered('{COPY_LINK_ACTION}')).toBe(true);
     // Константа, которую нигде не рисуют, нарисованной не считается.
     expect(isRendered('Ссылка скопирована')).toBe(false);
+    // v4.32.724: и кнопка системного диалога — тоже не надпись на экране.
+    // «Копировать ID» осталась одной такой кнопкой в ContactsScreen; если
+    // подсказка снова начнёт звать по ней маршрут, проверка это заметит.
+    expect(LABEL_CONSTANTS.get('COPY_ID_ACTION')).toBe('Копировать ID');
+    expect(filesWith('text: COPY_ID_ACTION')).toEqual(['ui/screens/ContactsScreen.tsx']);
+    expect(isRendered('Копировать ID')).toBe(false);
   });
 });

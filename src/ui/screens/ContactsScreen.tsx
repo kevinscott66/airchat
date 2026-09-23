@@ -40,7 +40,8 @@ import { log } from '../../core/logger';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
-import { COPY_ID_ACTION, COPIED_ID } from '../clipboardText';
+import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID } from '../clipboardText';
+import { CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
 
 type Props = {
   onOpenChatWithPeer: (peerPublicKey: string) => void;
@@ -388,7 +389,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
 
   const validationError: string | null = useMemo(() => {
     if (!addIdInput.trim()) return null;
-    if (!parsedKey) return 'Не удалось распознать ID. Ожидается did:key:… или base64.';
+    if (!parsedKey) return 'Это не похоже на ссылку или код AirChat. Попросите прислать их заново.';
     if (isSelf) return 'Это ваш собственный ID — нельзя добавить самого себя как контакт.';
     return null;
   }, [addIdInput, parsedKey, isSelf]);
@@ -434,7 +435,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       if (!parsed) {
         // Не закрываем сканер — пользователь может навести на другой QR,
         // просто показываем подсказку о неверном формате.
-        setScannerError('QR не содержит ID AirChat (did:key или base64 pubkey)');
+        setScannerError('В этом QR-коде нет контакта AirChat.');
         return;
       }
       scanHandledRef.current = true;
@@ -510,7 +511,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
   const submitAdd = useCallback(async () => {
     if (!parsedKey) return;
     if (!pair) {
-      showError('Пара ключей ещё не готова — попробуйте позже');
+      showError(NOT_READY_TEXT);
       return;
     }
     if (isSelf) {
@@ -610,7 +611,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
   // ─── Share my ID ───────────────────────────────────────────────────────
   const shareMyId = useCallback(async () => {
     if (!myDid) {
-      showError('Ваш ID ещё не готов');
+      showError(NOT_READY_TEXT);
       return;
     }
     try {
@@ -648,7 +649,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             // раньше в буфер уезжал did:key, который не примет обратно ни один
             // разборщик, и человек отправлял его собеседнику как свой адрес.
             const did = didFromPubB64(c.peerPublicKey);
-            if (!did) { showError('У контакта испорчен ключ'); return; }
+            if (!did) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
             void Clipboard.setStringAsync(did).then(() => showSuccess(COPIED_ID));
           },
         },
@@ -822,12 +823,15 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             </AppPressable>
           </View>
           <View style={styles.modalBody}>
-            <Text style={styles.label}>ID контакта (did:key:… или base64)</Text>
+            {/* Поле принимает и ссылку, и голый код, и deep-link — разбирает
+                их parseContactId. Называть его форматами («did:key», «base64»)
+                значило требовать от человека знать, что ему прислали. */}
+            <Text style={styles.label}>Ссылка или код контакта</Text>
             <TextInput
               style={styles.input}
               value={addIdInput}
               onChangeText={setAddIdInput}
-              placeholder="did:key:z6Mk…"
+              placeholder="Вставьте то, что вам прислали"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -872,7 +876,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
               </View>
             ) : (
               <Text style={styles.hint}>
-                Попросите друга: «Профиль» → «Мой QR-код» → «{COPY_ID_ACTION}». Вставьте его сюда — общий секретный ключ вычислится автоматически.
+                Попросите друга: «Профиль» → «Мой QR-код» → «{COPY_LINK_ACTION}». Вставьте сюда то, что он пришлёт.
               </Text>
             )}
           </View>

@@ -778,6 +778,7 @@ import { COPY_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 import { buildDmLink } from '../../core/net/appLink';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
 import { SecureContent, isSecureContentSupported, setWindowSecure } from '../../../modules/airchat-screen-guard/src';
+import { CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
 
 
 
@@ -1788,7 +1789,7 @@ function ChatThreadView({
       try {
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
         const peerDid = didFromPubB64(peerB64);
-        if (!peerDid) { showError('У контакта испорчен ключ'); return; }
+        if (!peerDid) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
         let sentAny = false;
         let skippedTooLarge = 0;
         for (const va of videoAssets) {
@@ -1863,7 +1864,7 @@ function ChatThreadView({
   const handleSendLocationOnce = useCallback(async () => {
     if (!peerB64) return;
     const svc = getMessagingService();
-    if (!svc) { showError('Сервис не готов.'); return; }
+    if (!svc) { showError(NOT_READY_TEXT); return; }
     const read = await readPlaceOnce();
     if (!isMountedRef.current) return;
     if (!read.ok) {
@@ -1883,7 +1884,7 @@ function ChatThreadView({
       await svc.sendMessage(peerB64, locText);
     } catch (e) {
       log.error('chat_send_location_failed', { err: rawErrorText(e) });
-      if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить местоположение'));
+      if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить геолокацию'));
     } finally {
       if (isMountedRef.current) { setSending(false); void appendNewMessages(); }
     }
@@ -2105,7 +2106,7 @@ function ChatThreadView({
     try {
       const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
       const peerDid = didFromPubB64(peerB64);
-      if (!peerDid) { showError('У контакта испорчен ключ'); return; }
+      if (!peerDid) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
       const up = await uploadMediaToCid(asset.uri, {
         mime: asset.mimeType,
         targetDid: peerDid,
@@ -2151,7 +2152,7 @@ function ChatThreadView({
       void (async () => {
         try {
           const svc = getMessagingService();
-          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError('Сервис не готов. Подождите.'); return; }
+          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
           await measurePerformance('chat_send_media', () => svc.sendMessage(peerB64, text, uris));
           void appendNewMessages();
         } catch (e) {
@@ -2208,7 +2209,7 @@ function ChatThreadView({
           scrollToNewest();
         } else {
           const svc = getMessagingService();
-          if (!svc) throw new Error('Сервис не готов. Подождите и повторите.');
+          if (!svc) throw new Error(NOT_READY_TEXT);
           // v4.32.226: upload the recording as an E2E-encrypted ntfy attachment so
           // the recipient can fetch the bytes — IPFS is unavailable on mobile and
           // the 3KB text channel can't carry audio. The sender keeps the local uri
@@ -2295,7 +2296,7 @@ function ChatThreadView({
         scrollToNewest();
       } else {
         const svc = getMessagingService();
-        if (!svc) { showError('Сервис не готов'); return; }
+        if (!svc) { showError(NOT_READY_TEXT); return; }
         await svc.sendMessage(peerB64, gifText);
         void appendNewMessages();
         scrollToNewest();
@@ -2332,7 +2333,7 @@ function ChatThreadView({
       void (async () => {
         try {
           const svc = getMessagingService();
-          if (!svc) { showError('Сервис не готов'); return; }
+          if (!svc) { showError(NOT_READY_TEXT); return; }
           const echo = await svc.editMessage(peerB64, target.id, newText);
           void appendNewMessages();
           reportTwoSided(echo, 'edit');
@@ -2436,7 +2437,7 @@ function ChatThreadView({
       void (async () => {
         try {
           const svc = getMessagingService();
-          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError('Сервис не готов.'); return; }
+          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
           await measurePerformance('chat_send_text', () =>
             svc.sendMessage(peerB64, text, undefined, replyRef?.id, truncateReplyPreview(replyRef?.text) ?? undefined)
           );
@@ -3944,7 +3945,7 @@ function ChatThreadView({
         ) : null}
         <View style={[s.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: showEmojiPanel && !isSelecting ? 0 : tabInset, display: isSelecting ? 'none' : 'flex' }]}>
           {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
-              с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
+              с 8 вкладками (Галерея / Камера / Файл / Геолокация / GIF / Опрос / Ответ / Контакт).
               Long-press оставляем shortcut-ом на системный picker галереи. */}
           <AppPressable
             style={s.roundIconBtn}

@@ -497,7 +497,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
    */
   const handleSeedConfirmed = (): void => {
     if (!pendingPair) {
-      Alert.alert('AirChat', 'Внутренняя ошибка: нет ключей.');
+      Alert.alert('AirChat', 'Не получилось создать аккаунт. Вернитесь назад и попробуйте ещё раз.');
       return;
     }
     setStep('verifySeed');
@@ -510,7 +510,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
    */
   const finishOnboarding = async (deferred: boolean): Promise<void> => {
     if (!pendingPair) {
-      Alert.alert('AirChat', 'Внутренняя ошибка: нет ключей.');
+      Alert.alert('AirChat', 'Не получилось создать аккаунт. Вернитесь назад и попробуйте ещё раз.');
       return;
     }
     setBusy(true);
@@ -786,7 +786,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               ) : null}
               {!isBackupPaste && !cloudReady ? (
                 <Text style={styles.encHint}>
-                  В этой сборке облачное хранилище не настроено: вернутся только ключи. Переписка,
+                  В этой версии приложения облачное хранилище не настроено: вернутся только ключи. Переписка,
                   профиль и юзернейм хранятся на сервере и появятся после входа в приложении с
                   настроенным адресом.
                 </Text>

@@ -2018,7 +2018,7 @@ function GroupChatScreen({
       announceGroupSend(fanoutGroupMessage(group.id, locText, myDisplayName, myPubB64, row.id));
       await loadMessages();
     } catch (e) {
-      showError(userErrorText(e, 'Не удалось отправить геопозицию'));
+      showError(userErrorText(e, 'Не удалось отправить геолокацию'));
     } finally {
       setSending(false);
     }
@@ -4357,7 +4357,7 @@ function GroupChatScreen({
           ) : null}
           <View style={[gcStyles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface, marginBottom: grpEmojiPanelVisible ? 0 : tabInset }]}>
             {/* v4.32.60: Attach (📎) — Telegram-style. Тап открывает AttachSheet-hub
-                с 8 вкладками (Галерея / Камера / Файл / Геопозиция / GIF / Опрос / Ответ / Контакт).
+                с 8 вкладками (Галерея / Камера / Файл / Геолокация / GIF / Опрос / Ответ / Контакт).
                 Группы не поддерживают live-location, onShareLiveLocation опускается. */}
             <AppPressable
               style={gcStyles.roundIconBtn}

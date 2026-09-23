@@ -216,7 +216,7 @@ describe('переписка: отправка места и карточки б
     const body = SEND_LOC();
     expect(body).toMatch(/\} catch \(e\) \{/);
     expect(body).toContain("log.error('chat_send_location_failed'");
-    expect(body).toContain("userErrorText(e, 'Не удалось отправить местоположение')");
+    expect(body).toContain("userErrorText(e, 'Не удалось отправить геолокацию')");
   });
 
   it('карточка контакта ловит отказ доставки', () => {
@@ -255,7 +255,7 @@ describe('группа и лента: причина названа', () => {
     expect(sendingAt).toBeGreaterThan(readAt);
     expect(body).toContain('showError(locationFailureText(read.kind))');
     // Общий catch остаётся тому, чем он и был: отказу отправки.
-    expect(body).toContain("userErrorText(e, 'Не удалось отправить геопозицию')");
+    expect(body).toContain("userErrorText(e, 'Не удалось отправить геолокацию')");
   });
 
   it('лента больше не сводит все причины к одному тексту', () => {

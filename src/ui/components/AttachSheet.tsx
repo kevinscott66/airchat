@@ -1,6 +1,6 @@
 // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.
 // Причина: Telegram-style attach-hub с 8 вкладками (Галерея / Камера / Файл /
-//          Геопозиция / GIF / Опрос / Ответ / Контакт). Заменяет старый
+//          Геолокация / GIF / Опрос / Ответ / Контакт). Заменяет старый
 //          Alert.alert('Вложение', ...) в ChatScreen/GroupsScreen/MessageComposer.
 //          Любое изменение структуры Props ломает 3 composer-call-sites.
 //
@@ -82,7 +82,10 @@ const ALL_TABS: TabDef[] = [
   { id: 'gallery', label: 'Галерея', icon: 'images-outline' },
   { id: 'camera', label: 'Камера', icon: 'camera-outline' },
   { id: 'file', label: 'Файл', icon: 'document-outline' },
-  { id: 'location', label: 'Геопозиция', icon: 'location-outline' },
+  // «Геолокация», а не «Геопозиция»: на пузыре, в предпросмотре ответа и в
+  // запросе разрешения у этой же вещи было второе имя, и человек нажимал одно,
+  // а получал другое.
+  { id: 'location', label: 'Геолокация', icon: 'location-outline' },
   { id: 'gif', label: 'GIF', icon: 'film-outline' },
   { id: 'poll', label: 'Опрос', icon: 'bar-chart-outline' },
   { id: 'reply', label: 'Ответ', icon: 'arrow-undo-outline' },
@@ -653,7 +656,7 @@ function FileTab({
 }
 
 // ============================================================================
-// Tab: Геопозиция — кнопки «Отправить» / «Транслировать N мин»
+// Tab: Геолокация — кнопки «Отправить» / «Транслировать N мин»
 // ============================================================================
 
 function LocationTab({
@@ -722,7 +725,7 @@ function LocationTab({
             <Ionicons name="location" size={20} color={contrastingInk(colors.primary)} />
           </View>
           <View style={styles.textCol}>
-            <Text style={styles.title}>Отправить геопозицию</Text>
+            <Text style={styles.title}>Отправить геолокацию</Text>
             <Text style={styles.sub}>Текущие координаты, отправляется один раз</Text>
           </View>
         </AppPressable>
@@ -730,7 +733,7 @@ function LocationTab({
 
       {onShareLive ? (
         <>
-          <Text style={styles.sectionTitle}>Транслировать геопозицию</Text>
+          <Text style={styles.sectionTitle}>Транслировать геолокацию</Text>
           <View style={styles.card}>
             <AppPressable style={[styles.durRow, styles.rowSep]} onPress={() => onShareLive(15)}>
               <View style={styles.iconWrapGreen}>

@@ -1546,7 +1546,14 @@ function SettingsScreenImpl({
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Предпросмотр ссылок из входящих</Text>
-            <Text style={styles.desc}>Выключено: чужая ссылка не загрузится сама и не выдаст ваш IP-адрес. Свои ссылки в поле ввода показываются всегда</Text>
+            {/*
+              Описаны оба положения, как в соседних строках раздела. Раньше тут
+              говорилось только про выключенное — то есть про безопасное, — а про
+              включённое человек не узнавал ничего. Ровно оно и отдаёт адрес:
+              приложение само идёт по чужой ссылке, и хозяин ссылки видит, что по
+              ней пришли, и откуда.
+            */}
+            <Text style={styles.desc}>Включено: приложение само открывает чужую ссылку, чтобы показать заголовок и картинку, — и хозяин ссылки узнаёт ваш IP-адрес. Выключено: не открывает. Свои ссылки в поле ввода показываются всегда</Text>
           </View>
           <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void kvSet(LINK_PREVIEW_INCOMING_KEY, String(v)); }} />
         </View>
@@ -1903,19 +1910,23 @@ function SettingsScreenImpl({
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </AppPressable>
 
-      <Text style={styles.sectionTitle}>Распределённое облако</Text>
+      <Text style={styles.sectionTitle}>Синхронизация</Text>
       <View style={styles.card}>
         <View style={styles.row}>
           <View style={styles.rowBody}>
-            <Text style={styles.label}>Распределённое облако</Text>
+            {/* Раньше называлось «распределённое облако». Ничего
+                распределённого тут нет: cloudBaseUrl() отдаёт один адрес из
+                конфига. Слово обещало устройство системы, которого не было, и
+                расходилось со справкой, где то же самое названо просто. */}
+            <Text style={styles.label}>Синхронизация с сервером</Text>
             {/* Состояние спрашиваем, а не рисуем: сборка без адреса хранилища
                 собирается молча и работает без облака (config.ts пишет
                 config_cloud_backup_placeholder). Зелёная галочка в такой
                 сборке сказала бы человеку, что копии уходят, — а их нет. */}
             <Text style={styles.desc}>
               {isCloudVaultConfigured()
-                ? 'Сообщения синхронизируются через защищённое хранилище'
-                : 'Хранилище не задано в этой сборке — синхронизации нет'}
+                ? 'Переписка и настройки открываются на других ваших устройствах'
+                : 'В этой версии приложения синхронизации нет'}
             </Text>
           </View>
           <StatusBadge
@@ -1965,7 +1976,7 @@ function SettingsScreenImpl({
         <View style={styles.row}>
           <Ionicons name="globe-outline" size={22} color={ipfsOnline ? colors.success : colors.textMuted} style={{ marginRight: 10 }} />
           <View style={styles.rowBody}>
-            <Text style={styles.label}>Интернет (IPFS)</Text>
+            <Text style={styles.label}>Интернет</Text>
             <Text style={styles.desc}>{ipfsOnline === null ? 'Проверка…' : ipfsOnline ? 'Подключён' : 'Нет соединения'}</Text>
           </View>
           <StatusBadge tone={ipfsOnline ? 'success' : 'muted'} text={ipfsOnline ? 'Вкл' : 'Выкл'} />
@@ -1976,7 +1987,7 @@ function SettingsScreenImpl({
           <View style={[styles.row, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
             <Ionicons name="wifi-outline" size={22} color={lanPeerCount > 0 ? colors.accent : colors.textMuted} style={{ marginRight: 10 }} />
             <View style={styles.rowBody}>
-              <Text style={styles.label}>Wi-Fi LAN</Text>
+              <Text style={styles.label}>Устройства рядом</Text>
               <Text style={styles.desc}>{lanPeerCount > 0 ? `${devicesLabel(lanPeerCount)} в сети` : 'Нет устройств рядом'}</Text>
             </View>
             <StatusBadge tone={lanPeerCount > 0 ? 'accent' : 'muted'} text={lanPeerCount > 0 ? String(lanPeerCount) : '0'} />

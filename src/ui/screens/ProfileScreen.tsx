@@ -66,7 +66,7 @@ import { shortIdentity } from '../identity/shortId';
 import { findEntities } from '../../core/text/entities';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { userErrorText } from '../components/userErrorText';
-import { COPY_ID_ACTION, COPIED_LINK } from '../clipboardText';
+import { COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
 
 /**
@@ -775,7 +775,7 @@ function ProfileScreenImpl({
           <Text style={styles.infoText}>
             {isCloudVaultConfigured()
               ? 'Аккаунт хранится на сервере в зашифрованном виде и открывается на других ваших устройствах.'
-              : 'Аккаунт хранится только на этом телефоне: синхронизации с другими устройствами в этой сборке нет.'}
+              : 'Аккаунт хранится только на этом телефоне: синхронизации с другими устройствами в этой версии приложения нет.'}
           </Text>
           {/* v4.32.528: в браузере эта строка была неправдой. Wi-Fi LAN держится
               на слушающем сокете и mDNS — странице не дают ни того, ни другого,
@@ -796,14 +796,18 @@ function ProfileScreenImpl({
                 <BrandedQr value={buildContactLink(did).web} size={200} />
               </View>
               <Text style={styles.modalHint}>Друг может отсканировать код — или открыть вашу ссылку. Её же можно вставить у себя: «Профиль» → «Контакты» → «Новый контакт»</Text>
-              {/* v4.32.31: прямая кнопка «копировать DID» — чтобы пользователь мог скинуть его в мессенджер/чат, а получатель вставил в Контакты → + */}
+              {/* v4.32.31: прямая кнопка — чтобы человек мог скинуть себя в любой
+                  мессенджер, а получатель вставил у себя в «Новый контакт».
+                  v4.32.724: в буфер с v4.32.606 уезжает ссылка, а надпись до сих
+                  пор говорила «Копировать ID» — и всплывающее подтверждение
+                  сразу же возражало ей «Ссылка скопирована». */}
               <AppPressable
                 style={styles.btn}
                 onPress={() => {
                   void Clipboard.setStringAsync(buildContactLink(did).web).then(() => showSuccess(COPIED_LINK));
                 }}
               >
-                <Text style={styles.btnText}>{COPY_ID_ACTION}</Text>
+                <Text style={styles.btnText}>{COPY_LINK_ACTION}</Text>
               </AppPressable>
               <AppPressable
                 style={styles.linkBtn}

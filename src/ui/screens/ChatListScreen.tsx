@@ -88,6 +88,7 @@ import { formatListTime, formatSearchTime } from '../time/listTime';
 import { shortIdentity } from '../identity/shortId';
 import { muteRemainingLabel } from '../time/durationLabel';
 import { userErrorText } from '../components/userErrorText';
+import { NOT_READY_TEXT } from '../commonText';
 
 export const SAVED_MESSAGES_KEY = '__saved_messages__';
 
@@ -484,11 +485,11 @@ function AddContactModal({
 
   const submit = async () => {
     const key = keyInput.trim();
-    if (!key) { Alert.alert('AirChat', 'Введите ID (did:key:… или base64)'); return; }
-    if (!pair) { Alert.alert('AirChat', 'Пара ключей не готова'); return; }
+    if (!key) { Alert.alert('AirChat', 'Вставьте ссылку или код собеседника'); return; }
+    if (!pair) { Alert.alert('AirChat', NOT_READY_TEXT); return; }
     // v4.32.31: универсальный парсер — теперь AddContactModal принимает и DID, и base64.
     const pk = parseContactId(key);
-    if (!pk) { Alert.alert('AirChat', 'Не удалось распознать ID. Ожидается did:key:… или base64 открытого ключа.'); return; }
+    if (!pk) { Alert.alert('AirChat', 'Это не похоже на ссылку или код AirChat. Попросите прислать их заново.'); return; }
     const pkB64 = Buffer.from(pk).toString('base64');
     const minePk = Buffer.from(pair.publicKey).toString('base64');
     if (pkB64 === minePk) { Alert.alert('AirChat', 'Нельзя добавить самого себя как контакт'); return; }
@@ -564,12 +565,12 @@ function AddContactModal({
             </AppPressable>
           </View>
           <View style={acStyles.body}>
-            <Text style={[acStyles.label, { color: colors.textSecondary }]}>ID собеседника (did:key:… или base64)</Text>
+            <Text style={[acStyles.label, { color: colors.textSecondary }]}>Ссылка или код собеседника</Text>
             <TextInput
               style={[acStyles.input, { color: colors.text, backgroundColor: colors.surfaceHigh, borderColor: colors.border }]}
               value={keyInput}
               onChangeText={setKeyInput}
-              placeholder="did:key:z6Mk… или base64…"
+              placeholder="Вставьте то, что вам прислали"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
