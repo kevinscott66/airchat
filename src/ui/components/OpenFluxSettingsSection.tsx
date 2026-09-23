@@ -112,8 +112,10 @@ export function OpenFluxSettingsSection(): React.ReactElement {
   // «Работает» в ту самую секунду, когда ядро как раз не поднялось.
   useEffect(
     () =>
-      addOpenFluxReviveListener(({ status: s, socks: addr }) => {
-        setStatus(s);
+      addOpenFluxReviveListener(({ status: s, socks: addr, transport }) => {
+        // Ядро поднялось, а соединения приложения переоткрыть не удалось —
+        // значит трафик никуда не идёт, и «Работает» здесь было бы враньём.
+        setStatus(transport === 'failed' ? 'failed' : s);
         setSocks(addr);
       }),
     [],

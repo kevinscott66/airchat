@@ -59,6 +59,17 @@ export type NetworkPathChange = {
 let subscription: { remove: () => void } | null = null;
 let lastConnected: boolean | null = null;
 let lastType: string | null = null;
+/**
+ * Успело ли первое настоящее событие сети опередить чтение начального
+ * состояния. См. `startNetworkReconnectWatcher`: начальное состояние читается
+ * асинхронно, и его запись обязана уступить дорогу тому, что пришло позже.
+ */
+let stateSeeded = false;
+/**
+ * Номер запуска. Нужен ровно затем, чтобы чтение начального состояния,
+ * оставшееся в полёте от прошлого запуска, не приземлилось в следующий.
+ */
+let watcherRun = 0;
 let pairRef: KeyPairBytes | null = null;
 let onReconnectRef: ((pair: KeyPairBytes) => void) | null = null;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -133,19 +144,35 @@ export function startNetworkReconnectWatcher(
   onReconnectRef = onReconnect ?? null;
   if (subscription) return; // уже запущен
 
-  // Seed текущего состояния, чтобы первый event сравнивался корректно.
+  // Начальное состояние, чтобы первому событию было с чем сравниться.
+  //
+  // Читается оно асинхронно, а подписка ставится синхронно строчкой ниже —
+  // то есть событие сети может прийти раньше, чем ответ на этот запрос. Тогда
+  // записывать ответ уже нельзя: он описывает сеть на момент запуска
+  // приложения, а обработчик к тому времени видел более свежую. Затерев его,
+  // мы сравнивали бы следующее событие с устаревшим «до» — и либо пропустили
+  // бы смену сети (туннель не переподняли бы), либо объявили бы лишнюю
+  // (ядро и все соединения перезапустились бы впустую). Окно узкое, но
+  // приходится ровно на запуск, когда сеть как раз и дёргается.
+  const run = ++watcherRun;
+  stateSeeded = false;
   void Network.getNetworkStateAsync()
     .then((st) => {
+      if (run !== watcherRun || stateSeeded) return;
+      stateSeeded = true;
       lastConnected = !!st.isConnected;
       lastType = st.type ? String(st.type) : null;
     })
     .catch(() => {
+      if (run !== watcherRun || stateSeeded) return;
+      stateSeeded = true;
       lastConnected = null;
       lastType = null;
     });
 
   try {
     subscription = Network.addNetworkStateListener((ev) => {
+      stateSeeded = true;
       const now = !!ev.isConnected;
       const prev = lastConnected;
       const type = ev.type ? String(ev.type) : null;
@@ -202,5 +229,9 @@ export function stopNetworkReconnectWatcher(): void {
   onReconnectRef = null;
   lastConnected = null;
   lastType = null;
+  // Следующий запуск прочитает состояние заново; заодно этот номер отсекает
+  // ответ на чтение, оставшееся в полёте от нынешнего.
+  watcherRun += 1;
+  stateSeeded = false;
   log.info('net_reconnect_watcher_stopped');
 }

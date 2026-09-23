@@ -149,7 +149,7 @@ describe('смена сети при включённом туннеле', () =>
     await reviveOpenFluxAfterNetworkChange();
     off();
 
-    expect(seen).toEqual([{ status: 'on', socks: NEW_ADDR }]);
+    expect(seen).toEqual([{ status: 'on', socks: NEW_ADDR, transport: 'restarted' }]);
     expect(seen[0].socks).not.toBe(OLD_ADDR);
   });
 });
@@ -224,13 +224,22 @@ describe('ядро не поднялось', () => {
     await reviveOpenFluxAfterNetworkChange();
     off();
 
-    expect(seen).toEqual([{ status: 'failed', socks: null }]);
+    expect(seen).toEqual([{ status: 'failed', socks: null, transport: 'restarted' }]);
   });
 
-  it('падение перезапуска транспорта не роняет заход', async () => {
+  it('падение перезапуска транспорта не роняет заход, но и «работает» не даёт', async () => {
+    // Ядро поднялось — и на этом хорошие новости кончаются: сокеты приложения
+    // остались в эфемерном порту прошлого запуска, которого больше нет. Заход
+    // при этом доводится до конца (чинить больше нечего), но и подписчику, и
+    // вызывающему уходит правда: связи у человека нет.
     mockRestart.mockRejectedValue(new Error('транспорт не поднялся'));
+    const seen: OpenFluxRevived[] = [];
+    const off = addOpenFluxReviveListener((r) => seen.push(r));
 
-    await expect(reviveOpenFluxAfterNetworkChange()).resolves.toBe('revived');
+    await expect(reviveOpenFluxAfterNetworkChange()).resolves.toBe('degraded');
+    off();
+
+    expect(seen).toEqual([{ status: 'on', socks: NEW_ADDR, transport: 'failed' }]);
   });
 });
 

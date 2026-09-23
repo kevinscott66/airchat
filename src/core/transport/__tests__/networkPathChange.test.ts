@@ -27,12 +27,17 @@ jest.mock('../../storage/sync', () => ({ runSyncIfOnline: jest.fn(async () => {}
 // `jest.mock` выше объявлений, и обычную константу фабрика бы не увидела.
 const mockNet: {
   initial: { isConnected?: boolean; type?: string };
+  /** Задержка ответа о начальном состоянии — ею проверяется гонка при старте. */
+  gate: Promise<void> | null;
   listener: ((ev: { isConnected?: boolean; type?: string }) => void) | null;
   removed: number;
-} = { initial: { isConnected: true, type: 'WIFI' }, listener: null, removed: 0 };
+} = { initial: { isConnected: true, type: 'WIFI' }, gate: null, listener: null, removed: 0 };
 
 jest.mock('expo-network', () => ({
-  getNetworkStateAsync: jest.fn(async () => mockNet.initial),
+  getNetworkStateAsync: jest.fn(async () => {
+    if (mockNet.gate) await mockNet.gate;
+    return mockNet.initial;
+  }),
   addNetworkStateListener: jest.fn((fn: (ev: { isConnected?: boolean; type?: string }) => void) => {
     mockNet.listener = fn;
     return {
@@ -80,6 +85,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockNet.listener = null;
   mockNet.removed = 0;
+  mockNet.gate = null;
 });
 
 afterEach(() => {
@@ -133,6 +139,33 @@ describe('смена пути трафика', () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0].to).toBe('WIFI');
+  });
+
+  it('событие, обогнавшее чтение начального состояния, не затирается им', async () => {
+    // Начальное состояние читается асинхронно, а подписка ставится сразу же.
+    // На запуске приложения сеть как раз и дёргается, поэтому событие вполне
+    // успевает прийти первым — и тогда ответ о состоянии «на момент старта»
+    // уже устарел. Затерев им то, что видел обработчик, наблюдатель сравнивал
+    // бы следующее событие с несуществующим прошлым: здесь он объявил бы
+    // «связь вернулась» вместо переезда на другую сеть, то есть переподнял бы
+    // туннель по неверному поводу и с неверной парой «откуда/куда».
+    let openGate = (): void => {};
+    mockNet.gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    mockNet.initial = { isConnected: false, type: 'NONE' };
+    startNetworkReconnectWatcher(PAIR);
+    const seen = listen();
+
+    emit({ isConnected: true, type: 'WIFI' });
+    openGate();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    emit({ isConnected: true, type: 'CELLULAR' });
+    jest.runOnlyPendingTimers();
+
+    expect(seen).toEqual([{ reason: 'type', from: 'WIFI', to: 'CELLULAR' }]);
   });
 
   it('молчит, пока связи нет: поднимать туннель некуда', async () => {

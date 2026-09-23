@@ -46,7 +46,20 @@ export type OpenFluxReviveResult =
   | 'busy';
 
 /** Чем кончился заход: то же, что видит экран настроек. */
-export type OpenFluxRevived = { status: OpenFluxUiStatus; socks: string | null };
+export type OpenFluxRevived = {
+  status: OpenFluxUiStatus;
+  socks: string | null;
+  /**
+   * Переоткрылись ли соединения приложения под новый порт ядра.
+   *
+   * Отдельно от `status`, потому что это разные вещи: ядро может стоять
+   * поднятым (`on`), пока сокеты приложения ведут в эфемерный порт прошлого
+   * запуска, которого уже нет. Для человека это «не работает», сколько бы ядро
+   * ни рапортовало о себе, — поэтому экран обязан увидеть разницу, а не
+   * получить зелёное «Работает» на нерабочем соединении.
+   */
+  transport: 'restarted' | 'failed';
+};
 
 let unsubscribe: (() => void) | null = null;
 let inFlight = false;
@@ -132,15 +145,20 @@ async function reviveOnce(): Promise<OpenFluxReviveResult> {
     log.warn('openflux_net_change_failed');
   }
 
+  let transport: 'restarted' | 'failed' = 'restarted';
   try {
     await restartInternetTransport(cfg);
   } catch (e) {
+    // Ядро могло подняться, но соединения приложения остались в старом порту.
+    // Заход из-за этого не прерываем — чинить больше нечего, — но и «работает»
+    // отсюда не выходит: связи у человека нет.
+    transport = 'failed';
     log.warn('openflux_net_change_transport_restart_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
   }
-  reviveListeners.notify({ status, socks });
-  return status === 'on' ? 'revived' : 'degraded';
+  reviveListeners.notify({ status, socks, transport });
+  return status === 'on' && transport === 'restarted' ? 'revived' : 'degraded';
 }
 
 /** Следить за сменой сети и чинить туннель. Повторный вызов ничего не меняет. */
