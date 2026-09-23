@@ -133,7 +133,10 @@ describe('цитата в личной переписке', () => {
 
   it('повторная отправка не уносит пустую цитату собеседнику', () => {
     const src = CHAT();
-    expect(src.split('outwardQuote(row.replyToPreview, row.replyToPreviewUnreadable)').length - 1).toBe(2);
+    // v4.32.725: путей повтора стало не два, а один — текстовые сообщения
+    // повторяют тем же retrySendDm, что и сообщения с вложением. Правило о
+    // цитате от этого не поменялось, поменялось число мест, где его применяют.
+    expect(src.split('outwardQuote(row.replyToPreview, row.replyToPreviewUnreadable)').length - 1).toBe(1);
     expect(src).not.toContain('row.replyToPreview ?? undefined');
   });
 });

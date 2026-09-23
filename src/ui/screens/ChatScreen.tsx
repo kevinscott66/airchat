@@ -2516,24 +2516,33 @@ function ChatThreadView({
         // Повторная отправка уже есть — retrySendDm, ею пользуется очередь:
         // она переиспользует готовые ссылки, сохраняет id и время сообщения и
         // сама переписывает строку в «доставлено». Удалять ничего не нужно.
+        // v4.32.725: текстовые сообщения повторяли другим путём — новой
+        // отправкой с последующим удалением исходной строки. `sendMessage`
+        // отвечает null, когда отправки не было (исчерпан часовой лимит,
+        // не получен симметричный ключ — то есть ровно та причина, по которой
+        // сообщение и оказалось в «не доставлено»), и это не исключение: catch
+        // не срабатывал, и `deleteMessageLocally` стирал строку насовсем.
+        // Копии в «Недавно удалённые» тут никто не кладёт — набранный текст
+        // исчезал из переписки навсегда. Повтор идёт тем же retrySendDm, что и
+        // с вложениями: он сохраняет id и время, переписывает строку в
+        // «доставлено» и удалять ничего не просит.
         const mediaCids = parseMediaCidsColumn(row.mediaCids);
-        if (mediaCids.length > 0) {
-          const ok = await svc.retrySendDm({
-            contactPubB64: peerB64,
-            text: row.text ?? '',
-            mediaCids,
-            messageId: row.id,
-            ts: row.createdAt,
-            replyToId: row.replyToId ?? undefined,
-            replyToPreview: outwardQuote(row.replyToPreview, row.replyToPreviewUnreadable),
-          });
-          if (!ok) {
-            showError('Не удалось отправить, вложение сохранено');
-            return;
-          }
-        } else {
-          await svc.sendMessage(peerB64, row.text ?? '', undefined, row.replyToId ?? undefined, outwardQuote(row.replyToPreview, row.replyToPreviewUnreadable));
-          await svc.deleteMessageLocally(row.id);
+        const ok = await svc.retrySendDm({
+          contactPubB64: peerB64,
+          text: row.text ?? '',
+          mediaCids,
+          messageId: row.id,
+          ts: row.createdAt,
+          replyToId: row.replyToId ?? undefined,
+          replyToPreview: outwardQuote(row.replyToPreview, row.replyToPreviewUnreadable),
+        });
+        if (!ok) {
+          showError(
+            mediaCids.length > 0
+              ? 'Не удалось отправить, вложение сохранено'
+              : 'Не удалось отправить. Сообщение осталось в переписке'
+          );
+          return;
         }
         void appendNewMessages();
       } catch (e) {
