@@ -248,7 +248,7 @@ describe('исходник: исходы объявлены и читаются'
   });
 
   test('отказ полки снимает ключ повтора и назван вслух', () => {
-    const recv = CODE.slice(CODE.indexOf('const applied = await applyFeedEnvelope('));
+    const recv = CODE.slice(CODE.indexOf('const applied = await applyFeedEnvelope(payload, s, envelopePid);'));
     const forget = recv.indexOf('feedSeenForget(dedupKey);');
     const warn = recv.indexOf("log.warn('feed_envelope_shelf_failed'");
     const ret = recv.indexOf("return 'deferred';");

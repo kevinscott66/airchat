@@ -36,6 +36,7 @@ import {
   deferredFromPayload,
   parseDeferredStore,
   takeDeferred,
+  type DeferredEvent,
   type DeferredStore,
 } from './feedDeferred';
 import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvDeleteChecked, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
@@ -2784,21 +2785,40 @@ async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number
  * Применить всё отложенное по публикации, которая только что появилась.
  *
  * Полка очищается ДО применения: событие, которое роняет применение, не должно
- * оставаться и падать снова при каждой следующей публикации.
+ * оставаться и падать снова при каждой следующей публикации. Брошенное
+ * исключение здесь так и остаётся приговором — отличить негодное событие от
+ * занятой базы по нему нельзя, а вечно возвращаться к тому, что падает, значит
+ * ронять разбор каждой следующей публикации.
+ *
+ * v4.32.784: но у `applyFeedEnvelope` есть исход, который приговором не
+ * является. `'deferred'` означает ровно одно: событие НЕ применено и НЕ
+ * отложено — полка отказала в записи. Приговаривать за отказ базы нельзя, и
+ * такие события кладутся обратно: они уже были на полке, вернуть их туда —
+ * не «оставить падающее», а восстановить то, что с неё сняли зря.
  */
 async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promise<void> {
   const store = await loadDeferred(pid);
   if (store === null) return;
   const taken = takeDeferred(store, postId, Date.now());
   if (taken.events.length === 0) return;
-  await saveDeferred(pid, taken.store);
+  if ((await saveDeferred(pid, taken.store)) === 'failed') {
+    // Очистка не легла: события применятся, но с полки не пропадут и придут
+    // сюда снова при следующем приходе публикации. Повтор безвреден — все
+    // четыре откладываемых рода идут по своему ключу (реакция и голос по
+    // автору, комментарий и правка по своему id) и второй раз ничего не
+    // удваивают. Не применить их сейчас было бы хуже: полка живёт сутки.
+    log.warn('feed_deferred_clear_failed', { postId: postId.slice(0, 24), n: taken.events.length });
+  }
+  /** Снятые с полки, но так на неё и не вернувшиеся по вине записи. */
+  const unshelved: DeferredEvent[] = [];
   for (const event of taken.events) {
     try {
-      await applyFeedEnvelope(
+      const applied = await applyFeedEnvelope(
         { type: event.type, postId, authorDid: event.authorDid, ts: event.ts, data: event.data } as FeedEnvelopePayload,
         s,
         pid,
       );
+      if (applied === 'deferred') unshelved.push(event);
     } catch (e) {
       log.warn('feed_deferred_apply_failed', {
         type: event.type,
@@ -2807,7 +2827,32 @@ async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promi
       });
     }
   }
+  if (unshelved.length > 0) await reshelveDeferred(postId, pid, unshelved);
   log.info('feed_deferred_applied', { postId: postId.slice(0, 24), n: taken.events.length });
+}
+
+/**
+ * Вернуть на полку снятое с неё зря (v4.32.784).
+ *
+ * Полка перечитывается заново: пока шло применение, на неё могли лечь события
+ * по другим публикациям, и класть поверх старую карту значит их потерять —
+ * ровно та беда, ради которой в v4.32.698 чтение полки стало двойственным.
+ */
+async function reshelveDeferred(postId: string, pid: number, events: DeferredEvent[]): Promise<void> {
+  const fresh = await loadDeferred(pid);
+  if (fresh === null) {
+    log.warn('feed_deferred_reshelve_unreadable', { postId: postId.slice(0, 24), n: events.length });
+    return;
+  }
+  const now = Date.now();
+  let next = fresh;
+  for (const event of events) next = addDeferred(next, postId, event, now);
+  const wrote = await saveDeferred(pid, next);
+  if (wrote === 'shelved') {
+    log.info('feed_deferred_reshelved', { postId: postId.slice(0, 24), n: events.length });
+  } else {
+    log.warn('feed_deferred_reshelve_failed', { postId: postId.slice(0, 24), n: events.length });
+  }
 }
 
 /**
