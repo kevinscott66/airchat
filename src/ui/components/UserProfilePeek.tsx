@@ -110,7 +110,7 @@ import {
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { rawErrorText, userErrorText } from './userErrorText';
-import { COPY_ACTION, COPY_ID_ACTION, COPIED_LINK } from '../clipboardText';
+import { COPY_ACTION, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
 // v4.32.540: чужой профиль — обложка из набора обоев и постоянный
 // идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
@@ -137,7 +137,7 @@ import {
 } from '../../core/storage/local';
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { setDisappearAndSync } from '../../core/social/disappearSync';
-import { rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { getCurrentCall, initiateCall } from '../../core/social/callService';
 import { copyGuardState } from '../../core/social/copyGuard';
 import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
@@ -665,11 +665,18 @@ export function UserProfilePeek({
   const toggleMute = useCallback(() => {
     if (!resolved) return;
     const pub = resolved.pubB64;
+    // v4.32.724: обе записи возвращают отказ значением и ничего не бросают,
+    // поэтому catch до них не доходил, а колокольчик переключался безусловно —
+    // и разносил ложное состояние дальше через onMuteChanged. Человеку обещали
+    // молчание, уведомления продолжали приходить, а после перезапуска
+    // колокольчик снова оказывался включённым. В шапке чата это уже починено
+    // (ChatScreen, v4.32.630) — здесь те же две записи с четырёх экранов.
     const apply = (untilMs: number | null): void => {
       void (async () => {
         try {
-          await setConversationMutedUntil(pub, activeProfileId, untilMs);
-          await muteSet('chat', pub, untilMs !== null ? { untilMs } : undefined);
+          const okRow = await setConversationMutedUntil(pub, activeProfileId, untilMs);
+          const okMute = await muteSet('chat', pub, untilMs !== null ? { untilMs } : undefined);
+          if (!okRow || !okMute) { showError('Не удалось выключить уведомления'); return; }
           setMuted(true);
           onMuteChanged?.(true, untilMs);
           showSuccess(untilMs === null ? 'Уведомления выключены' : 'Уведомления временно выключены');
@@ -681,8 +688,9 @@ export function UserProfilePeek({
     if (muted) {
       void (async () => {
         try {
-          await setConversationMuted(pub, activeProfileId, false);
-          await muteUnset('chat', pub);
+          const okRow = await setConversationMuted(pub, activeProfileId, false);
+          const okMute = await muteUnset('chat', pub);
+          if (!okRow || !okMute) { showError('Не удалось включить уведомления'); return; }
           setMuted(false);
           onMuteChanged?.(false, null);
           showSuccess('Уведомления включены');
@@ -842,9 +850,17 @@ export function UserProfilePeek({
   const toggleBlock = useCallback(() => {
     if (!resolved) return;
     const pub = resolved.pubB64;
+    // v4.32.724: blockContact/unblockContact отвечают отказом значением, а не
+    // исключением, поэтому .catch не срабатывал никогда, и карточка показывала
+    // зелёное «Заблокировано» поверх незаписанного запрета: он жил в памяти до
+    // перезапуска, после которого сообщения и звонки возвращались без
+    // предупреждения. Все остальные экраны результат уже проверяют.
     if (blocked) {
       void rateLimiter.unblockContact(pub)
-        .then(() => { setBlocked(false); showSuccess('Разблокировано'); })
+        .then((ok) => {
+          if (!ok) { showError(BLOCK_NOT_SAVED_OFF); return; }
+          setBlocked(false); showSuccess('Разблокировано');
+        })
         .catch((e: unknown) => showError(userErrorText(e, 'Не удалось разблокировать')));
       return;
     }
@@ -854,7 +870,10 @@ export function UserProfilePeek({
         text: 'Заблокировать',
         style: 'destructive',
         onPress: () => void rateLimiter.blockContact(pub)
-          .then(() => { setBlocked(true); showSuccess('Заблокировано'); })
+          .then((ok) => {
+            if (!ok) { showError(BLOCK_NOT_SAVED_ON); return; }
+            setBlocked(true); showSuccess('Заблокировано');
+          })
           .catch((e: unknown) => showError(userErrorText(e, 'Не удалось заблокировать'))),
       },
     ]);
@@ -883,11 +902,16 @@ export function UserProfilePeek({
                 style: 'destructive' as const,
                 onPress: () => void (async () => {
                   try {
-                    await rateLimiter.blockContact(pub);
-                    setBlocked(true);
-                    await recordContactReport(did, r.id, true);
+                    // v4.32.724: запрет мог не записаться, и тогда в журнал
+                    // жалоб уходила блокировка, которой нет. Жалоба всё равно
+                    // записывается — это обещано строкой выше, — но записывается
+                    // тем, чем вышло, и человеку названо честно.
+                    const ok = await rateLimiter.blockContact(pub);
+                    if (ok) setBlocked(true);
+                    await recordContactReport(did, r.id, ok);
                     setReported(true);
-                    showSuccess('Жалоба записана, контакт заблокирован');
+                    if (ok) showSuccess('Жалоба записана, контакт заблокирован');
+                    else showError(BLOCK_NOT_SAVED_ON);
                   } catch (e) {
                     showError(userErrorText(e, 'Не удалось записать жалобу'));
                   }
@@ -1140,7 +1164,7 @@ export function UserProfilePeek({
                   style={styles.didMain}
                   onPress={() => void handleCopyId()}
                   accessibilityRole="button"
-                  accessibilityLabel={COPY_ID_ACTION}
+                  accessibilityLabel={COPY_LINK_ACTION}
                 >
                   <Text style={[styles.didLabel, { color: colors.textSecondary }]}>DID</Text>
                   <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1}>

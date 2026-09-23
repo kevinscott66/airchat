@@ -39,7 +39,7 @@ import { EducationalCommunicationRouter } from './core/transport/educational';
 import { parseDidKey, publicKeyToDidKey } from './core/identity/did';
 import { ownerPidForPublicKey } from './core/identity/ownerPidLookup';
 import { OWN_DISPLAY_NAME_KEY, getOwnDisplayName, ownFieldGet, stripOwnDisplayName } from './core/identity/ownProfile';
-import { ensureLocalStorageReadyForBoot, kvGet, subscribeChatWrites, purgeDisappearedMessages, createGroup, upsertGroupMember, groupIdState, liveAttachmentBlobIds } from './core/storage/local';
+import { ensureLocalStorageReadyForBoot, kvGet, kvTryGet, subscribeChatWrites, purgeDisappearedMessages, createGroup, upsertGroupMember, groupIdState, liveAttachmentBlobIds } from './core/storage/local';
 import { currentStorageEnv, diagnoseStorageFailure } from './core/storage/webStorageDiagnosis';
 import { KEYCHAIN_LOCKED_TEXT, isKeychainLockedMessage } from './core/storage/keychainLocked';
 import { dekFailureAdvice } from './core/storage/dekFailureAdvice';
@@ -108,6 +108,7 @@ import {
   startOpenFluxNetworkGuard,
   stopOpenFluxNetworkGuard,
 } from './core/vpn/openFluxNetworkGuard';
+import { autoLockEnabled } from './ui/autoLockDecision';
 import { startOpenFluxDegradedNotice } from './ui/openFluxDegradedNotice';
 import { authGuard } from './core/security/authGuard';
 import { PasswordScreen } from './ui/screens/PasswordScreen';
@@ -2152,7 +2153,13 @@ export default function App(): React.ReactElement {
         Alert.alert(
           'Данные удалены не полностью',
           'Часть данных не удалось стереть — возможно, устройство было заблокировано. ' +
-            'Повторите выход ещё раз. Если сообщение появится снова, удалите данные приложения в настройках Android.'
+            'Повторите выход ещё раз. Если сообщение появится снова, ' +
+            // Приходит в самый тревожный момент — человек отдаёт телефон и
+            // хочет, чтобы от него в нём ничего не осталось. Совет, который
+            // на его устройстве выполнить нельзя, здесь хуже отсутствия совета.
+            (Platform.OS === 'ios'
+              ? 'удалите приложение и установите заново.'
+              : 'удалите данные приложения в настройках Android.')
         );
       }
     } catch (e) {
@@ -2495,8 +2502,14 @@ export default function App(): React.ReactElement {
         const wentBackgroundAt = backgroundedAtRef.ts;
         backgroundedAtRef.ts = 0;
         void (async () => {
-          const lockEnabled = (await kvGet('auto_lock_on_exit')) === 'true';
-          if (!lockEnabled) return;
+          // v4.32.724: kvGet отвечает одинаковым null и на «выключено», и на
+          // «не смогли прочитать», поэтому отказ базы — та же заблокированная
+          // SQLite или подъём до первой разблокировки устройства — читался как
+          // «замок выключен», и телефон открывался прямо в переписку. Правило
+          // разбирается в autoLockDecision, там же и его цена.
+          const lockRead = await kvTryGet('auto_lock_on_exit');
+          if (lockRead === null) log.warn('auto_lock_pref_unreadable');
+          if (!autoLockEnabled(lockRead)) return;
           // v4.32.627. Чтение хранилища ключей может отказать — например,
           // приложение подняли из переключателя до первой разблокировки
           // устройства, когда AFTER_FIRST_UNLOCK ещё не наступил. Раньше отказ
@@ -2665,7 +2678,12 @@ export default function App(): React.ReactElement {
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           return 'Долгая инициализация. Запустите Metro (npm run android). Для эмулятора: adb reverse tcp:8081 tcp:8081 и expo start с --localhost.';
         }
-        return 'Запуск занимает больше обычного. Подождите ещё минуту или проверьте, что приложение не ограничено в фоне. Если окно не исчезает — переустановите приложение или очистите данные AirChat в настройках Android.';
+        return (
+          'Запуск занимает больше обычного. Подождите ещё минуту или проверьте, что приложение не ограничено в фоне. Если окно не исчезает — ' +
+          (Platform.OS === 'ios'
+            ? 'удалите приложение и установите заново.'
+            : 'переустановите приложение или очистите данные AirChat в настройках Android.')
+        );
       });
     }, ms);
     return () => clearTimeout(t);
