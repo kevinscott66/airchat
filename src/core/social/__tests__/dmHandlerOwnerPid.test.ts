@@ -107,7 +107,7 @@ describe('закрепление в личке', () => {
 describe('таймер исчезающих сообщений', () => {
   it('ставится в переписке владельца', async () => {
     const env = encodeDisappearEnvelope({ ms: 60_000, ts: 2000 });
-    expect(await handleIncomingDisappear(env, PEER, OWNER)).toBe(true);
+    expect(await handleIncomingDisappear(env, PEER, OWNER)).toBe('consumed');
     expect(mockSetTimer).toHaveBeenCalledWith(PEER, OWNER, 60_000);
   });
 
@@ -121,7 +121,7 @@ describe('таймер исчезающих сообщений', () => {
 
   it('конверт без отправителя не ставит таймер', async () => {
     const env = encodeDisappearEnvelope({ ms: 60_000, ts: 2000 });
-    expect(await handleIncomingDisappear(env, undefined, OWNER)).toBe(true);
+    expect(await handleIncomingDisappear(env, undefined, OWNER)).toBe('consumed');
     expect(mockSetTimer).not.toHaveBeenCalled();
   });
 });

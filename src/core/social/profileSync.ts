@@ -42,6 +42,7 @@ import { ownLinksFor } from '../identity/ownLinks';
 import { profileLinksKey, type ProfileLink } from '../identity/profileLinks';
 import { badgeFor } from '../identity/verification';
 import { didFromPubB64 } from '../identity/did';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import { publishOwnAvatarToDirectory } from './publicAvatar';
 
@@ -546,17 +547,23 @@ export async function handleIncomingProfileRequest(
 }
 
 /**
- * Применить входящий профиль. Возвращает true, если конверт наш, — тогда
- * messaging не сохраняет его как обычное сообщение переписки.
+ * Применить входящий профиль.
+ *
+ * v4.32.759: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» и вызывающим не читался: ветка в messaging.ts объявляла кадр разобранным
+ * даже тогда, когда запись в адресную книгу упала. «Разобрано» двигает метку
+ * докуда прочитано, relay отдаёт накопленное только по ней, а профиль второй
+ * раз не присылают — тому, кто его отправил, он «уже доставлен». Собеседник
+ * оставался кружком с буквой до следующей смены своего имени или фото.
  */
 export async function handleIncomingPeerProfile(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(PROFILE_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(PROFILE_PREFIX)) return 'consumed';
   const env = decodeProfileEnvelope(text, Date.now());
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Профиль относится к ПОДПИСАННОМУ отправителю: поля «чей» в конверте нет
   // намеренно, иначе один контакт подменял бы фото другому.
   // v4.32.547: галочка проверяется ЗДЕСЬ, где известен отправитель, и только
@@ -566,9 +573,11 @@ export async function handleIncomingPeerProfile(
   const verified = await badgeFor(env.badge, didFromPubB64(senderPubB64), env.username);
   try {
     await setPeerProfileFor(ownerPid, senderPubB64, { ...env, verified });
-    log.info('profile_applied', { from: senderPubB64.slice(0, 12), verified: verified ?? '' });
   } catch (e) {
+    // Упавший запрос к базе пройдёт сам — а вот второго конверта не будет.
     log.warn('profile_apply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
-  return true;
+  log.info('profile_applied', { from: senderPubB64.slice(0, 12), verified: verified ?? '' });
+  return 'consumed';
 }

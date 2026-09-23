@@ -170,10 +170,10 @@ describe('повтор конверта автоудаления', () => {
     const now = Date.now();
     const week = encodeDisappearEnvelope({ ms: 7 * 24 * 3600_000, ts: now - 10_000 });
     const day = encodeDisappearEnvelope({ ms: 24 * 3600_000, ts: now - 1_000 });
-    expect(await handleIncomingDisappear(week, PEER, PID)).toBe(true);
-    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(week, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe('consumed');
     // Повтор перехваченного первого кадра.
-    expect(await handleIncomingDisappear(week, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(week, PEER, PID)).toBe('consumed');
     expect(mockTimers.map((t) => t.ms)).toEqual([7 * 24 * 3600_000, 24 * 3600_000]);
     // И системной строки о нём в переписке тоже не появляется.
     expect(mockRows.length).toBe(2);
@@ -182,8 +182,8 @@ describe('повтор конверта автоудаления', () => {
   it('таймер соседней переписки повтором не сбивается', async () => {
     const now = Date.now();
     const env = encodeDisappearEnvelope({ ms: 3600_000, ts: now - 5_000 });
-    expect(await handleIncomingDisappear(env, PEER, PID)).toBe(true);
-    expect(await handleIncomingDisappear(env, OTHER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(env, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingDisappear(env, OTHER, PID)).toBe('consumed');
     expect(mockTimers.map((t) => t.peer)).toEqual([PEER, OTHER]);
   });
 });
@@ -193,9 +193,9 @@ describe('повтор конверта запрета копирования', 
     const now = Date.now();
     const on = encodeCopyGuardEnvelope({ on: true, ts: now - 10_000 });
     const off = encodeCopyGuardEnvelope({ on: false, ts: now - 1_000 });
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
-    expect(await handleIncomingCopyGuard(off, PEER, PID)).toBe(true);
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingCopyGuard(off, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('consumed');
     expect(mockGuards.map((g) => g.on)).toEqual([true, false]);
   });
 });
@@ -205,9 +205,9 @@ describe('повтор конверта «показывать время вхо
     const now = Date.now();
     const show = encodePresencePrefEnvelope({ show: true, ts: now - 10_000 });
     const hide = encodePresencePrefEnvelope({ show: false, ts: now - 1_000 });
-    expect(await handleIncomingLastSeenPref(show, PEER, PID)).toBe(true);
-    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
-    expect(await handleIncomingLastSeenPref(show, PEER, PID)).toBe(true);
+    expect(await handleIncomingLastSeenPref(show, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingLastSeenPref(show, PEER, PID)).toBe('consumed');
     expect(mockPresence.map((p) => p.show)).toEqual([true, false]);
   });
 });
@@ -266,21 +266,22 @@ describe('запрет копирования: знак двигается по�
   it('не легшая запись оставляет конверт повторяемым', async () => {
     const on = encodeCopyGuardEnvelope({ on: true, ts: Date.now() - 10_000 });
     mockGuardApplyFails = true;
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('deferred');
     expect(mockGuards).toEqual([]);
-    // Знак не сдвинут — собеседник может прислать конверт заново.
+    // Знак не сдвинут, а кадр отложен (v4.32.759): относить его к разобранным
+    // значило двинуть метку релея — второго конверта никто не пришлёт.
     expect(mockKv.size).toBe(0);
     expect(mockRows).toEqual([]);
     mockGuardApplyFails = false;
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('consumed');
     expect(mockGuards.map((g) => g.on)).toEqual([true]);
     expect(mockKv.size).toBe(1);
   });
 
   it('удавшееся применение знак двигает — повтор не проходит', async () => {
     const on = encodeCopyGuardEnvelope({ on: true, ts: Date.now() - 10_000 });
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
-    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe(true);
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingCopyGuard(on, PEER, PID)).toBe('consumed');
     expect(mockGuards.map((g) => g.on)).toEqual([true]);
   });
 
@@ -313,15 +314,15 @@ describe('автоудаление: знак двигается после пр�
   it('не легшая запись оставляет конверт повторяемым', async () => {
     const day = encodeDisappearEnvelope({ ms: 24 * 3600_000, ts: Date.now() - 10_000 });
     mockTimerApplyFails = true;
-    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe('deferred');
     expect(mockTimers).toEqual([]);
-    // Знак не сдвинут — тот же конверт примут ещё раз.
+    // Знак не сдвинут, а кадр отложен (v4.32.759) — тот же конверт придёт снова.
     expect(mockKv.size).toBe(0);
     // И системной строки о непроизошедшем в переписке не появилось.
     expect(mockRows).toEqual([]);
 
     mockTimerApplyFails = false;
-    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe('consumed');
     expect(mockTimers.map((t) => t.ms)).toEqual([24 * 3600_000]);
     expect(mockKv.size).toBe(1);
     expect(mockRows).toHaveLength(1);
@@ -329,8 +330,8 @@ describe('автоудаление: знак двигается после пр�
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: удавшееся применение знак двигает — повтор не проходит', async () => {
     const day = encodeDisappearEnvelope({ ms: 24 * 3600_000, ts: Date.now() - 10_000 });
-    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
-    expect(await handleIncomingDisappear(day, PEER, PID)).toBe(true);
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingDisappear(day, PEER, PID)).toBe('consumed');
     expect(mockTimers.map((t) => t.ms)).toEqual([24 * 3600_000]);
   });
 
@@ -361,21 +362,21 @@ describe('время входа: знак двигается после прим
   it('не легшая запись оставляет конверт повторяемым', async () => {
     const hide = encodePresencePrefEnvelope({ show: false, ts: Date.now() - 10_000 });
     mockPresenceApplyFails = true;
-    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe('deferred');
     expect(mockPresence).toEqual([]);
-    // Знак не сдвинут — ту же просьбу примут ещё раз.
+    // Знак не сдвинут, а кадр отложен (v4.32.759) — ту же просьбу принесут снова.
     expect(mockKv.size).toBe(0);
 
     mockPresenceApplyFails = false;
-    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe('consumed');
     expect(mockPresence.map((p) => p.show)).toEqual([false]);
     expect(mockKv.size).toBe(1);
   });
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: удавшееся применение знак двигает — повтор не проходит', async () => {
     const hide = encodePresencePrefEnvelope({ show: false, ts: Date.now() - 10_000 });
-    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
-    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe(true);
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe('consumed');
+    expect(await handleIncomingLastSeenPref(hide, PEER, PID)).toBe('consumed');
     expect(mockPresence.map((p) => p.show)).toEqual([false]);
   });
 

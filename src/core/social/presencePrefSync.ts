@@ -32,6 +32,7 @@ import { shouldShareLastSeenWith, parseLastSeenVisibility, type LastSeenVisibili
 import { privacyPrefTryGetFor } from '../settings/privacyPrefs';
 import { canReachPeer } from './sendGate';
 import { commitControlTs, controlTsFresh } from './controlWatermark';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import {
   PRESENCE_PREF_PREFIX,
   encodePresencePrefEnvelope,
@@ -222,17 +223,27 @@ export async function syncLastSeenPrefTo(peerPubB64: string): Promise<void> {
 }
 
 /**
- * Применяет входящую просьбу. true — конверт наш (даже если отброшен):
- * вызывающий не должен сохранять его как обычное сообщение.
+ * Применяет входящий конверт.
+ *
+ * v4.32.759: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» — и вызывающим не читался вовсе: ветка в messaging.ts объявляла кадр
+ * разобранным в любом исходе. «Разобрано» же двигает метку докуда прочитано, а
+ * relay отдаёт накопленное только по ней и повтора у служебного конверта нет:
+ * занятая на секунду база стоила просьбы спрятать время входа навсегда. Порядок «проверить знак —
+ * применить — сдвинуть знак» тут уже правильный (v4.32.751), но починить он мог
+ * только повтор, которого никто не присылает.
+ *
+ * Откладываем ровно то, что пройдёт само. Устаревший повтор, мусор вместо
+ * конверта и конверт без отправителя годными не станут — они разобраны.
  */
 export async function handleIncomingLastSeenPref(
   text: string,
   senderPubB64: string | undefined,
   ownerProfileId: number
-): Promise<boolean> {
-  if (!text.startsWith(PRESENCE_PREF_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(PRESENCE_PREF_PREFIX)) return 'consumed';
   const env = decodePresencePrefEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Решение относится к ПОДПИСАННОМУ отправителю: поля «за кого» в конверте
   // нет намеренно, иначе один контакт прятал бы другого.
   //
@@ -245,7 +256,7 @@ export async function handleIncomingLastSeenPref(
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await controlTsFresh('presence', senderPubB64, ownerProfileId, env.ts))) return true;
+  if (!(await controlTsFresh('presence', senderPubB64, ownerProfileId, env.ts))) return 'consumed';
   const applied = await setPeerLastSeenAllowedFor(ownerProfileId, senderPubB64, env.show);
   // v4.32.751: знак двигаем ПОСЛЕ применения — та же пара, что у запрета
   // копирования (v4.32.655) и у таймера автоудаления (v4.32.750). Сдвиг до
@@ -255,9 +266,9 @@ export async function handleIncomingLastSeenPref(
   // шлёт, а сказать ему «не дошло» нечем.
   if (!applied) {
     log.warn('presence_pref_apply_failed', { from: senderPubB64.slice(0, 12), show: env.show });
-    return true;
+    return 'deferred';
   }
   await commitControlTs('presence', senderPubB64, ownerProfileId, env.ts);
   log.info('presence_pref_applied', { from: senderPubB64.slice(0, 12), show: env.show });
-  return true;
+  return 'consumed';
 }

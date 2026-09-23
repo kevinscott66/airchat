@@ -1292,44 +1292,38 @@ export class MessagingService {
 
     // v4.32.237: таймер исчезающих сообщений. Сам конверт пузырём не
     // становится — вместо него в переписке появляется системная строка.
+    // v4.32.759: ответ обработчика — наш ответ, как у реакции, опроса и
+    // закреплений выше.
     if (textPayload.text?.startsWith(DISAPPEAR_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingDisappear } = await import('./disappearSync');
-        await handleIncomingDisappear(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingDisappear } = await import('./disappearSync');
+      return await handleIncomingDisappear(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.571: запрет копирования и пересылки, включённый собеседником.
     // Пузырём не становится — в переписке появляется системная строка, иначе
     // у получателя молча пропадут «Копировать» и «Переслать».
     if (textPayload.text?.startsWith(COPY_GUARD_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingCopyGuard } = await import('./copyGuardSync');
-        await handleIncomingCopyGuard(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingCopyGuard } = await import('./copyGuardSync');
+      return await handleIncomingCopyGuard(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.238: просьба «не показывай моё время входа». Пузыря не создаёт;
     // применяется к подписанному отправителю (см. presencePrefSync).
     if (textPayload.text?.startsWith(PRESENCE_PREF_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingLastSeenPref } = await import('./presencePrefSync');
-        await handleIncomingLastSeenPref(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingLastSeenPref } = await import('./presencePrefSync');
+      return await handleIncomingLastSeenPref(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.247: имя, фото и «О себе» собеседника. Раньше профиль уходил
     // только в IPFS, выключенный на телефоне, — контакт всегда оставался
     // кружком с буквой. В переписке конверт не показывается.
     if (textPayload.text?.startsWith(PROFILE_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingPeerProfile } = await import('./profileSync');
-        await handleIncomingPeerProfile(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingPeerProfile } = await import('./profileSync');
+      return await handleIncomingPeerProfile(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.671: просьба прислать свой профиль. Пузыря не создаёт — это

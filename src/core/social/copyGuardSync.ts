@@ -29,6 +29,7 @@
 import { saveChatMessage } from '../storage/local';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import { SYS_LINE_PREFIX } from './sysLineGuard';
 import { setCopyGuard, setPeerCopyGuardFor } from './copyGuard';
@@ -135,23 +136,33 @@ export async function setCopyGuardAndSync(params: {
 }
 
 /**
- * Применяет входящий конверт. true — конверт наш (даже если отброшен):
- * вызывающий не должен сохранять его как обычное сообщение.
+ * Применяет входящий конверт.
+ *
+ * v4.32.759: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» — и вызывающим не читался вовсе: ветка в messaging.ts объявляла кадр
+ * разобранным в любом исходе. «Разобрано» же двигает метку докуда прочитано, а
+ * relay отдаёт накопленное только по ней и повтора у служебного конверта нет:
+ * занятая на секунду база стоила запрета копирования навсегда. Порядок «проверить знак —
+ * применить — сдвинуть знак» тут уже правильный (v4.32.655), но починить он мог
+ * только повтор, которого никто не присылает.
+ *
+ * Откладываем ровно то, что пройдёт само. Устаревший повтор, мусор вместо
+ * конверта и конверт без отправителя годными не станут — они разобраны.
  */
 export async function handleIncomingCopyGuard(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(COPY_GUARD_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(COPY_GUARD_PREFIX)) return 'consumed';
   const env = decodeCopyGuardEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // v4.32.615: повтор старого конверта откатывал состояние. Окно приёма — 30
   // суток, а единственной защитой от повтора был Set в памяти, гибнущий при
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await controlTsFresh('copyguard', senderPubB64, ownerPid, env.ts))) return true;
+  if (!(await controlTsFresh('copyguard', senderPubB64, ownerPid, env.ts))) return 'consumed';
   // Переписка определяется ПОДПИСАННЫМ отправителем: иначе любой контакт
   // запирал бы чужой разговор. Профиль-владелец приходит от службы переписки —
   // активным к этому моменту может быть уже другой (v4.32.481).
@@ -161,7 +172,7 @@ export async function handleIncomingCopyGuard(
   // запрет собеседника не включался уже никогда.
   if (!applied) {
     log.warn('copy_guard_apply_failed', { from: senderPubB64.slice(0, 12), on: env.on });
-    return true;
+    return 'deferred';
   }
   await commitControlTs('copyguard', senderPubB64, ownerPid, env.ts);
   await insertSysRow({
@@ -172,5 +183,5 @@ export async function handleIncomingCopyGuard(
     byMe: false,
   });
   log.info('copy_guard_applied_remote', { from: senderPubB64.slice(0, 12), on: env.on });
-  return true;
+  return 'consumed';
 }

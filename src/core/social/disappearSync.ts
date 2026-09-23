@@ -17,6 +17,7 @@ import { setConversationDisappearTimer, saveChatMessage } from '../storage/local
 import { commitControlTs, controlTsFresh } from './controlWatermark';
 import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope, fanoutReasonText, type FanoutUndelivered } from './controlFanout';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import { SYS_LINE_PREFIX } from './sysLineGuard';
 import {
@@ -154,17 +155,27 @@ export async function setDisappearAndSync(params: {
 }
 
 /**
- * Применяет входящий конверт. true — конверт наш (даже если отброшен):
- * вызывающий не должен сохранять его как обычное сообщение.
+ * Применяет входящий конверт.
+ *
+ * v4.32.759: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» — и вызывающим не читался вовсе: ветка в messaging.ts объявляла кадр
+ * разобранным в любом исходе. «Разобрано» же двигает метку докуда прочитано, а
+ * relay отдаёт накопленное только по ней и повтора у служебного конверта нет:
+ * занятая на секунду база стоила исчезающей переписки навсегда. Порядок «проверить знак —
+ * применить — сдвинуть знак» тут уже правильный (v4.32.750), но починить он мог
+ * только повтор, которого никто не присылает.
+ *
+ * Откладываем ровно то, что пройдёт само. Устаревший повтор, мусор вместо
+ * конверта и конверт без отправителя годными не станут — они разобраны.
  */
 export async function handleIncomingDisappear(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(DISAPPEAR_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(DISAPPEAR_PREFIX)) return 'consumed';
   const env = decodeDisappearEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // Профиль-владелец — от службы переписки (v4.32.481).
   const pid = ownerPid;
   // v4.32.615: повтор старого конверта откатывал состояние. Окно приёма — 30
@@ -172,7 +183,7 @@ export async function handleIncomingDisappear(
   // перезапуске; служебный конверт вдобавок выходит раньше, чем в базе
   // появится строка с его messageId. Отметка времени монотонна для каждой
   // пары «профиль — собеседник» (см. controlWatermark.ts).
-  if (!(await controlTsFresh('disappear', senderPubB64, pid, env.ts))) return true;
+  if (!(await controlTsFresh('disappear', senderPubB64, pid, env.ts))) return 'consumed';
   // Разговор определяется ПОДПИСАННЫМ отправителем DM: иначе любой контакт
   // включал бы автоудаление в чужой переписке.
   const applied = await setConversationDisappearTimer(senderPubB64, pid, env.ms);
@@ -184,7 +195,7 @@ export async function handleIncomingDisappear(
   // которую собеседник считает исчезающей, оставалась у нас навсегда.
   if (!applied) {
     log.warn('disappear_apply_failed', { from: senderPubB64.slice(0, 12), ms: env.ms });
-    return true;
+    return 'deferred';
   }
   await commitControlTs('disappear', senderPubB64, pid, env.ts);
   // Место в ленте — по своему времени: по чужому ts строка легла бы куда
@@ -199,5 +210,5 @@ export async function handleIncomingDisappear(
     byMe: false,
   });
   log.info('disappear_applied_remote', { from: senderPubB64.slice(0, 12), ms: env.ms });
-  return true;
+  return 'consumed';
 }
