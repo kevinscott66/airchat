@@ -280,15 +280,26 @@ API_AVAILABLE(ios(17.0))
 }
 #pragma clang diagnostic pop
 
-- (BOOL)ofSend:(NSURLSessionWebSocketMessage *)message error:(NSError **)error
+/// Задача, в которую можно писать прямо сейчас, или nil с тем же отказом, каким
+/// отвечал SocketRocket на попытку отправки в неоткрытый сокет.
+- (NSURLSessionWebSocketTask *)ofTaskForSendingWithError:(NSError **)error
 {
   NSURLSessionWebSocketTask *task = _ofTask;
-  if (!task || self.readyState != SR_OPEN) {
-    if (error) {
-      *error = [NSError errorWithDomain:SRWebSocketErrorDomain
-                                   code:2134
-                               userInfo:@{NSLocalizedDescriptionKey : @"Сокет не открыт"}];
-    }
+  if (task && self.readyState == SR_OPEN) {
+    return task;
+  }
+  if (error) {
+    *error = [NSError errorWithDomain:SRWebSocketErrorDomain
+                                 code:2134
+                             userInfo:@{NSLocalizedDescriptionKey : @"Сокет не открыт"}];
+  }
+  return nil;
+}
+
+- (BOOL)ofSend:(NSURLSessionWebSocketMessage *)message error:(NSError **)error
+{
+  NSURLSessionWebSocketTask *task = [self ofTaskForSendingWithError:error];
+  if (!task) {
     return NO;
   }
   // Отправка асинхронная, поэтому «да» здесь означает «поставлено в очередь» —
@@ -302,13 +313,8 @@ API_AVAILABLE(ios(17.0))
 
 - (BOOL)sendPing:(NSData *)data error:(NSError **)error
 {
-  NSURLSessionWebSocketTask *task = _ofTask;
-  if (!task || self.readyState != SR_OPEN) {
-    if (error) {
-      *error = [NSError errorWithDomain:SRWebSocketErrorDomain
-                                   code:2134
-                               userInfo:@{NSLocalizedDescriptionKey : @"Сокет не открыт"}];
-    }
+  NSURLSessionWebSocketTask *task = [self ofTaskForSendingWithError:error];
+  if (!task) {
     return NO;
   }
   // Полезная нагрузка ping'а задаче недоступна — она шлёт свой пустой кадр.

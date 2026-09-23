@@ -1,5 +1,5 @@
 // AirChatOpenFlux для iOS — туннель через документ: ядро на Go внутри процесса
-// плюс два слоя перехвата трафика (OpenFluxRouting).
+// плюс три слоя перехвата трафика (OpenFluxRouting).
 //
 // Модуль намеренно почти не содержит логики повторов и расписаний — этим
 // занимается openFluxController на стороне JS, где видно и настройки, и
@@ -128,12 +128,11 @@ public class AirChatOpenFluxModule: Module {
 
     // Ни docUrl, ни текста ошибки с ним в лог не пишем: он даёт право писать в
     // документ, а логи с устройства достаёт кто угодно.
-    var error = OpenFluxCore.start(
-      transport: transport,
-      docURL: docUrl,
-      socksAddr: routing.preferredSocksAddr(),
-      dns: dns
-    )
+    func launchCore(at socksAddr: String) -> String? {
+      OpenFluxCore.start(transport: transport, docURL: docUrl, socksAddr: socksAddr, dns: dns)
+    }
+
+    var error = launchCore(at: routing.preferredSocksAddr())
 
     // Зарезервированный порт мог за это время кто-то занять. Туннель важнее
     // второго слоя перехвата: поднимаемся на любом свободном порту, а про то,
@@ -143,12 +142,7 @@ public class AirChatOpenFluxModule: Module {
     if let first = error,
        first.contains("address already in use"),
        routing.preferredSocksAddr() != routing.fallbackSocksAddr() {
-      error = OpenFluxCore.start(
-        transport: transport,
-        docURL: docUrl,
-        socksAddr: routing.fallbackSocksAddr(),
-        dns: dns
-      )
+      error = launchCore(at: routing.fallbackSocksAddr())
     }
 
     if let error {

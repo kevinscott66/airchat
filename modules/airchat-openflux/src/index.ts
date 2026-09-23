@@ -14,9 +14,10 @@
  *
  * Полнота перехвата у платформ разная, и это принципиально. На Android один
  * `ProxySelector.setDefault` покрывает весь OkHttp, то есть и `fetch`, и
- * `WebSocket`. На iOS единой точки нет: там два слоя (системный прокси
- * Network.framework и конфигурация сессии React Native), и веб-сокеты в них
- * могут не попасть — см. modules/airchat-openflux/ios/OpenFluxRouting.swift.
+ * `WebSocket`. На iOS единой точки нет: там три слоя (системный прокси
+ * Network.framework, конфигурация сессии React Native и отдельный слой для
+ * веб-сокетов, которые в первые два не попадали) —
+ * см. modules/airchat-openflux/ios/OpenFluxRouting.swift.
  * Поэтому у iOS есть то, чего нет у Android: `enableTunnelStats`/`tunnelStats`,
  * счётчик соединений из самого ядра — единственный способ не гадать, а увидеть.
  *

@@ -111,10 +111,22 @@ final class OpenFluxRouting {
   /// ядро слушает именно тот порт, который в него зашит.
   private var httpRoutedToReservedPort = false
 
+  // MARK: - доступ к общему состоянию
+
+  /// Состояние ниже читают и меняют разные потоки: провайдеры слоёв 2 и 3
+  /// React Native зовёт со своих очередей, а activate/deactivate приходят с
+  /// потока, на котором Expo выполнил AsyncFunction. Один помощник вместо
+  /// lock/unlock в каждом месте.
+  private func withLock<T>(_ body: () -> T) -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return body()
+  }
+
   // MARK: - подготовка
 
   /// Есть ли на этой iOS то, чем вообще можно перехватить трафик.
-  /// Оба слоя завязаны на API Network.framework из iOS 17; на 15–16 туннель
+  /// Все три слоя завязаны на API Network.framework из iOS 17; на 15–16 туннель
   /// поднялся бы, но не повёз бы ничего — а туннель, который ничего не везёт,
   /// честнее назвать недоступным.
   var isPlatformCapable: Bool {
@@ -127,13 +139,14 @@ final class OpenFluxRouting {
   func prepare() {
     guard isPlatformCapable, OpenFluxCore.isAvailable else { return }
 
-    lock.lock()
-    if reservedPort == nil {
-      reservedPort = Self.reserveLoopbackPort()
+    let alreadyInstalled = withLock { () -> Bool in
+      if reservedPort == nil {
+        reservedPort = Self.reserveLoopbackPort()
+      }
+      let installed = hookInstalled
+      hookInstalled = true
+      return installed
     }
-    let alreadyInstalled = hookInstalled
-    hookInstalled = true
-    lock.unlock()
 
     guard !alreadyInstalled else { return }
     installHTTPProvider()
@@ -144,9 +157,7 @@ final class OpenFluxRouting {
   /// поднимется даже если зарезервировать порт не удалось, просто слой 2 в
   /// этом случае мимо (и мы об этом честно сообщаем в stats).
   func preferredSocksAddr() -> String {
-    lock.lock()
-    defer { lock.unlock() }
-    guard let port = reservedPort else { return "127.0.0.1:0" }
+    guard let port = currentReservedPort else { return fallbackSocksAddr() }
     return "127.0.0.1:\(port)"
   }
 
@@ -158,20 +169,20 @@ final class OpenFluxRouting {
 
   /// Ядро поднялось и слушает actualPort — заворачиваем в него трафик.
   func activate(host: String, port: UInt16) {
-    lock.lock()
-    httpRoutedToReservedPort = (reservedPort == port)
-    activeSocksEndpoint = "\(host):\(port)"
-    lock.unlock()
+    withLock {
+      httpRoutedToReservedPort = (reservedPort == port)
+      activeSocksEndpoint = "\(host):\(port)"
+    }
 
     guard #available(iOS 17, *) else { return }
     setSystemProxy(host: host, port: port)
   }
 
   func deactivate() {
-    lock.lock()
-    httpRoutedToReservedPort = false
-    activeSocksEndpoint = nil
-    lock.unlock()
+    withLock {
+      httpRoutedToReservedPort = false
+      activeSocksEndpoint = nil
+    }
 
     guard #available(iOS 17, *) else { return }
     clearSystemProxy()
@@ -200,17 +211,13 @@ final class OpenFluxRouting {
     nw_privacy_context_clear_proxies(_nw_privacy_context_default_context)
     nw_privacy_context_add_proxy(_nw_privacy_context_default_context, proxy)
 
-    lock.lock()
-    systemProxyActive = true
-    lock.unlock()
+    withLock { systemProxyActive = true }
   }
 
   @available(iOS 17, *)
   private func clearSystemProxy() {
     nw_privacy_context_clear_proxies(_nw_privacy_context_default_context)
-    lock.lock()
-    systemProxyActive = false
-    lock.unlock()
+    withLock { systemProxyActive = false }
   }
 
   // MARK: - слой 2: HTTP через React Native
@@ -222,9 +229,7 @@ final class OpenFluxRouting {
   }
 
   private var currentReservedPort: UInt16? {
-    lock.lock()
-    defer { lock.unlock() }
-    return reservedPort
+    withLock { reservedPort }
   }
 
   // MARK: - слой 3: веб-сокеты через React Native
@@ -236,9 +241,7 @@ final class OpenFluxRouting {
   }
 
   private var currentSocksEndpoint: String? {
-    lock.lock()
-    defer { lock.unlock() }
-    return activeSocksEndpoint
+    withLock { activeSocksEndpoint }
   }
 
   private static func makeSessionConfiguration(port: UInt16?) -> URLSessionConfiguration {
@@ -275,9 +278,7 @@ final class OpenFluxRouting {
   }
 
   func state() -> RoutingState {
-    lock.lock()
-    defer { lock.unlock() }
-    return RoutingState(systemProxy: systemProxyActive, httpProxy: httpRoutedToReservedPort)
+    withLock { RoutingState(systemProxy: systemProxyActive, httpProxy: httpRoutedToReservedPort) }
   }
 
   // MARK: - резервирование порта
