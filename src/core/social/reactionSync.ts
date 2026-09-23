@@ -20,7 +20,8 @@ import {
   undeliveredText,
 } from './controlFanout';
 import { canInteractInGroup } from './groupSendPolicy';
-import { lookupGroupActor, roleOf } from './groupActor';
+import { lookupGroupActor, lookupGroupActorRead, roleOf } from './groupActor';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
 import {
   REACTION_PREFIX,
@@ -139,17 +140,28 @@ export async function toggleAndSyncReaction(params: {
 }
 
 /**
- * Применяет входящий конверт реакции. Возвращает true, если конверт наш
- * (независимо от того, применился он или был отброшен).
+ * Применяет входящий конверт реакции.
+ *
+ * v4.32.754: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» и вызывающим не читался вовсе — ветка в messaging.ts объявляла кадр
+ * разобранным в любом случае. Значит занятая база («failed») стоила реакции
+ * навсегда: метка «докуда прочитано» перешагивала кадр, relay его больше не
+ * отдавал, а повтора у служебного конверта нет. Собеседник при этом видит свою
+ * реакцию у себя и считает, что она стоит у обоих.
+ *
+ * Откладываем ровно то, что пройдёт само: отказ запроса к базе и нечитаемый
+ * состав группы. «Сообщения нет», «столбец не открылся» и оба потолка реакций
+ * повтором не лечатся — держать на них метку значило бы остановить приём всего
+ * остального навсегда.
  */
 export async function handleIncomingReaction(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!text.startsWith(REACTION_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  if (!text.startsWith(REACTION_PREFIX)) return 'consumed';
   const env = decodeReactionEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
   // v4.32.481: профиль-владелец приходит от службы переписки, которая знает
   // его по своей паре ключей. Раньше он брался у глобального «активного», а
   // между расшифровкой конверта и записью в базу стоят await'ы — переключение
@@ -160,10 +172,17 @@ export async function handleIncomingReaction(
   if (env.groupId) {
     // Реакция от не-участника — тот же анти-спуф, что и для сообщений: иначе
     // посторонний, знающий id группы и сообщения, накручивает реакции всем.
-    const actor = await lookupGroupActor(env.groupId, senderPubB64, pid);
+    // v4.32.754: различающее чтение. lookupGroupActor схлопывает отказ базы в
+    // «группа незнакомая», и реакция участника отбрасывалась навсегда ровно
+    // потому, что в эту секунду базу читал кто-то другой.
+    const actor = await lookupGroupActorRead(env.groupId, senderPubB64, pid);
+    if (!actor) {
+      log.warn('reaction_group_unreadable', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     if (!actor.group) {
       log.debug('reaction_unknown_group', { gid: env.groupId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     const verdict = canInteractInGroup(actor.role);
     if (!verdict.allowed) {
@@ -172,7 +191,7 @@ export async function handleIncomingReaction(
         from: senderPubB64.slice(0, 12),
         code: verdict.code,
       });
-      return true;
+      return 'consumed';
     }
   }
 
@@ -196,8 +215,10 @@ export async function handleIncomingReaction(
       group: !!env.groupId,
       reason: res.reason,
     });
-    return true;
+    // v4.32.754: 'failed' — это упавший запрос, и он пройдёт сам. Остальные
+    // четыре причины постоянны (см. reactionWrite): повтор их не изменит.
+    return res.reason === 'failed' ? 'deferred' : 'consumed';
   }
   log.info('reaction_applied', { group: !!env.groupId, on: env.on });
-  return true;
+  return 'consumed';
 }

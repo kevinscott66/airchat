@@ -1256,12 +1256,13 @@ export class MessagingService {
 
     // v4.32.232: реакция на сообщение — обновляет существующую строку, своего
     // пузыря в чате не создаёт.
+    // v4.32.754: ответ обработчика — наш ответ. Раньше он выбрасывался, и
+    // занятая база стоила реакции навсегда: relay держит кадр тридцать суток,
+    // но перезапрашивают его только по метке, а метка уже перешагнула.
     if (textPayload.text?.startsWith(REACTION_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingReaction } = await import('./reactionSync');
-        await handleIncomingReaction(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingReaction } = await import('./reactionSync');
+      return await handleIncomingReaction(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.250: голос в опросе — обновляет счётчики существующего опроса,
