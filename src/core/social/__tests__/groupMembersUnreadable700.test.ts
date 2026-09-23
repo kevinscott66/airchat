@@ -192,10 +192,15 @@ describe('форма правки закреплена', () => {
     expect(gmSrc).not.toContain('const actor = await lookupGroupActor(groupId, senderPubB64, pid);');
   });
 
-  it('обёртка с третьим исходом не подменяет собой прежнюю', () => {
-    // Приёму конвертов пустой ответ безобиден: конверт не применится, а
-    // отправитель повторит. Обе формы живут рядом, каждая для своей стороны.
-    expect(gaSrc).toContain('export async function lookupGroupActor(');
+  it('формы чтения состава осталась одна — с третьим исходом', () => {
+    // Здесь стояло «обе формы живут рядом, каждая для своей стороны»: приёму
+    // конвертов пустой ответ считался безобидным, потому что отправитель
+    // повторит. К v4.32.755 выяснилось, что не повторит ни один служебный
+    // конверт — ни реакция, ни голос, ни завершение опроса, ни отметка о
+    // прочтении: о своей судьбе они не узнают, а relay отдаёт накопленное
+    // только по метке «докуда прочитано». Схлопывающая форма осталась без
+    // вызывающих, и её убрали (v4.32.756): имя у неё было короче.
+    expect(gaSrc).not.toContain('export async function lookupGroupActor(');
     expect(gaSrc).toContain('export async function lookupGroupActorRead(');
     expect(gaSrc).toContain('const members = await listGroupMembersRead(groupId, ownerProfileId);');
     expect(gaSrc).toContain('if (!members) return null;');

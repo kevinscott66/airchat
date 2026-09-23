@@ -170,7 +170,7 @@ describe('запрещённые формы действительно расп�
       '    const verdict = canInteractInGroup(actor.role);',
       '    const verdict = canInteractInGroup(roleOf(members, actorKey));',
       "  return (row?.role as SendRole | undefined) ?? 'member';",
-      '    const actor = await lookupGroupActor(env.groupId, senderPubB64, pid);',
+      '    const actor = await lookupGroupActorRead(env.groupId, senderPubB64, pid);',
       "    const idx = list.some((g) => g.name === 'x');",
     ];
     for (const line of legit) {
