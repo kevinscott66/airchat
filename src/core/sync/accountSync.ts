@@ -2,7 +2,7 @@ import { checkOnlineWrite } from './cachePolicy';
 import { pullSyncMutations, pushSyncMutations } from './syncApi';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
-import { getSyncState, saveSyncState, validSyncCursor } from '../storage/local';
+import { getSyncState, kvSetChecked, saveSyncState, validSyncCursor } from '../storage/local';
 import type { SyncMutation, SyncPullResponse, SyncPushResponse } from './syncProtocol';
 
 export type SyncProjection = (mutation: SyncMutation) => Promise<void>;
@@ -61,6 +61,28 @@ const poisonAttempts = new Map<string, number>();
 
 function poisonKey(ownerProfileId: number, mutationId: string): string {
   return `${ownerProfileId}\u0000${mutationId}`;
+}
+
+/** Строка пробы: одна на всё приложение, перезаписывается поверх себя. */
+const POISON_PROBE_KEY = 'airchat_sync_poison_probe';
+
+/**
+ * Отвечает ли база прямо сейчас (v4.32.786).
+ *
+ * Счётчик выше считает, сколько раз строка уронила проекцию, — но проекция
+ * бросает одно и то же исключение и на неисправимом (конверт чужим ключом,
+ * tombstone без разделителя), и на временном (база занята, места нет).
+ * Различить их по самому исключению нельзя: оно приходит из чужого кода и
+ * текст его никто не обещал.
+ *
+ * Зато можно спросить у базы. Проверяемая запись не бросает: она отвечает
+ * `false` и на «database is locked», и на переполненный диск. Ответила `true`
+ * — беда не в базе, значит виновата строка, и приговор ей честный. Ответила
+ * `false` — падало не из-за строки, и выбрасывать её нельзя: приговор
+ * откладывается до следующего прохода.
+ */
+async function databaseAnswers(): Promise<boolean> {
+  return kvSetChecked(POISON_PROBE_KEY, String(Date.now()));
 }
 
 /**
@@ -202,6 +224,22 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
         // всю карту, и худшее следствие — несколько лишних попыток.
         if (poisonAttempts.size >= POISON_MAX_TRACKED) poisonAttempts.clear();
         poisonAttempts.set(attemptKey, attempts);
+        throw e;
+      }
+      // v4.32.786: до этой проверки занятая база три прохода подряд выглядела
+      // как испорченная строка — и совершенно исправную строку выбрасывали
+      // навсегда, а курсор уходил за неё. Проходы идут подряд при
+      // переподключении, так что три штуки укладываются в секунды.
+      //
+      // Счётчик при этом трогать не нужно: он остался на POISON_MAX_ATTEMPTS
+      // минус один, и как только база освободится, приговор вынесут первым же
+      // проходом, без новых трёх попыток.
+      if (!(await databaseAnswers())) {
+        log.warn('sync_pull_row_verdict_held', {
+          entityKind: mutation.entityKind,
+          revision: mutation.revision,
+          attempts,
+        });
         throw e;
       }
       poisonAttempts.delete(attemptKey);
