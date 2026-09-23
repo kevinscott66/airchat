@@ -1,5 +1,5 @@
 /**
- * Туннель OpenFlux: что именно он отвечает и когда (v4.32.723).
+ * Туннель OpenFlux: что именно он отвечает и когда (v4.32.724).
  *
  * Проверяется здесь не «функция вернула строку», а различимость состояний.
  * Туннель включают в той сети, где приложение уже молчит, и человек видит
@@ -36,6 +36,8 @@ import { Platform } from 'react-native';
 import AirChatOpenFlux from 'airchat-openflux';
 import type { AppConfig } from '../../config';
 import {
+  enableOpenFluxTunnelStats,
+  getOpenFluxTunnelStats,
   maybeStartOpenFlux,
   openFluxConfigured,
   retryOpenFlux,
@@ -48,6 +50,9 @@ const mockNative = AirChatOpenFlux as unknown as {
   stop: jest.Mock;
   isRunning: jest.Mock;
   socksAddr: jest.Mock;
+  // Счётчик соединений есть не везде — заглушка повторяет Android, где его нет.
+  enableTunnelStats?: jest.Mock;
+  tunnelStats?: jest.Mock;
 };
 
 type OpenFlux = NonNullable<AppConfig['openflux']>;
@@ -127,12 +132,24 @@ describe('maybeStartOpenFlux', () => {
     expect(mockNative.start).not.toHaveBeenCalled();
   });
 
-  it('на платформе без ядра отвечает «недоступно», а не «ошибка»', async () => {
-    for (const os of ['ios', 'web']) {
-      (Platform as { OS: string }).OS = os;
-      await expect(maybeStartOpenFlux(cfg())).resolves.toBe('unsupported');
-    }
+  it('на web отвечает «недоступно», даже не спрашивая нативную часть', async () => {
+    (Platform as { OS: string }).OS = 'web';
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('unsupported');
+    expect(mockNative.isSupported).not.toHaveBeenCalled();
     expect(mockNative.start).not.toHaveBeenCalled();
+  });
+
+  it('на iOS не отказывает заранее, а спрашивает нативную часть', async () => {
+    // Раньше iOS стоял рядом с web в списке «ядра нет». Теперь ядро есть, но
+    // его наличие из JS не выводится: xcframework лежит вне git и попадает не
+    // в каждую сборку, а перехват требует iOS 17. Отказ по имени платформы
+    // здесь означал бы «недоступно» на устройстве, где туннель работает.
+    (Platform as { OS: string }).OS = 'ios';
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('on');
+
+    mockNative.isSupported.mockResolvedValueOnce(false);
+    await expect(maybeStartOpenFlux(cfg())).resolves.toBe('unsupported');
+    expect(mockNative.start).toHaveBeenCalledTimes(1);
   });
 
   it('отказ ядра — это failed: тут чинить сеть или документ', async () => {
@@ -183,5 +200,44 @@ describe('stopOpenFlux', () => {
   it('не роняет приложение, если ядро упало на остановке', async () => {
     mockNative.stop.mockRejectedValueOnce(new Error('already dead'));
     await expect(stopOpenFlux()).resolves.toBeUndefined();
+  });
+});
+
+describe('счётчик соединений', () => {
+  afterEach(() => {
+    delete mockNative.enableTunnelStats;
+    delete mockNative.tunnelStats;
+  });
+
+  it('там, где считать нечем, отвечает «нечем», а не нулём', async () => {
+    // Ноль соединений и «счётчика нет» — разные вещи. Первое значит «трафик
+    // мимо туннеля», второе — «мы не смотрели»; показать одно вместо другого
+    // и есть то самое враньё нулём, от которого счётчик и задумывался.
+    await expect(enableOpenFluxTunnelStats()).resolves.toBe(false);
+    await expect(getOpenFluxTunnelStats()).resolves.toBeNull();
+  });
+
+  it('отдаёт то, что насчитало ядро, не приукрашивая', async () => {
+    const stats = {
+      counting: true,
+      connections: 0,
+      failures: 0,
+      lastTarget: null,
+      lastAt: null,
+      systemProxy: true,
+      httpProxy: true,
+    };
+    mockNative.enableTunnelStats = jest.fn().mockResolvedValue(undefined);
+    mockNative.tunnelStats = jest.fn().mockResolvedValue(stats);
+
+    await expect(enableOpenFluxTunnelStats()).resolves.toBe(true);
+    // Прокси поставлены, а соединений ноль — именно так и должно выглядеть
+    // «перехват включён, но трафик через него пока не пошёл».
+    await expect(getOpenFluxTunnelStats()).resolves.toEqual(stats);
+  });
+
+  it('упавший счётчик не выдаёт за отсутствие соединений', async () => {
+    mockNative.tunnelStats = jest.fn().mockRejectedValue(new Error('no core'));
+    await expect(getOpenFluxTunnelStats()).resolves.toBeNull();
   });
 });

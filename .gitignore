@@ -83,6 +83,11 @@ modules/*/android/src/main/jniLibs/*/*.so
 # Заголовок C-API ядра OpenFlux: генерируется тем же скриптом из исходников
 # ядра, то есть такой же результат сборки, как и .so рядом.
 modules/airchat-openflux/android/src/main/cpp/include/libopenflux.h
+# То же ядро под iOS: два статических среза (устройство и симулятор) по 15 МБ,
+# собирает scripts/build-openflux-ios.sh. В отличие от Android, заголовок
+# C-API здесь НЕ артефакт сборки — OpenFluxCoreAPI.h написан руками и лежит в
+# git, иначе модуль не собрался бы в свежем клоне (см. README.md рядом).
+modules/airchat-openflux/ios/OpenFlux.xcframework/
 
 # Манифест локальной релизной сборки (scripts/build-release.sh).
 release/

@@ -1,5 +1,5 @@
 /**
- * Туннель OpenFlux: один переключатель (v4.32.723).
+ * Туннель OpenFlux: один переключатель (v4.32.724).
  *
  * Здесь нарочно нет ни одного поля ввода — в отличие от соседней секции VPN,
  * где пользователь вбивает свой сервер. Адрес документа приходит переменной
@@ -30,27 +30,48 @@ import {
   stopInternetTransportStack,
 } from '../../core/transport/internet/internetCoordinator';
 import {
+  enableOpenFluxTunnelStats,
   getOpenFluxRunning,
   getOpenFluxSocksAddr,
+  getOpenFluxTunnelStats,
   retryOpenFlux,
   stopOpenFlux,
+  type OpenFluxTunnelStats,
   type OpenFluxUiStatus,
 } from '../../core/vpn/openFluxController';
 
+/**
+ * «Канал поднят», а не «Работает». Разница не косметическая: статус `on`
+ * означает ровно то, что ядро поднялось и отдало локальный SOCKS5 — пошёл ли
+ * в него трафик приложения, эта надпись не знает. На Android знала (прокси
+ * стоит на самом сетевом стеке), на iOS перехват держится на двух отдельных
+ * слоях. Ответ на «работает ли» даёт счётчик ниже, а не эта строка.
+ */
 const STATUS_LABEL: Record<OpenFluxUiStatus, string> = {
   off: 'Выключен',
   starting: 'Поднимаю канал…',
-  on: 'Работает',
+  on: 'Канал поднят',
   failed: 'Не удалось поднять',
   unsupported: 'Недоступно на этом устройстве',
   unconfigured: 'В этой сборке нет ссылки на документ',
 };
+
+/** Пока счётчик включён, обновляем его сами: считает ядро, событий оно не шлёт. */
+const STATS_POLL_MS = 2000;
+
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 export function OpenFluxSettingsSection(): React.ReactElement {
   const [enabled, setEnabled] = useState(false);
   const [status, setStatus] = useState<OpenFluxUiStatus>('off');
   const [socks, setSocks] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** `null` — счётчика на этой платформе нет, весь блок ниже не показываем. */
+  const [stats, setStats] = useState<OpenFluxTunnelStats | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -67,11 +88,26 @@ export function OpenFluxSettingsSection(): React.ReactElement {
       } catch {
         /* статус останется off */
       }
+      const s = await getOpenFluxTunnelStats();
+      if (alive) setStats(s);
     })();
     return () => {
       alive = false;
     };
   }, []);
+
+  // Опрашиваем, только пока счёт идёт: до включения там нули, и обновлять их
+  // раз в две секунды — просто будить процессор.
+  useEffect(() => {
+    if (!stats?.counting) return;
+    const id = setInterval(() => {
+      void (async () => {
+        const s = await getOpenFluxTunnelStats();
+        if (s) setStats(s);
+      })();
+    }, STATS_POLL_MS);
+    return () => clearInterval(id);
+  }, [stats?.counting]);
 
   /** Записать решение пользователя в override и вернуть свежий конфиг. */
   const persist = useCallback(async (on: boolean): Promise<AppConfig> => {
@@ -152,6 +188,20 @@ export function OpenFluxSettingsSection(): React.ReactElement {
     }
   });
 
+  /**
+   * Включить подсчёт соединений. Отдельной кнопкой, а не само собой, по двум
+   * причинам: в ядре это отладочный режим без выключателя (до перезапуска
+   * приложения), и он печатает в журнал адрес каждого соединения — включать
+   * такое за спиной пользователя нельзя.
+   */
+  const countBtn = useAsyncButton(async () => {
+    if (!(await enableOpenFluxTunnelStats())) {
+      showError('В этой сборке счётчик недоступен');
+      return;
+    }
+    setStats(await getOpenFluxTunnelStats());
+  });
+
   const styles = useThemedStyles((c) => ({
     sectionTitle: {
       color: c.textSecondary,
@@ -195,6 +245,20 @@ export function OpenFluxSettingsSection(): React.ReactElement {
       gap: 6,
     },
     retryText: { color: c.text, fontSize: font.sm, fontWeight: '700' as const },
+    proof: {
+      marginTop: 12,
+      paddingTop: 10,
+      borderTopWidth: 1,
+      borderTopColor: c.border,
+    },
+    proofTitle: {
+      color: c.textSecondary,
+      fontSize: font.xs,
+      fontWeight: '700' as const,
+      marginBottom: 6,
+    },
+    proofLine: { color: c.text, fontSize: font.sm, marginTop: 2 },
+    proofNote: { color: c.textMuted, fontSize: font.xs, marginTop: 6, lineHeight: 16 },
     dotOn: { backgroundColor: c.success },
     dotWarn: { backgroundColor: c.warning },
     dotErr: { backgroundColor: c.error },
@@ -262,6 +326,68 @@ export function OpenFluxSettingsSection(): React.ReactElement {
               </>
             )}
           </Pressable>
+        ) : null}
+
+        {/*
+          Блок существует только там, где есть чем считать (сейчас — iOS).
+          Ничего не рисовать честнее, чем рисовать галочку «работает» по факту
+          «ядро поднялось»: на iOS перехват идёт двумя отдельными слоями, и
+          какой из них накрыл конкретное соединение, из JS не видно. Числа
+          ниже приходят из самого ядра — оно считает соединения, которые
+          приняло на свой SOCKS5.
+        */}
+        {stats ? (
+          <View style={styles.proof}>
+            <Text style={styles.proofTitle}>ИДЁТ ЛИ ТРАФИК ЧЕРЕЗ ТУННЕЛЬ</Text>
+            {stats.counting ? (
+              <>
+                <Text style={styles.proofLine}>Соединений через туннель: {stats.connections}</Text>
+                {stats.failures > 0 ? (
+                  <Text style={[styles.proofLine, styles.errColor]}>
+                    Из них не дошло до адресата: {stats.failures}
+                  </Text>
+                ) : null}
+                {stats.lastTarget && stats.lastAt ? (
+                  <Text style={styles.proofLine}>
+                    Последнее: {stats.lastTarget}, в {formatTime(stats.lastAt)}
+                  </Text>
+                ) : null}
+                <Text style={styles.proofLine}>
+                  Перехват: системный {stats.systemProxy ? 'включён' : 'выключен'}, запросы
+                  приложения {stats.httpProxy ? 'направлены в туннель' : 'идут напрямую'}
+                </Text>
+                <Text style={styles.proofNote}>
+                  {stats.connections === 0
+                    ? 'Ни одного соединения. Если приложение сейчас работает, значит, трафик идёт мимо туннеля. Откройте чат или отправьте сообщение и посмотрите, изменится ли число.'
+                    : 'Число растёт только от соединений, которые действительно приняло ядро. Если оно стоит на месте, пока приходят сообщения, — веб-сокет идёт мимо туннеля.'}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.proofNote}>
+                  «Канал поднят» не означает, что трафик пошёл через документ. Счётчик показывает,
+                  сколько соединений приняло ядро, — другого подтверждения нет. Работает до
+                  перезапуска приложения и пишет в журнал адреса соединений, поэтому включается
+                  вручную.
+                </Text>
+                <Pressable
+                  style={styles.retryBtn}
+                  onPress={countBtn.onPress}
+                  disabled={countBtn.loading}
+                  testID="openflux_count"
+                >
+                  {countBtn.loading ? (
+                    <ActivityIndicator color={styles.accent.color} />
+                  ) : (
+                    <>
+                      <Ionicons name="stats-chart" size={16} color={styles.accent.color} />
+                      <Text style={styles.retryText}>Считать соединения</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            )}
+          </View>
         ) : null}
       </View>
     </View>
