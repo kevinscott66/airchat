@@ -68,6 +68,7 @@ import {
   markConversationRead,
   setConversationDraft,
   upsertChatMessage,
+  upsertChatMessageChecked,
   touchConversation,
   setConversationMuted,
   setConversationMutedUntil,
@@ -2223,7 +2224,10 @@ function ChatThreadView({
           const ts = Date.now();
           // Saved Messages live only on this device — the local uri is enough.
           const voiceText = makeVoiceText(result.uri, result.durationMs);
-          await upsertChatMessage({
+          // v4.32.789: см. отправку текста — у заметки для себя эта строка
+          // единственный след. Отказ бросаем: ниже его поймает общий catch,
+          // который заодно уберёт осиротевшую запись из кэша.
+          const wrote = await upsertChatMessageChecked({
             id: uuidv4(),
             contactPubB64: peerB64,
             cid: `local:${ts}`,
@@ -2236,6 +2240,7 @@ function ChatThreadView({
             replyToId: null,
             replyToPreview: null,
           });
+          if (wrote === 'failed') throw new Error('Заметка не сохранилась');
           void touchConversation(peerB64, activeProfileId, '🎤 Голосовое сообщение', 'out', false);
           void appendNewMessages();
           scrollToNewest();
@@ -2316,7 +2321,9 @@ function ChatThreadView({
     try {
       if (isSavedMessages) {
         const ts = Date.now();
-        await upsertChatMessage({
+        // v4.32.789: см. отправку текста — у заметки для себя эта строка
+        // единственный след. Отказ бросаем: ниже его поймает общий catch.
+        const wrote = await upsertChatMessageChecked({
           id: uuidv4(),
           contactPubB64: peerB64,
           cid: `local:${ts}`,
@@ -2329,6 +2336,7 @@ function ChatThreadView({
           replyToId: null,
           replyToPreview: null,
         });
+        if (wrote === 'failed') throw new Error('Заметка не сохранилась');
         void touchConversation(peerB64, activeProfileId, '🎞 GIF', 'out', false);
         void appendNewMessages();
         scrollToNewest();
@@ -2445,7 +2453,24 @@ function ChatThreadView({
       Vibration.vibrate(30);
       scrollToNewest();
       void (async () => {
-        await upsertChatMessage(row);
+        // v4.32.789: запись отвечает исходом. У «Заметок для себя» нет ни сети,
+        // ни конверта, ни очереди повторной отправки — эта строка единственный
+        // след написанного. Гасящая форма свой отказ глушила сама, и занятой на
+        // секунду базы хватало, чтобы заметка исчезла совсем: поле уже очищено,
+        // черновик снят, пузыря нет и ошибки нет. Обычная отправка защищена так
+        // с v4.32.781 — сюда защита просто не дошла.
+        if ((await upsertChatMessageChecked(row)) === 'failed') {
+          // Возвращаем набранное в поле, как это делает `'refused'` на обычном
+          // пути: база отпускает через секунду, и человек повторит сам.
+          setMsg(text);
+          msgRef.current = text;
+          setReplyTo(replyRef ?? null);
+          log.error('saved_note_row_failed', { profileId: activeProfileId });
+          showError('Заметка не сохранилась. Попробуйте ещё раз');
+          return;
+        }
+        // Пометка в списке чатов — только после того, как строка легла: иначе в
+        // списке появилось бы превью сообщения, которого в переписке нет.
         void touchConversation(peerB64, activeProfileId, previewLabelForText(text).slice(0, 120), 'out', false);
         void appendNewMessages();
       })();
