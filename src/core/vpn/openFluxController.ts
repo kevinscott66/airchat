@@ -28,6 +28,7 @@ import { log } from '../logger';
 // себя сама (`isSupported`), и на iOS она скажет «нет», если ядро не собрано
 // или система старше iOS 17.
 import { openFluxAvailable } from '../../ui/platformCapabilities';
+import { openFluxErrorText } from './openFluxErrorText';
 
 export type OpenFluxUiStatus =
   /** Выключен пользователем или конфигом. */
@@ -102,8 +103,10 @@ export async function maybeStartOpenFlux(
     return 'on';
   } catch (e) {
     // Текст ядра (документ недоступен, старый редактор выключен, нет прав на
-    // запись) уносим в журнал целиком: без него причина неотличима от «сеть».
-    log.warn('openflux_start_failed', { err: e instanceof Error ? e.message : String(e) });
+    // запись) уносим в журнал: без него причина неотличима от «сеть». Но без
+    // адресов — ссылка на документ есть право писать в него, см.
+    // openFluxErrorText.
+    log.warn('openflux_start_failed', { err: openFluxErrorText(e) });
     return 'failed';
   }
 }
@@ -116,7 +119,7 @@ export async function stopOpenFlux(): Promise<void> {
     await mod.stop();
     log.info('openflux_stopped');
   } catch (e) {
-    log.warn('openflux_stop_failed', { err: e instanceof Error ? e.message : String(e) });
+    log.warn('openflux_stop_failed', { err: openFluxErrorText(e) });
   }
 }
 
@@ -189,9 +192,7 @@ export async function enableOpenFluxTunnelStats(): Promise<boolean> {
     log.info('openflux_stats_enabled');
     return true;
   } catch (e) {
-    log.warn('openflux_stats_enable_failed', {
-      err: e instanceof Error ? e.message : String(e),
-    });
+    log.warn('openflux_stats_enable_failed', { err: openFluxErrorText(e) });
     return false;
   }
 }

@@ -161,6 +161,57 @@ describe('мост: конфиг', () => {
     expect(mockRestart).toHaveBeenCalledTimes(1);
   });
 
+  it('ссылку на документ не отдаёт, но говорит, что она есть', async () => {
+    // Ссылка и есть право писать в документ: обе нативные части специально не
+    // пишут её в журнал. Отдав её тому, у кого оказался ключ доступа к мосту,
+    // мы подарили бы ему весь транзит. При этом «в сборке нет туннеля» и
+    // «есть, просто ссылку тебе не дали» агент обязан различать — иначе он
+    // станет чинить не то.
+    mockConfig = { openflux: { enabled: true, docUrl: 'https://disk.invalid/edit/d/КЛЮЧ' } };
+    const res = await runBridgeCommand({ cmd: 'config.get' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(JSON.stringify(res.result)).not.toContain('КЛЮЧ');
+    expect(JSON.stringify(res.result)).not.toContain('disk.invalid');
+    const of = (res.result as { openflux: { docUrl: string; enabled: boolean } }).openflux;
+    expect(of.docUrl).not.toBe('');
+    expect(of.enabled).toBe(true);
+  });
+
+  it('пустую ссылку не подменяет: «туннеля в сборке нет» должно быть видно', async () => {
+    mockConfig = { openflux: { enabled: true, docUrl: '' } };
+    const res = await runBridgeCommand({ cmd: 'config.get' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.result as { openflux: { docUrl: string } }).openflux.docUrl).toBe('');
+  });
+
+  it('config.get не портит конфиг, из которого читал', async () => {
+    mockConfig = { openflux: { enabled: true, docUrl: 'https://disk.invalid/edit/d/КЛЮЧ' } };
+    await runBridgeCommand({ cmd: 'config.get' });
+    expect((mockConfig as { openflux: { docUrl: string } }).openflux.docUrl).toBe(
+      'https://disk.invalid/edit/d/КЛЮЧ',
+    );
+  });
+
+  it('отказывается писать ссылку на документ, хотя раздел править можно', async () => {
+    const res = await runBridgeCommand({
+      cmd: 'config.set',
+      arg: { openflux: { docUrl: 'https://чужой.invalid/doc' } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('field_not_allowed');
+    expect((mockConfig as { openflux: { docUrl: string } }).openflux.docUrl).toBe(
+      'https://example.invalid/doc',
+    );
+    expect(mockRestart).not.toHaveBeenCalled();
+  });
+
+  it('остальное в том же разделе править по-прежнему можно', async () => {
+    const res = await runBridgeCommand({ cmd: 'config.set', arg: { openflux: { autoStart: false } } });
+    expect(res.ok).toBe(true);
+    expect((mockConfig as { openflux: { autoStart: boolean } }).openflux.autoStart).toBe(false);
+  });
+
   it('список разделов не пуст и не содержит хранилищ токенов', () => {
     expect(CONFIG_SECTIONS.length).toBeGreaterThan(0);
     expect(CONFIG_SECTIONS as readonly string[]).not.toContain('publicServices');

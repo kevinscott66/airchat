@@ -107,6 +107,9 @@ type BridgeState = {
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   reconnectAttempt: number;
   active: boolean;
+  /** Чужие кадры с прошлой сводки и время самой сводки — см. `noteForeign`. */
+  foreignSeen: number;
+  foreignReportedAt: number;
 };
 
 let state: BridgeState | null = null;
@@ -136,6 +139,31 @@ async function publishReply(s: BridgeState, seq: number, reply: BridgeReply): Pr
     // отчёт о неполадке целиком, и тема моста в нём оказаться не должна.
     log.warn('agent_bridge_reply_failed', { kind: e instanceof Error ? e.name : 'unknown' });
   }
+}
+
+/** Не чаще одной сводки о чужих кадрах в минуту. */
+const FOREIGN_REPORT_INTERVAL_MS = 60_000;
+
+/**
+ * Отметить кадр, не открывшийся нашим ключом.
+ *
+ * Строкой на каждый такой кадр это было раньше — и тем самым любой, кто узнал
+ * тему (её видит оператор ретранслятора: она стоит прямо в адресе подписки),
+ * мог залить журнал со своей скоростью. Журнал уезжает в отчёт о неполадке, и
+ * настоящая причина в нём тонула бы. Считаем и пишем сводкой: факт «кто-то
+ * стучится в тему» она сохраняет, а объём — уже не его выбор.
+ *
+ * Расшифровку при этом не прекращаем и квоту команд чужим кадром не расходуем:
+ * иначе поток мусора запирал бы настоящего агента, а это ровно та беда, от
+ * которой раздельные `admit`/`accept` в BridgeGuard и защищают.
+ */
+function noteForeign(s: BridgeState): void {
+  s.foreignSeen += 1;
+  const now = Date.now();
+  if (now - s.foreignReportedAt < FOREIGN_REPORT_INTERVAL_MS) return;
+  log.info('agent_bridge_frame_foreign', { count: s.foreignSeen });
+  s.foreignSeen = 0;
+  s.foreignReportedAt = now;
 }
 
 async function handleRaw(s: BridgeState, raw: string): Promise<void> {
@@ -168,7 +196,7 @@ async function handleRaw(s: BridgeState, raw: string): Promise<void> {
   // Не расшифровалось — значит, кадр не от владельца ключа. Молчание здесь
   // намеренное: ответ подтвердил бы чужому, что тема угадана верно.
   if (payload === null) {
-    log.info('agent_bridge_frame_foreign');
+    noteForeign(s);
     return;
   }
 
@@ -272,6 +300,8 @@ export async function startAgentBridgeIfEnabled(): Promise<boolean> {
     reconnectTimer: null,
     reconnectAttempt: 0,
     active: true,
+    foreignSeen: 0,
+    foreignReportedAt: 0,
   };
   state = s;
   openWs(s);
@@ -324,6 +354,8 @@ export async function handleBridgeFrameForTest(
     reconnectTimer: null,
     reconnectAttempt: 0,
     active: true,
+    foreignSeen: 0,
+    foreignReportedAt: 0,
   };
   const prev = state;
   state = s;

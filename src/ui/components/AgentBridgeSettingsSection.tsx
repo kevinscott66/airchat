@@ -16,7 +16,7 @@
  * месте хуже, чем её отсутствие: она создаёт впечатление, что ответ есть.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 
@@ -24,7 +24,6 @@ import { AppSwitch } from './AppSwitch';
 import { BrandedQr } from './BrandedQr';
 import { font, radius } from '../theme';
 import { useThemedStyles } from '../ThemeContext';
-import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showConfirm, showError, showSuccess } from './userFeedback';
 import { userErrorText } from './userErrorText';
 import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
@@ -124,13 +123,40 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
     [busy, refreshKey],
   );
 
-  const copyBtn = useAsyncButton(async () => {
+  const copyKey = useCallback(async () => {
     if (!accessKey) return;
     await Clipboard.setStringAsync(accessKey);
     // Текст подтверждения — из общего словаря (ui/clipboardText): у копирования
     // в приложении одно слово на всех, и заводить здесь своё значит разойтись.
     showSuccess(COPIED_TEXT);
-  });
+  }, [accessKey]);
+
+  // Буфер обмена общий на всё устройство, а на Apple — ещё и общий между
+  // устройствами одного Apple ID (Universal Clipboard). Ключ здесь —
+  // предъявительский мандат: строка `airchat-bridge://…` содержит и секрет, и
+  // адрес сервера, больше для управления ничего не нужно. Поэтому не копируем
+  // молча — человек решает это сам, зная цену; рядом стоит код, через который
+  // ключ вообще не покидает экран.
+  const onCopyPress = useCallback(() => {
+    if (!accessKey) return;
+    showConfirm({
+      // Глагол — из общего словаря: «Копировать» против «Скопировать» здесь
+      // уже расходились, и `clipboardText.test` это ловит.
+      title: `${COPY_ACTION} ключ?`,
+      message:
+        'Ключ уйдёт в буфер обмена: его прочитает любое приложение, которое вы откроете следом, а на iPhone и Mac с одним Apple ID он появится на всех устройствах сразу. Надёжнее показать агенту код на экране. Сразу после вставки скопируйте что-нибудь другое.',
+      actions: [
+        {
+          label: `Всё равно ${COPY_ACTION.toLowerCase()}`,
+          destructive: true,
+          onPress: () => {
+            void copyKey();
+          },
+        },
+        { label: 'Отмена', cancel: true },
+      ],
+    });
+  }, [accessKey, copyKey]);
 
   const revoke = useCallback(async () => {
     try {
@@ -217,9 +243,10 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
       <Text style={styles.sectionTitle}>МОСТ ДЛЯ ВНЕШНЕГО АГЕНТА</Text>
       <Text style={styles.hint}>
         Позволяет программе на компьютере узнавать состояние туннеля, включать и выключать его и
-        править настройки этого устройства. Переписку мост не читает и сообщений не отправляет.
-        Команды идут через тот же сервер доставки, отдельной темой; телефон ничего не слушает
-        снаружи.
+        править настройки этого устройства. Переписку мост не читает и сообщений не отправляет —
+        но он правит адрес сервера доставки, а значит тот, у кого окажется ключ, может перевести
+        вашу доставку на свой сервер. Ключ давайте только своей программе. Команды идут через тот
+        же сервер доставки, отдельной темой; телефон ничего не слушает снаружи.
       </Text>
       <View style={styles.card}>
         <View style={styles.switchRow}>
@@ -257,20 +284,15 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
                 <BrandedQr value={accessKey} size={QR_SIZE} />
                 <Text style={styles.qrNote}>
                   Ключ и адрес сервера в одной строке: агенту больше ничего вводить не нужно.
+                  Через код надёжнее, чем через буфер обмена.
                 </Text>
               </View>
             ) : null}
 
             <View style={styles.rowBtns}>
-              <Pressable style={styles.btn} onPress={copyBtn.onPress} disabled={copyBtn.loading}>
-                {copyBtn.loading ? (
-                  <ActivityIndicator color={styles.accent.color} />
-                ) : (
-                  <>
-                    <Ionicons name="copy-outline" size={16} color={styles.accent.color} />
-                    <Text style={styles.btnText}>{COPY_ACTION}</Text>
-                  </>
-                )}
+              <Pressable style={styles.btn} onPress={onCopyPress} testID="agent_bridge_copy">
+                <Ionicons name="copy-outline" size={16} color={styles.accent.color} />
+                <Text style={styles.btnText}>{COPY_ACTION}</Text>
               </Pressable>
               <Pressable style={styles.btn} onPress={onRevokePress} testID="agent_bridge_revoke">
                 <Ionicons name="refresh" size={16} color={styles.errColor.color} />

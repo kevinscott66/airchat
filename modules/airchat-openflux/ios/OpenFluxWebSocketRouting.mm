@@ -101,9 +101,17 @@ API_AVAILABLE(ios(17.0))
 
 - (void)dealloc
 {
-  // Сессия держит делегата (то есть нас) до инвалидации. Штатно её гасит
-  // -URLSession:task:didCompleteWithError:, но если сокет умер, не дойдя даже
-  // до этого, лучше отпустить ресурсы здесь, чем оставить висеть сессию.
+  // Здесь мы оказываемся только до -open: пока сессии нет, никто нас не держит.
+  //
+  // После -open рассчитывать на dealloc нельзя, и прежний комментарий на этом
+  // месте утверждал обратное. NSURLSession держит делегата СИЛЬНО до самой
+  // инвалидации, а делегат — это мы; значит пока сессия жива, счётчик ссылок
+  // на нас не дойдёт до нуля и dealloc не позовут никогда. Кольцо разрывает
+  // -URLSession:task:didCompleteWithError:, где стоит finishTasksAndInvalidate,
+  // и туда приходят все три конца жизни задачи: кадр close от сервера, ошибка
+  // и наш собственный cancel из -closeWithCode:. Поэтому строчка ниже — не
+  // подстраховка «если сокет умер, не дойдя до этого» (такой случай сюда и не
+  // попадёт), а уборка за сокетом, который создали и не открыли.
   [_ofSession invalidateAndCancel];
 }
 
@@ -492,6 +500,19 @@ void AirChatOpenFluxInstallWebSocketProvider(AirChatOpenFluxSocksEndpointProvide
       NSString *host = [endpoint substringToIndex:separator.location];
       NSString *port = [endpoint substringFromIndex:separator.location + 1];
       if (host.length == 0 || port.length == 0) {
+        return nil;
+      }
+
+      // Петлю через туннель не гоняем — то же правило, что у слоёв 1 и 2
+      // (OpenFluxRouting.excludedHosts). Свой же SOCKS5 и всё остальное на
+      // localhost обязано ходить напрямую: завернуть петлю в туннель значит в
+      // лучшем случае отправить её наружу и потерять, в худшем — замкнуть ядро
+      // на самоё себя. В dev-сборке сюда же попадает веб-сокет перезагрузки
+      // бандла Metro.
+      NSString *target = request.URL.host.lowercaseString;
+      if ([target isEqualToString:@"localhost"] || [target isEqualToString:@"127.0.0.1"] ||
+          [target isEqualToString:@"::1"] || [target isEqualToString:@"[::1]"] ||
+          [target hasSuffix:@".localhost"]) {
         return nil;
       }
 

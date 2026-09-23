@@ -96,8 +96,9 @@ final class OpenFluxTunnelLog {
     _ = fcntl(write, F_SETFL, fcntl(write, F_GETFL, 0) | O_NONBLOCK)
     _ = fcntl(read, F_SETFL, fcntl(read, F_GETFL, 0) | O_NONBLOCK)
 
-    // Настоящий stderr сохраняем и дублируем в него всё, что перехватили:
-    // иначе из Xcode пропадут и наши строки, и чужие (NSLog пишет туда же).
+    // Настоящий stderr сохраняем и дублируем в него перехваченное: иначе из
+    // Xcode пропадут и наши строки, и чужие (NSLog пишет туда же). Но не
+    // дословно — построчно и без адресов, см. `redactedForConsole`.
     realStderr = dup(2)
     guard dup2(write, 2) >= 0 else {
       close(read)
@@ -121,12 +122,6 @@ final class OpenFluxTunnelLog {
       let count = Darwin.read(fd, &buffer, buffer.count)
       if count <= 0 { break }
 
-      if realStderr >= 0 {
-        _ = buffer.withUnsafeBytes { raw in
-          Darwin.write(realStderr, raw.baseAddress, count)
-        }
-      }
-
       tail.append(contentsOf: buffer[0..<count])
       consumeLines()
       if count < buffer.count { break }
@@ -138,6 +133,7 @@ final class OpenFluxTunnelLog {
     while let index = tail.firstIndex(of: newline) {
       let line = String(decoding: tail[tail.startIndex..<index], as: UTF8.self)
       tail = Data(tail[tail.index(after: index)...])
+      echo(line: line)
       handle(line: line)
     }
     // Ограничение на случай, если в stderr польётся что-то без переводов
@@ -145,6 +141,52 @@ final class OpenFluxTunnelLog {
     if tail.count > 64 * 1024 {
       tail = Data()
     }
+  }
+
+  /**
+   * Вернуть строку в настоящий stderr — без адресов.
+   *
+   * Счётчик включает в ядре подробный вывод, а подробный вывод транспортного
+   * кода содержит адреса: и тот, по которому ядро разговаривает с документом
+   * (ссылка на документ и есть право писать в него), и каждый host:port, куда
+   * приложение соединяется через SOCKS5. Настоящий stderr — это системная
+   * консоль устройства: её снимает подключённый Mac без всякого доступа к
+   * секретам, и туда же смотрит любой, у кого телефон оказался в руках.
+   *
+   * Раньше сюда уходил перехваченный буфер дословно. Дословность тут не нужна
+   * никому: из Xcode нужны наши строки и факт, что ядро что-то печатает, — а
+   * адрес назначения виден в самом приложении, на экране диагностики, который
+   * человек открывает сам.
+   */
+  private func echo(line: String) {
+    guard realStderr >= 0 else { return }
+    var out = redactedForConsole(line)
+    out.append("\n")
+    guard let data = out.data(using: .utf8) else { return }
+    _ = data.withUnsafeBytes { raw in
+      Darwin.write(realStderr, raw.baseAddress, data.count)
+    }
+  }
+
+  /// Адрес в строке — от схемы до пробела; и цель CONNECT целиком.
+  private static let urlLike = try? NSRegularExpression(
+    pattern: "[a-zA-Z][a-zA-Z0-9+.-]*://[^\\s\"']+"
+  )
+
+  private func redactedForConsole(_ line: String) -> String {
+    var out = line
+    if let range = out.range(of: "[SOCKS5] CONNECT ") {
+      // Куда именно пошло соединение — это ровно та метаданная, ради сокрытия
+      // которой туннель и заводили. Факт соединения оставляем: по нему в Xcode
+      // видно, что перехват жив.
+      out = String(out[out.startIndex..<range.upperBound]) + "<адрес скрыт>"
+    }
+    guard let regex = Self.urlLike else { return out }
+    return regex.stringByReplacingMatches(
+      in: out,
+      range: NSRange(out.startIndex..., in: out),
+      withTemplate: "<адрес скрыт>"
+    )
   }
 
   private func handle(line: String) {

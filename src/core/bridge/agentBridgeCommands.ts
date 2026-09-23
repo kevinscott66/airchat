@@ -83,6 +83,28 @@ export const CONFIG_SECTIONS = [
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 /**
+ * Поля внутри разрешённых разделов, которые мост не показывает и не принимает.
+ *
+ * Раздел разрешён целиком, а внутри него может лежать не настройка, а ключ.
+ * `openflux.docUrl` — ровно такой случай: ссылка на документ и есть право
+ * писать в него, и обе нативные части специально не пишут её в журнал
+ * (`AirChatOpenFluxModule.swift`, `.kt` — «logcat читается с устройства кем
+ * угодно»). Отдав её по `config.get`, мост подарил бы это право всякому, у
+ * кого оказался ключ доступа; приняв её по `config.set`, позволил бы перевести
+ * весь туннелированный трафик на чужой транзит — и это пережило бы перезапуск
+ * приложения, потому что правка ложится в `airchat-config.json`.
+ *
+ * Список, а не «всё, что похоже на URL»: полей мало, каждое надо назвать и
+ * объяснить, а угадывание по виду значения однажды пропустит новое.
+ */
+const SECRET_FIELDS: ReadonlyArray<{ section: ConfigSection; field: string }> = [
+  { section: 'openflux', field: 'docUrl' },
+];
+
+/** Что стоит в ответе вместо значения ключа: факт наличия без самого ключа. */
+const SECRET_PLACEHOLDER = '<скрыто мостом>';
+
+/**
  * Настройки, привязанные к устройству.
  *
  * Те самые, что не синхронизируются и потому недоступны headless-клиенту:
@@ -200,6 +222,18 @@ function pickSections(cfg: AppConfig): Record<string, unknown> {
   for (const section of CONFIG_SECTIONS) {
     if (cfg[section] !== undefined) out[section] = cfg[section];
   }
+  // Ключи не показываем, но и не прячем сам факт: агенту надо уметь отличить
+  // «в сборке нет туннеля» от «есть, просто ссылку тебе не дали» — иначе он
+  // станет чинить не то. Копия раздела делается здесь же: `cfg` пришёл из
+  // `loadConfig`, и затирать поле в нём значило бы стереть ссылку у всех,
+  // кто держит тот же объект.
+  for (const { section, field } of SECRET_FIELDS) {
+    const value = out[section];
+    if (!value || typeof value !== 'object') continue;
+    const copy = { ...(value as Record<string, unknown>) };
+    if (typeof copy[field] === 'string' && copy[field] !== '') copy[field] = SECRET_PLACEHOLDER;
+    out[section] = copy;
+  }
   return out;
 }
 
@@ -220,6 +254,23 @@ async function cmdConfigSet(arg: unknown): Promise<BridgeReply> {
       `Мост не правит разделы: ${forbidden.join(', ')}. Разрешены: ${CONFIG_SECTIONS.join(', ')}.`,
     );
   }
+  // Раздел разрешён — это ещё не значит, что разрешено всё внутри него. См.
+  // SECRET_FIELDS: правка `openflux.docUrl` переводит весь туннелированный
+  // трафик на чужой транзит и переживает перезапуск, потому что ложится в
+  // `airchat-config.json`. Заодно это отсекает «верни обратно то, что получил»:
+  // в ответе `config.get` на месте ссылки стоит SECRET_PLACEHOLDER, и
+  // невнимательный агент записал бы в конфиг именно его.
+  for (const { section, field } of SECRET_FIELDS) {
+    const value = patch[section];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    if (!(field in (value as Record<string, unknown>))) continue;
+    return fail(
+      'config.set',
+      'field_not_allowed',
+      `Мост не правит ${section}.${field}: это ключ доступа, а не настройка. Меняйте его в сборке.`,
+    );
+  }
+
   const cfg = await saveConfigOverride(patch as Partial<AppConfig>);
   // Адрес ретранслятора и туннель меняют путь трафика, а путь действует
   // только на новые соединения — главный канал надо переоткрыть.
