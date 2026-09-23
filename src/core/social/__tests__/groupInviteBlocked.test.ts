@@ -49,6 +49,7 @@ jest.mock('../../storage/local', () => ({
   insertGroupMessageChecked: jest.fn(async () => 'inserted'),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
+  markGroupMessageSeenChecked: jest.fn(async () => 'recorded'),
   insertGroupJoinRequest: jest.fn(async () => ({ created: true })),
   profileKvGet: jest.fn(async () => null),
   kvDeleteScoped: jest.fn(async () => {}),

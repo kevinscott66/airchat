@@ -98,6 +98,7 @@ jest.mock('../../storage/local', () => ({
   insertGroupMessageChecked: jest.fn(async () => 'inserted'),
   touchGroupConversation: jest.fn(async () => {}),
   markGroupMessageSeen: jest.fn(async () => {}),
+  markGroupMessageSeenChecked: jest.fn(async () => 'recorded'),
   insertGroupJoinRequest: jest.fn(async (...a: unknown[]) => {
     mockJoinRequests.push(a);
     return { created: true };

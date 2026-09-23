@@ -236,7 +236,9 @@ describe('храповик: чтение и запись списка идут �
 
   it.each([
     ['export async function toggleReaction(', 'applyReactionInTx('],
-    ['export async function markGroupMessageSeen(', 'recordGroupSeenInTx('],
+    // v4.32.769: транзакцию держит различающая форма, а прежнее имя —
+    // её обёртка в одну строку. Двух копий этой проводки быть не должно.
+    ['export async function markGroupMessageSeenChecked(', 'recordGroupSeenInTx('],
     ['export async function markStoryViewed(', 'recordStoryViewInTx('],
   ])('%s открывает транзакцию до чтения', (head, helper) => {
     const body = bodyOf(head);

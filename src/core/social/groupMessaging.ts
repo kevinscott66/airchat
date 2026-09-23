@@ -25,7 +25,7 @@ import {
   updateGroupMessageText,
   deleteGroupMessage,
   touchGroupConversation,
-  markGroupMessageSeen,
+  markGroupMessageSeenChecked,
   insertGroupJoinRequest,
   createGroup,
   upsertGroupMember,
@@ -457,14 +457,25 @@ export async function handleIncomingGroupReadReceipt(
       });
       return 'consumed';
     }
-    await markGroupMessageSeen(env.lastSeenMsgId, env.groupId, pid, env.viewerPubB64);
+    // v4.32.769: отметка отвечает словом. Прежде она отвечала `void` и гасила
+    // свой отказ сама, а ветка отсрочки ниже ждала исключения — то есть не
+    // зажигалась никогда. Занятая база или не открывшийся столбец списка
+    // стоили галочки «прочитано» у отправителя навсегда: повтора у квитанции
+    // нет, следующая расскажет уже про следующее сообщение.
+    const seen = await markGroupMessageSeenChecked(
+      env.lastSeenMsgId,
+      env.groupId,
+      pid,
+      env.viewerPubB64
+    );
+    if (seen === 'failed') {
+      log.warn('group_read_receipt_apply_failed', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     log.debug('group_read_receipt_applied', { groupId: env.groupId.slice(0, 8), viewer: env.viewerPubB64.slice(0, 8) });
   } catch (e) {
-    // v4.32.748: сюда попадает только отказ записи — разбор конверта кончился
-    // выше, до try, а проверки внутри не бросают. Значит это «сейчас не
-    // смогли», и конверт надо перезапросить: повтора у отметки нет, а
-    // следующая расскажет уже про следующее сообщение. Прежде отказ уходил в
-    // log.debug, и галочка у отправителя не появлялась никогда.
+    // Разбор конверта кончился выше, до try, а проверки внутри не бросают —
+    // сюда попадает только неожиданное. Оно тоже «сейчас не смогли».
     log.warn('group_read_receipt_apply_failed', { err: e instanceof Error ? e.message : String(e) });
     return 'deferred';
   }

@@ -7267,37 +7267,68 @@ export async function markGroupMessageSeen(
   ownerProfileId: number,
   viewerPubB64: string
 ): Promise<void> {
+  await markGroupMessageSeenChecked(msgId, groupId, ownerProfileId, viewerPubB64);
+}
+
+/**
+ * Исход отметки «прочитано» тремя словами (v4.32.769).
+ *
+ * До этого круга отметка отвечала `void`, и любой отказ гасился здесь же в
+ * `catch`: занятая база, неподнявшаяся блокировка `beginImmediate`, не
+ * открывшийся ключ шифрования данных, нечитаемый столбец `seen_by`. Наружу
+ * уходило то же самое, что и после удачной записи, — ничего.
+ *
+ * Приёмник квитанции (`handleIncomingGroupReadReceipt`) ветку отсрочки имел, но
+ * зажигалась она исключением, а его эта функция не бросает. То есть ветка была
+ * мёртвой: отказ объявлялся разобранным, метка «докуда прочитано» у
+ * ретранслятора уходила вперёд, а повтора у квитанции нет — следующая
+ * расскажет уже про следующее сообщение. Галочка «прочитано» у отправителя не
+ * появлялась никогда.
+ *
+ * `'noop'` — писать нечего: строки нет, читатель уже в списке, список упёрся в
+ * тысячу. Все три окончательны, повтор кадра их не изменит.
+ */
+export type GroupSeenWrite = 'recorded' | 'noop' | 'failed';
+
+export async function markGroupMessageSeenChecked(
+  msgId: string,
+  groupId: string,
+  ownerProfileId: number,
+  viewerPubB64: string
+): Promise<GroupSeenWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
     // Серийность списка прочитавших — см. applyReactionInTx.
     const txn = await beginImmediate(d);
-    let changed = false;
+    let outcome: GroupSeenWrite = 'noop';
     try {
-      changed = await recordGroupSeenInTx(d, dek, { msgId, groupId, ownerProfileId, viewerPubB64 });
+      outcome = await recordGroupSeenInTx(d, dek, { msgId, groupId, ownerProfileId, viewerPubB64 });
       await txn.commit();
     } catch (inner) {
       try { await txn.rollback(); } catch { /* ignore */ }
       throw inner;
     }
-    if (changed) emitChatWrites();
+    if (outcome === 'recorded') emitChatWrites();
+    return outcome;
   } catch (e) {
     log.warn('mark_group_message_seen_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
   }
 }
 
-/** Дописать читателя в список. `true` — список действительно изменился. */
+/** Дописать читателя в список: записали, писать нечего, не вышло. */
 async function recordGroupSeenInTx(
   d: SQLite.SQLiteDatabase,
   dek: Uint8Array,
   req: { msgId: string; groupId: string; ownerProfileId: number; viewerPubB64: string }
-): Promise<boolean> {
+): Promise<GroupSeenWrite> {
   const { msgId, groupId, ownerProfileId, viewerPubB64 } = req;
   const row = await d.getFirstAsync<{ seen_by: string | null }>(
     'SELECT seen_by FROM group_messages WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
     [msgId, groupId, ownerProfileId]
   );
-  if (!row) return false;
+  if (!row) return 'noop';
   // v4.32.189 (Round-19 #3): guard against corrupt/non-array seen_by.
   // If a prior partial write stored `{}`, `current.includes` would throw
   // and no row would ever be marked seen; if it stored anything else
@@ -7307,21 +7338,25 @@ async function recordGroupSeenInTx(
   // нынешним читателем.
   const seenCell = readAtRestCell(row.seen_by, dek);
   if (!mayOverwrite(seenCell)) {
+    // v4.32.769: столбец не открылся — это отказ, а не «писать нечего».
+    // Ключ мог ещё не подняться; со следующей попыткой он откроется, и
+    // читатель допишется. Прежде этот случай был неотличим от «уже в
+    // списке», и квитанция объявлялась разобранной навсегда.
     log.warn('group_seen_by_unreadable', {});
-    return false;
+    return 'failed';
   }
   // v4.32.591: разбор один на все списки ключей — см. social/viewerList.
   const current = parseViewerList(cellTextOrNull(seenCell)).viewers;
-  if (current.includes(viewerPubB64)) return false; // already recorded
+  if (current.includes(viewerPubB64)) return 'noop'; // already recorded
   // v4.32.201 (Round-31 #1): cap seen_by at 1000 to prevent a hostile
   // group member spamming receipts from spoofed pubkeys bloating the row.
-  if (current.length >= 1000) return false;
+  if (current.length >= 1000) return 'noop';
   current.push(viewerPubB64);
   await d.runAsync(
     'UPDATE group_messages SET seen_by = ? WHERE id = ? AND group_id = ? AND owner_profile_id = ?',
     [encryptAtRestString(JSON.stringify(current), dek), msgId, groupId, ownerProfileId]
   );
-  return true;
+  return 'recorded';
 }
 
 export type GroupStats = {

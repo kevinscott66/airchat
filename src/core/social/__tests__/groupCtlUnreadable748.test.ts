@@ -35,8 +35,8 @@ let mockGroupRow: FakeGroup | null = null;
 let mockGroupFails = false;
 /** Состав группы. null — «состав не прочитался», как у listGroupMembersRead. */
 let mockMembers: FakeMember[] | null = [];
-/** Бросает ли запись отметки о прочтении. */
-let mockSeenThrows = false;
+/** Чем отвечает запись отметки о прочтении (v4.32.769). */
+let mockSeenWrite: 'recorded' | 'noop' | 'failed' = 'recorded';
 
 const mockCreated: unknown[][] = [];
 const mockSeen: unknown[][] = [];
@@ -59,9 +59,12 @@ jest.mock('../../storage/local', () => ({
   // настоящий повтор от отказа базы. Предмет этого набора другой.
   insertGroupMessageChecked: jest.fn(async () => 'inserted'),
   touchGroupConversation: jest.fn(async () => {}),
-  markGroupMessageSeen: jest.fn(async (...a: unknown[]) => {
-    if (mockSeenThrows) throw new Error('база занята');
-    mockSeen.push(a);
+  markGroupMessageSeen: jest.fn(async () => {}),
+  // v4.32.769: отметка отвечает словом, а не бросает. Прежний мок бросал —
+  // настоящая функция гасила свой отказ сама, и ветка отсрочки была мёртвой.
+  markGroupMessageSeenChecked: jest.fn(async (...a: unknown[]) => {
+    if (mockSeenWrite === 'recorded') mockSeen.push(a);
+    return mockSeenWrite;
   }),
   insertGroupJoinRequest: jest.fn(async () => ({ created: true })),
   profileKvGet: jest.fn(async () => null),
@@ -168,7 +171,7 @@ beforeEach(() => {
   mockGroupRow = null;
   mockGroupFails = false;
   mockMembers = [];
-  mockSeenThrows = false;
+  mockSeenWrite = 'recorded';
   mockCreated.length = 0;
   mockSeen.length = 0;
   mockUpserts.length = 0;
@@ -246,8 +249,18 @@ describe('отметка о прочтении', () => {
     // а про это не напомнит никто.
     mockGroupRow = known();
     mockMembers = [{ peerPubB64: PEER, role: 'member', ownerProfileId: 1 }];
-    mockSeenThrows = true;
+    mockSeenWrite = 'failed';
     expect(await handleIncomingGroupReadReceipt(receipt(), RCPT, PEER)).toBe('deferred');
+    expect(mockSeen).toEqual([]);
+  });
+
+  it('писать было нечего — это не отказ, конверт разобран', async () => {
+    // v4.32.769: читатель уже в списке, строки нет, список упёрся в тысячу.
+    // Повтор кадра ни одного из трёх не изменит.
+    mockGroupRow = known();
+    mockMembers = [{ peerPubB64: PEER, role: 'member', ownerProfileId: 1 }];
+    mockSeenWrite = 'noop';
+    expect(await handleIncomingGroupReadReceipt(receipt(), RCPT, PEER)).toBe('consumed');
   });
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: обычная отметка доезжает и записывается', async () => {
