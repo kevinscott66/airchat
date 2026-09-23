@@ -30,6 +30,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
 import { flushFeedPublishQueue, resumeCommentOutbox } from '../social/feedService';
 import { runSyncIfOnline } from '../storage/sync';
+import { createListenerSet } from './listenerSet';
 
 const FLUSH_DEBOUNCE_MS = 2_000;
 
@@ -63,7 +64,7 @@ let onReconnectRef: ((pair: KeyPairBytes) => void) | null = null;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let pathTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPath: NetworkPathChange | null = null;
-const pathListeners = new Set<(change: NetworkPathChange) => void>();
+const pathListeners = createListenerSet<NetworkPathChange>('net_path_listener_failed');
 
 /**
  * Подписаться на смену пути трафика. Возвращает отписку.
@@ -73,10 +74,7 @@ const pathListeners = new Set<(change: NetworkPathChange) => void>();
  * отключала бы восстановление туннеля до перезапуска приложения.
  */
 export function addNetworkPathListener(fn: (change: NetworkPathChange) => void): () => void {
-  pathListeners.add(fn);
-  return () => {
-    pathListeners.delete(fn);
-  };
+  return pathListeners.add(fn);
 }
 
 function schedulePathChange(change: NetworkPathChange): void {
@@ -90,16 +88,7 @@ function schedulePathChange(change: NetworkPathChange): void {
     pendingPath = null;
     if (!settled) return;
     log.info('net_path_changed', settled);
-    // Копия набора: подписчик вправе отписаться прямо из обработчика.
-    for (const fn of Array.from(pathListeners)) {
-      try {
-        fn(settled);
-      } catch (e) {
-        log.warn('net_path_listener_failed', {
-          err: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    pathListeners.notify(settled);
   }, PATH_DEBOUNCE_MS);
 }
 

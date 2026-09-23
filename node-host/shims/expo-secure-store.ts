@@ -48,10 +48,10 @@
  * файловой системы атомарен, а прямая перезапись оставила бы при обрыве
  * обрезанный файл — то есть потерю секретных слов без возможности возврата.
  */
-import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { makeSerialQueue } from '../runtime/serialQueue';
 import { onWorkdir, workdir } from '../runtime/workdir';
 
 export type SecureStoreOptions = {
@@ -218,15 +218,7 @@ async function writeStore(data: StoreFile): Promise<void> {
  * но этот файл читается-меняется-пишется целиком, и любой обход очереди
  * (прямой импорт, второй потребитель) потерял бы одну из двух записей.
  */
-let chain: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain.then(fn, fn);
-  chain = next.then(
-    () => undefined,
-    () => undefined
-  );
-  return next;
-}
+const serial = makeSerialQueue();
 
 export async function getItemAsync(
   itemKey: string,
@@ -305,9 +297,4 @@ export function setItem(): void {
 export function canUseBiometricAuthentication(): boolean {
   // Ни датчика, ни человека рядом — «нет» здесь единственный честный ответ.
   return false;
-}
-
-/** Есть ли уже заведённые записи — нужно скрипту проверки, а не ядру. */
-export function storeFileExists(): boolean {
-  return storePath !== null && fs.existsSync(storePath);
 }

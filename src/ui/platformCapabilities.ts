@@ -52,5 +52,20 @@ export const EMBEDDED_VPN_AVAILABLE = Platform.OS === 'android';
  * Отдельная константа, а не переиспользование EMBEDDED_VPN_AVAILABLE: это
  * разные реализации с разными границами — встроенный VPN так и остался
  * android-only.
+ *
+ * Перечисление платформ, а не `!== 'web'`: когда появится следующая платформа,
+ * она обязана попасть сюда осознанно. Молчаливое «раз не web, значит ядро
+ * есть» превратилось бы в непонятную ошибку старта вместо честного
+ * «недоступно».
+ *
+ * Функция и константа — одно и то же условие, записанное один раз. Константа
+ * нужна интерфейсу (`{OPENFLUX_AVAILABLE && …}` в разметке), функция — ядру
+ * (`vpn/openFluxController`), которое спрашивает по ходу дела; своя копия
+ * условия в ядре означала бы, что при переносе на следующую платформу мост и
+ * контроллер разъедутся в ответах «есть ядро» и «нет ядра».
  */
-export const OPENFLUX_AVAILABLE = Platform.OS === 'android' || Platform.OS === 'ios';
+export function openFluxAvailable(): boolean {
+  return Platform.OS === 'android' || Platform.OS === 'ios';
+}
+
+export const OPENFLUX_AVAILABLE = openFluxAvailable();

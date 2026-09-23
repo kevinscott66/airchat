@@ -32,17 +32,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
+import { check, finish, say } from '../report';
+
 const HOST_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp.mjs');
-
-function say(line: string): void {
-  process.stdout.write(`${line}\n`);
-}
-
-let failures = 0;
-function check(ok: boolean, label: string, fact: string): void {
-  if (!ok) failures += 1;
-  say(`  ${ok ? 'OK  ' : 'FAIL'} ${label}: ${fact}`);
-}
 
 /**
  * Окружение дочернего процесса собирается списком, а не наследованием: в этом
@@ -451,9 +443,7 @@ async function main(): Promise<void> {
   );
   say('');
 
-  say(`ИТОГ: провалов ${failures}`);
-  say(`каталог сценария оставлен: ${root}`);
-  if (failures > 0) process.exitCode = 1;
+  finish(`каталог сценария оставлен: ${root}`);
 }
 
 await main();

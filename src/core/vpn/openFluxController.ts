@@ -15,10 +15,19 @@
  * означало бы отправить человека искать поломку там, где её нет; в этом
  * репозитории такое уже ловили на облачной копии (см. config.bundledConfig).
  */
-import { Platform } from 'react-native';
 import AirChatOpenFlux from 'airchat-openflux';
 import type { AppConfig } from '../config';
 import { log } from '../logger';
+// Модуль интерфейса в ядре — осознанно, по той же причине, что и в
+// `bridge/agentBridgeCommands`: ответ на вопрос «есть ли на этой платформе
+// ядро OpenFlux» в проекте должен быть один. Своя копия условия здесь
+// разъехалась бы с той, по которой интерфейс решает, показывать ли настройку,
+// — и ровно в тот день, когда ядро принесут под следующую платформу.
+//
+// Сам по себе этот ответ ничего не гарантирует — нативная часть отвечает за
+// себя сама (`isSupported`), и на iOS она скажет «нет», если ядро не собрано
+// или система старше iOS 17.
+import { openFluxAvailable } from '../../ui/platformCapabilities';
 
 export type OpenFluxUiStatus =
   /** Выключен пользователем или конфигом. */
@@ -33,21 +42,6 @@ export type OpenFluxUiStatus =
   | 'unconfigured'
   /** Пробовали поднять — не вышло. */
   | 'failed';
-
-/**
- * Есть ли на этой платформе нативная часть туннеля.
- *
- * Перечисление, а не `!== 'web'`: когда появится следующая платформа, она
- * обязана попасть сюда осознанно. Молчаливое «раз не web, значит ядро есть»
- * превратилось бы в непонятную ошибку старта вместо честного «недоступно».
- *
- * Сам по себе этот ответ ничего не гарантирует — нативная часть отвечает за
- * себя сама (`isSupported`), и на iOS она скажет «нет», если ядро не собрано
- * или система старше iOS 17.
- */
-function hasNativeCore(): boolean {
-  return Platform.OS === 'android' || Platform.OS === 'ios';
-}
 
 /** Куда просить ядро положить локальный SOCKS5. Порт 0 — пусть выберет сам. */
 function socksAddrFor(cfg: AppConfig): string {
@@ -85,7 +79,7 @@ export async function maybeStartOpenFlux(
   }
   // На web ядра нет и быть не может — это не ошибка, а отсутствие реализации,
   // и говорить о ней надо именно так.
-  if (!hasNativeCore()) return 'unsupported';
+  if (!openFluxAvailable()) return 'unsupported';
   const mod = AirChatOpenFlux;
   if (!mod) {
     log.warn('openflux_module_missing');
@@ -115,7 +109,7 @@ export async function maybeStartOpenFlux(
 }
 
 export async function stopOpenFlux(): Promise<void> {
-  if (!hasNativeCore()) return;
+  if (!openFluxAvailable()) return;
   const mod = AirChatOpenFlux;
   if (!mod) return;
   try {
@@ -127,7 +121,7 @@ export async function stopOpenFlux(): Promise<void> {
 }
 
 export async function getOpenFluxRunning(): Promise<boolean> {
-  if (!hasNativeCore()) return false;
+  if (!openFluxAvailable()) return false;
   const mod = AirChatOpenFlux;
   if (!mod) return false;
   try {
@@ -139,7 +133,7 @@ export async function getOpenFluxRunning(): Promise<boolean> {
 
 /** Адрес локального SOCKS5, пока туннель поднят. Для экрана диагностики. */
 export async function getOpenFluxSocksAddr(): Promise<string | null> {
-  if (!hasNativeCore()) return null;
+  if (!openFluxAvailable()) return null;
   const mod = AirChatOpenFlux;
   if (!mod) return null;
   try {
@@ -187,7 +181,7 @@ export type OpenFluxTunnelStats = {
  * false, если считать нечем (web, Android — там счётчика пока нет).
  */
 export async function enableOpenFluxTunnelStats(): Promise<boolean> {
-  if (!hasNativeCore()) return false;
+  if (!openFluxAvailable()) return false;
   const mod = AirChatOpenFlux;
   if (!mod?.enableTunnelStats) return false;
   try {
@@ -204,7 +198,7 @@ export async function enableOpenFluxTunnelStats(): Promise<boolean> {
 
 /** `null` — счётчика на этой платформе нет; это не то же самое, что ноль. */
 export async function getOpenFluxTunnelStats(): Promise<OpenFluxTunnelStats | null> {
-  if (!hasNativeCore()) return null;
+  if (!openFluxAvailable()) return null;
   const mod = AirChatOpenFlux;
   if (!mod?.tunnelStats) return null;
   try {

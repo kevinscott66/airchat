@@ -24,6 +24,7 @@
  */
 import { loadConfig } from '../config';
 import { log } from '../logger';
+import { createListenerSet } from '../transport/listenerSet';
 import { restartInternetTransport } from '../transport/internet/restartInternetTransport';
 import { addNetworkPathListener, type NetworkPathChange } from '../transport/networkReconnectWatcher';
 import {
@@ -50,7 +51,7 @@ export type OpenFluxRevived = { status: OpenFluxUiStatus; socks: string | null }
 let unsubscribe: (() => void) | null = null;
 let inFlight = false;
 let changedAgain = false;
-const reviveListeners = new Set<(r: OpenFluxRevived) => void>();
+const reviveListeners = createListenerSet<OpenFluxRevived>('openflux_revive_listener_failed');
 
 /**
  * Узнать, что туннель переподняли под новую сеть.
@@ -61,22 +62,7 @@ const reviveListeners = new Set<(r: OpenFluxRevived) => void>();
  * «Работает» в тот момент, когда ядро как раз не поднялось.
  */
 export function addOpenFluxReviveListener(fn: (r: OpenFluxRevived) => void): () => void {
-  reviveListeners.add(fn);
-  return () => {
-    reviveListeners.delete(fn);
-  };
-}
-
-function notifyRevived(r: OpenFluxRevived): void {
-  for (const fn of Array.from(reviveListeners)) {
-    try {
-      fn(r);
-    } catch (e) {
-      log.warn('openflux_revive_listener_failed', {
-        err: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
+  return reviveListeners.add(fn);
 }
 
 /**
@@ -153,7 +139,7 @@ async function reviveOnce(): Promise<OpenFluxReviveResult> {
       err: e instanceof Error ? e.message : String(e),
     });
   }
-  notifyRevived({ status, socks });
+  reviveListeners.notify({ status, socks });
   return status === 'on' ? 'revived' : 'degraded';
 }
 

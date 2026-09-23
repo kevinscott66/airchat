@@ -111,11 +111,6 @@ type BridgeState = {
 
 let state: BridgeState | null = null;
 
-/** Отдаёт темы для интерфейса. `null` — мост не поднят. */
-export function bridgeTopicsForDiagnostics(): { command: string; reply: string } | null {
-  return state ? { command: state.keys.commandTopic, reply: state.keys.replyTopic } : null;
-}
-
 export function isBridgeRunning(): boolean {
   return !!state?.active;
 }

@@ -29,6 +29,7 @@ import { generateMnemonic } from 'bip39';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import { startCore, stopCore } from './host';
+import { check, finish, say } from './report';
 import { documentDir } from './runtime/workdir';
 
 import { deriveKeyPairFromMnemonic } from '../src/core/backup/seedPhrase';
@@ -42,17 +43,6 @@ import {
 } from '../src/core/transport/internet/internetTransport';
 
 const RELAY_BASE = 'https://ntfy.sh';
-
-function say(line: string): void {
-  process.stdout.write(`${line}\n`);
-}
-
-let failures = 0;
-/** Утверждение с печатью факта: и успех, и провал видны в выводе одинаково. */
-function check(ok: boolean, label: string, fact: string): void {
-  if (!ok) failures += 1;
-  say(`  ${ok ? 'OK  ' : 'FAIL'} ${label}: ${fact}`);
-}
 
 function hex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('hex');
@@ -320,8 +310,6 @@ export async function runProof(root: string): Promise<void> {
   }
   say('');
 
-  say(`ИТОГ: провалов ${failures}`);
-  say(`каталог проверки оставлен: ${root}`);
-  if (failures > 0) process.exitCode = 1;
+  finish(`каталог проверки оставлен: ${root}`);
 }
 

@@ -63,6 +63,7 @@ import { broadcastLastSeenPref } from '../../src/core/social/presencePrefSync';
 
 import { currentCore } from '../host';
 import { captureLog, type LogEntry } from '../runtime/logBus';
+import { makeSerialQueue } from '../runtime/serialQueue';
 
 /** Отказ с названной причиной. `detail` — для человека, `reason` — для кода. */
 export type Refusal = { ok: false; reason: string; detail?: string; log?: string[] };
@@ -79,7 +80,10 @@ function core(): ReturnType<typeof currentCore> {
   return currentCore();
 }
 
-const NO_CORE = 'core_not_running';
+/** Один и тот же отказ на все инструменты: ядра нет — говорить не о чем. */
+function noCore(): Refusal {
+  return refuse('core_not_running', 'ядро не запущено');
+}
 
 // ── Разбор идентификатора собеседника ───────────────────────────────────────
 
@@ -118,7 +122,7 @@ export function markStarted(at: number): void {
 
 export function status(): Result<StatusResult> {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
   const s = getInternetTransportSingleton().getStatus();
   return {
     ok: true,
@@ -160,7 +164,7 @@ function viewContact(c: Contact): ContactView {
 }
 
 export async function contactsList(): Promise<Result<{ contacts: ContactView[] }>> {
-  if (!core()) return refuse(NO_CORE, 'ядро не запущено');
+  if (!core()) return noCore();
   const rows = await listContactsRead();
   if (rows === null) {
     return refuse(
@@ -176,7 +180,7 @@ export async function contactAdd(input: {
   name: string;
 }): Promise<Result<{ contact: string; did: string | null; displayName: string }>> {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
   const key = parseContactId(input.id);
   if (!key) {
     return refuse(
@@ -208,13 +212,16 @@ export async function contactAdd(input: {
     did: publicKeyToDidKey(key),
     // Ядро подрезает имя при записи (sanitizeDisplayName, 64 символа), поэтому
     // отдаём не то, что прислали, а то, что действительно легло.
-    displayName: (await namesByContact()).get(b64) ?? name,
+    displayName: namesByContact(await listContactsRead()).get(b64) ?? name,
   };
 }
 
-/** Карта «ключ → имя» для склейки со списком переписок. */
-async function namesByContact(): Promise<Map<string, string>> {
-  const rows = await listContactsRead();
+/**
+ * Карта «ключ → имя» для склейки со списком переписок. Отказ чтения (`null`)
+ * даёт здесь пустую карту, как и пустой список: различает их вызывающий —
+ * только ему видно, о чём он спрашивает.
+ */
+function namesByContact(rows: Contact[] | null): Map<string, string> {
   const map = new Map<string, string>();
   for (const c of rows ?? []) map.set(c.peerPublicKey, c.displayName);
   return map;
@@ -242,7 +249,7 @@ export async function conversationsList(input?: {
   limit?: number;
 }): Promise<Result<{ conversations: ConversationView[]; namesRead: 'ok' | 'failed' }>> {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
   const rows = await listConversationsRead(c.pid);
   if (rows === null) {
     return refuse(
@@ -253,8 +260,7 @@ export async function conversationsList(input?: {
   // Имена читаются отдельным запросом, и он может отказать сам по себе.
   // Тогда переписки всё равно отдаются — но без вранья, будто имён не было.
   const contacts = await listContactsRead();
-  const names = new Map<string, string>();
-  for (const k of contacts ?? []) names.set(k.peerPublicKey, k.displayName);
+  const names = namesByContact(contacts);
   const limit = input?.limit ?? 50;
   const conversations = rows.slice(0, limit).map((r) => ({
     contact: r.contactPubB64,
@@ -331,7 +337,7 @@ export async function conversationMessages(input: {
     cursor: ChatPageCursor | null;
   }>
 > {
-  if (!core()) return refuse(NO_CORE, 'ядро не запущено');
+  if (!core()) return noCore();
   const messaging = getMessagingService();
   if (!messaging) return refuse('messaging_not_ready', 'служба переписки не создана');
   const b64 = toPubB64(input.contact);
@@ -401,15 +407,7 @@ const SEND_REFUSALS: Array<{ marker: string; reason: string; detail: string }> =
  * Очередь отправок. См. пояснение в шапке файла: причина отказа читается из
  * общего журнала, и перекрытие двух отправок присвоило бы одной чужую причину.
  */
-let sendQueue: Promise<unknown> = Promise.resolve();
-function serialize<T>(fn: () => Promise<T>): Promise<T> {
-  const next = sendQueue.then(fn, fn);
-  sendQueue = next.then(
-    () => undefined,
-    () => undefined
-  );
-  return next;
-}
+const serialize = makeSerialQueue();
 
 export type SendResult = {
   messageId: string;
@@ -423,7 +421,7 @@ export async function messageSend(input: {
   contact: string;
   text: string;
 }): Promise<Result<SendResult>> {
-  if (!core()) return refuse(NO_CORE, 'ядро не запущено');
+  if (!core()) return noCore();
   const messaging = getMessagingService();
   if (!messaging) return refuse('messaging_not_ready', 'служба переписки не создана');
   const b64 = toPubB64(input.contact);
@@ -477,11 +475,21 @@ export type FieldView =
   | { state: 'unset' }
   | { state: 'unreadable' };
 
-async function readField(pid: number, key: 'user_username' | 'user_bio' | 'user_pronouns' | 'user_custom_status' | 'user_handle'): Promise<FieldView> {
-  const read = await ownFieldTryGetFor(pid, key);
+/**
+ * Разложить прочитанное на три состояния. `null` вместо всей записи — это
+ * «не прочиталось», и с пустым значением он не сливается ни здесь, ни у
+ * приватности: обе ячейки заполняются через эту же функцию, чтобы «не
+ * прочиталось» нельзя было случайно превратить в «не заполнено» в одной из
+ * них.
+ */
+function fieldView(read: { text: string | null } | null): FieldView {
   if (read === null) return { state: 'unreadable' };
   if (read.text === null || read.text === '') return { state: 'unset' };
   return { state: 'value', value: read.text };
+}
+
+async function readField(pid: number, key: 'user_username' | 'user_bio' | 'user_pronouns' | 'user_custom_status' | 'user_handle'): Promise<FieldView> {
+  return fieldView(await ownFieldTryGetFor(pid, key));
 }
 
 export type ProfileView = {
@@ -496,7 +504,7 @@ export type ProfileView = {
 
 export async function profileGet(): Promise<Result<{ profile: ProfileView }>> {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
   const [displayName, bio, status_, pronouns, username] = await Promise.all([
     readField(c.pid, OWN_DISPLAY_NAME_KEY),
     readField(c.pid, 'user_bio'),
@@ -535,7 +543,7 @@ export async function profileSet(input: {
   Result<{ changed: string[]; broadcast: 'started' | 'skipped'; profile: ProfileView }>
 > {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
 
   const writes: Array<{ field: string; key: 'user_username' | 'user_bio' | 'user_pronouns' | 'user_custom_status'; value: string }> = [];
   if (input.displayName !== undefined) {
@@ -605,18 +613,14 @@ export type PrivacyView = Record<string, FieldView>;
 
 export async function privacyGet(): Promise<Result<{ privacy: PrivacyView }>> {
   const c = core();
-  if (!c) return refuse(NO_CORE, 'ядро не запущено');
+  if (!c) return noCore();
   const out: PrivacyView = {};
   for (const key of PRIVACY_PREF_KEYS) {
     const read = await privacyPrefTryGetFor(c.pid, key);
     // Та же тройка, что и у карточки: не прочиталось ≠ не трогали. У
     // переключателя приватности разница особенно дорогая — осторожная
     // сторона у каждого своя, и выбирает её тот, кто спрашивает.
-    out[key] = read === null
-      ? { state: 'unreadable' }
-      : read.value === null || read.value === ''
-        ? { state: 'unset' }
-        : { state: 'value', value: read.value };
+    out[key] = fieldView(read && { text: read.value });
   }
   return { ok: true, privacy: out };
 }
@@ -625,7 +629,7 @@ export async function privacySet(input: {
   key: string;
   value: string;
 }): Promise<Result<{ key: string; value: string; broadcast?: 'started' | 'failed' }>> {
-  if (!core()) return refuse(NO_CORE, 'ядро не запущено');
+  if (!core()) return noCore();
   const key = PRIVACY_PREF_KEYS.find((k) => k === input.key);
   if (!key) {
     return refuse('bad_key', `неизвестная настройка; известны: ${PRIVACY_PREF_KEYS.join(', ')}`);
