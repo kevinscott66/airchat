@@ -6,6 +6,8 @@ const mockFailCopyTo = new Set<string>();
 const mockFailWriteContaining = new Set<string>();
 /** Пути, переезд НА которые отказывает: занятый файл, отказ файловой системы. */
 const mockFailMoveTo = new Set<string>();
+/** То же, но по образцу: имя отложенного каталога содержит время и заранее неизвестно. */
+const mockFailMoveToMatching: RegExp[] = [];
 
 function mockChildren(uri: string): string[] {
   const prefix = uri.endsWith('/') ? uri : `${uri}/`;
@@ -47,6 +49,7 @@ jest.mock('expo-file-system/legacy', () => ({
   }),
   moveAsync: jest.fn(async ({ from, to }: { from: string; to: string }) => {
     if (mockFailMoveTo.has(to)) throw new Error(`move failed ${to}`);
+    for (const pattern of mockFailMoveToMatching) if (pattern.test(to)) throw new Error(`move failed ${to}`);
     for (const key of [...mockFiles.keys()]) {
       if (key.startsWith(from)) {
         mockFiles.set(`${to}${key.slice(from.length)}`, mockFiles.get(key)!);
@@ -82,6 +85,7 @@ beforeEach(() => {
   mockFailCopyTo.clear();
   mockFailWriteContaining.clear();
   mockFailMoveTo.clear();
+  mockFailMoveToMatching.length = 0;
   mockFiles.clear();
   mockDirs.clear();
   mockSecure.clear();
@@ -297,6 +301,24 @@ describe('сорвавшееся восстановление возвращае
     expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('рабочая лента');
     expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('рабочий аватар');
     expect(JSON.parse(mockSecure.get(PROFILE_STATE_KEY) ?? '{}').profiles[0].name).toBe('Рабочий');
+  });
+
+  it('сорванная раскладка возвращает уже отложенное на место (v4.32.725)', async () => {
+    await snapshotThenDiverge();
+    // Список каталога снимают один раз, а переносят по файлу: SQLite успевает
+    // убрать `-wal`/`-shm` чекпойнтом, и переезд по имени из списка не
+    // проходит. Рабочая база к этому моменту уже лежит в отложенном каталоге, а
+    // откат у вызывающего начинается ПОСЛЕ раскладки — то есть не начинается.
+    mockFailMoveToMatching.push(/\.restore-stash-.*airchat_feed_p1\.db$/);
+
+    expect(await restoreAccountVault(MNEMONIC)).toBe(false);
+
+    // Устройство осталось таким, каким его взяли.
+    expect(mockFiles.get('/doc/SQLite/airchat_local.db')).toBe('рабочая база');
+    expect(mockFiles.get('/doc/SQLite/airchat_feed_p1.db')).toBe('рабочая лента');
+    expect(mockFiles.get('/doc/avatar_123.jpg')).toBe('рабочий аватар');
+    // И ничего не забыто в каталоге, на который больше нет ни одной ссылки.
+    expect([...mockFiles.keys()].filter((key) => key.includes('.restore-stash-'))).toEqual([]);
   });
 
   it('невернувшийся файл остаётся в отложенном, а не стирается вместе с ним (v4.32.724)', async () => {

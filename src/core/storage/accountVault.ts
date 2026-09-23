@@ -204,13 +204,33 @@ async function stashFiles(
 ): Promise<StashedFiles> {
   const stash: StashedFiles = { dir: stashDir, names: [] };
   await FileSystem.makeDirectoryAsync(stashDir, { intermediates: true });
-  for (const source of sources) {
-    if (!(await exists(source.dir))) continue;
-    for (const name of await FileSystem.readDirectoryAsync(source.dir)) {
-      if (!source.pattern.test(name)) continue;
-      await FileSystem.moveAsync({ from: `${source.dir}${name}`, to: `${stashDir}${name}` });
-      stash.names.push({ from: source.dir, name });
+  try {
+    for (const source of sources) {
+      if (!(await exists(source.dir))) continue;
+      for (const name of await FileSystem.readDirectoryAsync(source.dir)) {
+        if (!source.pattern.test(name)) continue;
+        await FileSystem.moveAsync({ from: `${source.dir}${name}`, to: `${stashDir}${name}` });
+        stash.names.push({ from: source.dir, name });
+      }
     }
+  } catch (error) {
+    // v4.32.725: сама раскладка тоже бывает неполной. Список каталога снимают
+    // один раз, а переносят по файлу: SQLite успевает убрать `-wal`/`-shm`
+    // чекпойнтом, и `moveAsync` по имени из списка не проходит. К этому моменту
+    // рабочая база уже лежит в отложенном каталоге.
+    //
+    // Откат у вызывающих начинается ПОСЛЕ этого вызова, то есть сюда он не
+    // доставал: отказ уходил во внешний catch, тот писал «восстановление не
+    // удалось» и возвращал false. Рабочие файлы оставались в
+    // `.restore-stash-<accountId>-<время>/`, на который во всём коде больше нет
+    // ни одной ссылки, — вернуть их было нечем и некогда. Человеку при этом
+    // предлагали повторить попытку, и повтор уводил в отложенное уже пустоту.
+    //
+    // Теперь раскладка отвечает за себя сама: либо переложено всё, либо ничего.
+    if (!(await unstashFiles(stash))) {
+      log.error('account_vault_stash_rollback_incomplete', { stashDir });
+    }
+    throw error;
   }
   return stash;
 }
