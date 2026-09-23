@@ -37,14 +37,14 @@ function scheduleFlush(): void {
 
 /**
  * Пишет JSON-строки логов в файл в documentDirectory (без показа в LogBox).
- * В release включается только при __DEV__ или скрытом internal diagnostics.
+ * В release включается только при __DEV__ или скрытом режиме разработчика.
  */
 export async function initFileLogging(): Promise<void> {
   const base = FileSystem.documentDirectory;
   if (!base) return;
-  const { isInternalDiagnosticsEnabled } = await import('./internalDiagnostics');
+  const { isDeveloperModeEnabled } = await import('./developerMode');
   const enable =
-    typeof __DEV__ !== 'undefined' && __DEV__ ? true : await isInternalDiagnosticsEnabled();
+    typeof __DEV__ !== 'undefined' && __DEV__ ? true : await isDeveloperModeEnabled();
   if (!enable) {
     setFileSink(null);
     logPath = null;

@@ -45,13 +45,14 @@ import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/pa
 import { PasswordField } from '../components/PasswordField';
 import { ModalScrimBlur } from '../components/ModalScrimBlur';
 import { copySecretToClipboard } from '../../core/security/clipboardSecret';
-import { isInternalDiagnosticsEnabled, toggleInternalDiagnostics } from '../../core/internalDiagnostics';
+import { isDeveloperModeEnabled, toggleDeveloperMode } from '../../core/developerMode';
 import { Ionicons } from '@expo/vector-icons';
 import { BlockedContactsList } from '../components/BlockedContactsList';
 import { VpnSettingsSection } from '../components/VpnSettingsSection';
 import { OpenFluxSettingsSection } from '../components/OpenFluxSettingsSection';
 import { AgentBridgeSettingsSection } from '../components/AgentBridgeSettingsSection';
 import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAILABLE } from '../platformCapabilities';
+import { settingsVisibility } from './settingsVisibility';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
 import { HelpScreen } from './HelpScreen';
@@ -321,7 +322,14 @@ function SettingsScreenImpl({
   const [currentSyncDeviceId, setCurrentSyncDeviceId] = useState<string | null>(null);
   const [profileRefreshToken, setProfileRefreshToken] = useState(0);
   const versionTapRef = useRef({ n: 0, t: 0 });
-  const [diagUnlocked, setDiagUnlocked] = useState(false);
+  /**
+   * Режим разработчика: показывать инженерные разделы (сервер доставки, мост
+   * для агента, ссылка vless://, счётчик соединений, диагностика). Обычному
+   * человеку они не нужны, а мост ещё и опасен — ключ от него позволяет
+   * увести доставку на чужой сервер. Включается семью нажатиями по номеру
+   * версии внизу этого экрана.
+   */
+  const [devMode, setDevMode] = useState(false);
 
   // ── Appearance state ───────────────────────────────────────────────────────
   const [nightTimeModal, setNightTimeModal] = useState(false);
@@ -421,7 +429,27 @@ function SettingsScreenImpl({
   useEffect(() => {
     void authGuard.hasPassword().then(setHasAppPassword).catch(() => setHasAppPassword(true));
   }, []);
-  useEffect(() => { void isInternalDiagnosticsEnabled().then(setDiagUnlocked); }, []);
+  /** Что из инженерной части сейчас на экране — одним ответом, см. settingsVisibility. */
+  const visible = useMemo(
+    () =>
+      settingsVisibility({
+        devMode,
+        openFluxAvailable: OPENFLUX_AVAILABLE,
+        embeddedVpnAvailable: EMBEDDED_VPN_AVAILABLE,
+      }),
+    [devMode],
+  );
+
+  useEffect(() => { void isDeveloperModeEnabled().then(setDevMode); }, []);
+  /**
+   * Режим выключили, не выходя из инженерного экрана — вернуть в меню. Без
+   * этого человек оставался бы на экране, который уже не рисуется: пустота
+   * вместо настроек и кнопка «назад», которой там нет.
+   */
+  useEffect(() => {
+    if (devMode) return;
+    setSubScreen((s) => (s === 'relay' || s === 'diagnostics' ? null : s));
+  }, [devMode]);
   useEffect(() => {
     void hasSeedBackupPending().then(setSeedBackupPendingState).catch(() => setSeedBackupPendingState(false));
   }, []);
@@ -1131,8 +1159,14 @@ function SettingsScreenImpl({
     if (versionTapRef.current.n >= 7) {
       versionTapRef.current.n = 0;
       void (async () => {
-        await toggleInternalDiagnostics();
-        setDiagUnlocked(await isInternalDiagnosticsEnabled());
+        const on = await toggleDeveloperMode();
+        setDevMode(on);
+        // Пока режим включал один только файл лога, молчать было можно: ничего
+        // на экране не менялось, и объявлять было не о чем. Теперь он двигает
+        // разделы меню, и человек, попавший сюда случайно, должен понимать,
+        // что произошло, — иначе появившийся «Сервер доставки» читается как
+        // поломка приложения.
+        showSuccess(on ? 'Режим разработчика включён' : 'Режим разработчика выключен');
       })();
     }
   }, []);
@@ -1358,7 +1392,9 @@ function SettingsScreenImpl({
           label="Безопасность"
           onPress={() => setSubScreen('security')}
         />
-        {(EMBEDDED_VPN_AVAILABLE || OPENFLUX_AVAILABLE) && (
+        {/* Без режима разработчика на этом экране остаётся один OpenFlux, и
+            звать туда, где его нет, незачем: человек открыл бы пустоту. */}
+        {visible.bypassRow && (
           <>
             <View style={styles.menuDivider} />
             <MenuRow
@@ -1370,14 +1406,6 @@ function SettingsScreenImpl({
             />
           </>
         )}
-        <View style={styles.menuDivider} />
-        <MenuRow
-          iconName="cloud-outline"
-          hue="sky"
-          label="Сервер доставки"
-          onPress={() => setSubScreen('relay')}
-          testID="settings_relay_row"
-        />
         <View style={styles.menuDivider} />
         <MenuRow
           iconName="ban-outline"
@@ -1450,8 +1478,34 @@ function SettingsScreenImpl({
           label="Политика конфиденциальности"
           onPress={() => setSubScreen('privacy-policy')}
         />
-        {diagUnlocked ? (
-          <>
+      </View>
+
+      {/*
+        Инженерная часть настроек собрана в одно место и показывается только в
+        режиме разработчика. Раньше она стояла вперемешку с обычными пунктами:
+        «Сервер доставки» — между «Обходом блокировок» и «Заблокированными»,
+        мост для внешнего агента — внутри «Обхода блокировок». Человеку, который
+        зашёл поменять звук уведомления, там нечего выбирать: адрес сервера
+        доставки он не знает, а ключ от моста, попав не в те руки, уводит его
+        переписку на чужой сервер. Отдельный раздел с честным названием честнее
+        трёх пунктов, спрятанных по смежным экранам.
+      */}
+      {visible.developerSection ? (
+        <>
+          <Text style={styles.sectionTitle}>ДЛЯ РАЗРАБОТЧИКА</Text>
+          <Text style={styles.hint}>
+            Раздел открыт жестом на номере версии. Обычному пользователю он не нужен: здесь
+            настраивают то, что в обычной сборке решено за него. Чтобы скрыть обратно — снова
+            семь нажатий по номеру версии внизу.
+          </Text>
+          <View style={styles.menuCard}>
+            <MenuRow
+              iconName="cloud-outline"
+              hue="sky"
+              label="Сервер доставки"
+              onPress={() => setSubScreen('relay')}
+              testID="settings_relay_row"
+            />
             <View style={styles.menuDivider} />
             <MenuRow
               iconName="pulse-outline"
@@ -1460,9 +1514,9 @@ function SettingsScreenImpl({
               onPress={() => setSubScreen('diagnostics')}
               testID="settings_diagnostics"
             />
-          </>
-        ) : null}
-      </View>
+          </View>
+        </>
+      ) : null}
 
       {onLogout ? (
         <>
@@ -2183,13 +2237,19 @@ function SettingsScreenImpl({
           рассчитан на сеть с белым списком, где приложение уже не работает.
           Секция VPN ниже требует данных своего сервера — в этот момент их
           обычно взять неоткуда. */}
-      {OPENFLUX_AVAILABLE && <OpenFluxSettingsSection />}
-      {EMBEDDED_VPN_AVAILABLE && <VpnSettingsSection />}
+      {OPENFLUX_AVAILABLE && <OpenFluxSettingsSection devMode={visible.tunnelStats} />}
+      {/* Своим сервером VPN и мостом для агента управляют только в режиме
+          разработчика. Обе секции начинаются с поля, которое обычному человеку
+          нечем заполнить: одна ждёт ссылку vless:// от своего сервера, вторая
+          выдаёт ключ, дающий право сменить сервер доставки. Оставлять их на
+          виду — значит предлагать выбор тому, у кого нет данных для выбора, и
+          держать опасную кнопку в одном экране с «обойти блокировку». */}
+      {visible.vpnSection && <VpnSettingsSection />}
       {/* Мост показывается на любой платформе, в том числе там, где ядра
           OpenFlux нет: настройки и состояние туннеля он отдаёт и оттуда, а
           «недоступно на этой платформе» — такой же осмысленный ответ, как
           «выключено». */}
-      <AgentBridgeSettingsSection />
+      {visible.bridgeSection && <AgentBridgeSettingsSection />}
     </ScrollView>
   );
 
@@ -2996,7 +3056,10 @@ function SettingsScreenImpl({
       {subScreen === 'data' && renderData()}
       {subScreen === 'security' && renderSecurity()}
       {subScreen === 'vpn' && renderVpn()}
-      {subScreen === 'relay' && renderRelay()}
+      {/* Гейт повторён здесь, а не только на пункте меню: режим разработчика
+          выключают тем же жестом, и до этой проверки открытый экран сервера
+          доставки пережил бы собственное сокрытие. */}
+      {subScreen === 'relay' && visible.relayRow && renderRelay()}
       {subScreen === 'blocked' && renderBlocked()}
       {subScreen === 'muted' && renderMuted()}
       {subScreen === 'backup' && renderBackup()}
@@ -3004,7 +3067,7 @@ function SettingsScreenImpl({
       {subScreen === 'language' && renderLanguage()}
       {subScreen === 'about' && <HelpScreen onClose={() => setSubScreen(null)} />}
       {subScreen === 'privacy-policy' && <PrivacyPolicyScreen onBack={() => setSubScreen(null)} />}
-      {subScreen === 'diagnostics' && <DiagnosticScreen onClose={() => setSubScreen(null)} />}
+      {subScreen === 'diagnostics' && visible.diagnosticsRow && <DiagnosticScreen onClose={() => setSubScreen(null)} />}
       {subScreen === 'permissions' && (
         <PermissionsScreen embedded onDone={() => setSubScreen(null)} />
       )}

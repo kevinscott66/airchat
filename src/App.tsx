@@ -360,8 +360,8 @@ function MainTabs({
       let enabled = typeof __DEV__ !== 'undefined' && __DEV__;
       if (!enabled) {
         try {
-          const { isInternalDiagnosticsEnabled } = await import('./core/internalDiagnostics');
-          enabled = await isInternalDiagnosticsEnabled();
+          const { isDeveloperModeEnabled } = await import('./core/developerMode');
+          enabled = await isDeveloperModeEnabled();
         } catch { /* не прочиталось — считаем выключенным */ }
       }
       if (!enabled || cancelled) return;

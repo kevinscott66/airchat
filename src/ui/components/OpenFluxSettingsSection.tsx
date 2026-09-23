@@ -62,7 +62,21 @@ function formatTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export function OpenFluxSettingsSection(): React.ReactElement {
+export type OpenFluxSettingsSectionProps = {
+  /**
+   * Показывать ли доказательную часть — счётчик соединений ядра.
+   *
+   * Обычному человеку он не помогает, а мешает: «Ни одного соединения» рядом
+   * с «Канал поднят» читается как поломка, хотя чаще всего означает, что он
+   * просто ещё ничего не отправил. Включить счёт к тому же нельзя отменить до
+   * перезапуска приложения, и он пишет в журнал адрес каждого соединения.
+   * Тому, кто разбирается, это ровно та цифра, ради которой сюда идут; тому,
+   * кто не разбирается, — кнопка, ухудшающая его же приватность.
+   */
+  devMode?: boolean;
+};
+
+export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSectionProps = {}): React.ReactElement {
   const [enabled, setEnabled] = useState(false);
   const [status, setStatus] = useState<OpenFluxUiStatus>('off');
   const [socks, setSocks] = useState<string | null>(null);
@@ -85,18 +99,30 @@ export function OpenFluxSettingsSection(): React.ReactElement {
       } catch {
         /* статус останется off */
       }
-      const s = await getOpenFluxTunnelStats();
-      if (alive) setStats(s);
     })();
     return () => {
       alive = false;
     };
   }, []);
 
+  // Счётчик спрашиваем только тогда, когда его есть кому показать: без режима
+  // разработчика весь блок не рисуется, и опрос ядра был бы работой в стол.
+  useEffect(() => {
+    if (!devMode) return;
+    let alive = true;
+    void (async () => {
+      const s = await getOpenFluxTunnelStats();
+      if (alive) setStats(s);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [devMode]);
+
   // Опрашиваем, только пока счёт идёт: до включения там нули, и обновлять их
   // раз в две секунды — просто будить процессор.
   useEffect(() => {
-    if (!stats?.counting) return;
+    if (!devMode || !stats?.counting) return;
     const id = setInterval(() => {
       void (async () => {
         const s = await getOpenFluxTunnelStats();
@@ -104,7 +130,7 @@ export function OpenFluxSettingsSection(): React.ReactElement {
       })();
     }, STATS_POLL_MS);
     return () => clearInterval(id);
-  }, [stats?.counting]);
+  }, [devMode, stats?.counting]);
 
   // Экран читает состояние один раз, при открытии, а туннель за его спиной
   // переподнимается сам при смене сети — и порт у ядра каждый раз новый. Без
@@ -339,7 +365,7 @@ export function OpenFluxSettingsSection(): React.ReactElement {
           ниже приходят из самого ядра — оно считает соединения, которые
           приняло на свой SOCKS5.
         */}
-        {stats ? (
+        {devMode && stats ? (
           <View style={styles.proof}>
             <Text style={styles.proofTitle}>ИДЁТ ЛИ ТРАФИК ЧЕРЕЗ ТУННЕЛЬ</Text>
             {stats.counting ? (
