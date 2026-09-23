@@ -134,6 +134,22 @@ export type PushInitOptions = {
 };
 
 /**
+ * Чем кончилась запись адреса доставки на сигналинге (v4.32.733).
+ *
+ * Без этой записи ретранслятору некуда слать уведомление: токен устройства он
+ * знает только отсюда. Метод отвечал `void` и глотал все свои отказы —
+ * отсутствующий адрес сигналинга, неподписанный конверт, ошибку сети, ответ
+ * сервера, — а переключатель в настройках по возврату `'enabled'` вставал в
+ * положение «включено». Уведомления при этом не приходили никогда, и человеку
+ * неоткуда было узнать, что подписка не состоялась.
+ *
+ * `'unsupported'` — писать некуда или нечем (нет адреса сигналинга, платформа
+ * не та, конверт не подписался): повтор не поможет. `'unreachable'` — сервер
+ * не ответил или отказал: имеет смысл попробовать ещё раз.
+ */
+export type PushTokenRegistration = 'registered' | 'unreachable' | 'unsupported';
+
+/**
  * Firebase Cloud Messaging + Notifee. Requires dev build + google-services files + prebuild.
  */
 export class PushNotificationService {
@@ -345,7 +361,10 @@ export class PushNotificationService {
         const token = await messaging().getToken();
         await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
         log.info('push_fcm_token', { len: token?.length ?? 0 });
-        await this.registerTokenWithSignaling(options.peerId, token);
+        // v4.32.733: исход записи адреса — в журнал. Уведомлений без неё не
+        // будет до следующего запуска, и разбираться вслепую здесь уже не надо.
+        const reg = await this.registerTokenWithSignaling(options.peerId, token);
+        if (reg !== 'registered') log.warn('push_register_not_done', { reg });
       } catch (e) {
         log.warn('push_token_unavailable', { err: e instanceof Error ? e.message : String(e) });
       }
@@ -404,7 +423,8 @@ export class PushNotificationService {
         // closure — identity rotation mutates currentPeerId via dispose()+init().
         const peerId = this.currentPeerId;
         if (!peerId) return;
-        await this.registerTokenWithSignaling(peerId, t);
+        const reg = await this.registerTokenWithSignaling(peerId, t);
+        if (reg !== 'registered') log.warn('push_reregister_not_done', { reg });
       });
 
       this.initialized = true;
@@ -558,7 +578,7 @@ export class PushNotificationService {
     }
   }
 
-  async registerTokenWithSignaling(peerId: string, token: string): Promise<void> {
+  async registerTokenWithSignaling(peerId: string, token: string): Promise<PushTokenRegistration> {
     const cfg = await loadConfig();
     // v4.32.381: без хвостового слэша и заведомо http(s) — приведено в
     // core/config. Прежний replace() снимал слэш, но пропускал 'wss://…',
@@ -567,7 +587,7 @@ export class PushNotificationService {
     const base = cfg.webrtc?.signalingUrl;
     if (!base) {
       log.warn('push_no_signaling_url');
-      return;
+      return 'unsupported';
     }
     // Ретранслятор знает людей по сырому ключу в base64 — так же, как сокет
     // сигналинга. Разбирать did:key на сервере нечем; см. pushEnvelope.
@@ -577,7 +597,7 @@ export class PushNotificationService {
     // доставка и свои ключи (см. web/shims/firebase-messaging).
     if (!signedPeerId || (Platform.OS !== 'android' && Platform.OS !== 'ios' && Platform.OS !== 'web')) {
       log.warn('push_register_unsupported', { platform: Platform.OS });
-      return;
+      return 'unsupported';
     }
     // v4.32.614: тот же peerId нужен фоновому обработчику, чтобы развернуть
     // метку отправителя (см. pushSenderTag). Спросить его там не у кого:
@@ -622,7 +642,7 @@ export class PushNotificationService {
       });
       if (!envelope) {
         log.warn('push_register_unsigned');
-        return;
+        return 'unsupported';
       }
       const res = await fetch(`${base}/register-token`, {
         method: 'POST',
@@ -632,9 +652,12 @@ export class PushNotificationService {
       });
       if (!res.ok) {
         log.warn('push_register_failed', { status: res.status });
+        return 'unreachable';
       }
+      return 'registered';
     } catch (e) {
       log.warn('push_register_error', { err: e instanceof Error ? e.message : String(e) });
+      return 'unreachable';
     } finally {
       clearTimeout(to);
     }
@@ -661,7 +684,16 @@ export class PushNotificationService {
       if ((await messaging().requestPermission()) !== authorized) return 'denied';
       const token = await messaging().getToken();
       await SecureStore.setItemAsync(FCM_TOKEN_KEY, token);
-      await this.registerTokenWithSignaling(peerId, token);
+      // v4.32.733: разрешение браузера — половина дела. Пока адрес доставки
+      // не записан на сигналинге, ретранслятору некуда слать уведомление, и
+      // «включено» было бы обещанием, которого приложение не выполнит.
+      // Ветка `failed` у переключателя своя и с верным текстом — она просто
+      // была недостижима.
+      const reg = await this.registerTokenWithSignaling(peerId, token);
+      if (reg !== 'registered') {
+        log.warn('push_web_register_failed', { reg });
+        return 'failed';
+      }
       log.info('push_web_enabled');
       return 'enabled';
     } catch (e) {
