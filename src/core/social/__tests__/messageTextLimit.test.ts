@@ -103,7 +103,9 @@ describe('форма исходников — v4.32.508', () => {
   });
 
   test('групповой приём спрашивает тот же модуль', () => {
-    expect(group).toContain('if (!withinMessageTextLimit(env.text)) return true;');
+    // v4.32.730: исход называется словом. Слишком длинный текст — мусор, а не
+    // временная беда: кадр разобран, перезапрашивать его незачем.
+    expect(group).toContain("if (!withinMessageTextLimit(env.text)) return 'consumed';");
   });
 
   test('планировщик отложенных спрашивает тот же модуль в обеих проверках', () => {

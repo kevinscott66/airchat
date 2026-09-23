@@ -40,6 +40,7 @@ import {
   type MemberRole,
 } from '../storage/local';
 import { type GroupRecipient } from './groupRecipient';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { getMessagingService } from './messaging';
 import { activeRecipients, fanoutControlEnvelope } from './controlFanout';
 import type { FanoutResult } from './controlFanout';
@@ -481,24 +482,24 @@ export async function handleIncomingGroupEnvelope(
   text: string,
   rcpt: GroupRecipient,
   senderPubB64: string
-): Promise<boolean> {
+): Promise<EnvelopeIntake> {
   const env = decodeGroupMsgEnvelope(text);
-  if (!env) return false;
+  if (!env) return 'consumed';
 
   // v4.32.188 (Round-18 #4): strict shape validation. env comes straight
   // from an over-the-wire JSON — a malformed payload (non-string text,
   // NaN ts, oversized names) used to crash downstream (`env.text.toLowerCase`
   // throws if text is an object) or produce rows that poison date-sep
   // labels and dialog previews forever. Reject hard.
-  if (typeof env.groupId !== 'string' || env.groupId.length === 0 || env.groupId.length > 128) return true;
-  if (typeof env.msgId !== 'string' || env.msgId.length === 0 || env.msgId.length > 128) return true;
-  if (!isPubKeyB64(env.senderPubB64)) return true;
-  if (!withinMessageTextLimit(env.text)) return true;
+  if (typeof env.groupId !== 'string' || env.groupId.length === 0 || env.groupId.length > 128) return 'consumed';
+  if (typeof env.msgId !== 'string' || env.msgId.length === 0 || env.msgId.length > 128) return 'consumed';
+  if (!isPubKeyB64(env.senderPubB64)) return 'consumed';
+  if (!withinMessageTextLimit(env.text)) return 'consumed';
   // v4.32.238: системную строку («Вы заблокированы в группе» и т. п.) рисует
   // приложение, поэтому участник не вправе её прислать — см. sysLineGuard.
   env.text = stripSpoofedSysPrefix(env.text);
   if (env.senderName != null) {
-    if (typeof env.senderName !== 'string' || env.senderName.length > 128) return true;
+    if (typeof env.senderName !== 'string' || env.senderName.length > 128) return 'consumed';
     // v4.32.239: имя автора — это ещё и первая строка пересылки
     // ('\x08fwd:' + имя + '\n' + текст, см. makeForwardText). Перевод строки
     // внутри имени обрывал имя на нём, а остаток становился «оригинальным
@@ -511,7 +512,7 @@ export async function handleIncomingGroupEnvelope(
   // руками, слово в слово повторено ниже и не применено к joinedAt вовсе.
   env.ts = clampEnvelopeTs(env.ts);
   if (env.mediaCids != null) {
-    if (!Array.isArray(env.mediaCids)) return true;
+    if (!Array.isArray(env.mediaCids)) return 'consumed';
     // v4.32.197 (Round-27 #3): cap count BEFORE filter — attacker can ship
     // 10k valid-shape CIDs to bloat SQLite rows / UI. Legit messages ≤ 10.
     // v4.32.244: правила разбора переехали в core/media/mediaCidPolicy — там же
@@ -528,7 +529,7 @@ export async function handleIncomingGroupEnvelope(
       env: env.senderPubB64.slice(0, 12),
       signer: senderPubB64.slice(0, 12),
     });
-    return true;
+    return 'consumed';
   }
 
   // Check if we are a member of this group
@@ -541,7 +542,7 @@ export async function handleIncomingGroupEnvelope(
   const group = await getGroup(env.groupId, pid);
   if (!group) {
     log.debug('group_msg_unknown_group', { groupId: env.groupId.slice(0, 8) });
-    return true; // still consumed — don't create a phantom DM
+    return 'consumed'; // still consumed — don't create a phantom DM
   }
 
   // Не-члены, забаненные, ограниченные, подписчики канала и «только для
@@ -568,7 +569,7 @@ export async function handleIncomingGroupEnvelope(
         from: senderPubB64.slice(0, 12),
         code: verdict.code,
       });
-      return true;
+      return 'consumed';
     }
   } catch (e) {
     // v4.32.581. Отказ проверки прав — это отказ, а не пропуск: записывать в
@@ -582,7 +583,9 @@ export async function handleIncomingGroupEnvelope(
       gid: env.groupId.slice(0, 8),
       err: e instanceof Error ? e.message : String(e),
     });
-    return true;
+    // v4.32.730: состав не прочитался — беда временная, и конверт надо
+    // перезапросить, а не считать разобранным.
+    return 'deferred';
   }
 
   // v4.32.299: цитата. Приходит от участника, то есть это недоверенный ввод,
@@ -638,7 +641,7 @@ export async function handleIncomingGroupEnvelope(
     const stored = await insertGroupMessage(row);
     if (!stored) {
       log.debug('group_msg_duplicate_skip', { msgId: env.msgId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     // v4.32.573: голос, обогнавший свой опрос, ждал на полке — см.
     // pollVotePending. Сообщение записано, значит его можно применить.
@@ -695,7 +698,7 @@ export async function handleIncomingGroupEnvelope(
     log.error('group_msg_apply_failed', { gid: env.groupId.slice(0, 8), err: e instanceof Error ? e.message : String(e) });
   }
 
-  return true;
+  return 'consumed';
 }
 
 // ─── Join Requests ────────────────────────────────────────────────────────────
@@ -2045,7 +2048,8 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
  * переехала в fanoutGroupMessage, мёртвые методы удалены.
  */
 export type GroupMessagingService = {
-  receiveGroupEnvelope: (payload: Uint8Array, senderDid: string) => Promise<void>;
+  /** Отвечает, разобран ли конверт: по нему двигается отметка на relay. */
+  receiveGroupEnvelope: (payload: Uint8Array, senderDid: string) => Promise<EnvelopeIntake>;
 };
 
 let _groupSvc: GroupMessagingService | null = null;
@@ -2072,10 +2076,13 @@ export function getGroupMessagingService(): GroupMessagingService {
         // ложилось (или терялось) в «Рабочем».
         const svc = getMessagingService();
         if (!svc) {
+          // v4.32.730: служба поднимается на старте, и на холодном запуске
+          // накопленное с relay успевает прийти раньше неё. Это «ещё не», а не
+          // «мусор»: конверт надо перезапросить.
           log.warn('group_envelope_no_service_drop', { from: senderPubB64.slice(0, 12) });
-          return;
+          return 'deferred';
         }
-        await handleIncomingGroupEnvelope(text, await svc.groupRecipient(), senderPubB64);
+        return await handleIncomingGroupEnvelope(text, await svc.groupRecipient(), senderPubB64);
       },
     };
   }

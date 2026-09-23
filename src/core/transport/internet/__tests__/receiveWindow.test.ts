@@ -72,19 +72,35 @@ describe('отметка двигается только по разобранн
     expect(src).toContain('onFrame: (senderDid, payload, frameAtMs) => {');
   });
 
-  it('продвижение стоит после await разбора, а не перед ним', () => {
-    const advanceAt = src.indexOf('advance(frameAtMs);');
-    const feedAt = src.indexOf('await receiveFeedEnvelope(payload, senderDid);');
-    expect(feedAt).toBeGreaterThan(0);
-    expect(advanceAt).toBeGreaterThan(feedAt);
+  it('продвижение стоит после разбора, а не перед ним', () => {
+    // v4.32.730: мест вызова стало два. Первое — намеренная сдача (`giveUp`),
+    // второе — успех. Порядок в файле и есть проверяемое: ни одно продвижение
+    // не стоит раньше, чем у кадра появился исход.
+    const giveUpAt = src.indexOf('const giveUp = ');
+    const consumedAt = src.indexOf("if (intake === 'consumed') {");
+    expect(giveUpAt).toBeGreaterThan(0);
+    expect(consumedAt).toBeGreaterThan(giveUpAt);
+    expect(src.indexOf('advance(frameAtMs);')).toBeGreaterThan(giveUpAt);
+    expect(src.indexOf('advance(frameAtMs);', consumedAt)).toBeGreaterThan(consumedAt);
   });
 
-  it('все три ветки приёма дожидаются разбора', () => {
-    expect(src).toContain('await receiveFeedEnvelope(payload, senderDid);');
-    expect(src).toContain('await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid);');
+  it('все три ветки приёма дожидаются разбора и читают его исход', () => {
+    // v4.32.730: приёмник отвечает словом, а не молчанием. Присваивание в
+    // `intake` — и есть то, что раньше выбрасывалось.
+    expect(src).toContain('intake = await receiveFeedEnvelope(payload, senderDid);');
     expect(src).toContain(
-      'await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid);',
+      'await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid)) ??',
     );
+    expect(src).toContain(
+      'await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)) ??',
+    );
+  });
+
+  it('службы ещё нет — кадр отложен, а не прочитан', () => {
+    // Холодный старт: накопленное приходит раньше, чем поднялась переписка.
+    // `?? 'deferred'` — единственное, что отличает «некому разбирать» от
+    // «разобрано». Без него кадр терялся навсегда.
+    expect(src.match(/\?\?\n?\s*'deferred';/g) ?? []).toHaveLength(2);
   });
 
   it('упавший кадр держит отметку, но не навсегда', () => {
@@ -93,6 +109,17 @@ describe('отметка двигается только по разобранн
     // Второй провал того же кадра отпускает отметку — иначе накопленное
     // качалось бы по кругу при каждом подключении.
     expect(src).toContain('internet_frame_handle_failed_again');
-    expect(src).toContain('if (failedOnce.size > 512) failedOnce.clear();');
+    expect(src).toContain('internet_frame_deferred_again');
+    expect(src).toContain('if (failedOnce.size > 512) {');
+  });
+
+  it('удержанный кадр не даёт соседнему унести отметку за себя', () => {
+    // v4.32.730. Транспорт зовёт onFrame на каждое сообщение WS, не дожидаясь
+    // разбора предыдущего, а отметка двигалась только вперёд — и удачный сосед
+    // уносил её за кадр, который мы собирались перезапросить. То есть удержание
+    // не работало ни в одной пачке длиннее одного кадра.
+    expect(src).toContain('const held = new Set<number>();');
+    expect(src).toContain('for (const h of held) if (h <= target) target = h - 1;');
+    // Поведение этого места проверяется отдельно: backlogIntake730.test.ts.
   });
 });

@@ -56,6 +56,7 @@ import { reactionAddRefusal } from './reactionMapPolicy';
 import { reactionLimitError, reactionUnreadableText } from './reactionWrite';
 // v4.32.528: тип, в котором сбой чтения отличим от пустой ленты.
 import type { DbRead } from '../storage/readResult';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import {
   FEED_COMMENT_MAX_CHARS,
   FEED_POST_MAX_CHARS,
@@ -3225,11 +3226,12 @@ export async function receiveFeedEnvelope(
      */
     gossip?: boolean;
   },
-): Promise<void> {
+): Promise<EnvelopeIntake> {
   // v4.32.132 (AUDIT P1): drop envelopes arriving during stop→rebind→start.
   if (feedRebinding) {
+    // v4.32.730: перепривязка кончится сама — конверт надо перезапросить.
     log.debug('feed_envelope_dropped_during_rebind');
-    return;
+    return 'deferred';
   }
   // v4.32.208 (Bridge Stage 2): if frame is a 0xF1 relay wrapper, unwrap to
   // get the inner signed 0xF0 frame + current hops count; otherwise treat
@@ -3241,7 +3243,7 @@ export async function receiveFeedEnvelope(
     const unwrapped = unwrapFeedRelay(frame);
     if (!unwrapped) {
       log.warn('feed_relay_unwrap_failed');
-      return;
+      return 'consumed';
     }
     innerFrame = unwrapped.inner;
     incomingHops = unwrapped.hops;
@@ -3273,7 +3275,7 @@ export async function receiveFeedEnvelope(
   const payload = authorFromBody
     ? await parseAndVerifyRelayedFeedEnvelope(innerFrame, verifyOpts)
     : await parseAndVerifyFeedEnvelope(innerFrame, senderDid, verifyOpts);
-  if (!payload) return;
+  if (!payload) return 'consumed';
 
   // v4.32.208: dedup by (type, postId, authorDid, ts). Feed envelopes are
   // signed so identical (author, type, postId, ts) tuples are the same
@@ -3286,7 +3288,7 @@ export async function receiveFeedEnvelope(
   const dedupKey = `${payload.type}|${payload.postId}|${payload.authorDid}|${payload.ts}|${dataHash}`;
   if (feedSeenMarkOrHas(dedupKey)) {
     log.debug('feed_envelope_dedup_drop', { key: dedupKey.slice(0, 80) });
-    return;
+    return 'consumed';
   }
 
   // v4.32.213 (Audit-42 H2): mute check MOVED above gossip relay. Previously
@@ -3299,7 +3301,7 @@ export async function receiveFeedEnvelope(
       type: payload.type,
       authorDid: payload.authorDid.slice(0, 24),
     });
-    return;
+    return 'consumed';
   }
 
   // v4.32.617: лента про блокировку не знала вовсе. Заглушка выше — отдельный
@@ -3312,7 +3314,7 @@ export async function receiveFeedEnvelope(
       type: payload.type,
       authorDid: payload.authorDid.slice(0, 24),
     });
-    return;
+    return 'consumed';
   }
 
   // v4.32.208: mesh-gossip re-broadcast. If hop-limit not reached, wrap the
@@ -3333,7 +3335,7 @@ export async function receiveFeedEnvelope(
     // и повтор обязан получить второй шанс (v4.32.614).
     feedSeenForget(dedupKey);
     log.debug('feed_envelope_dropped_profile_switched');
-    return;
+    return 'deferred';
   }
 
   try {
@@ -3350,15 +3352,18 @@ export async function receiveFeedEnvelope(
     if (envelopePid == null) {
       feedSeenForget(dedupKey);
       log.warn('feed_envelope_profile_unset', { type: payload.type });
-      return;
+      return 'deferred';
     }
 
-    if (!(await applyFeedEnvelope(payload, s, envelopePid))) return;
+    if (!(await applyFeedEnvelope(payload, s, envelopePid))) return 'consumed';
 
     emitFeedUpdate();
+    return 'consumed';
   } catch (e) {
     feedSeenForget(dedupKey);
+    // v4.32.730: разбор сорвался на записи — конверт остаётся неразобранным.
     log.warn('feed_envelope_ingest_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
 }
 

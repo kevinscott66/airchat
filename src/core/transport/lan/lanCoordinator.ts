@@ -48,6 +48,11 @@ export async function startLanTransportIfEnabled(pair: KeyPairBytes, cfg?: AppCo
       // (relay wrapper); receiveFeedEnvelope unwraps 0xF1 internally.
       // v4.32.226: 0xB1 — chunk зашифрованного media-blob'а (LAN-доставка
       // фото/голосовых/файлов без relay). Бинарный, проверяется до feed/JSON.
+      //
+      // v4.32.730: `EnvelopeIntake` здесь намеренно выброшен. По локальной сети
+      // кадр приходит живьём, отправитель рядом и повторит сам; перезапросить
+      // его неоткуда — накопленного у LAN нет, отметки «докуда прочитано» тоже.
+      // Отвечает исход ради интернет-координатора, где он и читается.
       if (isLanBlobFrame(payload)) {
         void receiveLanBlobFrame(payload);
       } else if (isFeedFrame(payload)) {

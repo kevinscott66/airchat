@@ -11,6 +11,7 @@ import { getMessagingService } from '../../social/messaging';
 import { getGroupMessagingService } from '../../social/groupMessaging';
 import { isFeedFrame } from '../../social/feedTransport';
 import { receiveFeedEnvelope } from '../../social/feedService';
+import type { EnvelopeIntake } from '../envelopeIntake';
 import { getInternetTransportSingleton } from './internetTransport';
 import {
   WATERMARK_FLUSH_MS,
@@ -73,19 +74,45 @@ export async function startInternetTransportIfEnabled(
   // провал того же кадра отпускает её: кадр, падающий стабильно, иначе
   // заставлял бы перекачивать весь накопленный месяц при каждом подключении.
   const failedOnce = new Set<number>();
+  // v4.32.730: кадры, которые мы намерены перезапросить. Отметка не пойдёт
+  // дальше самого раннего из них: пачка разбирается параллельно (транспорт
+  // зовёт onFrame на каждое сообщение WS, не дожидаясь предыдущего), и
+  // соседний удачный кадр иначе унёс бы отметку за тот, который мы удерживаем.
+  // Именно так удержание при провале и не работало ни в одной пачке длиннее
+  // одного кадра — то есть ровно там, где оно и нужно.
+  const held = new Set<number>();
+
+  /**
+   * Запомнить первый провал кадра и удержать на нём отметку.
+   *
+   * Оба множества растут только на провалах, и потолок у них общий: длинная
+   * сессия с плохой сетью иначе копила бы их без предела, а удержанная навсегда
+   * отметка заставляла бы перекачивать весь накопленный месяц при каждом
+   * подключении.
+   */
+  const rememberFailure = (atMs: number): void => {
+    if (failedOnce.size > 512) {
+      failedOnce.clear();
+      held.clear();
+    }
+    failedOnce.add(atMs);
+    held.add(atMs);
+  };
 
   /** Продвинуть отметку «докуда прочитано» — только вперёд и только по разобранному. */
   const advance = (atMs: number): void => {
+    let target = atMs;
+    for (const h of held) if (h <= target) target = h - 1;
     // Кадры внутри пачки приходят не строго по возрастанию времени, и откат
     // отметки назад означал бы повторный разбор уже разобранного.
-    if (atMs <= (watermark ?? 0)) return;
-    watermark = atMs;
-    pendingWatermark = { myDid, atMs };
+    if (target <= (watermark ?? 0)) return;
+    watermark = target;
+    pendingWatermark = { myDid, atMs: target };
     const now = Date.now();
     if (now - flushedAt < WATERMARK_FLUSH_MS) return;
     flushedAt = now;
     pendingWatermark = null;
-    void saveBacklogWatermark(myDid, atMs);
+    void saveBacklogWatermark(myDid, target);
   };
 
   transport.start({
@@ -101,30 +128,54 @@ export async function startInternetTransportIfEnabled(
       // кадра записывалось сразу по приёме, и кадр, на котором разбор упал
       // (база ещё не открыта, профиль не загружен, ключ занят), больше не
       // запрашивался никогда — relay его хранит, а мы его уже «прочитали».
+      //
+      // v4.32.730: разобран кадр или нет — приёмник теперь отвечает словом.
+      // Раньше о транзиентной беде (справочник контактов не прочитался, служба
+      // переписки ещё не поднята, состав группы недоступен, профиль
+      // переключился посреди разбора) он сообщал одним `return`, снаружи
+      // неотличимым от удачи, — и отметка перешагивала кадр, который relay
+      // хранит ещё тридцать суток. Ловушка ниже срабатывала только на брошенное.
       void (async () => {
-        try {
-          if (isFeedFrame(payload)) {
-            await receiveFeedEnvelope(payload, senderDid);
-          } else if (isGroupEnvelope(payload)) {
-            await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid);
-          } else {
-            await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid);
-          }
+        /** Второй провал того же кадра — отпускаем: он не транзиентный. */
+        const giveUp = (why: string, err?: unknown): void => {
+          held.delete(frameAtMs);
+          log.warn(why, err === undefined ? {} : { err: err instanceof Error ? err.message : String(err) });
           advance(frameAtMs);
-        } catch (e) {
-          if (failedOnce.has(frameAtMs)) {
-            // Второй провал того же кадра: он не транзиентный. Отпускаем, иначе
-            // отметка встанет навсегда и накопленное будет качаться по кругу.
-            log.warn('internet_frame_handle_failed_again', {
-              err: e instanceof Error ? e.message : String(e),
-            });
+        };
+        try {
+          let intake: EnvelopeIntake;
+          if (isFeedFrame(payload)) {
+            intake = await receiveFeedEnvelope(payload, senderDid);
+          } else if (isGroupEnvelope(payload)) {
+            // Службы может не быть вовсе — до её появления кадр не разобран.
+            intake =
+              (await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid)) ??
+              'deferred';
+          } else {
+            intake =
+              (await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)) ??
+              'deferred';
+          }
+          if (intake === 'consumed') {
+            held.delete(frameAtMs);
+            failedOnce.delete(frameAtMs);
             advance(frameAtMs);
             return;
           }
-          // Множество растёт только на провалах; потолок — чтобы длинная
-          // сессия с плохой сетью не копила его без предела.
-          if (failedOnce.size > 512) failedOnce.clear();
-          failedOnce.add(frameAtMs);
+          if (failedOnce.has(frameAtMs)) {
+            giveUp('internet_frame_deferred_again');
+            return;
+          }
+          rememberFailure(frameAtMs);
+          log.warn('internet_frame_deferred');
+        } catch (e) {
+          if (failedOnce.has(frameAtMs)) {
+            // Отпускаем, иначе отметка встанет навсегда и накопленное будет
+            // качаться по кругу.
+            giveUp('internet_frame_handle_failed_again', e);
+            return;
+          }
+          rememberFailure(frameAtMs);
           log.warn('internet_frame_handle_failed', {
             err: e instanceof Error ? e.message : String(e),
           });

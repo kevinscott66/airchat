@@ -25,6 +25,7 @@ import {
   type ChatMessageRow,
 } from '../storage/local';
 import { compareChatRows, oldestCursor, type ChatPageCursor } from '../storage/chatPageCursor';
+import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { checkOnlineWrite, requireOnlineWrite } from '../sync/cachePolicy';
 import { combineHalves, selfChatOutcome, shouldTryPeerHalf, type TwoSidedOutcome } from './twoSidedEdit';
 import { handleIncomingGroupEnvelope, handleIncomingGroupReadReceipt, handleIncomingGroupJoinRequest, handleIncomingGroupControl, GROUP_READ_RECEIPT_PREFIX, GROUP_JOIN_REQUEST_PREFIX, GROUP_CTL_PREFIX } from './groupMessaging';
@@ -740,12 +741,23 @@ export class MessagingService {
     await this.persistIncomingFromEnvelope(em, peerPubKeyB64, cid, undefined, allowSelfAuthored);
   }
 
-  /** Входящий DM по локальной сети (mDNS + TCP), без CID в IPFS. */
-  async receiveDirectLanEnvelope(raw: Uint8Array, claimedSenderDid: string): Promise<void> {
+  /**
+   * Входящий DM по локальной сети (mDNS + TCP), без CID в IPFS.
+   *
+   * v4.32.730: отвечает, разобран ли конверт. Три ветки ниже — не «мусор в
+   * эфире», а «сейчас не смогли»: справочник контактов не прочитался, общий
+   * ключ не достался, запись неявного контакта сорвалась. По интернету тот же
+   * конверт приходит из накопленного на relay, и отметка «докуда прочитано»
+   * двигается по разобранному — см. `EnvelopeIntake`.
+   */
+  async receiveDirectLanEnvelope(
+    raw: Uint8Array,
+    claimedSenderDid: string,
+  ): Promise<EnvelopeIntake> {
     const em = parseEnvelopeFromWire(raw);
     if (!em) {
       log.warn('lan_envelope_parse_failed');
-      return;
+      return 'consumed';
     }
     // v4.32.207: sender-hop mismatch is now informational, not fatal.
     // When peer C relays A→B, claimedSenderDid is C but env.senderDid is A.
@@ -758,7 +770,7 @@ export class MessagingService {
     const myDid = publicKeyToDidKey(this.pair.publicKey);
     // v4.32.120 #4: self-echo never enters ingress (defence-in-depth vs
     // subscribeToSelfInbox's own guard).
-    if (em.senderDid === myDid) return;
+    if (em.senderDid === myDid) return 'consumed';
     // v4.32.207: recipient-mismatch → mesh-gossip relay candidate.
     // Instead of dropping, try to forward toward the real recipient using
     // our own multi-transport router. Bounded by MAX_RELAY_HOPS and dedup
@@ -766,7 +778,7 @@ export class MessagingService {
     if (em.recipientDid !== myDid) {
       void this.maybeRelayDm(em, claimedSenderDid);
       void raw;
-      return;
+      return 'consumed';
     }
 
     // v4.32.120 #1: decrypt-before-implicit-contact. Attackers who spray
@@ -784,7 +796,7 @@ export class MessagingService {
     // повтора в этот раз не дождётся ни при каком нашем решении.
     if (lookup === 'unreadable') {
       log.warn('lan_contacts_unreadable_envelope_left', { did: em.senderDid.slice(0, 20) });
-      return;
+      return 'deferred';
     }
     let peerPubKeyB64: string | null = lookup;
     let needsImplicitContact = false;
@@ -796,7 +808,7 @@ export class MessagingService {
       senderPk = parseDidKey(em.senderDid);
       if (!senderPk) {
         log.warn('lan_unknown_sender_bad_did', { did: em.senderDid.slice(0, 20) });
-        return;
+        return 'consumed';
       }
       peerPubKeyB64 = publicKeyToB64(senderPk);
       needsImplicitContact = true;
@@ -811,12 +823,12 @@ export class MessagingService {
     }
     if (!sym) {
       log.warn('lan_symkey_unavailable');
-      return;
+      return 'deferred';
     }
     const pt = decryptSymmetric(sym, em.encryptedContent);
     if (!pt) {
       // Attacker traffic or corrupt packet — drop silently, no DB touch.
-      return;
+      return 'consumed';
     }
     // v4.32.170: privacy_only_contacts_msg — reject DMs from unknown peers
     // when the user asked «сообщения только от контактов». We drop after
@@ -839,7 +851,7 @@ export class MessagingService {
           log.warn('dm_contacts_filter_unreadable', { did: em.senderDid.slice(0, 20) });
         } else if (onlyContacts) {
           log.info('dm_rejected_non_contact', { did: em.senderDid.slice(0, 20) });
-          return;
+          return 'consumed';
         }
       } catch (e) {
         // v4.32.313: молчать здесь нельзя. Отказ чтения означает, что настройку
@@ -882,7 +894,7 @@ export class MessagingService {
       if (rateLimiter.isBlocked(peerPubKeyB64)) {
         if (!survivesBlock(peekPayloadText(pt))) {
           log.info('dm_blocked_no_implicit_contact', { from: peerPubKeyB64.slice(0, 12) });
-          return;
+          return 'consumed';
         }
         blockedGroupScoped = true;
       }
@@ -900,12 +912,13 @@ export class MessagingService {
         if (created) await this.refreshSubscriptions();
       } catch (e) {
         log.warn('lan_implicit_contact_failed', { err: e instanceof Error ? e.message : String(e) });
-        return;
+        return 'deferred';
       }
     }
     const storageCid = `lan:${em.messageId}`;
     // Pass pre-verified plaintext through to persist path to avoid re-decrypting.
     await this.persistIncomingFromEnvelope(em, peerPubKeyB64, storageCid, pt);
+    return 'consumed';
   }
 
   private async persistIncomingFromEnvelope(

@@ -108,7 +108,10 @@ describe('личный конверт: неизвестность не выда�
     expect(stranger).toBeGreaterThan(guard);
     const inside = MSG.slice(guard, stranger);
     expect(inside).toContain("log.warn('lan_contacts_unreadable_envelope_left'");
-    expect(inside.indexOf('return;')).toBeGreaterThan(-1);
+    // v4.32.730: уходим со словом «отложено». Прежний голый `return` снаружи
+    // был неотличим от удачи, и отметка «докуда прочитано» перешагивала
+    // конверт, который relay хранит ещё тридцать суток.
+    expect(inside).toContain("return 'deferred';");
   });
 
   it('дальше по коду ответ уже обычный: строка или null', () => {
