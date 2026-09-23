@@ -21,6 +21,7 @@ import {
   getCallLog,
   loadCallLog,
 } from '../callService';
+import { READ_RETRY_ATTEMPTS } from '../../storage/readRetry';
 
 const PID = 7;
 const SCOPED_KEY = `p${PID}:call_log`;
@@ -179,7 +180,10 @@ describe('журнал звонков не пропадает из-за сорв
     await loadCallLog(PID);
 
     // ПРОВЕРКА НЕ ПУСТАЯ: перезапись действительно шла по профильному ключу.
-    expect(keysOf(mockKvSetSecret)).toEqual([SCOPED_KEY]);
+    // v4.32.749: и не по одному разу — «не смог» теперь повторяют, прежде чем
+    // признать записью потерянной. Ключ у всех попыток один и тот же.
+    expect(keysOf(mockKvSetSecret)).toEqual(
+      new Array(1 + READ_RETRY_ATTEMPTS).fill(SCOPED_KEY));
     expect(warnEvents()).toContain('call_log_persist_failed');
   });
 
@@ -214,11 +218,15 @@ describe('журнал звонков не пропадает из-за сорв
     // Запись журнала: ответ читают, а исключение уходит в лог, а не в пустоту.
     // v4.32.744: ответ ещё и возвращается вызывающему — придержанные сервером
     // звонки убирают с него свою копию по этому самому слову.
-    expect(src).toContain('      if (await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot))) return true;');
+    // v4.32.749: тело снимка считается один раз — его пишет и первая попытка,
+    // и повторные.
+    expect(src).toContain('      const body = JSON.stringify(snapshot);');
+    expect(src).toContain('      if (await kvSetSecret(callLogKey(profileId), body)) return true;');
     expect(src).toContain("      log.warn('call_log_persist_failed', { pid: profileId });");
-    expect(src).not.toContain('kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot));');
+    expect(src).not.toContain('kvSetSecret(callLogKey(profileId), body);');
     expect(src).toContain("      log.warn('call_log_persist_error', { err: e instanceof Error ? e.message : String(e) });");
-    // Ровно два места, где журнал вообще пишется.
-    expect(src.split('await kvSetSecret(callLogKey(').length - 1).toBe(2);
+    // Ровно два места, где журнал вообще пишется: миграция и запись снимка —
+    // а у записи с v4.32.749 две ветки, первая попытка и повтор.
+    expect(src.split('await kvSetSecret(callLogKey(').length - 1).toBe(3);
   });
 });

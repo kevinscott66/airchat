@@ -18,6 +18,7 @@ import {
 import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sealCallEnvelope, openCallEnvelope, MISSED_RECEIPT_MAX_AGE_MS } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
@@ -357,7 +358,23 @@ function persistCallLog(profileId: number, entries = callLog): Promise<boolean> 
       // Одному вызывающему он жизненно нужен: придержанные сервером звонки
       // существуют ровно в одном экземпляре, и расписываться за них можно
       // только после того, как они действительно легли.
-      if (await kvSetSecret(callLogKey(profileId), JSON.stringify(snapshot))) return true;
+      const body = JSON.stringify(snapshot);
+      if (await kvSetSecret(callLogKey(profileId), body)) return true;
+      // v4.32.749: и повтор, прежде чем признать запись потерянной. Отказ
+      // приходит чаще всего в первую секунду после запуска: экран открывается
+      // одновременно с восстановлением сессии и разбором очереди доставки, а
+      // придержанные сервером звонки приезжают первым же событием после
+      // регистрации — то есть ровно тогда, когда база занята, а ключ шифрования
+      // ещё поднимается. Цена одиночного «не смог» здесь высокая и
+      // несимметричная: `recordCallEnd` бросает ответ (сказать ему некому), и
+      // звонок остаётся жить только в памяти — до перезапуска; за придержанный
+      // сервером мы не расписываемся, и он приедет снова, но лишним заходом.
+      // Паузы те же, что у повтора чтения: причина у обоих одна — занятая база,
+      // а не направление обращения.
+      for (let attempt = 1; attempt <= READ_RETRY_ATTEMPTS; attempt += 1) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, readRetryDelayMs(attempt)); });
+        if (await kvSetSecret(callLogKey(profileId), body)) return true;
+      }
       log.warn('call_log_persist_failed', { pid: profileId });
       return false;
     } catch (e) {
