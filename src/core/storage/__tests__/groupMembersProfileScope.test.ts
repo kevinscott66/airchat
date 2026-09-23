@@ -159,7 +159,12 @@ describe('групповые пути спрашивают состав у св�
     expect(GM).toContain('export async function fanoutGroupControl(');
     const f = bodyOf(GM, 'export async function fanoutGroupControl(');
     expect(f).toContain('ownerProfileId: number,');
-    expect(f).toContain('await listGroupMembers(groupId, ownerProfileId)');
+    // v4.32.737: тот же профиль, но формой, отличающей пустоту от сбоя чтения,
+    // — как у рассылки сообщения с v4.32.700. Прежняя выдавала нечитаемый
+    // состав за законную пустую группу, и «Участники увидят, что вы вышли»
+    // говорилось группе, которой не сказали ничего.
+    expect(f).toContain('await listGroupMembersRead(groupId, ownerProfileId)');
+    expect(f).toContain("return { op: ctl.op, sent: false, reason: 'members_unreadable' };");
     expect(f).not.toContain('getMessagingService');
   });
 
@@ -187,8 +192,11 @@ describe('групповые пути спрашивают состав у св�
   });
 
   it('ни одного вызова состава без второго аргумента', () => {
-    expect(count(GM, 'listGroupMembers(')).toBeGreaterThan(4);
-    expect(GM).not.toMatch(/listGroupMembers\([^,)]*\)/);
+    // Обе формы чтения разом: с v4.32.737 у управляющего конверта она
+    // различающая, и считать надо оба имени — иначе переход на
+    // listGroupMembersRead молча уменьшал бы счёт.
+    expect(count(GM, 'listGroupMembers(') + count(GM, 'listGroupMembersRead(')).toBeGreaterThan(4);
+    expect(GM).not.toMatch(/listGroupMembers(Read)?\([^,)]*\)/);
   });
 });
 

@@ -963,7 +963,19 @@ export async function fanoutGroupControl(
   actorName?: string
 ): Promise<GroupControlOutcome> {
   const payload = encodeGroupCtlEnvelope({ ...ctl, groupId, ts: Date.now(), actorName } as GroupCtlEnvelope);
-  const members = await listGroupMembers(groupId, ownerProfileId);
+  // v4.32.737: состав берётся различающим чтением. listGroupMembers отдаёт на
+  // сбое пустой список, а пустой список адресатов в группе — законный случай
+  // (кроме меня никого), и рассылка по нему считается состоявшейся. Значит
+  // секундная блокировка базы выдавала `{ sent: true, recipients: 0 }`:
+  // «Вы вышли из группы, участники увидят» — группе, которой не сказали
+  // ничего, а строка группы тут же удалялась. Повтора у служебного конверта
+  // нет, и сказать было уже нечем. Рассылка сообщения ушла с этого чтения ещё
+  // в v4.32.648 — здесь оно осталось прежним.
+  const members = await listGroupMembersRead(groupId, ownerProfileId);
+  if (!members) {
+    log.warn('group_ctl_members_unreadable', { gid: groupId.slice(0, 8), op: ctl.op });
+    return { op: ctl.op, sent: false, reason: 'members_unreadable' };
+  }
   // Правило адресатов остаётся здесь: оно своё у управляющих конвертов группы
   // (адресат операции получает конверт даже забаненным). Отправкой же ведает
   // общая воронка — своей копии «есть ли сервис / поймать исключение» тут

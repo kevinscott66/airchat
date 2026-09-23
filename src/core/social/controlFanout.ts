@@ -24,8 +24,17 @@
 import { getMessagingService } from './messaging';
 import { log } from '../logger';
 
-/** Почему служебный конверт никуда не ушёл. */
-export type FanoutUndelivered = 'no_service' | 'no_peer' | 'all_failed';
+/**
+ * Почему служебный конверт никуда не ушёл.
+ *
+ * `members_unreadable` (v4.32.737) — состав группы не прочитался. Отдельная
+ * причина, а не «некому»: пустой список адресатов в группе законен (группа,
+ * где кроме меня никого), и рассылка по нему честно считается состоявшейся.
+ * Нечитаемый состав выглядел ровно так же — и «вы вышли, участники увидят»
+ * говорилось группе, которой не сказали ничего. То же слово и тем же поводом,
+ * что у рассылки сообщения, — см. groupSendOutcome (v4.32.700).
+ */
+export type FanoutUndelivered = 'no_service' | 'no_peer' | 'all_failed' | 'members_unreadable';
 
 /**
  * Итог рассылки. Оба варианта обязаны нести своё поле: «скольким адресатам»
@@ -130,5 +139,8 @@ const NO_PEER: Record<FanoutTarget['kind'], string> = {
 };
 
 export function fanoutReasonText(reason: FanoutUndelivered, kind: FanoutTarget['kind']): string {
+  // v4.32.737: «нет связи» здесь было бы неправдой — связь могла быть, не
+  // прочитался список адресатов. Слово то же, что у рассылки сообщения.
+  if (reason === 'members_unreadable') return 'состав группы не прочитан';
   return reason === 'no_peer' ? NO_PEER[kind] : 'нет связи';
 }

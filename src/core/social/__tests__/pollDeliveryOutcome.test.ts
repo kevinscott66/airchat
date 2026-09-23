@@ -62,9 +62,11 @@ describe('v4.32.446 — итог доставки конверта опроса 
     expect(fanoutSrc).not.toContain('reason?: FanoutUndelivered');
   });
 
-  it('три причины «не ушло» перечислены и различимы', () => {
+  it('причины «не ушло» перечислены и различимы', () => {
+    // v4.32.737: причин стало четыре — нечитаемый состав группы больше не
+    // сходится с законной пустой группой (см. groupCtlMembersUnreadable737).
     expect(fanoutSrc).toContain(
-      "export type FanoutUndelivered = 'no_service' | 'no_peer' | 'all_failed';"
+      "export type FanoutUndelivered = 'no_service' | 'no_peer' | 'all_failed' | 'members_unreadable';"
     );
     // Опросы больше не держат своей копии перечня — только псевдоним.
     expect(src).toContain('export type PollUndelivered = FanoutUndelivered;');
