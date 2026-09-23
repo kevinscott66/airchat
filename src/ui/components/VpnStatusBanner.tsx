@@ -44,7 +44,7 @@ export function VpnStatusBanner({ status, onRetry }: Props): React.ReactElement 
     <StatusBanner
       tone="ok"
       icon="shield-checkmark"
-      text="SOCKS-канал активен: защищает поддерживаемые HTTP-запросы, но не весь трафик приложения или устройства."
+      text="Защищённый канал включён. Через него идёт часть запросов приложения — остальной его трафик и другие программы идут напрямую."
     />
   );
 }
