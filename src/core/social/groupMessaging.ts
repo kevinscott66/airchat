@@ -18,6 +18,7 @@ import {
   listGroupMembers,
   listGroupMembersRead,
   getGroup,
+  getGroupRead,
   getGroupMessageTexts,
   getGroupMessageTarget,
   insertGroupMessage,
@@ -41,12 +42,13 @@ import {
 } from '../storage/local';
 import { type GroupRecipient } from './groupRecipient';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
+import { lookupValue } from '../utils/lookupResult';
 import { getMessagingService } from './messaging';
 import { activeRecipients, fanoutControlEnvelope } from './controlFanout';
 import type { FanoutResult } from './controlFanout';
 import type { GroupControlOutcome } from './groupControlOutcome';
 import { canApplyGroupMessageOp, canSendToGroup, mediaKindOfText, slowModeSysLine, type SendDenyCode, type SendVerdict } from './groupSendPolicy';
-import { lookupGroupActor, lookupGroupActorRead, roleOf } from './groupActor';
+import { lookupGroupActorRead, roleOf } from './groupActor';
 import { isAdminRole, ownGroupRole, roleAfterCtl } from './ownGroupRole';
 import { displayNameOrNull, sanitizeDisplayName, stripSpoofedSysPrefix } from './sysLineGuard';
 import { previewLabelForText, truncateReplyPreview } from './messagePreview';
@@ -391,15 +393,21 @@ export async function sendGroupReadReceipt(
 }
 
 /**
- * Handle an incoming group read receipt.
- * Returns true if this was a receipt (so messaging layer skips normal DM storage).
+ * Входящая отметка «прочитано» в группе.
+ *
+ * v4.32.748: отвечает словом, а не «да». Конверт наш при любом исходе — это
+ * `'consumed'`, — но отказ базы исходом не является. Отметка приходит ровно
+ * один раз: следующая расскажет уже про следующее сообщение, а про это не
+ * напомнит никто. Потерянная отметка — это галочка, которая у отправителя не
+ * появится никогда, хотя прочитали.
  */
 export async function handleIncomingGroupReadReceipt(
   text: string,
   rcpt: GroupRecipient,
   senderPubB64?: string
-): Promise<boolean> {
-  if (!text.startsWith(GROUP_READ_RECEIPT_PREFIX)) return false;
+): Promise<EnvelopeIntake> {
+  // Позвали не по адресу: приёмник проверяет префикс до вызова.
+  if (!text.startsWith(GROUP_READ_RECEIPT_PREFIX)) return 'consumed';
   // v4.32.197 (Round-27 #1): byte-cap + field-shape validation before trust.
   // Peer could DM multi-MB read-receipt JSON to stall parse / flood SQLite.
   // v4.32.507: потолок и разбор — через общий readEnvelopeBody, как у
@@ -408,14 +416,14 @@ export async function handleIncomingGroupReadReceipt(
   const env = readEnvelopeBody<GroupReadReceiptEnvelope>(text, GROUP_READ_RECEIPT_PREFIX, 16 * 1024);
   // Дальше конверт наш при любом исходе: возвращать false значило бы отдать
   // сырой служебный текст в переписку как обычное сообщение.
-  if (!env) return true;
+  if (!env) return 'consumed';
   try {
-    if (typeof env.groupId !== 'string' || !env.groupId || env.groupId.length > 128) return true;
-    if (typeof env.lastSeenMsgId !== 'string' || !env.lastSeenMsgId || env.lastSeenMsgId.length > 128) return true;
+    if (typeof env.groupId !== 'string' || !env.groupId || env.groupId.length > 128) return 'consumed';
+    if (typeof env.lastSeenMsgId !== 'string' || !env.lastSeenMsgId || env.lastSeenMsgId.length > 128) return 'consumed';
     // v4.32.666: форма ключа — общее правило isPubKeyB64, а не длина: под
     // «43…48 символов» подходят и управляющие байты, и кириллица.
-    if (!isPubKeyB64(env.viewerPubB64)) return true;
-    if (env.ts != null && (typeof env.ts !== 'number' || !Number.isFinite(env.ts))) return true;
+    if (!isPubKeyB64(env.viewerPubB64)) return 'consumed';
+    if (env.ts != null && (typeof env.ts !== 'number' || !Number.isFinite(env.ts))) return 'consumed';
     // v4.32.176: anti-spoof — DM-signer (senderPubB64, Ed25519-верифицированный)
     // должен совпадать с viewerPubB64 в envelope. Раньше любой peer мог
     // написать "Bob прочёл" и отравить seen_by для чужого.
@@ -424,28 +432,43 @@ export async function handleIncomingGroupReadReceipt(
         env: env.viewerPubB64.slice(0, 12),
         signer: senderPubB64.slice(0, 12),
       });
-      return true;
+      return 'consumed';
     }
     const pid = rcpt.pid;
     // v4.32.507: отметку принимаем только от участника этой группы. Проверка
     // подписи выше говорит лишь «конверт от того, кем подписан», а не «он
     // здесь состоит»: узнав id группы и id сообщения, посторонний собеседник
     // добавлял себя в seen_by и накручивал счётчик просмотров чужого канала.
-    const actor = await lookupGroupActor(env.groupId, env.viewerPubB64, pid);
+    // v4.32.748: различающим чтением. Прежнее отдавало на отказе базы пустой
+    // состав, роль по нему выходила null — и отметка от настоящего участника
+    // объявлялась подлогом («посторонний накручивает просмотры») и терялась
+    // навсегда. Отказ проверки — не отказ в праве; такой конверт надо
+    // перезапросить, а решение вынести, когда база ответит.
+    const actor = await lookupGroupActorRead(env.groupId, env.viewerPubB64, pid);
+    if (!actor) {
+      log.warn('group_read_receipt_unreadable', { gid: env.groupId.slice(0, 8) });
+      return 'deferred';
+    }
     if (!actor.group || actor.role === null) {
       log.warn('group_read_receipt_nonmember_drop', {
         gid: env.groupId.slice(0, 8),
         viewer: env.viewerPubB64.slice(0, 12),
         known: !!actor.group,
       });
-      return true;
+      return 'consumed';
     }
     await markGroupMessageSeen(env.lastSeenMsgId, env.groupId, pid, env.viewerPubB64);
     log.debug('group_read_receipt_applied', { groupId: env.groupId.slice(0, 8), viewer: env.viewerPubB64.slice(0, 8) });
   } catch (e) {
-    log.debug('group_read_receipt_apply_failed', { err: e instanceof Error ? e.message : String(e) });
+    // v4.32.748: сюда попадает только отказ записи — разбор конверта кончился
+    // выше, до try, а проверки внутри не бросают. Значит это «сейчас не
+    // смогли», и конверт надо перезапросить: повтора у отметки нет, а
+    // следующая расскажет уже про следующее сообщение. Прежде отказ уходил в
+    // log.debug, и галочка у отправителя не появлялась никогда.
+    log.warn('group_read_receipt_apply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
-  return true;
+  return 'consumed';
 }
 
 /**
@@ -1309,12 +1332,17 @@ async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: st
  * Дополнительно: владельца группы нельзя ни разжаловать, ни забанить, а
  * обычный админ не может трогать другого админа — только владелец.
  *
- * Возвращает true, если конверт наш (тогда messaging.ts не сохраняет его как DM).
+ * v4.32.748: отвечает словом, а не «да». Конверт наш при любом исходе — это
+ * `'consumed'`, — но отказ базы исходом не является: его надо перезапросить.
+ * Повторов у управляющего конверта нет, а лежит в нём то, что переспросить
+ * больше негде: бан, кик, смена роли, переименование группы, приглашение.
  */
-export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipient, senderPubB64?: string): Promise<boolean> {
-  if (!text.startsWith(GROUP_CTL_PREFIX)) return false;
+export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipient, senderPubB64?: string): Promise<EnvelopeIntake> {
+  // Позвали не по адресу: приёмник проверяет префикс до вызова. Откладывать
+  // нечего — перезапрос вернёт ровно этот же текст.
+  if (!text.startsWith(GROUP_CTL_PREFIX)) return 'consumed';
   const env = decodeGroupCtlEnvelope(text);
-  if (!env || !senderPubB64) return true;
+  if (!env || !senderPubB64) return 'consumed';
 
   const pid = rcpt.pid;
   // v4.32.511: по идентификатору, а не выбором из списка активных групп. От
@@ -1323,12 +1351,21 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   // незнакомая — и приглашение в неё применялось целиком. Любой контакт,
   // знающий id, переписывал этим состав и роли: себя администратором, хозяина
   // группы рядовым участником.
-  const group = await getGroup(env.groupId, pid);
+  // v4.32.748: различающим чтением. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «такой группы нет», — то есть занятая или недоступная база
+  // снимала защиту, описанную абзацем выше, ровно так же, как её снимал архив
+  // до 4.32.511. Отказ чтения теперь откладывает конверт целиком.
+  const groupRead = await getGroupRead(env.groupId, pid);
+  if (groupRead.state === 'failed') {
+    log.warn('group_ctl_group_unreadable', { gid: env.groupId.slice(0, 8), op: env.op });
+    return 'deferred';
+  }
+  const group = lookupValue(groupRead);
 
   // 'invite' — единственная операция, применимая к ЕЩЁ НЕ ИЗВЕСТНОЙ группе,
   // поэтому её разбор идёт до проверки «знаем ли мы такую группу».
   if (env.op === 'invite') {
-    if (group) return true; // уже состоим — приглашение идемпотентно
+    if (group) return 'consumed'; // уже состоим — приглашение идемпотентно
     // v4.32.617: приглашение — единственная операция, у которой нет прежнего
     // общего состояния, которое стоило бы беречь. Ради него `\x0egctl:` и
     // переживает блокировку (см. blockPolicy), но заводить заблокированному
@@ -1337,11 +1374,11 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     await rateLimiter.whenReady();
     if (rateLimiter.isBlocked(senderPubB64)) {
       log.info('group_ctl_invite_blocked_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     if (!(await isInviteTrusted(env.groupId, senderPubB64, rcpt))) {
       log.warn('group_ctl_invite_untrusted_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     // v4.32.621: единственная защита приглашения от повтора — `if (group)`
     // выше, и выход из группы её же и снимает: deleteGroup стирает строку, и
@@ -1350,7 +1387,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // см. groupLeaveMark.ts.
     if (!(await inviteNewerThanLeave(env.groupId, pid, env.ts))) {
       log.warn('group_ctl_invite_after_leave_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     const myPub = rcpt.myPub;
     const myName = (await getOwnDisplayNameFor(pid)) ?? 'Вы';
@@ -1384,15 +1421,25 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // Приглашение принято — прежний выход больше ничего не значит.
     await clearGroupLeft(env.groupId, pid);
     log.info('group_ctl_invite_applied', { gid: env.groupId.slice(0, 8), members: env.members.length });
-    return true;
+    return 'consumed';
   }
 
   if (!group) {
     log.debug('group_ctl_unknown_group', { gid: env.groupId.slice(0, 8) });
-    return true;
+    return 'consumed';
   }
 
-  const members = await listGroupMembers(env.groupId, pid);
+  // v4.32.748: состав различающим чтением — тот же шаг, что и у заявки на
+  // вступление в 4.32.738. Прежнее чтение отдавало на отказе базы пустой
+  // список, и `ownGroupRole` сползал на запасной ответ `groups.is_admin` — ту
+  // самую колонку, из-за которой правило и переписывали. Здесь цена ошибки
+  // выше, чем там: по `iAmAdmin` решается, пересказывать ли вступившего
+  // остальным, а `members` ниже отвечает и на «кого мы вообще знаем».
+  const members = await listGroupMembersRead(env.groupId, pid);
+  if (!members) {
+    log.warn('group_ctl_members_unreadable', { gid: env.groupId.slice(0, 8), op: env.op });
+    return 'deferred';
+  }
   /**
    * v4.32.512: свои права — из своей строки в group_members, а не из
    * `groups.is_admin`. Флаг ставился один раз при создании группы и дальше не
@@ -1420,7 +1467,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (env.op === 'join') {
     if (env.target !== senderPubB64) {
       log.warn('group_ctl_join_spoof_drop', { env: env.target.slice(0, 12), signer: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     const knownRole = members.find((m) => m.peerPubB64 === senderPubB64)?.role;
     /**
@@ -1462,7 +1509,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           from: senderPubB64.slice(0, 12),
           verdict: tokenVerdict,
         });
-        return true;
+        return 'consumed';
       }
     }
     /**
@@ -1485,9 +1532,9 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     if (verdict === 'banned') {
       // Бан держится: забаненный не вернётся, просто переслав себе ссылку.
       log.info('group_ctl_join_banned_drop', { gid: env.groupId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
-    if (verdict === 'ignore') return true;
+    if (verdict === 'ignore') return 'consumed';
     if (verdict === 'queue') {
       // Дедуп по (group_id, requester, pending): повторное открытие ссылки не
       // наплодит заявок.
@@ -1516,7 +1563,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         );
       }
       log.info('group_ctl_join_queued', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     /**
      * v4.32.620: тот же водяной знак `m:<участник>`, что у leave/ban/kick/role
@@ -1539,7 +1586,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      */
     if (!(await groupControlTsFresh(`m:${senderPubB64}`, env.groupId, pid, env.ts))) {
       log.warn('group_ctl_join_stale', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     await upsertGroupMember({
       groupId: env.groupId,
@@ -1588,7 +1635,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       }
     }
     log.info('group_ctl_join_applied', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-    return true;
+    return 'consumed';
   }
 
   /**
@@ -1601,22 +1648,22 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (env.op === 'leave') {
     if (env.target !== senderPubB64) {
       log.warn('group_ctl_leave_spoof_drop', { env: env.target.slice(0, 12), signer: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     const leaver = members.find((m) => m.peerPubB64 === senderPubB64);
-    if (!leaver || leaver.role === 'banned') return true;
+    if (!leaver || leaver.role === 'banned') return 'consumed';
     // v4.32.615: тот же водяной знак, что у ban/kick/role — состав и роль
     // одного человека это один скаляр. Без него перехваченный старый «вышел»
     // выбрасывал из группы того, кто давно вернулся, и повторять это можно
     // было все тридцать суток, пока кадр не протухнет.
-    if (!(await acceptGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts))) return true;
+    if (!(await acceptGroupControlTs(`m:${senderPubB64}`, env.groupId, pid, env.ts))) return 'consumed';
     await removeGroupMember(env.groupId, senderPubB64, pid);
     await recountGroupMembers(env.groupId, pid);
     // v4.32.372: через `??` пустое имя из конверта вытесняло и подпись из
     // списка участников, и «Участник» — оставалась строка « покинул(а) группу».
     await insertCtlSysMessage(env, pid, `${env.targetName || leaver.displayName || 'Участник'} покинул(а) группу`);
     log.info('group_ctl_leave_applied', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-    return true;
+    return 'consumed';
   }
 
   const actor = members.find((m) => m.peerPubB64 === senderPubB64);
@@ -1645,7 +1692,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     const target = await getGroupMessageTarget(env.msgId, pid);
     if (target == null || target.groupId !== env.groupId) {
       log.debug('group_ctl_msgop_unknown_msg', { msgId: env.msgId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     const author = target.senderPubB64;
     const verdict = canApplyGroupMessageOp({
@@ -1663,7 +1710,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         from: senderPubB64.slice(0, 12),
         code: verdict.code,
       });
-      return true;
+      return 'consumed';
     }
     // v4.32.628: правка — единственный управляющий конверт группы, способный
     // ЗАМЕНИТЬ уже показанный текст, и до этой версии она применялась без
@@ -1683,7 +1730,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
         gid: env.groupId.slice(0, 8),
         msgId: env.msgId.slice(0, 8),
       });
-      return true;
+      return 'consumed';
     }
     if (env.op === 'edit') {
       // v4.32.530: правка могла не примениться (нет строки, сбой базы). Тогда
@@ -1694,12 +1741,12 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           gid: env.groupId.slice(0, 8),
           msgId: env.msgId.slice(0, 8),
         });
-        return true;
+        return 'consumed';
       }
     } else await deleteGroupMessage(env.msgId, pid);
     await commitGroupMessageTs(env.msgId, pid, env.ts);
     log.info('group_ctl_msgop_applied', { op: env.op, gid: env.groupId.slice(0, 8) });
-    return true;
+    return 'consumed';
   }
 
   /**
@@ -1711,12 +1758,12 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (env.op === 'pin') {
     if (!actor || actor.role === 'banned') {
       log.warn('group_ctl_pin_not_member_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-      return true;
+      return 'consumed';
     }
     const { canPinInGroup } = await import('./groupPinPolicy');
     if (!canPinInGroup({ role: actor.role, adminOnlyPinning: group.adminOnlyPinning, type: group.type })) {
       log.warn('group_ctl_pin_denied', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12), role: actor.role });
-      return true;
+      return 'consumed';
     }
     // Текст баннера берётся из своей строки group_messages, а не из конверта:
     // иначе закрепление стало бы способом показать группе произвольный текст.
@@ -1729,7 +1776,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     const pinTarget = await getGroupMessageTarget(env.msgId, pid);
     if (pinTarget == null || pinTarget.groupId !== env.groupId) {
       log.debug('group_ctl_pin_unknown_msg', { msgId: env.msgId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     const { applyLocalPin } = await import('./groupPinSync');
     const applied = await applyLocalPin({ groupId: env.groupId, ownerProfileId: pid, msgId: env.msgId, on: env.on });
@@ -1738,16 +1785,16 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // должно: она сказала бы о том, чего в шапке нет.
     if (applied === null) {
       log.warn('group_ctl_pin_not_applied', { gid: env.groupId.slice(0, 8) });
-      return true;
+      return 'consumed';
     }
     await insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено' : 'Сообщение откреплено');
     log.info('group_ctl_pin_applied', { gid: env.groupId.slice(0, 8), on: env.on });
-    return true;
+    return 'consumed';
   }
 
   if (!actor || (actor.role !== 'owner' && actor.role !== 'admin')) {
     log.warn('group_ctl_not_admin_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
-    return true;
+    return 'consumed';
   }
 
   // v4.32.371: `||` вместо `??` — иначе имя, ничего не рисующее на экране,
@@ -1761,7 +1808,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
    */
   if (env.op === 'joinres') {
     const myPubR = rcpt.myPub;
-    if (!myPubR || env.target !== myPubR) return true;
+    if (!myPubR || env.target !== myPubR) return 'consumed';
     await insertCtlSysMessage(
       env,
       pid,
@@ -1774,7 +1821,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           : `${actorLabel} отклонил(а) заявку на вступление`
     );
     log.info('group_ctl_joinres_applied', { gid: env.groupId.slice(0, 8), status: env.status });
-    return true;
+    return 'consumed';
   }
 
   if (env.op === 'meta') {
@@ -1924,7 +1971,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     for (const field of acceptedMeta) await commitGroupControlTs(`meta:${field}`, env.groupId, pid, env.ts);
     for (const ev of events) await insertCtlSysMessage(env, pid, ev.text, ev.field);
     log.info('group_ctl_meta_applied', { gid: env.groupId.slice(0, 8), events: events.length });
-    return true;
+    return 'consumed';
   }
 
   const target = members.find((m) => m.peerPubB64 === env.target);
@@ -1936,7 +1983,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   const verdict = canModerate(actor.role, target?.role);
   if (!verdict.allowed) {
     log.warn('group_ctl_moderation_denied', { gid: env.groupId.slice(0, 8), actor: actor.role, target: target?.role ?? 'none' });
-    return true;
+    return 'consumed';
   }
 
   /**
@@ -1965,7 +2012,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
    */
   if (!(await groupControlTsFresh(`m:${env.target}`, env.groupId, pid, env.ts))) {
     log.warn('group_ctl_replay_rejected', { gid: env.groupId.slice(0, 8), op: env.op, target: env.target.slice(0, 12) });
-    return true;
+    return 'consumed';
   }
 
   const myPub = rcpt.myPub;
@@ -1980,7 +2027,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // самое, конверт пришёл дважды), и раньше он вычитал из числа участников
       // ещё раз и писал вторую системную строку. unban был идемпотентен с
       // самого начала — теперь и ban.
-      if (target?.role === 'banned') return true;
+      if (target?.role === 'banned') return 'consumed';
       if (target) await updateGroupMemberRole(env.groupId, env.target, 'banned', pid);
       else {
         /**
@@ -1993,7 +2040,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
          */
         if (countBanned(members) >= GROUP_BANLIST_MAX) {
           log.warn('group_banlist_full', { gid: env.groupId.slice(0, 8) });
-          return true;
+          return 'consumed';
         }
         await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'banned', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
       }
@@ -2002,7 +2049,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       break;
     }
     case 'unban': {
-      if (target?.role !== 'banned') return true;
+      if (target?.role !== 'banned') return 'consumed';
       await updateGroupMemberRole(env.groupId, env.target, 'member', pid);
       await clearGroupRemoval(env.groupId, env.target, pid);
       await recountGroupMembers(env.groupId, pid);
@@ -2010,7 +2057,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       break;
     }
     case 'kick': {
-      if (!target) return true;
+      if (!target) return 'consumed';
       await removeGroupMember(env.groupId, env.target, pid);
       // Строки в group_members больше нет — память об исключении хранится
       // отдельно, иначе исключённый вернётся сам по старой ссылке.
@@ -2033,7 +2080,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
          * каждого, кто вошёл в группу без одобрения.
          */
         if (isMe) await insertCtlSysMessage(env, pid, `${actorLabel} одобрил(а) вашу заявку на вступление`);
-        return true;
+        return 'consumed';
       }
       await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'member', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
       // Администратор вернул исключённого — отметка своё отработала.
@@ -2043,7 +2090,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       break;
     }
     case 'role': {
-      if (!target || target.role === env.role) return true;
+      if (!target || target.role === env.role) return 'consumed';
       // v4.32.257: роль 'restricted' («только чтение») добавлена к admin/member,
       // а текст системной строки считается по ПРЕЖНЕЙ роли — иначе снятие
       // ограничения и снятие админских прав описывались бы одинаково.
@@ -2082,7 +2129,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   }
 
   log.info('group_ctl_applied', { gid: env.groupId.slice(0, 8), op: env.op, target: env.target.slice(0, 12) });
-  return true;
+  return 'consumed';
 }
 
 // ── GroupMessagingService singleton ──────────────────────────────────────────

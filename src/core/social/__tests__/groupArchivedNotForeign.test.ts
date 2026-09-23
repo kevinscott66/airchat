@@ -52,6 +52,13 @@ jest.mock('../../storage/local', () => ({
   // знает ничего — `SELECT * FROM groups WHERE id = ? AND owner_profile_id = ?`.
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.748: копия настоящей пары. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «нет такой группы»; различающая форма отвечает состоянием.
+  // Здесь чтение удаётся всегда, поэтому 'failed' не возвращается никогда.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const row = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return row ? { state: 'found', value: row } : { state: 'missing' };
+  }),
   // Тоже копия настоящего, вместе с той самой оговоркой:
   // `SELECT * FROM groups WHERE owner_profile_id = ? AND archived = 0`.
   // В production-коде больше не зовётся — нужен здесь, чтобы показать, чем
@@ -241,7 +248,7 @@ describe('приглашение в собственную архивную гр
     // администратором, хозяин группы — рядовым участником.
     archivedGroup();
     const consumed = await handleIncomingGroupControl(invite(STRANGER), RCPT, STRANGER);
-    expect(consumed).toBe(true);
+    expect(consumed).toBe('consumed');
     expect(mockCreated).toEqual([]);
     expect(mockUpserts).toEqual([]);
   });
@@ -249,7 +256,7 @@ describe('приглашение в собственную архивную гр
   it('приглашение в группу, которой у нас нет, по-прежнему применяется', async () => {
     // Ратчет с двух сторон: правка закрывает захват, но не ломает вступление.
     const consumed = await handleIncomingGroupControl(invite(STRANGER), RCPT, STRANGER);
-    expect(consumed).toBe(true);
+    expect(consumed).toBe('consumed');
     expect(mockCreated).toHaveLength(1);
     expect(mockUpserts.find((m) => m.peerPubB64 === STRANGER)?.role).toBe('admin');
     expect(mockUpserts.find((m) => m.peerPubB64 === ME)?.role).toBe('member');

@@ -73,9 +73,9 @@ jest.mock('../../transport/multiTransport', () => ({
 jest.mock('../../transport/ipfs/heliaNode', () => ({ isIpfsEnabled: () => false }));
 jest.mock('../groupMessaging', () => ({
   handleIncomingGroupEnvelope: async () => false,
-  handleIncomingGroupReadReceipt: async () => false,
-  handleIncomingGroupJoinRequest: async () => false,
-  handleIncomingGroupControl: async () => false,
+  handleIncomingGroupReadReceipt: async () => 'consumed',
+  handleIncomingGroupJoinRequest: async () => 'consumed',
+  handleIncomingGroupControl: async () => 'consumed',
   GROUP_READ_RECEIPT_PREFIX: 'grr:',
   GROUP_JOIN_REQUEST_PREFIX: 'grj:',
   GROUP_CTL_PREFIX: 'grc:',

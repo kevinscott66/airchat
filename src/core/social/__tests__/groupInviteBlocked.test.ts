@@ -30,8 +30,18 @@ let mockOnlyContacts: boolean | null = false;
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.748: копия настоящей пары. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «нет такой группы»; различающая форма отвечает состоянием.
+  // Здесь чтение удаётся всегда, поэтому 'failed' не возвращается никогда.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const row = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return row ? { state: 'found', value: row } : { state: 'missing' };
+  }),
   listGroups: jest.fn(async () => []),
   listGroupMembers: jest.fn(async () => []),
+  // v4.32.748: та же выборка различающей формой — приём управляющего конверта
+  // спрашивает состав ею. Здесь база читается всегда, значит не null.
+  listGroupMembersRead: jest.fn(async () => []),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async () => true),
   touchGroupConversation: jest.fn(async () => {}),

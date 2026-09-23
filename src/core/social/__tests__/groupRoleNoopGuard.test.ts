@@ -106,7 +106,7 @@ describe('BEFORE — что уходило в историю без этой п�
     // именно то, что делает отправителя без проверки источником расхождения:
     // строка написана, тост показан, а применять её некому.
     const messaging = fs.readFileSync(path.join(SRC, 'core', 'social', 'groupMessaging.ts'), 'utf8');
-    expect(messaging).toContain('if (!target || target.role === env.role) return true;');
+    expect(messaging).toContain("if (!target || target.role === env.role) return 'consumed';");
   });
 
   it('повторное назначение администратором писало о повышении уже повышенного', () => {

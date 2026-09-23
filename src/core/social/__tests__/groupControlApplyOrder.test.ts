@@ -76,6 +76,13 @@ jest.mock('../../storage/profileScopedKv', () => ({
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.748: копия настоящей пары. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «нет такой группы»; различающая форма отвечает состоянием.
+  // Здесь чтение удаётся всегда, поэтому 'failed' не возвращается никогда.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const row = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return row ? { state: 'found', value: row } : { state: 'missing' };
+  }),
   listGroups: jest.fn(async (pid: number) => mockGroups.filter((g) => g.ownerProfileId === pid)),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
@@ -254,7 +261,7 @@ describe('G1: повторный «вступил» не возвращает у
   it('первый конверт применяется и оставляет отметку', async () => {
     ownGroup();
     const ts = Date.now() - 1000;
-    expect(await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B)).toBe(true);
+    expect(await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B)).toBe('consumed');
     expect(mockUpserts.map((m) => m.peerPubB64)).toEqual([B]);
     // Отметка ДОЛЖНА появиться — иначе следующая проверка была бы пустой.
     expect(mockKv.get(`${PID}|${groupWatermarkKey(`m:${B}`, GID)}`)).toBe(String(ts));
@@ -267,7 +274,7 @@ describe('G1: повторный «вступил» не возвращает у
     mockUpserts.length = 0;
     // Человек с тех пор вышел: строки в составе нет, отметки об исключении
     // тоже нет — прежде decideJoin отвечал бы 'add' и вернул его.
-    expect(await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B)).toBe(true);
+    expect(await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B)).toBe('consumed');
     expect(mockUpserts).toEqual([]);
   });
 
@@ -277,7 +284,7 @@ describe('G1: повторный «вступил» не возвращает у
     const ts = Date.now() - 5000;
     await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B);
     mockUpserts.length = 0;
-    expect(await handleIncomingGroupControl(joinEnv(B, ts + 1000), RCPT, B)).toBe(true);
+    expect(await handleIncomingGroupControl(joinEnv(B, ts + 1000), RCPT, B)).toBe('consumed');
     expect(mockUpserts.map((m) => m.peerPubB64)).toEqual([B]);
   });
 
@@ -309,7 +316,7 @@ describe('G4: отметка поля meta сдвигается только п�
     mockMetaWriteFails = true;
     await expect(handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).rejects.toThrow();
     mockMetaWriteFails = false;
-    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe(true);
+    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe('consumed');
     expect(mockMetaPatches).toEqual([{ name: 'Соседи' }]);
     expect(mockKv.get(`${PID}|${groupWatermarkKey('meta:name', GID)}`)).toBe(String(ts));
   });
@@ -317,7 +324,7 @@ describe('G4: отметка поля meta сдвигается только п�
   it('удавшаяся запись по-прежнему запирает повтор', async () => {
     ownGroup();
     const ts = Date.now() - 1000;
-    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe(true);
+    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe('consumed');
     mockMetaPatches.length = 0;
     // Название в группе не меняем: decideMetaField сравнивает с mockGroups, а
     // повтор должен отбиться именно водяным знаком.
@@ -333,7 +340,7 @@ describe('G4: отметка поля meta сдвигается только п�
     expect(await acceptGroupControlTs('meta:name', GID, PID, ts)).toBe(true);
     expect(mockKv.get(`${PID}|${groupWatermarkKey('meta:name', GID)}`)).toBe(String(ts));
     // Изменение при этом не применено, а повтор уже не примут.
-    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe(true);
+    expect(await handleIncomingGroupControl(metaEnv('Соседи', ts), RCPT, ME)).toBe('consumed');
     expect(mockMetaPatches).toEqual([]);
   });
 });
@@ -362,7 +369,7 @@ describe('G8: нечитаемые контакты не снимают филь
 
   it('незнакомец не попадает в заявки, пока список контактов не читается', async () => {
     mockContacts = () => { throw new Error('database is locked'); };
-    expect(await handleIncomingGroupControl(joinEnv(STRANGER, Date.now() - 1000), RCPT, STRANGER)).toBe(true);
+    expect(await handleIncomingGroupControl(joinEnv(STRANGER, Date.now() - 1000), RCPT, STRANGER)).toBe('consumed');
     expect(mockJoinRequests).toEqual([]);
     expect(mockUpserts).toEqual([]);
   });

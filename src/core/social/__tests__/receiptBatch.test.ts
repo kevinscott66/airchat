@@ -139,7 +139,9 @@ describe('форма исходников — v4.32.507', () => {
   });
 
   test('групповая отметка принимается только от участника', () => {
-    expect(group).toContain('await lookupGroupActor(env.groupId, env.viewerPubB64, pid);');
+    // v4.32.748: различающей формой — нечитаемый состав больше не выдаётся
+    // за «отправитель здесь не состоит».
+    expect(group).toContain('await lookupGroupActorRead(env.groupId, env.viewerPubB64, pid);');
     expect(group).toContain("log.warn('group_read_receipt_nonmember_drop'");
     expect(group).toContain('if (!actor.group || actor.role === null)');
   });
@@ -170,13 +172,17 @@ describe('форма исходников — v4.32.507', () => {
   });
 
   test('после проверки префикса приёмник конверт уже не отдаёт обратно', () => {
-    // `return false` значит «это не мой конверт» и отправляет служебный текст
-    // в переписку как обычное сообщение. Он допустим ровно один раз — в
-    // проверке префикса.
+    // `return false` значило «это не мой конверт» и отправляло служебный текст
+    // в переписку как обычное сообщение.
+    //
+    // v4.32.748: такого выхода у отметки не осталось вовсе — она отвечает
+    // вердиктом, и оба его слова, `'consumed'` и `'deferred'`, значат «конверт
+    // мой». Правило не ослабло, а стало строже, ровно как у заявки ниже.
     const at = group.indexOf('export async function handleIncomingGroupReadReceipt');
     expect(at).toBeGreaterThan(0);
     const body = group.slice(at, group.indexOf('\n}\n', at));
-    expect(body.match(/return false;/g)).toHaveLength(1);
+    expect(body.match(/return false;/g)).toBeNull();
+    expect(body).toContain("if (!text.startsWith(GROUP_READ_RECEIPT_PREFIX)) return 'consumed';");
 
     // v4.32.738: у заявки на вступление такого выхода не осталось вовсе. Она
     // отвечает вердиктом, и оба его слова — `'consumed'` и `'deferred'` —

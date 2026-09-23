@@ -1214,8 +1214,12 @@ export class MessagingService {
 
     // Group read receipt — update seen_by on the message, skip DM storage
     if (textPayload.text?.startsWith(GROUP_READ_RECEIPT_PREFIX)) {
-      if (inbound) await handleIncomingGroupReadReceipt(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return 'consumed';
+      // v4.32.748: ответ обработчика — наш ответ. Отметка приходит один раз:
+      // следующая расскажет уже про следующее сообщение, а про это не
+      // напомнит никто. Отказ базы у него значит «перезапросить», иначе
+      // галочка у отправителя не появится никогда, хотя прочитали.
+      if (!inbound) return 'consumed';
+      return await handleIncomingGroupReadReceipt(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
     }
 
     // Group join request — store as pending join request for admin, skip DM storage
@@ -1231,8 +1235,12 @@ export class MessagingService {
     // локальной БД и НЕ сохраняем как DM (иначе в чате «Контакт …» появился бы
     // сырой JSON с чужими публичными ключами).
     if (textPayload.text?.startsWith(GROUP_CTL_PREFIX)) {
-      if (inbound) await handleIncomingGroupControl(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
-      return 'consumed';
+      // v4.32.748: ответ обработчика — наш ответ. Повторов у управляющего
+      // конверта нет, а лежит в нём то, что переспросить больше негде: бан,
+      // кик, смена роли, переименование группы, приглашение. Отказ базы у
+      // него значит «перезапросить», а не «разобрано».
+      if (!inbound) return 'consumed';
+      return await handleIncomingGroupControl(textPayload.text, await this.groupRecipient(), peerPubKeyB64);
     }
 
     // v4.32.246: сторис контакта. Раньше ездила через IPFS pubsub, который на

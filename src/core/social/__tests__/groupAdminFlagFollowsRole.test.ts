@@ -51,6 +51,13 @@ const mockKv = new Map<string, string>();
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.748: копия настоящей пары. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «нет такой группы»; различающая форма отвечает состоянием.
+  // Здесь чтение удаётся всегда, поэтому 'failed' не возвращается никогда.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const row = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return row ? { state: 'found', value: row } : { state: 'missing' };
+  }),
   listGroupMembers: jest.fn(async (gid: string, pid: number) =>
     (mockMembers[gid] ?? []).filter((m) => m.ownerProfileId === pid)),
   // v4.32.738: приём заявки спрашивает состав различающей формой — она отвечает

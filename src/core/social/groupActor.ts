@@ -36,11 +36,13 @@
 
 import {
   getGroup,
+  getGroupRead,
   listGroupMembers,
   listGroupMembersRead,
   type GroupMemberRow,
   type GroupRow,
 } from '../storage/local';
+import { lookupValue } from '../utils/lookupResult';
 import type { SendRole } from './groupSendPolicy';
 
 /**
@@ -101,13 +103,20 @@ export async function lookupGroupActor(
  * пропадает — планировщик отложенных снимает строку расписания именно по
  * отказу в правах. Кому важно различие, берёт эту обёртку: null здесь значит
  * «проверять нечем», и решение остаётся за вызывающим.
+ *
+ * v4.32.748: не читается и строка самой группы — тоже «проверять нечем».
+ * `getGroup` схлопывает отказ базы в тот же `null`, что и «такой группы нет»:
+ * обёртка отвечала «группа незнакомая» на вопрос, который базе задать не
+ * удалось, и различие, ради которого её заводили, на этом шаге пропадало.
  */
 export async function lookupGroupActorRead(
   groupId: string,
   actorPubB64: string,
   ownerProfileId: number
 ): Promise<GroupActor | null> {
-  const group = await getGroup(groupId, ownerProfileId);
+  const groupRead = await getGroupRead(groupId, ownerProfileId);
+  if (groupRead.state === 'failed') return null;
+  const group = lookupValue(groupRead);
   if (!group) return { group: null, members: [], role: null };
   const members = await listGroupMembersRead(groupId, ownerProfileId);
   if (!members) return null;

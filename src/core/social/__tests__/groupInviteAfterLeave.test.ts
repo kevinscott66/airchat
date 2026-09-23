@@ -38,8 +38,18 @@ jest.mock('../../storage/profileScopedKv', () => ({
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async (id: string, pid: number) =>
     mockGroups.find((g) => g.id === id && g.ownerProfileId === pid) ?? null),
+  // v4.32.748: копия настоящей пары. `getGroup` схлопывает отказ базы в тот же
+  // `null`, что и «нет такой группы»; различающая форма отвечает состоянием.
+  // Здесь чтение удаётся всегда, поэтому 'failed' не возвращается никогда.
+  getGroupRead: jest.fn(async (id: string, pid: number) => {
+    const row = mockGroups.find((g) => g.id === id && g.ownerProfileId === pid);
+    return row ? { state: 'found', value: row } : { state: 'missing' };
+  }),
   listGroups: jest.fn(async () => []),
   listGroupMembers: jest.fn(async () => []),
+  // v4.32.748: та же выборка различающей формой — приём управляющего конверта
+  // спрашивает состав ею. Здесь база читается всегда, значит не null.
+  listGroupMembersRead: jest.fn(async () => []),
   getGroupMessageTexts: jest.fn(async () => new Map<string, string>()),
   insertGroupMessage: jest.fn(async () => true),
   touchGroupConversation: jest.fn(async () => {}),
@@ -172,14 +182,14 @@ describe('отметка выхода из группы', () => {
 describe('ветка invite в обработчике группы', () => {
   it('BEFORE: без отметки повтор приглашения заводит группу заново', async () => {
     const applied = await handleIncomingGroupControl(inviteEnv(T_LEAVE - 60_000), RCPT, INVITER);
-    expect(applied).toBe(true);
+    expect(applied).toBe('consumed');
     expect(mockCreated).toEqual([GID]);
   });
 
   it('повтор приглашения, отправленного до выхода, группу не заводит', async () => {
     await markGroupLeft(GID, PID, T_LEAVE);
     const applied = await handleIncomingGroupControl(inviteEnv(T_LEAVE - 60_000), RCPT, INVITER);
-    expect(applied).toBe(true);
+    expect(applied).toBe('consumed');
     expect(mockCreated).toEqual([]);
   });
 
@@ -194,7 +204,7 @@ describe('ветка invite в обработчике группы', () => {
     mockGroups.push({ id: GID, ownerProfileId: PID, name: 'Двор' });
     await markGroupLeft(GID, PID, T_LEAVE);
     const applied = await handleIncomingGroupControl(inviteEnv(T_LEAVE + 60_000), RCPT, INVITER);
-    expect(applied).toBe(true);
+    expect(applied).toBe('consumed');
     // Группа уже есть — приглашение идемпотентно, повторно её никто не заводит.
     expect(mockCreated).toEqual([]);
   });

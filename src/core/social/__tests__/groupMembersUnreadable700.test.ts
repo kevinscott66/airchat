@@ -40,6 +40,20 @@ jest.mock('../../storage/local', () => ({
     isAdmin: false,
     adminOnlyPosting: false,
   })),
+  // v4.32.748: та же строка различающей формой. Здесь она читается всегда —
+  // проверяется недоступный СОСТАВ, а не недоступная группа.
+  getGroupRead: jest.fn(async (id: string, pid: number) => ({
+    state: 'found',
+    value: {
+      id,
+      ownerProfileId: pid,
+      name: 'Двор',
+      type: 'group',
+      archived: false,
+      isAdmin: false,
+      adminOnlyPosting: false,
+    },
+  })),
   // Копия настоящей пары: обёртка со сплющиванием и обёртка с третьим исходом.
   // Обе на месте, чтобы прогон ДО правки шёл по настоящему коду, а не по
   // отсутствующему имени.
