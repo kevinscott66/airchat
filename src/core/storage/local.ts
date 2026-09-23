@@ -3268,6 +3268,29 @@ export function notifyChatStorageChanged(): void {
 }
 
 export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
+  await saveChatMessageChecked(row);
+}
+
+/**
+ * Исход записи личного сообщения: легло, уже лежало, не вышло.
+ *
+ * v4.32.767. До этого круга запись отвечала `void`, и весь отказ — занятая
+ * база, неподнявшаяся блокировка `beginImmediate`, переполненный диск,
+ * неоткрывшийся ключ шифрования данных — гасился здесь же в `catch`. Наружу не
+ * уходило ни исключения, ни слова. Приёмник конверта (`messaging`,
+ * `persistIncomingFromEnvelope`) шёл дальше и отвечал `'consumed'`; это слово
+ * двигает метку «докуда прочитано» у ретранслятора, а накопленное он отдаёт
+ * только по ней. Строки при этом не появлялось нигде, второго конверта не
+ * будет — личное сообщение терялось безвозвратно, и в списке чатов от него
+ * оставались превью и единица непрочитанного: дальше по коду они делались
+ * независимо от исхода записи.
+ *
+ * Групповой брат этой функции получил три исхода в v4.32.765
+ * (`insertGroupMessageChecked`), личный остался с `void` — здесь то же самое.
+ */
+export type ChatMessageWrite = 'inserted' | 'duplicate' | 'failed';
+
+export async function saveChatMessageChecked(row: ChatMessageRow): Promise<ChatMessageWrite> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
@@ -3279,8 +3302,9 @@ export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
     const replyEnc = encryptAtRestNullable(row.replyToPreview ?? null, dek);
     const ownerPid = row.ownerProfileId ?? 1;
     const txn = await beginImmediate(d);
+    let changed = 0;
     try {
-      await d.runAsync(
+      const res = await d.runAsync(
         `INSERT OR IGNORE INTO chat_messages (id, contact_pub_b64, cid, text, direction, status, media_cids, created_at, owner_profile_id, reply_to_id, reply_to_preview)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -3297,6 +3321,7 @@ export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
           replyEnc,
         ]
       );
+      changed = res.changes ?? 0;
       await txn.commit();
     } catch (e) {
       try {
@@ -3307,13 +3332,21 @@ export async function saveChatMessage(row: ChatMessageRow): Promise<void> {
       throw e;
     }
     emitChatWrites();
+    // `INSERT OR IGNORE` молчит о том, что строка с таким id уже лежит. Отличаем
+    // это от отказа: повтор — штатное дело (одно сообщение доезжает по сети, через
+    // ретранслятор и следом за push), и откладывать его значило бы запереть метку
+    // чтения навсегда.
+    return changed > 0 ? 'inserted' : 'duplicate';
   } catch (e) {
     log.warn('chat_message_save_failed', { err: e instanceof Error ? e.message : String(e) });
-    // v4.32.300: ошибку записи сообщения наружу не отдаём — вызывающему нечего
-    // с ней делать, а переписка не должна падать из-за одной строки. Но именно
-    // из-за этого переполненный диск был не виден вообще: сообщение
-    // отрисовывалось из памяти и исчезало при следующем открытии чата.
+    // v4.32.300 отказывался отдавать ошибку наружу: «вызывающему нечего с ней
+    // делать». С появлением контракта EnvelopeIntake (v4.32.730) есть что:
+    // приёмник отвечает на отказ `'deferred'` и просит кадр заново. Исключение
+    // при этом по-прежнему не летит — переписка не должна падать из-за одной
+    // строки, а тот, кто пишет своё только что составленное сообщение, читает
+    // обёртку выше и исхода не разбирает.
     notifyIfStoragePressure(e, 'chat_message_save');
+    return 'failed';
   }
 }
 

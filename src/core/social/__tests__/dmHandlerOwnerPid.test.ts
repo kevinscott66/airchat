@@ -33,6 +33,10 @@ jest.mock('../../storage/local', () => ({
   setConversationDisappearTimer: (...a: [string, number, number]) => mockSetTimer(...a),
   getChatMessageTexts: (...a: [string[], string, number]) => mockTexts(...a),
   saveChatMessage: (...a: [Record<string, unknown>]) => mockSaveMsg(...a),
+  saveChatMessageChecked: (...a: [Record<string, unknown>]) => {
+    mockSaveMsg(...a);
+    return Promise.resolve('inserted');
+  },
   notifyChatStorageChanged: () => {},
 }));
 

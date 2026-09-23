@@ -212,9 +212,11 @@ describe('pollVoteSync — куда положили и когда сняли', 
 describe('приём сообщения разгружает полку', () => {
   it('личный приём зовёт снятие после записи строки', () => {
     const s = MSG();
-    const at = s.indexOf('await saveChatMessage(row);');
+    // v4.32.767: запись идёт различающей формой — отказ базы больше не
+    // выдаётся за удачу, и снятие с полки стоит уже за этой развилкой.
+    const at = s.indexOf('const stored = await saveChatMessageChecked(row);');
     expect(at).toBeGreaterThan(0);
-    const after = s.slice(at, at + 700);
+    const after = s.slice(at, at + 1400);
     expect(after).toContain('isPollMessage(row.text)');
     // v4.32.764: снятие общее — у завершения опроса появилась своя полка рядом.
     expect(after).toContain('flushPendingPollEnvelopes(row.id, ownerPid)');

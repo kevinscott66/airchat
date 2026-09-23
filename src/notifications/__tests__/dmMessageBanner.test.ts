@@ -133,14 +133,24 @@ describe('приём личного сообщения показывает си
 });
 
 describe('одно сообщение — одно уведомление', () => {
-  it('приём спрашивает базу до записи, была ли уже такая строка', () => {
-    expect(MESSAGING).toContain(
-      'const alreadyStored = (await getChatMessageAuthor(rowId, ownerPid)) != null;'
-    );
+  it('«была ли уже такая строка» отвечает сама запись, а не лишнее чтение', () => {
+    // v4.32.767: до этого круга здесь стояло чтение строки ДО записи, и оно
+    // сплющивало «строки нет» с «базу не удалось спросить». Теперь ответ даёт
+    // `INSERT OR IGNORE`: изменил строку — сообщение новое, не изменил — повтор.
+    expect(MESSAGING).toContain('const stored = await saveChatMessageChecked(row);');
+    expect(MESSAGING).toContain("const alreadyStored = stored === 'duplicate';");
+  });
+
+  it('несостоявшаяся запись не показывает плашку и не двигает счётчик', () => {
+    const at = MESSAGING.indexOf('const stored = await saveChatMessageChecked(row);');
+    expect(at).toBeGreaterThan(0);
+    const head = MESSAGING.slice(at, MESSAGING.indexOf("const alreadyStored = stored === 'duplicate';", at));
+    expect(head).toContain("if (stored === 'failed') {");
+    expect(head).toContain("return 'deferred';");
   });
 
   it('повтор не двигает счётчик непрочитанного и не показывает плашку', () => {
-    const at = MESSAGING.indexOf('const alreadyStored =');
+    const at = MESSAGING.indexOf("const alreadyStored = stored === 'duplicate';");
     // Окно с запасом: между чтением и второй проверкой лежит разгрузка полок
     // опроса, и она растёт (v4.32.764). Смысл проверки — обе ветки стоят
     // рядом с чтением, а не точное число символов между ними.

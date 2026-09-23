@@ -35,6 +35,7 @@ jest.mock('../../storage/local', () => ({
   listChatMessages: async () => [],
   upsertChatMessage: async () => {},
   saveChatMessage: async (r: Record<string, unknown>) => { mockSaved.push(r); },
+  saveChatMessageChecked: async (r: Record<string, unknown>) => { mockSaved.push(r); return 'inserted'; },
   updateChatMessageStatus: async () => {},
   updateChatMessageText: async () => true,
   touchConversation: async () => {},

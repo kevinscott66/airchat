@@ -277,10 +277,13 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(body.split("return 'deferred';").length - 1).toBeGreaterThanOrEqual(4);
   });
 
-  it('единственное сплющенное чтение в личке — счётчик непрочитанного', () => {
+  it('сплющенных чтений в личке не осталось ни одного', () => {
     const body = codeOnly(read('core/social/messaging.ts'));
-    expect(body.split('await getChatMessageAuthor(').length - 1).toBe(1);
-    expect(body).toContain('const alreadyStored = (await getChatMessageAuthor(rowId, ownerPid)) != null;');
+    // v4.32.763 оставляла здесь одно: счётчик непрочитанного спрашивал базу ДО
+    // записи, и отказ выбирал меньший из двух перекосов. v4.32.767 сняла и его —
+    // на тот же вопрос точно отвечает сама запись (`INSERT OR IGNORE`).
+    expect(body).not.toContain('await getChatMessageAuthor(');
+    expect(body).toContain("const alreadyStored = stored === 'duplicate';");
   });
 
   it('опрос читает строку сообщения различающими обёртками', () => {

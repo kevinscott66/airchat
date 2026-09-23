@@ -148,7 +148,9 @@ describe('форма исходников: проверка стоит до ди
       'handleIncomingLastSeenPref',
       'handleIncomingPeerProfile',
       'if (inbound && liveNext) {',
-      'await saveChatMessage(row)',
+      // v4.32.767: запись идёт различающей формой — отказ базы больше не
+      // выдаётся за повтор и откладывает кадр.
+      'await saveChatMessageChecked(row)',
     ]) {
       expect(at(marker)).toBeGreaterThan(gate);
     }

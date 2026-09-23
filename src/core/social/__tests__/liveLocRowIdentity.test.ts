@@ -86,9 +86,13 @@ describe('приём: строка складывается по номеру с
   });
 
   it('счётчик непрочитанного и плашка спрашивают ту же строку', () => {
-    expect(MESSAGING()).toContain(
-      'const alreadyStored = (await getChatMessageAuthor(rowId, ownerPid)) != null;'
-    );
+    const s = MESSAGING();
+    // v4.32.767: отдельного чтения ДО записи больше нет — на вопрос «была ли
+    // уже такая строка» отвечает сама запись. Строка при этом та же самая:
+    // пишется ровно `row` с `id: rowId`, проверено выше.
+    expect(s).toContain('const stored = await saveChatMessageChecked(row);');
+    expect(s).toContain("const alreadyStored = stored === 'duplicate';");
+    expect(s).not.toContain('await getChatMessageAuthor(rowId, ownerPid)');
   });
 
   it('ветка обновления на месте больше не ищет строку по номеру конверта', () => {

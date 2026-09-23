@@ -35,6 +35,10 @@ jest.mock('../../storage/local', () => ({
   saveChatMessage: async (row: { id: string; text: string }) => {
     mockRows.push(row);
   },
+  saveChatMessageChecked: async (row: { id: string; text: string }) => {
+    mockRows.push(row);
+    return 'inserted';
+  },
 }));
 
 jest.mock('../controlFanout', () => ({

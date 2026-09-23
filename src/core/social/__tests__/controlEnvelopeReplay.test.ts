@@ -38,6 +38,13 @@ jest.mock('../../storage/local', () => ({
   saveChatMessage: async (row: { id: string }) => {
     mockRows.push(row.id);
   },
+  // v4.32.767: приёмник пишет различающей формой — отказ базы больше не
+  // выдаётся за повтор. Здесь запись всегда удаётся.
+  saveChatMessageChecked: async (row: { id: string }) => {
+    const seen = mockRows.includes(row.id);
+    mockRows.push(row.id);
+    return seen ? 'duplicate' : 'inserted';
+  },
 }));
 
 const mockTimers: { peer: string; pid: number; ms: number }[] = [];
