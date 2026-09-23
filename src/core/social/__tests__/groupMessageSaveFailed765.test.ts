@@ -240,8 +240,12 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(GRP).not.toContain('if (!stored) {');
   });
 
-  it('системная строка пишется прежней формой — её судьба кадра не решает', () => {
-    expect(GRP).toContain('await insertGroupMessage({');
+  it('системная строка тоже пишется различающей формой (v4.32.773)', () => {
+    // Здесь она была оставлена на прежней: её отказ казался безобидным. Оказался
+    // не безобиден — см. groupCtlSysRowFailed773. Слепой записи в приёмнике не
+    // осталось нигде.
+    expect(GRP).toContain('return await insertGroupMessageChecked({');
+    expect(GRP).not.toContain('await insertGroupMessage({');
   });
 
   it('ориентир на месте: отметка «прочитано» откладывает такой же отказ', () => {

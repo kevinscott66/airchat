@@ -20,7 +20,6 @@ import {
   getGroupRead,
   getGroupMessageTexts,
   getGroupMessageTargetRead,
-  insertGroupMessage,
   insertGroupMessageChecked,
   updateGroupMessageText,
   deleteGroupMessageChecked,
@@ -38,6 +37,7 @@ import {
   profileKvGet,
   kvDeleteScoped,
   type GroupMessageRow,
+  type GroupMessageWrite,
   type MemberRole,
 } from '../storage/local';
 import { type GroupRecipient } from './groupRecipient';
@@ -1371,7 +1371,7 @@ export async function sendGroupInvite(
  * истории. Слот — имя поля: оно детерминированное и не зависит от того, в
  * каком порядке события легли в список.
  */
-async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: string, slot?: string): Promise<void> {
+async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: string, slot?: string): Promise<GroupMessageWrite> {
   const key = slot ?? ('target' in env && env.target ? env.target.slice(0, 12) : 'meta');
   // v4.32.239: время берётся из чужого конверта, а сортировка переписки идёт по
   // created_at. Без ограничения ts из 2100 года навсегда прибивал системную
@@ -1380,8 +1380,15 @@ async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: st
   // сообщения группы (см. handleIncomingGroupEnvelope): неделя назад — пять
   // минут вперёд, чтобы расхождение часов между устройствами не мешало.
   const createdAt = clampEnvelopeTs(env.ts);
+  // v4.32.773: исход записи называется словом. Прежде он гасился пустым
+  // `catch { /* дубликат — не страшно */ }`, и вместе с настоящим дубликатом
+  // (id детерминированный, повтор того же конверта безвреден) туда же уходили
+  // занятая база, не открывшийся ключ данных и кончившееся место. Изменение
+  // состава применялось, а человек не узнавал ни что его исключили, ни что ему
+  // дали права, ни что его заявку одобрили: системные строки — единственный
+  // способ об этом сообщить.
   try {
-    await insertGroupMessage({
+    return await insertGroupMessageChecked({
       id: `ctl-${env.groupId}-${env.ts}-${env.op}-${key}`,
       groupId: env.groupId,
       senderPubB64: '',
@@ -1394,7 +1401,30 @@ async function insertCtlSysMessage(env: GroupCtlEnvelope, pid: number, event: st
       createdAt,
       ownerProfileId: pid,
     });
-  } catch { /* дубликат — не страшно */ }
+  } catch (e) {
+    // Различающая форма своих отказов не бросает — сюда попадает только
+    // неожиданное. Оно тоже «сейчас не смогли».
+    log.warn('group_ctl_sys_row_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
+  }
+}
+
+/**
+ * Отложить кадр, у которого не легла системная строка (v4.32.773).
+ *
+ * Отдельным именем, потому что важно не только слово `'deferred'`, но и то,
+ * ЧТО к этому моменту ещё не сделано: вызывается до изменения состава и до
+ * `commitGroupControlTs`, то есть повтор придёт в нетронутое состояние и
+ * пройдёт целиком. Возврат `'deferred'` оставляет конверт на relay: читающая
+ * отметка не двигается, и кадр вернётся следующим заходом.
+ */
+function deferCtlSysRow(env: GroupCtlEnvelope, op: string): EnvelopeIntake {
+  log.warn('group_ctl_sys_row_deferred', {
+    gid: env.groupId.slice(0, 8),
+    op,
+    target: 'target' in env && env.target ? env.target.slice(0, 12) : '',
+  });
+  return 'deferred';
 }
 
 /**
@@ -2150,8 +2180,7 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // ещё раз и писал вторую системную строку. unban был идемпотентен с
       // самого начала — теперь и ban.
       if (target?.role === 'banned') return 'consumed';
-      if (target) await updateGroupMemberRole(env.groupId, env.target, 'banned', pid);
-      else {
+      if (!target) {
         /**
          * v4.32.618: упреждающий бан заводит строку на того, кого в группе
          * нет, — и такая строка не видна нигде: в «N участников» забаненные не
@@ -2164,28 +2193,37 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           log.warn('group_banlist_full', { gid: env.groupId.slice(0, 8) });
           return 'consumed';
         }
-        await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'banned', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
       }
+      // v4.32.773: системная строка пишется ДО изменения состава, а её отказ
+      // откладывает кадр. Иначе повтор ничего бы не починил: проверки «уже в
+      // этом состоянии» в начале ветки вышли бы раньше, чем дело дошло бы до
+      // строки. Порядок безопасен: id строки детерминированный, повтор того же
+      // конверта дубликат, а знак времени сдвигается только в самом конце.
+      const said = await insertCtlSysMessage(env, pid, isMe ? `Вы заблокированы в группе (${actorLabel})` : `${label} заблокирован(а) в группе`);
+      if (said === 'failed') return deferCtlSysRow(env, 'ban');
+      if (target) await updateGroupMemberRole(env.groupId, env.target, 'banned', pid);
+      else await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'banned', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
       await recountGroupMembers(env.groupId, pid);
-      await insertCtlSysMessage(env, pid, isMe ? `Вы заблокированы в группе (${actorLabel})` : `${label} заблокирован(а) в группе`);
       break;
     }
     case 'unban': {
       if (target?.role !== 'banned') return 'consumed';
+      const said = await insertCtlSysMessage(env, pid, isMe ? 'Блокировка снята' : `${label} разблокирован(а)`);
+      if (said === 'failed') return deferCtlSysRow(env, 'unban');
       await updateGroupMemberRole(env.groupId, env.target, 'member', pid);
       await clearGroupRemoval(env.groupId, env.target, pid);
       await recountGroupMembers(env.groupId, pid);
-      await insertCtlSysMessage(env, pid, isMe ? 'Блокировка снята' : `${label} разблокирован(а)`);
       break;
     }
     case 'kick': {
       if (!target) return 'consumed';
+      const said = await insertCtlSysMessage(env, pid, isMe ? `Вас исключили из группы (${actorLabel})` : `${label} исключён(а) из группы`);
+      if (said === 'failed') return deferCtlSysRow(env, 'kick');
       await removeGroupMember(env.groupId, env.target, pid);
       // Строки в group_members больше нет — память об исключении хранится
       // отдельно, иначе исключённый вернётся сам по старой ссылке.
       await markGroupRemoval(env.groupId, env.target, pid, env.ts);
       await recountGroupMembers(env.groupId, pid);
-      await insertCtlSysMessage(env, pid, isMe ? `Вас исключили из группы (${actorLabel})` : `${label} исключён(а) из группы`);
       break;
     }
     case 'add': {
@@ -2201,14 +2239,19 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
          * там же, где он отправляется, — иначе строка была бы ложной у
          * каждого, кто вошёл в группу без одобрения.
          */
-        if (isMe) await insertCtlSysMessage(env, pid, `${actorLabel} одобрил(а) вашу заявку на вступление`);
+        // Здесь строка и есть всё событие: состав не меняется, и отложенный
+        // кадр повторит ровно её.
+        if (isMe && (await insertCtlSysMessage(env, pid, `${actorLabel} одобрил(а) вашу заявку на вступление`)) === 'failed') {
+          return deferCtlSysRow(env, 'add');
+        }
         return 'consumed';
       }
+      const said = await insertCtlSysMessage(env, pid, `${label} вступил(а) в группу`);
+      if (said === 'failed') return deferCtlSysRow(env, 'add');
       await upsertGroupMember({ groupId: env.groupId, peerPubB64: env.target, role: 'member', displayName: displayNameOrNull(env.targetName), joinedAt: env.ts, ownerProfileId: pid });
       // Администратор вернул исключённого — отметка своё отработала.
       await clearGroupRemoval(env.groupId, env.target, pid);
       await recountGroupMembers(env.groupId, pid);
-      await insertCtlSysMessage(env, pid, `${label} вступил(а) в группу`);
       break;
     }
     case 'role': {
@@ -2217,6 +2260,8 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // а текст системной строки считается по ПРЕЖНЕЙ роли — иначе снятие
       // ограничения и снятие админских прав описывались бы одинаково.
       const prev = target.role;
+      const said = await insertCtlSysMessage(env, pid, roleChangeSysText(env.role, prev, label, isMe));
+      if (said === 'failed') return deferCtlSysRow(env, 'role');
       await updateGroupMemberRole(env.groupId, env.target, env.role, pid);
       // v4.32.618: смена роли обычно счётчик не трогает — но через op:'role'
       // снимают и блокировку, а забаненный в «N участников» не входит. Без
@@ -2224,7 +2269,6 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       // навсегда: арифметику ±1 здесь никто не вёл, а сам пересчёт был только
       // в соседних ветках.
       if (countsAsMember(prev) !== countsAsMember(env.role)) await recountGroupMembers(env.groupId, pid);
-      await insertCtlSysMessage(env, pid, roleChangeSysText(env.role, prev, label, isMe));
       break;
     }
   }
