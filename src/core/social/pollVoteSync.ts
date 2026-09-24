@@ -37,6 +37,7 @@ import {
   type FanoutResult,
   type FanoutUndelivered,
 } from './controlFanout';
+import { commitPollVoteTs, pollVoteTsFresh } from './controlWatermark';
 import { canApplyGroupMessageOp, canInteractInGroup } from './groupSendPolicy';
 import { lookupGroupActorRead, roleOf } from './groupActor';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
@@ -347,6 +348,16 @@ async function applyIncomingPollVote(
   // в messaging наверх, где приёмник кадра ловил его общей ловушкой. Исход был
   // верный по случайности; теперь он назван, а снятому с полки голосу ловушка
   // по-прежнему нужна своя — она стоит в flushPendingPollVotes.
+  // v4.32.794: знак свежести на тройку «голосующий + вариант + сообщение».
+  // Голос — переключатель, и повтор перехваченного кадра его двигает. В
+  // одиночном опросе это не добавление, а подмена: setPollVote вытесняет
+  // прошлый выбор, поэтому сохранённый кадр «за A» стирает тот вариант, за
+  // который человек проголосовал потом. Сдвиг знака — ниже, после удавшейся
+  // записи: обе причины отказа проходят сами, и хоронить перезапрос нельзя.
+  if (!(await pollVoteTsFresh(senderPubB64, env.idx, env.msgId, pid, env.ts))) {
+    log.info('poll_vote_stale_drop', { from: senderPubB64.slice(0, 12), idx: env.idx });
+    return 'consumed';
+  }
   try {
     if (env.on) await setPollVote(env.msgId, senderPubB64, env.idx, pid, target.allowMultiple);
     else await deletePollVote(env.msgId, senderPubB64, env.idx, pid);
@@ -357,6 +368,7 @@ async function applyIncomingPollVote(
     });
     return 'deferred';
   }
+  await commitPollVoteTs(senderPubB64, env.idx, env.msgId, pid, env.ts);
   log.info('poll_vote_applied', { group: !!env.groupId, on: env.on });
   return 'consumed';
 }

@@ -294,6 +294,52 @@ export async function commitDmPinTs(
   await commitTs(dmPinWatermarkKey(peerPubB64, msgId), 'dm:pin', pid, ts);
 }
 
+/**
+ * Слот ОДНОГО голоса в опросе (v4.32.794).
+ *
+ * Голос — тоже переключатель: конверт называет вариант и положение (`on`), а
+ * повтор перехваченного кадра возвращает снятый голос или снимает нынешний.
+ * В одиночном опросе цена выше, чем кажется: хранилище вытесняет прошлый выбор,
+ * поэтому сохранённый кадр «за вариант A» не просто добавляет A — он СТИРАЕТ
+ * тот вариант, за который человек проголосовал потом. Ни пузырь опроса, ни
+ * переписка о подмене не говорят: у остальных счётчики свои.
+ *
+ * Ячейка на тройку «голосующий + вариант + сообщение»: голос принадлежит
+ * человеку, вариантов у опроса много, а порядка между ними relay не держит.
+ * Общий знак на опрос выбросил бы законный голос за B, поданный следом за
+ * более поздним кадром про A.
+ *
+ * Порядок частей — от ограниченного к неограниченному. Открытый ключ в base64
+ * двоеточий не содержит и берётся из подписанного отправителя; номер варианта
+ * кодек ограничивает целым числом в пределах MAX_OPTION_INDEX; идентификатор
+ * сообщения ограничен только длиной — он и последний.
+ */
+export function pollVoteWatermarkKey(peerPubB64: string, idx: number, msgId: string): string {
+  return `${WATERMARK_PREFIX}poll:v:${peerPubB64}:${idx}:${msgId}`;
+}
+
+/** Свежесть голоса — без сдвига отметки (см. controlTsFresh). */
+export async function pollVoteTsFresh(
+  peerPubB64: string,
+  idx: number,
+  msgId: string,
+  pid: number,
+  ts: number
+): Promise<boolean> {
+  return freshTs(pollVoteWatermarkKey(peerPubB64, idx, msgId), 'poll:v', pid, ts);
+}
+
+/** Сдвинуть отметку голоса — после того, как он записан. */
+export async function commitPollVoteTs(
+  peerPubB64: string,
+  idx: number,
+  msgId: string,
+  pid: number,
+  ts: number
+): Promise<void> {
+  await commitTs(pollVoteWatermarkKey(peerPubB64, idx, msgId), 'poll:v', pid, ts);
+}
+
 function groupKindLabel(slot: GroupControlSlot): string {
   return `grp:${slot.split(':')[0]}`;
 }
