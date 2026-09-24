@@ -25,12 +25,13 @@ import { AppSwitch } from '../components/AppSwitch';
 import { AppModal as Modal } from '../components/AppModal';
 import * as FileSystem from 'expo-file-system/legacy';
 import { authGuard } from '../../core/security/authGuard';
-import {
-  APPLE_BINDING_STORED,
-  hintAfterPasswordChange,
-  parseAppleBindingHint,
-} from '../../core/security/appleBindingHint';
+import { APPLE_BINDING_STORED, parseAppleBindingHint } from '../../core/security/appleBindingHint';
 import type { AppleBindingHint } from '../../core/security/appleBindingHint';
+import {
+  APPLE_BINDING_HINT_KEY,
+  APPLE_BINDING_STALE_TEXT,
+  markAppleBindingStale,
+} from '../../core/security/appleBindingStale';
 import {
   SENSITIVE_NO_PASSWORD_TEXT,
   sensitiveAccessGate,
@@ -133,14 +134,6 @@ import { log } from '../../core/logger';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
 
 
-/**
- * Здесь уже привязывали слова к Apple ID.
- *
- * Подсказка для надписи на кнопке, не источник истины: запись живёт на
- * сервере под слепым индексом, и увидеть её можно только предъявив токен
- * Apple. Флажок у профиля свой — привязка тоже своя у каждого аккаунта.
- */
-const APPLE_BINDING_HINT_KEY = 'apple_seed_binding_v1';
 
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -830,21 +823,19 @@ function SettingsScreenImpl({
    * даже предупреждения не видел.
    */
   const markAppleBindingStaleAfterPasswordChange = async (): Promise<void> => {
-    let next: AppleBindingHint | null;
-    try {
-      next = hintAfterPasswordChange(parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY)));
-    } catch {
+    // v4.32.868: чтение, решение и запись переехали в ядро — тот же вызов
+    // делает теперь и сброс пароля по словам, который раньше проходил мимо.
+    let outcome = await markAppleBindingStale();
+    if (outcome === 'unknown') {
       // Прочитать не вышло — судим по тому, что стоит на экране: это последнее,
       // что человек видел про привязку, и другого свидетеля здесь нет.
-      next = appleBound ? 'stale' : null;
+      if (!appleBound) return;
+      outcome = (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';
     }
-    if (!next) return;
+    if (outcome === 'not_bound') return;
     setAppleBound(false);
     setAppleBindStale(true);
-    const stored = await storeAppleBindingHint(next);
-    showError(stored
-      ? 'Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.'
-      : 'Привязка к Apple ID больше не откроется новым паролем, а пометить её не удалось: после перезапуска настройки снова покажут «привязаны». Привяжите слова заново сейчас.');
+    showError(APPLE_BINDING_STALE_TEXT[outcome]);
   };
 
   /**

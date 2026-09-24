@@ -44,14 +44,6 @@ const CHAT = (): string => codeOnly(read('ChatScreen.tsx'));
 const GROUPS = (): string => codeOnly(read('GroupsScreen.tsx'));
 const GUARD = (): string => fs.readFileSync(path.join(SCREENS, '..', 'components', 'runGuardedOp.ts'), 'utf8');
 
-function slice(src: string, from: string, to: string): string {
-  const a = src.indexOf(from);
-  expect(a).toBeGreaterThan(0);
-  const b = src.indexOf(to, a + from.length);
-  expect(b).toBeGreaterThan(a);
-  return src.slice(a, b);
-}
-
 /**
  * Тело одного runGuardedOp — от его открытия до закрывающей метки журнала.
  * Якорь — метка, а не подпись отказа: подписи повторяются (у одиночной

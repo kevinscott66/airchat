@@ -98,11 +98,22 @@ describe('храповик: экран настроек помечает при�
   });
 
   test('пометка решает через чистый модуль, а не сравнением строк на месте', () => {
+    // v4.32.868: чистый модуль зовётся теперь не с экрана, а из ядра —
+    // `markAppleBindingStale` читает подсказку, спрашивает `hintAfterPassword
+    // Change` и отвечает исходом. Смысл храповика тот же: решение принимает
+    // правило, а не сравнение строк, написанное здесь заново. Так его стало
+    // видно обоим путям смены пароля, а не одному.
     const body = bodyOf(SCREEN_CODE, 'const markAppleBindingStaleAfterPasswordChange =');
-    expect(body).toContain('parseAppleBindingHint(');
-    expect(body).toContain('hintAfterPasswordChange(');
-    expect(body).toMatch(/if \(!next\) return;/);
+    expect(body).toContain('await markAppleBindingStale();');
+    expect(body).not.toContain('APPLE_BINDING_STORED[');
     expect(body).toContain('setAppleBindStale(true)');
+    const core = fs.readFileSync(
+      path.join(__dirname, '..', 'appleBindingStale.ts'),
+      'utf8',
+    );
+    expect(core).toContain('parseAppleBindingHint(');
+    expect(core).toContain('hintAfterPasswordChange(');
+    expect(core).toMatch(/if \(!next\) return 'not_bound';/);
   });
 
   test('привязка и отвязка снимают пометку', () => {

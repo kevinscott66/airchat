@@ -51,6 +51,8 @@ function codeOnly(src: string): string {
 }
 
 const SETTINGS = codeOnly(read('ui', 'screens', 'SettingsScreen.tsx'));
+/** v4.32.868: правило переехало в ядро — часть закрепов смотрит туда. */
+const STALE = codeOnly(read('core', 'security', 'appleBindingStale.ts'));
 const SCOPED = codeOnly(read('core', 'storage', 'profileScopedKv.ts'));
 
 describe('подсказка о привязке пишется проверяемо', () => {
@@ -75,31 +77,50 @@ describe('подсказка о привязке пишется проверяе
     expect(SETTINGS).toContain("log.warn('apple_binding_hint_write_failed', { err: rawErrorText(e) });");
   });
 
-  it('смена пароля метит привязку до записи, а не после неё', () => {
+  it('пометка в интерфейсе не зависит от того, легла ли запись', () => {
+    // v4.32.868. Прежде это проверялось буквально по порядку строк: обе
+    // отметки стояли ДО `await storeAppleBindingHint(next)`. Теперь чтение,
+    // решение и запись ушли в ядро, а оно не бросает вовсе — отвечает словом.
+    // Смысл закрепа тот же: ни один исход записи не уносит с собой пометку.
     const at = SETTINGS.indexOf('const markAppleBindingStaleAfterPasswordChange');
     expect(at).toBeGreaterThan(0);
-    const body = SETTINGS.slice(at, at + 1200);
-    const marked = body.indexOf('setAppleBindStale(true);');
-    const written = body.indexOf('await storeAppleBindingHint(next);');
-    expect(marked).toBeGreaterThan(0);
-    expect(written).toBeGreaterThan(marked);
+    const body = SETTINGS.slice(at, at + 900);
+    expect(body).toContain('let outcome = await markAppleBindingStale();');
+    const bound = body.indexOf('setAppleBound(false);');
+    expect(bound).toBeGreaterThan(0);
+    expect(body).toContain('setAppleBindStale(true);');
+    // Мимо отметок ведут ровно два выхода, и оба означают «метить нечего».
+    expect([...body.slice(0, bound).matchAll(/\breturn;/g)]).toHaveLength(2);
+    expect(body.slice(0, bound)).toContain("if (outcome === 'not_bound') return;");
+    expect(body.slice(0, bound)).toContain('if (!appleBound) return;');
+    // А ядро на любой отказ отвечает словом: бросить оно не может.
+    expect(STALE).toContain("return 'unknown';");
+    expect(STALE).toContain("return ok ? 'marked' : 'unwritten';");
+    expect(STALE.split('catch (e) {').length - 1).toBe(2);
   });
 
   it('несостоявшаяся пометка «устарела» названа своим именем', () => {
     // Мягкого текста тут мало: человек только что сменил пароль, слова ещё на
     // устройстве, и привязать заново он может ровно сейчас.
-    expect(SETTINGS).toContain(
-      "? 'Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.'",
+    // v4.32.868: оба текста переехали в ядро — их показывают уже два экрана.
+    expect(STALE).toContain(
+      "  marked: 'Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.',",
     );
-    expect(SETTINGS).toContain(
-      ": 'Привязка к Apple ID больше не откроется новым паролем, а пометить её не удалось: после перезапуска настройки снова покажут «привязаны». Привяжите слова заново сейчас.');",
+    expect(STALE).toContain(
+      "    'Привязка к Apple ID больше не откроется новым паролем, а пометить её не удалось: после перезапуска настройки снова покажут «привязаны». Привяжите слова заново сейчас.',",
     );
+    expect(SETTINGS).toContain('showError(APPLE_BINDING_STALE_TEXT[outcome]);');
   });
 
   it('нечитаемая подсказка решается по тому, что показывает экран', () => {
     // Иначе бросок на чтении означал бы «ничего не делать» — и молчание ровно
     // там, где привязка на экране стоит как живая.
-    expect(SETTINGS).toContain("next = appleBound ? 'stale' : null;");
+    // v4.32.868: ядро на нечитаемой подсказке отвечает `unknown` и ничего не
+    // решает за вызывающего — свидетеля ищет тот, у кого он есть.
+    expect(SETTINGS).toContain("if (outcome === 'unknown') {");
+    expect(SETTINGS).toContain(
+      "outcome = (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';",
+    );
   });
 
   it('привязка и отвязка тоже отвечают за пометку', () => {
