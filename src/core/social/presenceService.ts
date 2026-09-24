@@ -16,7 +16,9 @@ import {
   scopedKvListKeysByPrefixFor,
   scopedKvSetCheckedFor,
   scopedKvSetFor,
+  scopedKvSetSecretCheckedFor,
   scopedKvTryGetFor,
+  scopedKvTryGetSecretFor,
 } from '../storage/profileScopedKv';
 import { keyNameDigest, looksLikeKeyNameDigest } from '../storage/keyNameDigest';
 import { ownerPidForPublicKeyB64 } from '../identity/ownerPidLookup';
@@ -79,6 +81,15 @@ export function legacyPresenceLastSeenKey(peerPubB64: string): string {
  * Одним ключом, а не `presence:allow:<pub>` на каждого: список нужно
  * восстановить ЦЕЛИКОМ при старте, в том числе для тех, кого нет в
  * контактах, — а loadPersistedPresence получает только контакты.
+ */
+/**
+ * Список «не отмечать этого человека».
+ *
+ * v4.32.814: значение ложится шифртекстом. Это перечень открытых ключей
+ * собеседников в одной строке — тот же граф связей, от которого в v4.32.813
+ * уводили имена ключей, только здесь он лежал в столбце `v`, тоже открытом.
+ * Причём список этот говорит больше обычного: в нём те, кто просил себя не
+ * отмечать, то есть те, кому небезразлично, видно ли их.
  */
 const HIDDEN_PEERS_KEY = 'presence:hidden_peers';
 
@@ -211,7 +222,7 @@ export async function loadMyLastSeenVisibility(): Promise<boolean> {
  * память, поэтому оно переживает перечитывание само.
  */
 export async function loadHiddenPeers(): Promise<boolean> {
-  const read = await scopedKvTryGetFor(presencePid, HIDDEN_PEERS_KEY).catch(() => null);
+  const read = await scopedKvTryGetSecretFor(presencePid, HIDDEN_PEERS_KEY).catch(() => null);
   if (read === null) {
     hiddenPeersKnown = false;
     return false;
@@ -262,7 +273,7 @@ export async function setPeerLastSeenAllowedFor(
     hiddenPeers.delete(peerPubB64);
   }
   if (next) {
-    const listed = await scopedKvSetCheckedFor(
+    const listed = await scopedKvSetSecretCheckedFor(
       presencePid, HIDDEN_PEERS_KEY, JSON.stringify(next)
     ).catch(() => false);
     stored = stored && listed;
@@ -305,7 +316,7 @@ async function persistHiddenPeerFor(
     // одним null и на «запретов не было», и на «прочитать не удалось», поэтому
     // список собирался заново из одного этого собеседника и ложился поверх
     // накопленного — весь чужой список запретов стирал один сбой базы.
-    const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
+    const read = await scopedKvTryGetSecretFor(ownerProfileId, HIDDEN_PEERS_KEY);
     if (read === null) {
       log.warn('presence_hidden_peers_read_failed', { pid: ownerProfileId });
       return false;
@@ -313,7 +324,7 @@ async function persistHiddenPeerFor(
     const next = withHiddenPeer(parseHiddenPeers(read.value), peerPubB64, !allow);
     // Список уже такой, какой нужен: править нечего, и это успех, а не отказ.
     if (!next) return true;
-    return await scopedKvSetCheckedFor(ownerProfileId, HIDDEN_PEERS_KEY, JSON.stringify(next));
+    return await scopedKvSetSecretCheckedFor(ownerProfileId, HIDDEN_PEERS_KEY, JSON.stringify(next));
   } catch (e) {
     log.warn('presence_hidden_peer_persist_failed', { err: e instanceof Error ? e.message : String(e) });
     return false;
@@ -409,7 +420,7 @@ async function recordForeignActivity(
   try {
     // v4.32.642: не прочитали список — не записываем. Пустой список от сбоя
     // неотличим, а разница между ними — ровно просьба «не отмечай меня».
-    const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
+    const read = await scopedKvTryGetSecretFor(ownerProfileId, HIDDEN_PEERS_KEY);
     if (read === null) return;
     if (parseHiddenPeers(read.value).includes(peerPubB64)) return;
     await persistLastSeen(ownerProfileId, peerPubB64, now);

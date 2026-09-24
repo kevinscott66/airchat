@@ -17,7 +17,15 @@
  * одного правила про имена ключей уже стоили нам чужих заметок в соседнем
  * профиле (v4.32.278) и потерянных контактов при восстановлении (v4.32.280).
  */
-import { kvDelete, kvDeleteChecked, kvListKeysByPrefix, kvSetChecked, kvTryGet } from './local';
+import {
+  kvDelete,
+  kvDeleteChecked,
+  kvGetSecretCellScoped,
+  kvListKeysByPrefix,
+  kvSetChecked,
+  kvSetSecret,
+  kvTryGet,
+} from './local';
 import { profileScopedKey } from './kvKeys';
 import { profileManager } from '../identity/profileManager';
 
@@ -94,6 +102,60 @@ export async function scopedKvTryGet(key: string): Promise<{ value: string | nul
 /** Записать значение активному профилю. */
 export async function scopedKvSet(key: string, value: string): Promise<void> {
   await scopedKvSetFor(activeProfileId(), key, value);
+}
+
+/**
+ * Прочитать ЗАШИФРОВАННУЮ запись профиля тремя состояниями (v4.32.814).
+ *
+ * Пара к scopedKvTryGetFor для значений, которые сами по себе говорят о
+ * человеке: список тех, кто просил себя не отмечать, — это перечень открытых
+ * ключей, то есть граф связей в одной строке. Столбец `v` лежит открытым, и
+ * такие строки обязаны попадать в него шифртекстом.
+ *
+ * `null` — «не знаем»: база не ответила ЛИБО шифртекст не открылся. Для того,
+ * кто по значению решает вопрос приватности, это один и тот же ответ —
+ * действовать по осторожному умолчанию, а не считать список пустым. Записанное
+ * открытым текстом до этой версии читается как есть и уходит в шифртекст при
+ * первой же записи: признак несёт сама строка, отдельного флага не нужно (см.
+ * kvGetSecretCellUpgrading о том, почему флаг здесь был бы хуже).
+ */
+export async function scopedKvTryGetSecretFor(
+  pid: number,
+  key: string,
+): Promise<{ value: string | null } | null> {
+  const cell = await kvGetSecretCellScoped(pid, key);
+  if (cell.state === 'unreadable') return null;
+  return { value: cell.state === 'plain' ? cell.text : null };
+}
+
+/** То же чтение у активного профиля. */
+export async function scopedKvTryGetSecret(key: string): Promise<{ value: string | null } | null> {
+  return scopedKvTryGetSecretFor(activeProfileId(), key);
+}
+
+/**
+ * Записать значение профиля шифртекстом, сообщив, легло ли (v4.32.814).
+ *
+ * Открытым текстом взамен не пишем ни при каких условиях: молчаливый откат к
+ * прежнему поведению — ровно та дыра, которую эта пара и закрывает (то же
+ * правило и теми же словами записано у kvSetSecret).
+ */
+export async function scopedKvSetSecretCheckedFor(
+  pid: number,
+  key: string,
+  value: string,
+): Promise<boolean> {
+  const written = await kvSetSecret(profileScopedKey(pid, key), value);
+  // Общая запись первого профиля больше не нужна — и, в отличие от своей, она
+  // лежит открытым текстом. См. scopedKvSetCheckedFor о том, почему только
+  // после удачной записи.
+  if (pid === 1 && written) await kvDelete(key);
+  return written;
+}
+
+/** То же у активного профиля. */
+export async function scopedKvSetSecretChecked(key: string, value: string): Promise<boolean> {
+  return scopedKvSetSecretCheckedFor(activeProfileId(), key, value);
 }
 
 /**

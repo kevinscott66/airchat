@@ -40,6 +40,19 @@ jest.mock('../../storage/local', () => ({
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+  // v4.32.814: список «не отмечай меня» лёг в секретную пару — без неё
+  // служба читает «не знаем» и перестаёт писать время входа.
+  kvSetSecret: async (k: string, v: string) => {
+    if (mockFailWrites.has(k)) return false;
+    mockKv.set(k, v);
+    return true;
+  },
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const scoped = `p${pid}:${k}`;
+    if (mockFailReads.has(scoped)) return { state: 'unreadable' };
+    const raw = mockKv.get(scoped);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  },
 }));
 
 // Ключ данных лежит в Keychain; здесь он постоянный — иначе дайджест менялся

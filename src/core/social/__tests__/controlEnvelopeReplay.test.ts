@@ -29,6 +29,17 @@ jest.mock('../../storage/local', () => ({
     mockKv.delete(k);
   },
   kvListKeysByPrefix: async () => [],
+  // v4.32.814: список «не отмечай меня» лёг в секретную пару — без неё
+  // служба читает «не знаем» и перестаёт писать время входа.
+  kvSetSecret: async (k: string, v: string) => {
+    mockKv.set(k, v);
+    return true;
+  },
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    if (mockKvReadFails) return { state: 'unreadable' };
+    const raw = mockKv.get(`p${pid}:${k}`);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  },
   setConversationDisappearTimer: async (peer: string, pid: number, ms: number) => {
     // v4.32.750: запись отчитывается о себе — как и запрет копирования.
     if (mockTimerApplyFails) return false;
@@ -451,7 +462,10 @@ describe('время входа: знак двигается после прим
     const at = svc.indexOf('export async function setPeerLastSeenAllowedFor(');
     const body = svc.slice(at, svc.indexOf('\n}\n', at));
     expect(body).not.toContain('scopedKvSetFor(');
-    expect(body.split('scopedKvSetCheckedFor(').length - 1).toBe(2);
+    // v4.32.814: список запретов ушёл в секретную пару — проверяемы обе записи
+    // по-прежнему, изменилось имя одной из них.
+    expect(body.split('scopedKvSetCheckedFor(').length - 1).toBe(1);
+    expect(body.split('scopedKvSetSecretCheckedFor(').length - 1).toBe(1);
   });
 });
 

@@ -27,6 +27,13 @@ jest.mock('../../storage/local', () => ({
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+  // v4.32.814: список «не отмечай меня» лёг в секретную пару — без неё
+  // служба читает «не знаем» и перестаёт писать время входа.
+  kvSetSecret: async (k: string, v: string) => { mockKv.set(k, v); return true; },
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const raw = mockKv.get(`p${pid}:${k}`);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  },
 }));
 
 // v4.32.813: служба присутствия считает имена ключей на ключе данных —

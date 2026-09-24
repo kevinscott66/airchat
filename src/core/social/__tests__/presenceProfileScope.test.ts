@@ -21,6 +21,13 @@ jest.mock('../../storage/local', () => ({
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+  // v4.32.814: список «не отмечай меня» лёг в секретную пару — без неё
+  // служба читает «не знаем» и перестаёт писать время входа.
+  kvSetSecret: async (k: string, v: string) => { mockKv.set(k, v); return true; },
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const raw = mockKv.get(`p${pid}:${k}`);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  },
 }));
 
 // v4.32.813: имя ключа времени входа считается на ключе из Keychain.
@@ -143,7 +150,10 @@ describe('форма исходников', () => {
     // и требование усилено: номер профиля назван по-прежнему, но теперь ещё и
     // провал чтения виден вызывающему. Прежняя форма запрещена явно — иначе
     // «список пуст» и «не прочитался» снова слились бы в один null.
-    expect(s).toContain('scopedKvTryGetFor(presencePid, HIDDEN_PEERS_KEY)');
+    // v4.32.814: тот же список перестал лежать открытым текстом — читается он
+    // секретной парой, и различимость «пусто» и «не прочиталось» сохранена.
+    expect(s).toContain('scopedKvTryGetSecretFor(presencePid, HIDDEN_PEERS_KEY)');
+    expect(s).not.toContain('scopedKvTryGetFor(presencePid, HIDDEN_PEERS_KEY)');
     expect(s).not.toContain('scopedKvGetFor(presencePid, HIDDEN_PEERS_KEY)');
     // Номер берётся у ключа, которым служба представляется сети, и разбор
     // ключа идёт через pubKeyFormat, а не своими руками.

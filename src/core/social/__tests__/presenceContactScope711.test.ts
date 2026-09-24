@@ -38,6 +38,12 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvTryGetFor: async (pid: number, k: string) => ({ value: mockKv.get(`p${pid}:${k}`) ?? null }),
   scopedKvSetCheckedFor: async (pid: number, k: string, v: string) => { mockKv.set(`p${pid}:${k}`, v); return true; },
   scopedKvDeleteFor: async (pid: number, k: string) => { mockKv.delete(`p${pid}:${k}`); },
+  // v4.32.814: список «не отмечай меня» читается и пишется секретной парой.
+  scopedKvTryGetSecretFor: async (pid: number, k: string) => ({ value: mockKv.get(`p${pid}:${k}`) ?? null }),
+  scopedKvSetSecretCheckedFor: async (pid: number, k: string, v: string) => {
+    mockKv.set(`p${pid}:${k}`, v);
+    return true;
+  },
   scopedKvListKeysByPrefixFor: async (pid: number, pref: string) =>
     [...mockKv.keys()].filter((k) => k.startsWith(`p${pid}:${pref}`)).map((k) => k.slice(`p${pid}:`.length)),
 }));
