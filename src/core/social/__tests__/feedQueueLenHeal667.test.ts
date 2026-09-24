@@ -30,6 +30,7 @@ jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => []),
   // v4.32.752: сама рассылка читает справочник различающим чтением.
   listContactsRead: jest.fn(async () => []),
+  listContactsReadDetailed: jest.fn(async () => ({ contacts: [], missing: 0 })),
   listContactsFor: jest.fn(async () => []),
   listContactsReadFor: jest.fn(async () => []),
 }));

@@ -40,6 +40,9 @@ jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => [{ peerPublicKey: mockPeerPk }]),
   // v4.32.752: рассылка кадра спрашивает различающее чтение.
   listContactsRead: jest.fn(async () => [{ peerPublicKey: mockPeerPk }]),
+  listContactsReadDetailed: jest.fn(async () => ({
+    contacts: [{ peerPublicKey: mockPeerPk }], missing: 0,
+  })),
 }));
 jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 

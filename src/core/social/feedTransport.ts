@@ -37,7 +37,7 @@ import type { KeyPairBytes } from '../crypto/keyManager';
 import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyToDidKey, parseDidKey } from '../identity/did';
 import { log } from '../logger';
-import { listContactsRead } from './contacts';
+import { listContactsReadDetailed } from './contacts';
 import { rateLimiter } from '../security/rateLimiter';
 import { RELAY_RETENTION_MS } from '../transport/retentionWindow';
 import { multiTransportRouter } from '../transport/multiTransport';
@@ -460,6 +460,15 @@ export type FeedBroadcastResult = {
   success: number;
   successDids: string[];
   contactsUnreadable: boolean;
+  /**
+   * Сколько контактов справочник назвать не смог (v4.32.846).
+   *
+   * Отдельно от `contactsUnreadable`: там не прочитался весь список, здесь —
+   * несколько строк в нём. Снаружи второе выглядело благополучнее первого, а
+   * стоило столько же: до этих людей кадр не дошёл, и `success === total`
+   * сходилось без них.
+   */
+  contactsMissing: number;
 };
 
 /**
@@ -475,7 +484,13 @@ export function feedBroadcastNeedsRetry(
   res: { delivered: FeedBroadcastResult } | null
 ): boolean {
   if (!res) return true;
-  return res.delivered.contactsUnreadable || res.delivered.success < res.delivered.total;
+  // v4.32.846: неназванный адресат — такой же повод, как недошедший. Кадр до
+  // него не дошёл, а `success < total` про него не знает вовсе.
+  return (
+    res.delivered.contactsUnreadable
+    || res.delivered.contactsMissing > 0
+    || res.delivered.success < res.delivered.total
+  );
 }
 
 /**
@@ -502,14 +517,18 @@ export async function broadcastFeedEnvelope(
   // один пустой массив. Для рассылки это разные вещи: пустой список — законный
   // конец («писать некому»), отказ базы — временная слепота, после которой пост
   // обязан уйти в очередь повторов. Отличаем их так же, как сторис (v4.32.724).
-  const contactsRead = await listContactsRead();
+  const contactsRead = await listContactsReadDetailed();
   if (contactsRead === null) {
     log.warn('feed_broadcast_contacts_unreadable');
-    return { total: 0, success: 0, successDids: [], contactsUnreadable: true };
+    return { total: 0, success: 0, successDids: [], contactsUnreadable: true, contactsMissing: 0 };
   }
-  const contacts = contactsRead.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
+  const missing = contactsRead.missing;
+  if (missing > 0) log.warn('feed_broadcast_contacts_partial', { missing });
+  const contacts = contactsRead.contacts.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
   if (contacts.length === 0) {
-    return { total: 0, success: 0, successDids: [], contactsUnreadable: false };
+    return {
+      total: 0, success: 0, successDids: [], contactsUnreadable: false, contactsMissing: missing,
+    };
   }
 
   const skipDids = opts?.skipDids;
@@ -528,7 +547,9 @@ export async function broadcastFeedEnvelope(
   }
   if (targets.length === 0) {
     log.info('feed_broadcast_done', { total: 0, success: 0, filtered: true });
-    return { total: 0, success: 0, successDids: [], contactsUnreadable: false };
+    return {
+      total: 0, success: 0, successDids: [], contactsUnreadable: false, contactsMissing: missing,
+    };
   }
 
   let success = 0;
@@ -545,7 +566,9 @@ export async function broadcastFeedEnvelope(
   });
 
   log.info('feed_broadcast_done', { total: targets.length, success });
-  return { total: targets.length, success, successDids, contactsUnreadable: false };
+  return {
+    total: targets.length, success, successDids, contactsUnreadable: false, contactsMissing: missing,
+  };
 }
 
 /**

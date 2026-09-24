@@ -38,6 +38,8 @@ jest.mock('../contacts', () => ({
   listContactsFor: async () => mockContacts ?? [],
   // v4.32.724: null — «справочник не прочитался», как у настоящей функции.
   listContactsReadFor: async () => mockContacts,
+  listContactsReadDetailed: async () =>
+    mockContacts === null ? null : { contacts: mockContacts, missing: 0 },
 }));
 
 jest.mock('../../security/rateLimiter', () => ({

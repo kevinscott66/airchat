@@ -37,7 +37,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { publicKeyToDidKey } from '../identity/did';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
-import { listContactsFor, listContactsReadFor } from './contacts';
+import { listContactsFor, listContactsReadDetailed } from './contacts';
 import { catFromIpfs } from '../transport/ipfs/node';
 import { insertStory, deleteExpiredStories, countActiveStoriesByAuthor, STORY_TTL_MS } from '../storage/local';
 import { decodeStoryEnvelope, encodeStoryEnvelope, type StoryEnvelope } from './storyEnvelope';
@@ -177,8 +177,10 @@ export async function publishStory(
   // двум нулям экран решает, что сторис локальная и говорить не о чем. Автор
   // видел свою сторис на месте (строка в базе создаётся до рассылки) и не
   // узнавал, что её не получил никто.
-  const contactsRead = await listContactsReadFor(pid);
-  const contacts = (contactsRead ?? []).filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));
+  const contactsRead = await listContactsReadDetailed(pid);
+  const contacts = (contactsRead?.contacts ?? []).filter(
+    (c) => !rateLimiter.isBlocked(c.peerPublicKey),
+  );
   const text2 = encodeStoryEnvelope(envelope);
   const { getMessagingService } = await import('./messaging');
   const svc = getMessagingService();
@@ -203,6 +205,7 @@ export async function publishStory(
     contacts: contacts.length,
     delivered,
     contactsUnreadable: contactsRead === null,
+    contactsMissing: contactsRead?.missing ?? 0,
   });
   notifyStoryListeners();
   return {
@@ -211,6 +214,9 @@ export async function publishStory(
     contacts: contacts.length,
     delivered,
     contactsUnreadable: contactsRead === null,
+    // v4.32.846: часть справочника не открылась. Сторис ушла тем, кого назвали,
+    // и молчать об остальных нельзя: повтора у сторис нет вовсе.
+    contactsMissing: contactsRead?.missing ?? 0,
   };
 }
 

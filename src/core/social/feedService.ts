@@ -1871,6 +1871,7 @@ async function tryPublishFeedPostComplete(
     contactsCount,
     result.delivered.success,
     result.delivered.contactsUnreadable,
+    result.delivered.contactsMissing,
   );
   if (attempt === 'no-recipients') {
     log.info('feed_publish_local_only', { postId });
@@ -2173,6 +2174,7 @@ export async function publishRepost(
         result.delivered.total,
         result.delivered.success,
         result.delivered.contactsUnreadable,
+        result.delivered.contactsMissing,
       )
     : classifyBroadcast(shouldAttemptBroadcast(online.ok), 0, 0);
   if (shouldAttemptBroadcast(online.ok) && !result) {

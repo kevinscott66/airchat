@@ -115,7 +115,8 @@ describe('группы: асинхронные действия не молча�
 describe('контакты: отказ чтения, сканер', () => {
   it('сорванное чтение не рисуется как пустая записная книжка', () => {
     expect(hasSequence(contacts, [
-      'const read = await listContactsRead();',
+      'const detailed = await listContactsReadDetailed();',
+      'const read = detailed?.contacts ?? null;',
       'if (!shouldApplyRows(read)) {',
       "showError('Не удалось прочитать контакты. Потяните список вниз, чтобы повторить.');",
       'return;',

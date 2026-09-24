@@ -61,6 +61,12 @@ jest.mock('../contacts', () => ({
     mockBareCalls.push(1);
     return mockContactsByPid.get(mockActivePid) ?? [];
   },
+  // v4.32.846: тем же кругом отвечает и чтение со счётом непрочитанных строк.
+  listContactsReadDetailed: async (pid?: number) => {
+    if (pid === undefined) mockBareCalls.push(1);
+    else mockScopePids.push(pid);
+    return { contacts: mockContactsByPid.get(pid ?? mockActivePid) ?? [], missing: 0 };
+  },
 }));
 
 /** Профиль, открытый на экране. Меняется прямо в тесте. */
@@ -346,9 +352,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     // остановилась на подсчёте: он решает судьбу записи в очереди.
     // v4.32.752: там же круг и уточнён — различающим чтением, чтобы отказ
     // базы не выглядел как «адресатов нет».
-    expect(TRANSPORT).toContain('const contactsRead = await listContactsRead();');
+    expect(TRANSPORT).toContain('const contactsRead = await listContactsReadDetailed();');
     expect(TRANSPORT).toContain(
-      'const contacts = contactsRead.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));'
+      'const contacts = contactsRead.contacts.filter((c) => !rateLimiter.isBlocked(c.peerPublicKey));'
     );
   });
 });

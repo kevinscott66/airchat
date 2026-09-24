@@ -23,7 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   addContact,
   deleteContact,
-  listContactsRead,
+  listContactsReadDetailed,
   parseContactId,
   renameContact,
   subscribeContactsChanged,
@@ -38,6 +38,7 @@ import { useThemedStyles, useColors } from '../ThemeContext';
 import { badgeTint, contrastingInk, font, mediaScrim, mono, radius, scrim } from '../theme';
 import { log } from '../../core/logger';
 import { shouldApplyRows } from '../../core/storage/readResult';
+import { ruPlural } from '../../core/text/ruPlural';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID, COPY_FAILED } from '../clipboardText';
@@ -325,10 +326,19 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     // рисовалось как «Добавьте первый контакт» — то есть как пропавшая
     // записная книжка. Различаем «пусто» и «не прочиталось»: во втором случае
     // оставляем на экране то, что уже показано, и называем беду.
-    const read = await listContactsRead();
+    const detailed = await listContactsReadDetailed();
+    const read = detailed?.contacts ?? null;
     if (!shouldApplyRows(read)) {
       showError('Не удалось прочитать контакты. Потяните список вниз, чтобы повторить.');
       return;
+    }
+    // v4.32.846: список прочитался, но не весь. Показать его молча — значит
+    // предъявить укороченную книжку как полную: человек решит, что контакт
+    // пропал, и заведёт его заново. Строки целы, их просто не открыть сейчас.
+    if (detailed && detailed.missing > 0) {
+      showError(
+        `${detailed.missing} ${ruPlural(detailed.missing, ['контакт', 'контакта', 'контактов'])} сейчас не прочитать — они на месте, но в списке их нет. Потяните список вниз, чтобы повторить.`,
+      );
     }
     // v4.32.31: «Сохранённые сообщения» (self-contact) не должны появляться в списке контактов —
     // только как закреп в списке чатов. Отфильтровываем запись с peerPublicKey === myPubB64.

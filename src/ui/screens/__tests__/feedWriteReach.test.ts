@@ -26,6 +26,7 @@ jest.mock('../../../core/transport/multiTransport', () => ({
 jest.mock('../../../core/social/contacts', () => ({
   listContacts: jest.fn(async () => []),
   listContactsRead: jest.fn(async () => []),
+  listContactsReadDetailed: jest.fn(async () => ({ contacts: [], missing: 0 })),
 }));
 jest.mock('../../../core/social/mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 

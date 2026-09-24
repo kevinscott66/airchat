@@ -24,6 +24,8 @@ jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => []),
   // v4.32.752: рассылка кадра читает справочник различающим чтением.
   listContactsRead: jest.fn(async () => []),
+  // v4.32.846: и со счётом непрочитанных строк — здесь их нет.
+  listContactsReadDetailed: jest.fn(async () => ({ contacts: [], missing: 0 })),
 }));
 jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 

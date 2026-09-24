@@ -31,6 +31,9 @@ jest.mock('../../transport/multiTransport', () => ({
 jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => mockContacts ?? []),
   listContactsRead: jest.fn(async () => mockContacts),
+  listContactsReadDetailed: jest.fn(async () =>
+    mockContacts === null ? null : { contacts: mockContacts, missing: 0 },
+  ),
 }));
 jest.mock('../../security/rateLimiter', () => ({
   rateLimiter: { whenReady: async () => {}, isBlocked: () => false },
@@ -103,7 +106,9 @@ describe('справочник не прочитался', () => {
 
     const res = await broadcastFeedEnvelope(await frame());
 
-    expect(res).toEqual({ total: 0, success: 0, successDids: [], contactsUnreadable: true });
+    expect(res).toEqual({
+      total: 0, success: 0, successDids: [], contactsUnreadable: true, contactsMissing: 0,
+    });
   });
 
   it('исход — «адресаты неизвестны», и он идёт в очередь повторов', () => {
@@ -118,7 +123,11 @@ describe('справочник не прочитался', () => {
   });
 
   it('комментарий тоже просится на повтор: 0 из 0 — не полная доставка', () => {
-    const blind = { delivered: { total: 0, success: 0, successDids: [], contactsUnreadable: true } };
+    const blind = {
+      delivered: {
+        total: 0, success: 0, successDids: [], contactsUnreadable: true, contactsMissing: 0,
+      },
+    };
 
     expect(feedBroadcastNeedsRetry(blind)).toBe(true);
     // Именно на этом месте старое условие и молчало.
@@ -132,7 +141,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой справочник 
 
     const res = await broadcastFeedEnvelope(await frame());
 
-    expect(res).toEqual({ total: 0, success: 0, successDids: [], contactsUnreadable: false });
+    expect(res).toEqual({
+      total: 0, success: 0, successDids: [], contactsUnreadable: false, contactsMissing: 0,
+    });
     expect(classifyBroadcast(true, 0, 0, false)).toBe('no-recipients');
     expect(needsRetryQueue('no-recipients')).toBe(false);
     expect(reportOf('no-recipients', false)).toBe('local-only');
@@ -149,6 +160,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой справочник 
       success: 1,
       successDids: [peer.did],
       contactsUnreadable: false,
+      contactsMissing: 0,
     });
     expect(feedBroadcastNeedsRetry(res && { delivered: res })).toBe(false);
   });
@@ -161,7 +173,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой справочник 
 describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('рассылка читает справочник различающим чтением', () => {
     const src = codeOnly(read('feedTransport.ts'));
-    expect(src).toContain('const contactsRead = await listContactsRead();');
+    expect(src).toContain('const contactsRead = await listContactsReadDetailed();');
     expect(src).toContain('if (contactsRead === null) {');
     expect(src).toContain("log.warn('feed_broadcast_contacts_unreadable');");
     // Схлопывающего чтения в рассылке не осталось вовсе.

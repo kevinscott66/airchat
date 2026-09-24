@@ -53,15 +53,30 @@ export type PublishDisposition = 'queue-retry' | 'local-only' | 'done';
  * `recipientsUnknown` (v4.32.752) — список адресатов не прочитался; тогда
  * `total: 0` означает не «некому», а «неизвестно кому», и молчать об этом
  * нельзя: в ноль адресатов не отправляют ни одного из настоящих.
+ *
+ * `recipientsMissing` (v4.32.846) — то же самое, но не про весь список, а про
+ * несколько строк в нём. Справочник читается по одной записи, и та, которую
+ * не удалось расшифровать, пропускается: вычеркнуть её из указателя нельзя,
+ * контакт тогда не вернуть ничем. Пропуск верный, а вот последствие — нет:
+ * `total` считался по уцелевшим, `success === total` сходилось, и рассылка
+ * объявляла себя дошедшей до всех, не назвав нескольких адресатов вовсе.
  */
 export function classifyBroadcast(
   attempted: boolean,
   total: number,
   success: number,
   recipientsUnknown = false,
+  recipientsMissing = 0,
 ): BroadcastAttempt {
   if (!attempted) return 'skipped-offline';
   if (recipientsUnknown) return 'unknown-recipients';
+  if (recipientsMissing > 0) {
+    // Адресаты есть, и часть из них этот проход даже не назвала. Полной такая
+    // рассылка не бывает; `no-recipients` тем более неверен — повторять есть
+    // ради кого, и очередь обязана это узнать.
+    if (success > 0) return 'partial';
+    return total > 0 ? 'failed' : 'unknown-recipients';
+  }
   if (total <= 0) return 'no-recipients';
   if (success <= 0) return 'failed';
   return success < total ? 'partial' : 'complete';

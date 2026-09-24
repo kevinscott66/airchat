@@ -8,6 +8,7 @@
  */
 
 import { formatLimit } from '../media/uploadRoute';
+import { ruPlural } from '../text/ruPlural';
 
 /** Медиа выбрали, но оно не уехало: либо больше предела, либо загрузка сорвалась. */
 export type StoryMediaFailure = { reason: 'oversize' | 'failed'; limitBytes: number };
@@ -27,6 +28,16 @@ export type StoryPublishOutcome = {
    * слышал ни слова о сторис, которую не получил никто.
    */
   contactsUnreadable?: boolean;
+  /**
+   * Сколько строк справочника не открылось (v4.32.846).
+   *
+   * Не то же, что `contactsUnreadable`: список прочитан, но короче, чем есть
+   * на самом деле. Сторис при этом уходит — тем, кого назвали, — и внешне всё
+   * благополучно: `delivered` больше нуля, и ни одна проверка ниже не
+   * срабатывала. Повтора у сторис нет, так что не сказать сейчас — значит не
+   * сказать никогда.
+   */
+  contactsMissing?: number;
 };
 
 /**
@@ -45,6 +56,12 @@ export function storyPublishProblem(
   }
   if (res.contacts > 0 && res.delivered === 0) {
     return 'Сторис сохранена, но не ушла ни одному контакту — нет связи. Попробуйте опубликовать снова';
+  }
+  const missing = res.contactsMissing ?? 0;
+  if (missing > 0) {
+    // Сначала про недошедших, потом про медиа — по тому же правилу, что и выше.
+    const who = `${missing} ${ruPlural(missing, ['контакт', 'контакта', 'контактов'])}`;
+    return `Сторис ушла не всем: ${who} сейчас не прочитать. Опубликуйте её снова, когда откроете приложение заново`;
   }
   const fail = res.mediaFailure;
   if (!fail) return null;

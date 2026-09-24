@@ -123,7 +123,7 @@ export function clearSymKeyCache(): void {
  * cache the materialized list and invalidate on ANY contact write (centralized
  * in withContactLock below) plus a 5s TTL safety net.
  */
-const contactsListCache = new Map<number, { at: number; data: Contact[] }>();
+const contactsListCache = new Map<number, { at: number; data: Contact[]; missing: number }>();
 const CONTACTS_LIST_TTL_MS = 5000;
 
 /** Drop the cached contact list (call after any contacts mutation). */
@@ -505,6 +505,26 @@ export async function listContactsRead(): Promise<Contact[] | null> {
 }
 
 /**
+ * Прочитанный справочник вместе с числом строк, которые открыть не вышло
+ * (v4.32.846).
+ *
+ * `missing` — это не порча и не пропажа: строки целы, их просто не удалось
+ * расшифровать этим проходом (заблокированный Keychain, недоступный момент
+ * базы). Индекс их поэтому и не чинит — вычеркнуть из него значит потерять
+ * контакт насовсем (v4.32.641).
+ *
+ * Отдельный вход нужен рассылке. Обычному «в контактах ли он» число ни к чему,
+ * а вот кадру ленты и сторис — к чему: короткий справочник они принимали за
+ * полный, `success === total` сходилось, повтор не назначался, и пост не
+ * доходил до человека, который так и оставался в контактах.
+ */
+export type ContactsRead = { contacts: Contact[]; missing: number };
+
+export function listContactsReadDetailed(ownerProfileId?: number): Promise<ContactsRead | null> {
+  return readContactsFor(ownerProfileId ?? activeProfileId());
+}
+
+/**
  * То же чтение, что и `listContactsFor`, но отличающее «контактов нет» от
  * «прочитать не вышло» (v4.32.622).
  *
@@ -519,6 +539,11 @@ export async function listContactsRead(): Promise<Contact[] | null> {
  * копировать её ещё раз незачем — `shouldApplyRows` принимает и такую.
  */
 export async function listContactsReadFor(ownerProfileId: number): Promise<Contact[] | null> {
+  return (await readContactsFor(ownerProfileId))?.contacts ?? null;
+}
+
+/** Одно чтение на оба входа: число непрочитанных строк считает только оно. */
+async function readContactsFor(ownerProfileId: number): Promise<ContactsRead | null> {
   try {
     const pid = ownerProfileId;
     // v4.32.227 (PERF): serve from the short-TTL cache to avoid the N+1 SQLite
@@ -526,7 +551,9 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
     const cached = contactsListCache.get(pid);
     // v4.32.227: return a shallow copy so a caller doing in-place sort/splice
     // can't corrupt the shared cached array for everyone else.
-    if (cached && Date.now() - cached.at < CONTACTS_LIST_TTL_MS) return cached.data.slice();
+    if (cached && Date.now() - cached.at < CONTACTS_LIST_TTL_MS) {
+      return { contacts: cached.data.slice(), missing: cached.missing };
+    }
     // v4.32.659: отказ чтения отличаем от пустоты. profileKvGet сводит их в
     // один null (kvTryGet гасит ошибку базы внутри себя), и обещание докблока
     // выше не выполнялось: недоступный момент SQLite экран рисовал как пустую
@@ -537,7 +564,7 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
     const read = await scopedKvTryGetFor(pid, 'contacts_index');
     if (read === null) return null;
     const raw = read.value;
-    if (!raw) return [];
+    if (!raw) return { contacts: [], missing: 0 };
     // v4.32.115: Array.isArray guard against corrupted index.
     const parsed = JSON.parse(raw);
     // v4.32.198 (Round-28 #6): filter non-string / wrong-length IDs and cap
@@ -552,13 +579,20 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
     // unparseable — heal the index persistently instead of re-warning on
     // every listContacts() call.
     const badIds: string[] = [];
+    // v4.32.846: сколько строк не открылось. Сам пропуск ниже верен, а вот
+    // молчание о нём — нет: список выходил короче индекса и снаружи выглядел
+    // полным.
+    let missing = 0;
     for (const id of ids) {
       const cell = await contactRowCell(pid, id);
       // v4.32.641: непрочитанная строка НЕ попадает в badIds. Починка индекса
       // ниже — удаление, и удалять по итогу неудавшегося чтения нельзя: строка
       // цела, открыть её не вышло, а вычеркнутый из индекса контакт вернуть
       // уже нечем. Один заблокированный Keychain стирал так всю книжку разом.
-      if (cell.state === 'unreadable') continue;
+      if (cell.state === 'unreadable') {
+        missing += 1;
+        continue;
+      }
       const row = cellTextOrNull(cell);
       // v4.32.71: skip empty-string rows (legacy artefact of old deleteContact
       // which wrote '' instead of DELETE'ing the row); JSON.parse('') would throw.
@@ -656,8 +690,12 @@ export async function listContactsReadFor(ownerProfileId: number): Promise<Conta
       (a.displayName || '').localeCompare(b.displayName || '', 'ru', { sensitivity: 'base' })
     );
     // v4.32.227 (PERF): cache the materialized list; invalidated on any write.
-    contactsListCache.set(pid, { at: Date.now(), data: out });
-    return out;
+    // v4.32.846: число едет в кэше вместе со списком. Не класть укороченный
+    // список вовсе было бы хуже: чтение строк идёт по одной, и пока Keychain
+    // заблокирован, каждый рендер и каждый обход присутствия запускали бы
+    // весь проход заново — ровно тот штурм базы, ради которого кэш и заведён.
+    contactsListCache.set(pid, { at: Date.now(), data: out, missing });
+    return { contacts: out, missing };
   } catch (e) {
     log.warn('contacts_list_failed', { err: e instanceof Error ? e.message : String(e) });
     return null;

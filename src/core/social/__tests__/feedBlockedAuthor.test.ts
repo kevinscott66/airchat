@@ -29,6 +29,7 @@ jest.mock('../contacts', () => ({
   // v4.32.752: рассылка читает справочник различающим чтением — ей отказ базы
   // дороже пустоты. `mockContacts = null` изображает именно отказ.
   listContactsRead: jest.fn(async () => mockContacts),
+  listContactsReadDetailed: jest.fn(async () => ({ contacts: mockContacts, missing: 0 })),
 }));
 jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
 jest.mock('../../security/rateLimiter', () => ({
@@ -183,7 +184,9 @@ describe('исходящее: своя публикация заблокиров
 
     const res = await broadcastFeedEnvelope(await frameFrom(me, 'blk-out-all'));
 
-    expect(res).toEqual({ total: 0, success: 0, successDids: [], contactsUnreadable: false });
+    expect(res).toEqual({
+      total: 0, success: 0, successDids: [], contactsUnreadable: false, contactsMissing: 0,
+    });
     expect(send).not.toHaveBeenCalled();
   });
 
