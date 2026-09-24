@@ -30,10 +30,12 @@ import * as Clipboard from 'expo-clipboard';
 import { AppPressable } from '../../AppPressable';
 import { SheetShell } from '../../SheetShell';
 import { showError, showSuccess } from '../../userFeedback';
+import { rawErrorText, userErrorText } from '../../userErrorText';
 import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../../../clipboardText';
 import { openExternal } from '../../../utils/openExternal';
 import { useColors } from '../../../ThemeContext';
 import { font, glass, radius, spacing, withAlpha } from '../../../theme';
+import { log } from '../../../../core/logger';
 import { loadKeyPair } from '../../../../core/crypto/keyManager';
 import { signBytes } from '../../../../core/crypto/signature';
 import { ownAccountRef } from '../../../../core/identity/accountRef';
@@ -162,6 +164,15 @@ export function LinkProofSheet({
       }
       setError(proofFailureText(res.reason, platform));
       setOffline(res.reason === 'network');
+    } catch (e) {
+      // v4.32.885: у `try` не было ловца — только `finally`. Сама проверка
+      // сетевой отказ возвращает ответом ('network'), но упасть броском ей
+      // есть чем: разбор подписи идёт через нативную криптографию, а ключ
+      // аккаунта берётся из хранилища. Тогда окно гасило «Проверяю…» и
+      // замирало: ни галочки, ни ошибки, ни строчки в журнале. Человек жмёт
+      // «Проверить» ещё раз — с тем же исходом.
+      log.warn('link_proof_verify_failed', { err: rawErrorText(e) });
+      setError(userErrorText(e, 'Не удалось проверить публикацию. Попробуйте ещё раз.'));
     } finally {
       setBusy(false);
     }
