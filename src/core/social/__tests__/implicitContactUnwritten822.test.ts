@@ -1,25 +1,30 @@
 /**
- * Заблокированный незнакомец не заводит строку контакта (v4.32.615).
+ * Письмо незнакомца больше не ложится мимо строки контакта (v4.32.822).
  *
- * Удаление контакта и блокировка — разные вещи, но вместе они обязаны давать
- * то, чего человек и хотел: от собеседника не остаётся ни следа, и он не
- * возвращается. До этой правки возвращался. Ключ шифрования в строке контакта
- * не хранится — он считается из двух открытых ключей, — поэтому следующее
- * сообщение удалённого расшифровывалось как прежде, и `ensureImplicitContact`
- * заводил строку заново. Проверка блок-листа стояла одна и ниже по коду, в
- * `persistIncomingFromEnvelope`: сообщение она отбрасывала верно, но строка к
- * тому времени уже была создана, а `refreshSubscriptions` успевал подписать
- * меня на топик того, кого просили не пускать.
+ * Дефект. `ensureImplicitContact` отвечал `boolean`, и `false` значил сразу
+ * три вещи: «строка уже есть», «это я сам» и «база отказала». Приём читал его
+ * одним способом — «заводить не понадобилось» — и шёл писать сообщение
+ * дальше. То есть отказ базы давал сохранённое письмо незнакомца, для
+ * которого строки контакта так и не появилось, а кадр при этом объявлялся
+ * разобранным: relay держит его ещё тридцать суток, но запрашивать его никто
+ * больше не станет.
  *
- * Теперь блок-лист спрашивается там же, где и `privacy_only_contacts_msg`, —
- * до создания строки. Групповые конверты по-прежнему проходят: состав и права
- * группы задаются ролями в ней, а не моим личным списком (см. blockPolicy).
+ * Цена. Контакт — это не украшение списка: в нём лежит имя, на нём стоит
+ * подписка на топик собеседника, по нему живёт ключ в указателе. Без строки
+ * переписка оставалась висеть от неизвестного, ответ ему не уходил, а
+ * следующее его сообщение заводило контакт уже без первого письма.
+ *
+ * Правка. Исход назван словом: `created` / `exists` / `self` / `failed`.
+ * Отказ базы проходит сам, поэтому кадр откладывается — придёт снова и ляжет
+ * целиком. Остальные три исхода приём проходит как прежде.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 
 const mockSaved: Record<string, unknown>[] = [];
-const mockEnsure = jest.fn(async () => 'created');
+/** Что ответит заведение неявного контакта. */
+let mockEnsureResult: 'created' | 'exists' | 'self' | 'failed' = 'created';
+const mockEnsure = jest.fn(async () => mockEnsureResult);
 const mockRefresh = jest.fn();
 const mockGroup = jest.fn(async () => true);
 const mockBlocked = { current: false };
@@ -145,7 +150,7 @@ const STRANGER_DID = publicKeyToDidKey(STRANGER);
 
 let seq = 0;
 /** Положить в приёмник конверт от незнакомца и отдать его сервису. */
-async function deliver(text: string): Promise<void> {
+async function deliver(text: string): Promise<'consumed' | 'deferred'> {
   const ts = Date.now();
   mockEnvelope.current = {
     messageId: `m${++seq}`,
@@ -154,7 +159,7 @@ async function deliver(text: string): Promise<void> {
     encryptedContent: new TextEncoder().encode(JSON.stringify({ text, _ts: ts })),
     timestamp: ts,
   };
-  await new MessagingService(myPair).receiveDirectLanEnvelope(new Uint8Array([1]), STRANGER_DID);
+  return await new MessagingService(myPair).receiveDirectLanEnvelope(new Uint8Array([1]), STRANGER_DID);
 }
 
 beforeEach(() => {
@@ -164,80 +169,99 @@ beforeEach(() => {
   mockGroup.mockClear();
   mockBlocked.current = false;
   mockScopePids.length = 0;
+  mockEnsureResult = 'created';
 });
 
-describe('строка контакта для незнакомца', () => {
-  it('незаблокированный незнакомец заводит контакт и его сообщение сохраняется', async () => {
-    await deliver('привет, это я');
-    expect(mockEnsure).toHaveBeenCalledTimes(1);
-    expect(mockSaved).toHaveLength(1);
-    // Счётчик переподписки живой: без него проверка ниже ничего не значила бы.
-    expect(mockRefresh).toHaveBeenCalled();
-  });
+describe('строка контакта не завелась — кадр ждёт, а не проглатывается', () => {
+  it('база отказала: отложено, письмо не сохранено', async () => {
+    mockEnsureResult = 'failed';
 
-  it('контакты спрашиваются у владельца службы, а не у активного профиля', async () => {
-    await deliver('привет, это я');
-    // Спрашивали хотя бы раз (приём конверта + переподписка) и каждый раз —
-    // про профиль, которому принадлежит пара ключей службы.
-    expect(mockScopePids.length).toBeGreaterThan(0);
-    expect(mockScopePids.every((p) => p === 1)).toBe(true);
-  });
-
-  it('заблокированный незнакомец контакт не заводит', async () => {
-    mockBlocked.current = true;
-    await deliver('я вернулся');
-    expect(mockEnsure).not.toHaveBeenCalled();
+    expect(await deliver('привет, это я')).toBe('deferred');
     expect(mockSaved).toHaveLength(0);
   });
 
-  it('заблокированный незнакомец не заставляет переподписаться на свой топик', async () => {
-    mockBlocked.current = true;
-    await deliver('я вернулся');
+  it('база ожила — тот же кадр доносит письмо', async () => {
+    mockEnsureResult = 'failed';
+    expect(await deliver('привет, это я')).toBe('deferred');
+
+    mockEnsureResult = 'created';
+    expect(await deliver('привет, это я')).toBe('consumed');
+    expect(mockSaved).toHaveLength(1);
+  });
+
+  it('отказ не подписывает меня на топик того, кого в списке нет', async () => {
+    mockEnsureResult = 'failed';
+    await deliver('привет, это я');
+
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 
-  it('групповой конверт от заблокированного разбирается: у группы своё правило', async () => {
-    mockBlocked.current = true;
-    await deliver('\x02grp:g1:привет всем');
-    expect(mockGroup).toHaveBeenCalledTimes(1);
+  it('групповой конверт от незнакомца — то же правило', async () => {
+    mockEnsureResult = 'failed';
+
+    expect(await deliver('\x02grp:g1:привет всем')).toBe('deferred');
+    expect(mockGroup).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ПРОВЕРКА НЕ ПУСТАЯ.
+ *
+ * Отложить можно было и на любой не-`created` ответ — правка короче и с виду
+ * надёжнее. Но «строка уже есть» — обычный ход вещей: так приходит каждое
+ * второе письмо от уже знакомого незнакомца, и откладывать его значит
+ * разбирать каждый такой кадр дважды и класть в журнал
+ * `internet_frame_deferred_again`, по которому ищут настоящие отсрочки.
+ */
+describe('ПРОВЕРКА НЕ ПУСТАЯ: обычные исходы кадр не задерживают', () => {
+  it('строка уже есть — разобрано, письмо записано', async () => {
+    mockEnsureResult = 'exists';
+
+    expect(await deliver('привет, это я')).toBe('consumed');
+    expect(mockSaved).toHaveLength(1);
+    // Про переподписку здесь нарочно не спрашиваем: прежний код читал ответ
+    // как `boolean`, и любое слово было для него «завёл». Что переподписка
+    // случается ровно на заведённой строке, стерегут две соседние проверки.
   });
 
-  it('но строку контакта групповой конверт от заблокированного не заводит', async () => {
-    // v4.32.617: исключение для групп касалось и создания строки — а не должно
-    // было. Заблокированному хватало одного `\x0egctl:`, чтобы вернуться в мой
-    // список; следом эта же строка сходила за доверие при разборе приглашения.
-    mockBlocked.current = true;
-    await deliver('\x02grp:g1:привет всем');
-    expect(mockEnsure).not.toHaveBeenCalled();
-    expect(mockRefresh).not.toHaveBeenCalled();
+  it('строку завели — разобрано, и на топик подписались', async () => {
+    expect(await deliver('привет, это я')).toBe('consumed');
+    expect(mockSaved).toHaveLength(1);
+    expect(mockRefresh).toHaveBeenCalled();
   });
 
-  it('проверка не пустая: незаблокированный групповой конверт строку заводит', async () => {
-    await deliver('\x02grp:g1:привет всем');
-    expect(mockGroup).toHaveBeenCalledTimes(1);
-    expect(mockEnsure).toHaveBeenCalledTimes(1);
-  });
-
-  it('нечитаемое тело от заблокированного проходит за обычное и отбрасывается', async () => {
+  it('заблокированный до заведения строки не доходит — и это не отсрочка', async () => {
     mockBlocked.current = true;
-    await deliver('\x02grp');
+    mockEnsureResult = 'failed';
+
+    expect(await deliver('я вернулся')).toBe('consumed');
     expect(mockEnsure).not.toHaveBeenCalled();
   });
 });
 
-describe('форма исходников', () => {
+describe('форма исходников: исход заведения прочитан', () => {
   const SRC = fs.readFileSync(path.join(__dirname, '..', 'messaging.ts'), 'utf8');
   const CODE = SRC.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const CONTACTS = fs
+    .readFileSync(path.join(__dirname, '..', 'contacts.ts'), 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
 
-  it('проверка блок-листа стоит раньше создания строки контакта', () => {
-    const gate = CODE.indexOf('dm_blocked_no_implicit_contact');
-    const create = CODE.indexOf('await ensureImplicitContact(');
-    expect(gate).toBeGreaterThan(-1);
-    expect(create).toBeGreaterThan(gate);
+  it('приём различает отказ базы и «заводить нечего»', () => {
+    expect(CODE).toContain("if (made === 'failed') {");
+    const at = CODE.indexOf("if (made === 'failed') {");
+    expect(CODE.slice(at, at + 220)).toContain("return 'deferred';");
+    expect(CODE).toContain("if (made === 'created') await this.refreshSubscriptions();");
   });
 
-  it('обещание deleteContact про исчезнувший ключ убрано', () => {
-    const contacts = fs.readFileSync(path.join(__dirname, '..', 'contacts.ts'), 'utf8');
-    expect(contacts).not.toContain('The sym key is gone');
+  it('слово об исходе рождается там же, где строка', () => {
+    expect(CONTACTS).toContain('export type ImplicitContactOutcome =');
+    expect(CONTACTS).toContain("      return 'failed';");
+    expect(CONTACTS).toContain("    return 'created';");
+    // Прежний двусмысленный ответ ушёл вместе с типом.
+    expect(CONTACTS).not.toContain(
+      '  displayName?: string\n): Promise<boolean> {'
+    );
   });
 });

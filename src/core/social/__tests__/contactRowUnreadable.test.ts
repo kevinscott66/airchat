@@ -204,7 +204,9 @@ describe('запись не ложится поверх непрочитанно
     const kept = mockLocal.__kv[rowKey(peer.publicKey)];
 
     mockUnreadable.add(rowKey(peer.publicKey));
-    expect(await ensureImplicitContact(1, me, peer.publicKey, 'незнакомец')).toBe(false);
+    // v4.32.822: исход назван словом. «Заводить нечего» — это 'exists',
+    // и непрочитанная строка попадает сюда же: она есть, просто закрыта.
+    expect(await ensureImplicitContact(1, me, peer.publicKey, 'незнакомец')).toBe('exists');
     expect(mockLocal.__kv[rowKey(peer.publicKey)]).toBe(kept);
 
     // Имя, которое задал человек, на месте — а не затёрто неявной строкой.
@@ -216,7 +218,7 @@ describe('запись не ложится поверх непрочитанно
   test('проверка не пустая: незнакомца без строки ensureImplicitContact заводит', async () => {
     const me = makeKeyPair();
     const peer = makeKeyPair();
-    expect(await ensureImplicitContact(1, me, peer.publicKey, 'незнакомец')).toBe(true);
+    expect(await ensureImplicitContact(1, me, peer.publicKey, 'незнакомец')).toBe('created');
     expect(mockLocal.__kv[rowKey(peer.publicKey)]).toBeDefined();
   });
 });

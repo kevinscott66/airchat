@@ -129,19 +129,21 @@ describe('строка контакта: отказ записи не выдаё
     expect(indexNow()).toEqual([Buffer.from(peer.publicKey).toString('base64')]);
   });
 
-  test('ensureImplicitContact при отказе записи отвечает false и не трогает указатель', async () => {
+  test('ensureImplicitContact при отказе записи отвечает отказом и не трогает указатель', async () => {
     const me = makeKeyPair();
     const peer = makeKeyPair();
     mockWriteFails = true;
-    await expect(ensureImplicitContact(1, me, peer.publicKey, 'Рита')).resolves.toBe(false);
+    // v4.32.822: отказ назван отдельным словом. Прежний `false` значил ещё и
+    // «строка уже есть», и приём читал его как «заводить не понадобилось».
+    await expect(ensureImplicitContact(1, me, peer.publicKey, 'Рита')).resolves.toBe('failed');
     expect(kv[rowKey(peer.publicKey)]).toBeUndefined();
     expect(indexNow()).toEqual([]);
   });
 
-  test('ПРОВЕРКА НЕ ПУСТАЯ: при исправной записи ensureImplicitContact отвечает true', async () => {
+  test('ПРОВЕРКА НЕ ПУСТАЯ: при исправной записи ensureImplicitContact отвечает «завёл»', async () => {
     const me = makeKeyPair();
     const peer = makeKeyPair();
-    await expect(ensureImplicitContact(1, me, peer.publicKey, 'Рита')).resolves.toBe(true);
+    await expect(ensureImplicitContact(1, me, peer.publicKey, 'Рита')).resolves.toBe('created');
     expect(kv[rowKey(peer.publicKey)]).toBeDefined();
     expect(indexNow()).toEqual([Buffer.from(peer.publicKey).toString('base64')]);
   });

@@ -940,12 +940,20 @@ export class MessagingService {
     // NOW it's safe to create the implicit contact row and persist.
     if (needsImplicitContact && senderPk && !blockedGroupScoped) {
       try {
-        const created = await ensureImplicitContact(await this.ownerProfileId(), this.pair, senderPk);
+        const made = await ensureImplicitContact(await this.ownerProfileId(), this.pair, senderPk);
+        // v4.32.822: отказ базы здесь — не «строка уже есть». Раньше оба
+        // исхода приходили одним `false`, и письмо незнакомца ложилось в
+        // переписку, для которой контакта так и не завелось, а кадр считался
+        // разобранным. Причина проходящая — перезапросим.
+        if (made === 'failed') {
+          log.warn('lan_implicit_contact_unwritten', { from: peerPubKeyB64.slice(0, 12) });
+          return 'deferred';
+        }
         // v4.32.120: only refresh pubsub subscriptions when a NEW row was
-        // actually created (idempotent call returns false on existing rows).
+        // actually created (idempotent call answers 'exists' on existing rows).
         // This bounds refreshSubscriptions churn even if attacker-bypass is
         // ever found upstream.
-        if (created) await this.refreshSubscriptions();
+        if (made === 'created') await this.refreshSubscriptions();
       } catch (e) {
         log.warn('lan_implicit_contact_failed', { err: e instanceof Error ? e.message : String(e) });
         return 'deferred';
@@ -1952,7 +1960,7 @@ export class MessagingService {
         const peerPkBytes = publicKeyFromB64(contactPubB64);
         if (peerPkBytes) {
           const created = await ensureImplicitContact(ownerPid, this.pair, peerPkBytes);
-          if (created) {
+          if (created === 'created') {
             // Переподписаться на pubsub-топик новоиспечённого контакта, иначе мы не услышим
             // его ответ, пока не перезагрузим приложение.
             await measureAsync('dm_refresh_subs_after_implicit', () => this.refreshSubscriptions());

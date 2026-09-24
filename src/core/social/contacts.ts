@@ -401,31 +401,41 @@ export async function addContact(
  * контактах рабочего — при том что сама переписка сохранялась в личном.
  * Второй аккаунт заводят ровно затем, чтобы его не связали с первым.
  */
+export type ImplicitContactOutcome =
+  /** Строка заведена этим вызовом. */
+  | 'created'
+  /** Заводить нечего: строка уже есть, либо не открылась нашим ключом. */
+  | 'exists'
+  /** Переписка с самим собой — неявной строки у неё не бывает. */
+  | 'self'
+  /** База отказала. Причина проходящая: тот же вызов позже заведёт строку. */
+  | 'failed';
+
 export async function ensureImplicitContact(
   ownerProfileId: number,
   pair: KeyPairBytes,
   peerPublicKey: Uint8Array,
   displayName?: string
-): Promise<boolean> {
+): Promise<ImplicitContactOutcome> {
   const pid = ownerProfileId;
   const b64 = Buffer.from(peerPublicKey).toString('base64');
   // Skip self-contact (отправка сообщения самому себе — Saved Messages, без implicit row)
   const myB64 = Buffer.from(pair.publicKey).toString('base64');
-  if (b64 === myB64) return false;
+  if (b64 === myB64) return 'self';
   // Fast-path check outside the lock (avoids ECDH + lock acquisition for existing rows).
   // v4.32.641: непрочитанная строка тоже значит «не заводить». Раньше отказ
   // чтения давал здесь `null`, и неявная строка ложилась поверх явной: контакт
   // терял имя, которое ему задал человек, флаг explicit и весь профиль.
   const pre = await contactRowCell(pid, b64);
-  if (pre.state !== 'absent') return false;
+  if (pre.state !== 'absent') return 'exists';
   const [kA, kB] = [myB64, b64].sort();
   const shared = ecdhSharedSecret(pair.secretKey, peerPublicKey);
   const salt = new TextEncoder().encode(`airchat-dm:${kA}:${kB}`);
   const sym = deriveSymmetricKey(shared, salt);
   // v4.32.115: serialize via withContactLock + re-check under lock to close TOCTOU window.
-  const created = await withContactLock(pid, async () => {
+  const created = await withContactLock(pid, async (): Promise<ImplicitContactOutcome> => {
     const existing = await contactRowCell(pid, b64);
-    if (existing.state !== 'absent') return false;
+    if (existing.state !== 'absent') return 'exists';
     const stored = await contactRowSet(
       pid,
       b64,
@@ -439,18 +449,26 @@ export async function ensureImplicitContact(
     // приёма чужого сообщения, и отказ базы не повод ронять приём. Но и
     // отвечать «завёл» неправдой тоже нельзя: ключ в указатель не пойдёт,
     // implicit_contact_created не запишется, вызывающий узнает про отказ.
+    //
+    // v4.32.822: узнать-то он узнавал, да сказать ему было нечем. Ответом был
+    // `boolean`, и `false` значил сразу три вещи: «строка уже есть»,
+    // «переписка с самим собой» и «база отказала». Приём читал его как
+    // «заводить не понадобилось» и шёл писать сообщение дальше — то есть
+    // сохранял письмо незнакомца, для которого строки контакта так и не
+    // появилось, и кадр при этом считался разобранным. Отказ базы проходит
+    // сам, и теперь он назван отдельным словом.
     if (!stored) {
       log.warn('implicit_contact_write_failed', { peer: b64.slice(0, 12) });
-      return false;
+      return 'failed';
     }
     await rememberContactIdUnlocked(pid, b64);
-    return true;
+    return 'created';
   });
-  if (!created) return false;
+  if (created !== 'created') return created;
   cacheSymKey(pid, b64, sym);
   emitContactsChanged();
   log.info('implicit_contact_created', { peer: b64.slice(0, 12) });
-  return true;
+  return 'created';
 }
 
 // v4.32.377: следом за promoteImplicitContact убрана и isImplicitContact —
