@@ -25,6 +25,7 @@ import { scheduledLabel } from '../utils/plural';
 import { AppPressable } from '../components/AppPressable';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { runGalleryPick } from '../galleryPick';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 // v4.32.27: AppModal = Modal + GestureHandlerRootView inside — чтобы RNGH
 // Pressable (AppPressable) внутри модалок получал касания на Android.
@@ -4646,7 +4647,7 @@ function ChatThreadView({
         onViewOnceChange={(v) => setViewOncePending(v)}
         onRemoveAt={(i) => setPendingImageUris((u) => u.filter((_, j) => j !== i))}
         onClearAll={() => setPendingImageUris([])}
-        onAddMore={() => { void pickImage(); }}
+        onAddMore={() => { runGalleryPick(pickImage); }}
         onCancel={() => { setPendingImageUris([]); setImageCaption(''); setViewOncePending(false); }}
         onSend={() => {
           const uris = pendingImageUris;

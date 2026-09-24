@@ -39,6 +39,7 @@ import { AppPressable } from './AppPressable';
 import { AppModal as Modal } from './AppModal';
 import { GlassSurface } from './GlassSurface';
 import { useColors } from '../ThemeContext';
+import { runGalleryPick } from '../galleryPick';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 import {
   darkColors,
@@ -205,7 +206,7 @@ export function StoryComposerModal({
                 </Text>
                 <AppPressable
                   style={[s.pickBtn, { backgroundColor: c.primary }]}
-                  onPress={() => void pick(mode === 'video' ? 'video' : 'photo')}
+                  onPress={() => runGalleryPick(() => pick(mode === 'video' ? 'video' : 'photo'))}
                 >
                   <Text style={[s.pickText, { color: primaryInk(c).text }]}>Выбрать из галереи</Text>
                 </AppPressable>
@@ -265,7 +266,7 @@ export function StoryComposerModal({
                 </GlassSurface>
                 <AppPressable
                   style={s.replaceRow}
-                  onPress={() => void pick(mode === 'video' ? 'video' : 'photo')}
+                  onPress={() => runGalleryPick(() => pick(mode === 'video' ? 'video' : 'photo'))}
                 >
                   <Ionicons name="swap-horizontal-outline" size={16} color={mediaScrim.inkMuted} />
                   <Text style={[s.replaceText, { color: mediaScrim.inkMuted }]}>Заменить</Text>

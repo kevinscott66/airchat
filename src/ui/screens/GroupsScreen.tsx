@@ -26,6 +26,7 @@ import {
 import { promptMessageReminder } from '../utils/messageReminder';
 import { AppPressable } from '../components/AppPressable';
 import { KeyboardHost } from '../components/KeyboardHost';
+import { runGalleryPick } from '../galleryPick';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 // v4.32.27: AppModal = Modal + GestureHandlerRootView inside.
 import { MediaPreviewModal } from '../components/MediaPreviewModal';
@@ -4622,7 +4623,7 @@ function GroupChatScreen({
               accessibilityLabel="Прикрепить файл"
               accessibilityHint="Удерживайте для быстрого выбора фото"
               android_ripple={{ color: colors.ripple, borderless: true, radius: 22 }}
-              onLongPress={() => { requestAnimationFrame(() => { void pickGroupImage(); }); }}
+              onLongPress={() => { requestAnimationFrame(() => { runGalleryPick(pickGroupImage); }); }}
               onPress={() => setGrpAttachSheetOpen(true)}
               delayLongPress={400}
               disabled={sending}
@@ -4959,7 +4960,7 @@ function GroupChatScreen({
         onViewOnceChange={(v) => setGrpImageViewOnce(v)}
         onRemoveAt={(i) => setPendingGrpImageUris((u) => u.filter((_, j) => j !== i))}
         onClearAll={() => setPendingGrpImageUris([])}
-        onAddMore={() => { void pickGroupImage(); }}
+        onAddMore={() => { runGalleryPick(pickGroupImage); }}
         onCancel={() => { setPendingGrpImageUris([]); setGrpImageCaption(''); setGrpImageViewOnce(false); }}
         onSend={() => {
           const uris = pendingGrpImageUris;
@@ -4982,7 +4983,7 @@ function GroupChatScreen({
         onClose={() => setGrpAttachSheetOpen(false)}
         onPickGalleryAssets={handleGroupAcceptGalleryAssets}
         onOpenCamera={handleGroupCameraCapture}
-        onOpenImagePicker={() => { void pickGroupImage(); }}
+        onOpenImagePicker={() => { runGalleryPick(pickGroupImage); }}
         onOpenDocumentPicker={() => { void pickGroupDoc(); }}
         onSendLocation={() => { void sendGroupLocation(); }}
         onOpenGifPicker={() => setGrpGifPickerVisible(true)}
