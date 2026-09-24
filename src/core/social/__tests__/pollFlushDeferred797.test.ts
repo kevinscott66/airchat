@@ -129,6 +129,13 @@ function codeOnly(src: string): string {
 const read = (...p: string[]): string => readFileSync(join(__dirname, '..', ...p), 'utf8');
 
 beforeEach(() => {
+  // Уборки в `afterEach` мало. Таймер повтора зовёт выкладку и не ждёт её:
+  // назначить следующий повтор эта выкладка может уже после уборки — и тогда
+  // ключ в карте таймеров доживает до следующей проверки. А `scheduleFlushRetry`
+  // на занятый ключ выходит молча, так что повтор в ней не назначается вовсе.
+  // Отсюда и редкие красные прогоны под нагрузкой: они начинались там, где
+  // предыдущая проверка успевала простоять дольше двух секунд.
+  resetPollFlushRetriesForTests();
   mockTarget = { state: 'missing' };
   mockAuthor = { state: 'missing' };
   mockVotes.length = 0;
