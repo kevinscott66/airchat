@@ -218,7 +218,7 @@ describe('форма исходников: обе поломки закрыты 
 
   it('экран настроек пишет общим правилом с откатом', () => {
     expect(SETTINGS).toContain(
-      'void applyPrivacyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v));',
+      'void applyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v));',
     );
     expect(SETTINGS).not.toContain('void kvSet(LINK_PREVIEW_INCOMING_KEY');
   });

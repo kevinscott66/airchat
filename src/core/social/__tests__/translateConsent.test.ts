@@ -163,8 +163,9 @@ describe('переключатель существует', () => {
     const s = readFileSync(join(SRC, 'ui/screens/SettingsScreen.tsx'), 'utf8');
     expect(s).toContain('<Text style={styles.label}>Облачный перевод</Text>');
     // v4.32.694: отказ записи возвращает переключатель на место и говорит
-    // об этом; молча оставить его в новом положении больше нельзя.
-    expect(s).toContain('void applyPrivacyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v));');
+    // об этом; молча оставить его в новом положении больше нельзя. Правило
+    // с v4.32.808 зовётся applyPref — оно общее для всех настроек экрана.
+    expect(s).toContain('void applyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v));');
     expect(s).toContain('cloudTranslateAllowed(),');
   });
 

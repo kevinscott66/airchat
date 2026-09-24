@@ -73,7 +73,7 @@ import { ACCENT_SWATCHES, avatarShape, colorsForScheme, contrastingInk, font, ra
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import {
-  kvGet, kvSet, clearAllMessageHistory, liveAttachmentBlobIds,
+  kvGet, kvSetChecked, clearAllMessageHistory, liveAttachmentBlobIds,
   listQuickReplies, addQuickReply, updateQuickReply, deleteQuickReply,
   type QuickReply,
 } from '../../core/storage/local';
@@ -507,8 +507,8 @@ function SettingsScreenImpl({
   }, [profileRefreshToken]);
 
   /**
-   * Переставить переключатель приватности и вернуть его назад, если запись не
-   * легла (v4.32.694).
+   * Переставить переключатель и вернуть его назад, если запись не легла
+   * (v4.32.694).
    *
    * Экран переставляет переключатель сразу, до записи, — иначе он бы «залипал»
    * на время обращения к базе. Раньше запись возвращала void, отказ терялся, и
@@ -519,14 +519,18 @@ function SettingsScreenImpl({
    * Поэтому: не легло — возвращаем положение переключателя и говорим об этом.
    * Продолжение (рассылка нового решения собеседникам) выполняется только
    * после успешной записи, иначе разосланное и сохранённое разъедутся.
+   *
+   * v4.32.808: имя без слова «приватность». Правило не про приватность, а про
+   * любой переключатель этого экрана, и остальные пятнадцать жили мимо него —
+   * см. applyKvPref ниже.
    */
-  const applyPrivacyPref = useCallback(
+  const applyPref = useCallback(
     async (write: () => Promise<boolean>, revert: () => void): Promise<boolean> => {
       let ok = false;
       try {
         ok = await write();
       } catch (e) {
-        log.warn('privacy_pref_apply_failed', { err: rawErrorText(e) });
+        log.warn('settings_pref_apply_failed', { err: rawErrorText(e) });
       }
       if (!ok) {
         revert();
@@ -535,6 +539,28 @@ function SettingsScreenImpl({
       return ok;
     },
     [],
+  );
+
+  /**
+   * То же для настроек, лежащих в kv простым значением (v4.32.808).
+   *
+   * Пятнадцать переключателей писались через `void kvSet(...)`. `kvSet` гасит
+   * свой отказ и возвращает void — то есть отказ базы не терялся даже, его
+   * неоткуда было взять. Человек видел выбранное положение, за которым на
+   * диске ничего нет, и узнавал об этом при следующем запуске, если узнавал
+   * вообще.
+   *
+   * Цена у каждого своя, и у некоторых она прямая: «Блокировать при выходе»
+   * и задержка блокировки — это защита переписки на потерянном телефоне;
+   * «Тихие часы» и звук — то, чем будильник среди ночи отличается от тишины.
+   * Общего у них одно: положение на экране обязано совпадать с тем, что
+   * переживёт перезапуск.
+   */
+  const applyKvPref = useCallback(
+    (key: string, value: string, revert: () => void): void => {
+      void applyPref(() => kvSetChecked(key, value), revert);
+    },
+    [applyPref],
   );
 
   /**
@@ -1460,7 +1486,7 @@ function SettingsScreenImpl({
                 const prev = lastSeenVisibility;
                 setLastSeenVisibility(val);
                 setMyLastSeenVisibility(val);
-                void applyPrivacyPref(
+                void applyPref(
                   () => privacyPrefSet('privacy_last_seen_visibility', val),
                   () => { setLastSeenVisibility(prev); setMyLastSeenVisibility(prev); },
                 ).then((ok) => { if (ok) return broadcastLastSeenPref(); });
@@ -1503,7 +1529,7 @@ function SettingsScreenImpl({
                 setAvatarVisibilityState(val);
                 // Новую карточку разошлём сразу: иначе выбор «Никто» вступал бы
                 // в силу только при следующей правке профиля.
-                void applyPrivacyPref(
+                void applyPref(
                   () => setAvatarVisibility(val),
                   () => setAvatarVisibilityState(prev),
                 ).then((ok) => { if (ok) return broadcastMyProfile(); });
@@ -1527,21 +1553,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Сообщения только от контактов</Text>
             <Text style={styles.desc}>Незнакомцы не смогут написать вам</Text>
           </View>
-          <AppSwitch value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void applyPrivacyPref(() => privacyPrefSet('privacy_only_contacts_msg', String(v)), () => setOnlyContactsCanMsg(!v)); }} />
+          <AppSwitch value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_msg', String(v)), () => setOnlyContactsCanMsg(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Добавление в группы — только контакты</Text>
             <Text style={styles.desc}>Незнакомцы не смогут добавить вас в группу</Text>
           </View>
-          <AppSwitch value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void applyPrivacyPref(() => privacyPrefSet('privacy_only_contacts_group', String(v)), () => setOnlyContactsCanAddToGroup(!v)); }} />
+          <AppSwitch value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_group', String(v)), () => setOnlyContactsCanAddToGroup(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Не отправлять уведомления о прочтении</Text>
             <Text style={styles.desc}>Отправители не будут видеть, что вы прочли их сообщения</Text>
           </View>
-          <AppSwitch value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void applyPrivacyPref(() => privacyPrefSet('privacy_disable_read_receipts', String(v)), () => setDisableReadReceipts(!v)); }} />
+          <AppSwitch value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void applyPref(() => privacyPrefSet('privacy_disable_read_receipts', String(v)), () => setDisableReadReceipts(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
@@ -1555,14 +1581,14 @@ function SettingsScreenImpl({
             */}
             <Text style={styles.desc}>Включено: приложение само открывает чужую ссылку, чтобы показать заголовок и картинку, — и хозяин ссылки узнаёт ваш IP-адрес. Выключено: не открывает. Свои ссылки в поле ввода показываются всегда</Text>
           </View>
-          <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void applyPrivacyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v)); }} />
+          <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void applyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Облачный перевод</Text>
             <Text style={styles.desc}>Выключено: перевод не работает, зато текст не покидает устройство. Включённый отправляет переводимое сообщение на сторонний сервис api.mymemory.translated.net в открытом виде — шифрование до него не доходит. Решение своё у каждого аккаунта</Text>
           </View>
-          <AppSwitch value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void applyPrivacyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v)); }} />
+          <AppSwitch value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void applyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v)); }} />
         </View>
       </View>
 
@@ -1606,21 +1632,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Личные сообщения</Text>
             <Text style={styles.desc}>Уведомлять о новых сообщениях</Text>
           </View>
-          <AppSwitch value={notifyDm} onValueChange={(v) => { setNotifyDm(v); void kvSet('notify_dm', String(v)); }} />
+          <AppSwitch value={notifyDm} onValueChange={(v) => { setNotifyDm(v); applyKvPref('notify_dm', String(v), () => setNotifyDm(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Группы и каналы</Text>
             <Text style={styles.desc}>Уведомлять о новых сообщениях в группах</Text>
           </View>
-          <AppSwitch value={notifyGroups} onValueChange={(v) => { setNotifyGroups(v); void kvSet('notify_groups', String(v)); }} />
+          <AppSwitch value={notifyGroups} onValueChange={(v) => { setNotifyGroups(v); applyKvPref('notify_groups', String(v), () => setNotifyGroups(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Звонки</Text>
             <Text style={styles.desc}>Показывать входящий звонок при закрытом приложении</Text>
           </View>
-          <AppSwitch value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); void kvSet('notify_calls', String(v)); }} />
+          <AppSwitch value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); applyKvPref('notify_calls', String(v), () => setNotifyCalls(!v)); }} />
         </View>
         {Platform.OS === 'ios' ? (
           <View style={styles.switchRow}>
@@ -1632,8 +1658,14 @@ function SettingsScreenImpl({
               value={bgKeepalive}
               onValueChange={(v) => {
                 setBgKeepalive(v);
-                void kvSet(KEEPALIVE_KEY, String(v));
                 setBackgroundKeepaliveEnabled(v);
+                // Откат возвращает и работу, а не только вид: иначе связь в
+                // фоне осталась бы включённой при выключенном переключателе и
+                // до первого перезапуска тратила бы батарею без спроса.
+                applyKvPref(KEEPALIVE_KEY, String(v), () => {
+                  setBgKeepalive(!v);
+                  setBackgroundKeepaliveEnabled(!v);
+                });
               }}
             />
           </View>
@@ -1675,14 +1707,14 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Лента</Text>
             <Text style={styles.desc}>Уведомлять о новых публикациях контактов</Text>
           </View>
-          <AppSwitch value={notifyFeed} onValueChange={(v) => { setNotifyFeed(v); void kvSet('notify_feed', String(v)); }} />
+          <AppSwitch value={notifyFeed} onValueChange={(v) => { setNotifyFeed(v); applyKvPref('notify_feed', String(v), () => setNotifyFeed(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Упоминания (@имя)</Text>
             <Text style={styles.desc}>Отдельное уведомление при упоминании в группе</Text>
           </View>
-          <AppSwitch value={notifyMentions} onValueChange={(v) => { setNotifyMentions(v); void kvSet('notify_mentions', String(v)); }} />
+          <AppSwitch value={notifyMentions} onValueChange={(v) => { setNotifyMentions(v); applyKvPref('notify_mentions', String(v), () => setNotifyMentions(!v)); }} />
         </View>
       </View>
 
@@ -1693,21 +1725,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Показывать содержимое</Text>
             <Text style={styles.desc}>Текст сообщений в уведомлениях</Text>
           </View>
-          <AppSwitch value={notifyPreview} onValueChange={(v) => { setNotifyPreview(v); void kvSet('notify_preview', String(v)); }} />
+          <AppSwitch value={notifyPreview} onValueChange={(v) => { setNotifyPreview(v); applyKvPref('notify_preview', String(v), () => setNotifyPreview(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Вибрация</Text>
             <Text style={styles.desc}>Вибросигнал при получении уведомления</Text>
           </View>
-          <AppSwitch value={notifyVibrate} onValueChange={(v) => { setNotifyVibrate(v); void kvSet('notify_vibrate', String(v)); }} />
+          <AppSwitch value={notifyVibrate} onValueChange={(v) => { setNotifyVibrate(v); applyKvPref('notify_vibrate', String(v), () => setNotifyVibrate(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Звук уведомления</Text>
             <Text style={styles.desc}>Воспроизводить звук при новом сообщении</Text>
           </View>
-          <AppSwitch value={notifySound} onValueChange={(v) => { setNotifySound(v); void kvSet('notify_sound', String(v)); }} />
+          <AppSwitch value={notifySound} onValueChange={(v) => { setNotifySound(v); applyKvPref('notify_sound', String(v), () => setNotifySound(!v)); }} />
         </View>
       </View>
 
@@ -1720,7 +1752,7 @@ function SettingsScreenImpl({
           </View>
           <AppSwitch
             value={dndEnabled}
-            onValueChange={(v) => { setDndEnabled(v); void kvSet('dnd_enabled', String(v)); }}
+            onValueChange={(v) => { setDndEnabled(v); applyKvPref('dnd_enabled', String(v), () => setDndEnabled(!v)); }}
           />
         </View>
         {dndEnabled ? (
@@ -1878,7 +1910,7 @@ function SettingsScreenImpl({
           {([['always', 'Всегда'], ['wifi', 'Wi-Fi'], ['never', 'Никогда']] as const).map(([val, label]) => {
             const active = autoDownload === val;
             return (
-              <AppPressable key={val} style={[styles.themeBtn, active && styles.themeBtnActive, { flex: 1 }]} onPress={() => { setAutoDownload(val); void kvSet('auto_download_media', val); }}>
+              <AppPressable key={val} style={[styles.themeBtn, active && styles.themeBtnActive, { flex: 1 }]} onPress={() => { const prev = autoDownload; setAutoDownload(val); applyKvPref('auto_download_media', val, () => setAutoDownload(prev)); }}>
                 <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive]}>{label}</Text>
               </AppPressable>
             );
@@ -2081,7 +2113,7 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Блокировать при выходе</Text>
             <Text style={styles.desc}>Требовать пароль при следующем открытии</Text>
           </View>
-          <AppSwitch value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); void kvSet('auto_lock_on_exit', String(v)); }} />
+          <AppSwitch value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); applyKvPref('auto_lock_on_exit', String(v), () => setAutoLockEnabled(!v)); }} />
         </View>
         {autoLockEnabled ? (
           <View style={[styles.switchRow, styles.switchRowLast]}>
@@ -2094,7 +2126,7 @@ function SettingsScreenImpl({
                 const active = autoLockDelayMs === ms;
                 return (
                   <AppPressable key={ms}
-                    onPress={() => { setAutoLockDelayMs(ms); void kvSet('auto_lock_delay_ms', String(ms)); }}
+                    onPress={() => { const prev = autoLockDelayMs; setAutoLockDelayMs(ms); applyKvPref('auto_lock_delay_ms', String(ms), () => setAutoLockDelayMs(prev)); }}
                     style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.lg, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
                   >
                     <Text style={{ color: active ? primaryOn : colors.text, fontSize: scaleFont(12), fontWeight: '600' }}>{label}</Text>
@@ -2820,8 +2852,8 @@ function SettingsScreenImpl({
               />
             </View>
             <AppPressable style={styles.pwdPrimaryBtn} onPress={() => {
-              if (dndTimeModal === 'start') { setDndStart(dndTimeTmp); void kvSet('dnd_start', String(dndTimeTmp)); }
-              else { setDndEnd(dndTimeTmp); void kvSet('dnd_end', String(dndTimeTmp)); }
+              if (dndTimeModal === 'start') { const prev = dndStart; setDndStart(dndTimeTmp); applyKvPref('dnd_start', String(dndTimeTmp), () => setDndStart(prev)); }
+              else { const prev = dndEnd; setDndEnd(dndTimeTmp); applyKvPref('dnd_end', String(dndTimeTmp), () => setDndEnd(prev)); }
               setDndTimeModal(null);
             }}>
               <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>

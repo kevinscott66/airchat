@@ -135,16 +135,22 @@ describe('экран настроек: переключатель возвращ
 
   it('есть общее правило с откатом и сообщением', () => {
     const s = screen();
-    expect(s).toContain('const applyPrivacyPref = useCallback(');
+    // v4.32.808: правило переименовано в applyPref — оно не про приватность,
+    // а про любой переключатель этого экрана; см. linkPreviewPref807 и 808.
+    expect(s).toContain('const applyPref = useCallback(');
     expect(s).toContain('        revert();');
     expect(s).toContain("        showError('Настройка не сохранилась. Попробуйте ещё раз.');");
+    expect(s).not.toContain('applyPrivacyPref');
   });
 
-  it('все семь переключателей идут через него', () => {
+  it('все семь решений о приватности идут через него', () => {
     const s = screen();
-    // Седьмой — предпросмотр входящих ссылок (v4.32.807). Он писался через
+    // Седьмое — предпросмотр входящих ссылок (v4.32.807). Оно писалось через
     // kvSet, то есть мимо и общего правила, и namespace аккаунта.
-    expect((s.match(/applyPrivacyPref\(/g) ?? []).length).toBe(7);
+    // Восемь вхождений: семь переключателей и сам applyKvPref, написанный
+    // поверх того же правила для настроек без namespace (v4.32.808).
+    expect((s.match(/void applyPref\(/g) ?? []).length).toBe(8);
+    expect((s.match(/void applyPref\(\(\) => privacyPrefSet/g) ?? []).length).toBe(4);
     for (const gone of [
       'void kvSet(LINK_PREVIEW_INCOMING_KEY, String(v)); }',
       "void privacyPrefSet('privacy_only_contacts_msg', String(v)); }",
