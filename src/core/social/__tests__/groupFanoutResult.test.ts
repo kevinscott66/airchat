@@ -107,7 +107,8 @@ describe('итог групповой рассылки различает отк
     expect(insert).toBeGreaterThan(noRecipient);
     // «никто не получил» не удаляет строку сразу, а откладывает до следующего тика
     const window = code.slice(noRecipient, noRecipient + 20).join('\n');
-    expect(window).toContain('ABANDON_AFTER_MS');
+    // v4.32.835: правило то же, мера другая — попытки вместо часов.
+    expect(window).toContain('ABANDON_AFTER_ATTEMPTS');
     expect(window).toContain('continue;');
   });
 
@@ -126,10 +127,13 @@ describe('итог групповой рассылки различает отк
     );
   });
 
-  it('срок отказа от попыток записан одним правилом', () => {
-    expect((scheduler.match(/15 \* 60_000/g) ?? []).length).toBe(1);
-    expect(scheduler).toContain('const ABANDON_AFTER_MS = 15 * 60_000;');
-    expect((scheduler.match(/ABANDON_AFTER_MS/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  it('запас попыток записан одним правилом', () => {
+    // v4.32.835: мерой были часы с назначенного времени, а часы шли и при
+    // закрытом приложении — см. scheduledAttempts835.test.ts. Числа `15 *
+    // 60_000` в коде больше нет: считаются попытки.
+    expect((scheduler.match(/15 \* 60_000/g) ?? []).length).toBe(0);
+    expect(scheduler).toContain('const ABANDON_AFTER_ATTEMPTS = 30;');
+    expect((scheduler.match(/ABANDON_AFTER_ATTEMPTS/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 
   it('проверки ловят прежний вид кода (не вакуумны)', () => {

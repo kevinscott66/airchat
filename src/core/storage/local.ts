@@ -433,7 +433,10 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       media_cids TEXT,
       send_at INTEGER NOT NULL,
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      -- v4.32.835: сколько раз отправку правда пробовали. До этого столбца мерой
+      -- служил возраст строки, а возраст рос и когда приложение было закрыто.
+      attempts INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages (send_at ASC);
 
@@ -1201,6 +1204,12 @@ async function ensureScheduledGroupIdColumn(database: SQLite.SQLiteDatabase): Pr
     }
     if (!cols.some((c) => c.name === 'sender_name')) {
       await database.execAsync('ALTER TABLE scheduled_messages ADD COLUMN sender_name TEXT');
+    }
+    // v4.32.835: счётчик попыток. Уже лежащие строки получают 0 — то есть полный
+    // запас попыток заново, и это правильно: сколько их было потрачено до
+    // миграции, не знает никто, а ошибиться тут можно только в сторону потери.
+    if (!cols.some((c) => c.name === 'attempts')) {
+      await database.execAsync('ALTER TABLE scheduled_messages ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
     }
   } catch (e) {
     log.warn('scheduled_group_id_column_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -9419,6 +9428,13 @@ export type ScheduledMessage = {
    * базу то, что им дали открытым текстом.
    */
   readState?: ScheduledReadState;
+  /**
+   * Сколько раз отправку этой строки уже пробовали (v4.32.835).
+   *
+   * Заполняется только на чтении; пишущим не нужно — у новой строки попыток
+   * ноль по определению, и столбец берёт значение по умолчанию.
+   */
+  attempts?: number;
 };
 
 /**
@@ -9445,7 +9461,7 @@ export async function insertScheduledMessage(row: ScheduledMessage): Promise<voi
 function rowToScheduled(r: {
   id: string; contact_pub_b64: string; text: string; media_cids: string | null;
   send_at: number; owner_profile_id: number; created_at: number;
-  group_id?: string | null; sender_name?: string | null;
+  group_id?: string | null; sender_name?: string | null; attempts?: number | null;
 }, dek: Uint8Array): ScheduledMessage {
   // v4.32.565: читаем состоянием, а не строкой. `decryptAtRestString` отдаёт
   // на неудаче пустую строку, и планировщик отправлял её как настоящий текст:
@@ -9463,6 +9479,8 @@ function rowToScheduled(r: {
     sendAt: r.send_at,
     ownerProfileId: r.owner_profile_id,
     createdAt: r.created_at,
+    // Строка, пережившая миграцию, приходит без столбца — это ноль попыток.
+    attempts: r.attempts ?? 0,
     groupId: r.group_id ?? null,
     // Строка без префикса enc2: — ещё не переведённая; readAtRestCell
     // возвращает её как есть (см. ensureScheduledSenderNameEncrypted).
@@ -9478,7 +9496,7 @@ export async function listDueScheduledMessages(ownerProfileId: number): Promise<
   const rows = await d.getAllAsync<{
     id: string; contact_pub_b64: string; text: string; media_cids: string | null;
     send_at: number; owner_profile_id: number; created_at: number;
-    group_id: string | null; sender_name: string | null;
+    group_id: string | null; sender_name: string | null; attempts: number | null;
   }>(
     'SELECT * FROM scheduled_messages WHERE owner_profile_id = ? AND send_at <= ? ORDER BY send_at ASC',
     [ownerProfileId, Date.now()]
@@ -9492,7 +9510,7 @@ export async function listAllScheduledMessages(ownerProfileId: number): Promise<
   const rows = await d.getAllAsync<{
     id: string; contact_pub_b64: string; text: string; media_cids: string | null;
     send_at: number; owner_profile_id: number; created_at: number;
-    group_id: string | null; sender_name: string | null;
+    group_id: string | null; sender_name: string | null; attempts: number | null;
   }>(
     'SELECT * FROM scheduled_messages WHERE owner_profile_id = ? ORDER BY send_at ASC',
     [ownerProfileId]
@@ -9506,7 +9524,7 @@ export async function listGroupScheduledMessages(groupId: string, ownerProfileId
   const rows = await d.getAllAsync<{
     id: string; contact_pub_b64: string; text: string; media_cids: string | null;
     send_at: number; owner_profile_id: number; created_at: number;
-    group_id: string | null; sender_name: string | null;
+    group_id: string | null; sender_name: string | null; attempts: number | null;
   }>(
     'SELECT * FROM scheduled_messages WHERE group_id = ? AND owner_profile_id = ? ORDER BY send_at ASC',
     [groupId, ownerProfileId]
@@ -9519,6 +9537,33 @@ export async function deleteScheduledMessage(id: string, ownerProfileId?: number
   const d = await db();
   const pid = ownerProfileId ?? (await import('../identity/profileManager')).profileManager.getActiveProfile()?.id ?? 1;
   await d.runAsync('DELETE FROM scheduled_messages WHERE id = ? AND owner_profile_id = ?', [id, pid]);
+}
+
+/**
+ * Отметить очередную попытку отправки отложенного сообщения (v4.32.835).
+ *
+ * Отвечает, легла ли отметка. Бросать отсюда нельзя: это бухгалтерия, и
+ * отменять из-за её отказа саму отправку было бы хуже, чем потерять счёт
+ * попыткам. Отказ значит, что запас попыток в этот раз не убыл, — но если база
+ * не принимает запись, то и снять строку после отправки ей будет нечем, так
+ * что хуже от этого никому.
+ */
+export async function bumpScheduledAttemptChecked(
+  id: string,
+  ownerProfileId: number,
+  attempts: number
+): Promise<boolean> {
+  try {
+    const d = await db();
+    await d.runAsync(
+      'UPDATE scheduled_messages SET attempts = ? WHERE id = ? AND owner_profile_id = ?',
+      [attempts, id, ownerProfileId]
+    );
+    return true;
+  } catch (e) {
+    log.warn('scheduled_attempt_bump_failed', { id: id.slice(0, 8), err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
 }
 
 // ─── Starred messages ─────────────────────────────────────────────────────────

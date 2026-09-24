@@ -99,14 +99,15 @@ describe('потерянное отложенное сообщение назв�
 describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы целы', () => {
   it('число удалений строки расписания не изменилось', () => {
     const flush = FLUSH();
-    // v4.32.782: седьмое — снятие строки, чья своя копия не легла за ABANDON_AFTER_MS.
+    // v4.32.782: седьмое — снятие строки, чья своя копия не легла за отпущенные попытки.
     expect(countOf(flush, 'deleteScheduledMessage(msg.id, pid)')).toBe(7);
     expect(codeOnly(flush)).not.toContain('deleteScheduledMessage(msg.id)');
   });
 
-  it('срок отказа и обе ветки удержания на месте', () => {
+  it('запас попыток и обе ветки удержания на месте', () => {
     const flush = codeOnly(FLUSH());
-    expect(flush).toContain('const ABANDON_AFTER_MS = 15 * 60_000;');
+    // v4.32.835: часы с назначенного времени заменены счётом попыток.
+    expect(flush).toContain('const ABANDON_AFTER_ATTEMPTS = 30;');
     expect(flush).toContain("log.info('scheduled_group_message_retry', {");
     expect(flush).toContain("log.info('scheduled_message_deferred_rate_limit', { id: msg.id.slice(0, 8) });");
     expect(flush).toContain("log.info('scheduled_message_blocked_drop', { id: msg.id.slice(0, 8) });");

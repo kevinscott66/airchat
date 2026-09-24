@@ -14,6 +14,7 @@ import {
   insertGroupMessageWithTouch,
   listDueScheduledMessages,
   deleteScheduledMessage,
+  bumpScheduledAttemptChecked,
 } from '../storage/local';
 import { fanoutGroupMessage } from './groupMessaging';
 import { groupSendProblem } from './groupSendOutcome';
@@ -26,15 +27,26 @@ import { getOwnDisplayNameFor } from '../identity/ownProfile';
 
 const POLL_INTERVAL_MS = 30_000;
 /**
- * Сколько ждать, прежде чем бросить попытки (v4.32.440).
+ * Сколько раз пробовать, прежде чем бросить (v4.32.440, переписано в v4.32.835).
  *
- * Столбца «сколько раз пробовали» в таблице нет, поэтому мерой служит возраст:
- * прошло больше этого срока с назначенного времени — строку снимаем, иначе
- * неудачная отправка билась бы в отказ каждые полминуты бесконечно. Правило
- * одно и живёт здесь: раньше срок стоял числом внутри catch, а ветка «никто
- * не получил» о нём не знала.
+ * Дефект. Мерой служил возраст: `Date.now() - msg.sendAt` больше пятнадцати
+ * минут — строку снимаем. Возраст этот рос всегда, а пробовали отправить
+ * только когда приложение открыто. Сообщение, назначенное на ночь, к утру
+ * оказывалось «старым» на девять часов, и ПЕРВАЯ же его попытка — та самая,
+ * что случается через полминуты после запуска, когда служба обмена ещё
+ * поднимается, а сеть ещё в режиме только-из-кэша и `requireOnlineWrite`
+ * бросает, — сразу перешагивала срок. Строку снимали вместе с текстом (своей
+ * копии у отложенного сообщения нет нигде) и говорили «связи не было слишком
+ * долго» про попытку, которой не было ни одной. Чем дольше человек откладывал
+ * сообщение и чем дольше не открывал приложение, тем вернее оно пропадало.
+ *
+ * Правка. В таблице теперь есть столбец `attempts`, которого не было в
+ * v4.32.440, — считаем попытки, а не часы. Тридцать попыток по тику раз в
+ * полминуты — это те же пятнадцать минут для приложения, которое всё это
+ * время работает, и ровно тридцать честных попыток для того, которое
+ * открывают дважды в день. Правило по-прежнему одно на все три ветки.
  */
-const ABANDON_AFTER_MS = 15 * 60_000;
+const ABANDON_AFTER_ATTEMPTS = 30;
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let flushing = false;
@@ -212,6 +224,11 @@ async function flushDueOnce(): Promise<void> {
       log.info('scheduled_flush_profile_switched_abort', { pid });
       break;
     }
+    // v4.32.835: номер этой попытки. Объявлен до `try`, потому что нужен и
+    // ловушке внизу. Сама отметка ложится ниже, перед отправкой: ветки
+    // «строка не прочиталась» и «часовой лимит выбран» уходят раньше, и
+    // тратить на них попытку не за что — отправлять там никто не пробовал.
+    const attempt = (msg.attempts ?? 0) + 1;
     try {
       // v4.32.565: сначала — прочиталась ли строка. Проверка стоит выше всех
       // остальных сознательно: каждая ветка ниже либо отправляет, либо
@@ -265,6 +282,10 @@ async function flushDueOnce(): Promise<void> {
           log.warn('scheduled_media_malformed_drop', { id: msg.id.slice(0, 8) });
         }
       }
+      // Отсюда и ниже отправка правда пробуется — значит, попытка потрачена.
+      // Отметку кладём ДО отправки: упасть она может как раз на отправке, и
+      // попытка, о которой никто не записал, повторялась бы вечно.
+      await bumpScheduledAttemptChecked(msg.id, pid, attempt);
       if (msg.groupId) {
         // Group scheduled message — fanout to all members
         const msgId = msg.id;
@@ -321,13 +342,12 @@ async function flushDueOnce(): Promise<void> {
         //   служба обмена пропала между проверкой в начале прохода и рассылкой;
         //   отправка КАЖДОМУ участнику бросила исключение.
         // В обоих сообщение не ушло никому, поэтому строка остаётся до
-        // следующего тика — но не дольше ABANDON_AFTER_MS.
+        // следующего тика — но не дольше ABANDON_AFTER_ATTEMPTS.
         if (problem) {
-          const staleMs = Date.now() - msg.sendAt;
-          if (staleMs > ABANDON_AFTER_MS) {
+          if (attempt >= ABANDON_AFTER_ATTEMPTS) {
             await deleteScheduledMessage(msg.id, pid);
             log.warn('scheduled_group_message_abandoned', {
-              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), ageMs: staleMs,
+              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), attempt,
             });
             reportScheduledLost(
               'SCHEDULED_NOT_SENT',
@@ -390,17 +410,16 @@ async function flushDueOnce(): Promise<void> {
            * `INSERT OR IGNORE` и отвечает `'duplicate'`, не поднимая ни
            * счётчиков, ни уведомлений. Дороже молча потерять текст.
            *
-           * Срок тот же, что у «никто не получил»: полчаса отказов базы — это
-           * уже не заминка, и дальше держать строку значит биться в неё
+           * Запас тот же, что у «никто не получил»: тридцать отказов базы —
+           * это уже не заминка, и дальше держать строку значит биться в неё
            * каждые полминуты без конца. Слова о потере здесь другие: сообщение
            * группа ПОЛУЧИЛА, и советовать набрать его заново нельзя — человек
            * напишет то же самое дважды.
            */
-          const staleMs = Date.now() - msg.sendAt;
-          if (staleMs > ABANDON_AFTER_MS) {
+          if (attempt >= ABANDON_AFTER_ATTEMPTS) {
             await deleteScheduledMessage(msg.id, pid);
             log.warn('scheduled_group_own_row_abandoned', {
-              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), ageMs: staleMs,
+              id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), attempt,
             });
             reportScheduledLost(
               'SCHEDULED_SENT_NOT_SAVED',
@@ -459,12 +478,14 @@ async function flushDueOnce(): Promise<void> {
         id: msg.id.slice(0, 8),
         err: e instanceof Error ? e.message : String(e),
       });
-      // v4.32.171: не биться в мёртвого получателя бесконечно — см. ABANDON_AFTER_MS.
-      const ageMs = Date.now() - msg.sendAt;
-      if (ageMs > ABANDON_AFTER_MS) {
+      // v4.32.171: не биться в мёртвого получателя бесконечно — см.
+      // ABANDON_AFTER_ATTEMPTS. Сюда же приходит отказ `requireOnlineWrite` в
+      // режиме только-из-кэша — то есть обычное «сети пока нет», и до
+      // v4.32.835 оно и стирало ночные сообщения первым же утренним тиком.
+      if (attempt >= ABANDON_AFTER_ATTEMPTS) {
         try {
           await deleteScheduledMessage(msg.id, pid);
-          log.warn('scheduled_message_abandoned', { id: msg.id.slice(0, 8), ageMs });
+          log.warn('scheduled_message_abandoned', { id: msg.id.slice(0, 8), attempt });
           reportScheduledLost(
             'SCHEDULED_NOT_SENT',
             'Отложенное сообщение не отправлено: связи не было слишком долго. Наберите его заново.'

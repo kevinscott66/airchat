@@ -97,14 +97,13 @@ describe('не легла — строка расписания остаётся
     expect(after).not.toContain('deleteScheduledMessage(');
   });
 
-  it('дольше ABANDON_AFTER_MS не держим: снимаем и говорим вслух', () => {
+  it('дольше ABANDON_AFTER_ATTEMPTS не держим: снимаем и говорим вслух', () => {
+    // v4.32.835: мерой был возраст строки; теперь — число потраченных попыток.
     const block = ownCopy();
-    const stale = block.indexOf('const staleMs = Date.now() - msg.sendAt;');
-    const gate = block.indexOf('if (staleMs > ABANDON_AFTER_MS) {', stale);
+    const gate = block.indexOf('if (attempt >= ABANDON_AFTER_ATTEMPTS) {');
     const del = block.indexOf('await deleteScheduledMessage(msg.id, pid);', gate);
     const rep = block.indexOf('reportScheduledLost(', del);
-    expect(stale).toBeGreaterThan(0);
-    expect(gate).toBeGreaterThan(stale);
+    expect(gate).toBeGreaterThan(0);
     expect(del).toBeGreaterThan(gate);
     // Отчёт после удаления, а не вместо него — правило v4.32.709.
     expect(rep).toBeGreaterThan(del);
