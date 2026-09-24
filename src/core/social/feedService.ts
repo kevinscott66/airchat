@@ -2978,18 +2978,20 @@ async function applyFeedEnvelope(
       });
       // Сохранить сам base64 отдельно (для рендера). TODO v4.32.25: отдельная таблица feed_media.
       // Пока кладём в kvStore по ключу inline:<postId>:<i>.
+      //
+      // v4.32.823: отказ записи здесь проходящий — kvSetInlineAttachment
+      // отвечает `false` на занятую базу и на недоступный DEK, то есть на
+      // заминку, а не на негодные байты (негодные отсеяла sanitizeInlineMedia
+      // выше). Поэтому счёт неудач ведётся, и кадр после него откладывается.
+      let unwritten = 0;
       for (let i = 0; i < inlineMedia.media.length; i++) {
-        // Отказ записи здесь не отменяет пост: текст уже сохранён, а место
-        // фотографии останется пустым (resolveFeedMediaUri отдаёт на такую
-        // ссылку пустую строку). Но узнать о нём надо: раньше kvSet гасил
-        // ошибку молча, и «пустая картинка у контакта» не имела следа.
-        //
         // v4.32.735: прежде здесь было написано, что ссылку «потом подчистит
         // reconcileOrphanInlineMedia». Она этого не делала — она удаляла пост
         // целиком, вместе с текстом и уцелевшими снимками, и принятую от
         // контакта публикацию вернуть после этого было нечем. Теперь уборка
         // трогает только свои посты, см. InlinePostRef.own.
         if (!(await kvSetInlineAttachment(`feed_inline_media:${payload.postId}:${i}`, inlineMedia.media[i]))) {
+          unwritten += 1;
           log.warn('feed_inline_media_receive_save_failed', {
             postId: payload.postId.slice(0, 24),
             idx: i,
@@ -3001,12 +3003,31 @@ async function applyFeedEnvelope(
       // же лёг в строку поста, и разъехаться они теперь не могут.
       for (let i = 0; i < inlineDocs.data.length; i++) {
         if (!(await kvSetInlineAttachment(`feed_inline_doc:${payload.postId}:${i}`, inlineDocs.data[i]))) {
+          unwritten += 1;
           log.warn('feed_inline_doc_receive_save_failed', {
             postId: payload.postId.slice(0, 24),
             idx: i,
             err: 'kv_write_failed',
           });
         }
+      }
+      // v4.32.823: хоть одно вложение не легло — кадр не разобран.
+      //
+      // Строка поста уже записана, и это нарочно: ссылка `inline:` без байтов
+      // показывает пустое место, но текст и уцелевшие снимки человек видит
+      // сразу. Повтор кадра перезапишет и строку, и все байты по тем же
+      // ключам, так что дубля не будет, а postWriteGuard пропустит его как
+      // своего — автор тот же. Без отсрочки пустое место оставалось НАВСЕГДА:
+      // публикацию второй раз не присылают, а уборка чужих постов их не
+      // трогает.
+      if (unwritten > 0) {
+        log.warn('feed_post_inline_unwritten', {
+          postId: payload.postId.slice(0, 24),
+          unwritten,
+          mediaN: inlineMedia.media.length,
+          docsN: inlineDocs.data.length,
+        });
+        return 'deferred';
       }
       // v4.32.615: публикация появилась — применить всё, что её ждало.
       await drainDeferred(payload.postId, s, envelopePid);
@@ -3586,6 +3607,10 @@ export async function receiveFeedEnvelope(
       // v4.32.783: событие некуда было ни применить, ни отложить. Метку
       // «докуда прочитано» двигать нельзя — ретранслятор хранит конверт ещё
       // тридцать суток, и это единственный способ получить его снова.
+      //
+      // v4.32.823: тем же словом отвечает публикация, у которой не легло
+      // вложение; причину в этом случае называет `feed_post_inline_unwritten`
+      // строкой выше.
       feedSeenForget(dedupKey);
       log.warn('feed_envelope_shelf_failed', { type: payload.type });
       return 'deferred';
