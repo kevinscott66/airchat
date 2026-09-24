@@ -86,6 +86,7 @@ import {
   setDefaultDisappearMs,
 } from '../../core/storage/defaultDisappear';
 import { exportDialogBackupToFile, importDialogBackupJson } from '../../core/storage/dialogBackup';
+import { dialogBackupReport } from '../../core/storage/dialogBackupReport';
 import { clearCacheFiles } from '../../core/media/cacheFiles';
 // v4.32.311: переключатели приватности — свои у каждого аккаунта, см. privacyPrefs.
 import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs';
@@ -1166,11 +1167,17 @@ function SettingsScreenImpl({
       const uri = result.assets[0]?.uri;
       if (!uri) { showError('Файл резервной копии не выбран'); return; }
       const raw = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
-      const restored = await importDialogBackupJson(raw);
-      if (restored > 0) {
-        showSuccess(`Восстановлено сообщений: ${restored}. Перезапустите приложение.`);
+      const outcome = await importDialogBackupJson(raw);
+      const said = dialogBackupReport(outcome);
+      if (said.ok) {
+        showSuccess(said.text);
+      } else if (outcome.refused) {
+        showError(said.text);
       } else {
-        showError('Копия не импортирована: проверьте секретные слова и убедитесь, что история на этом устройстве пуста.');
+        // Частичный импорт: часть шагов не прошла. Всплывающей подсказки тут
+        // мало — повторить импорт в эту историю уже не дадут, и если человек
+        // сейчас не сохранит файл копии, восстанавливать группы будет нечем.
+        Alert.alert('История восстановлена не полностью', said.text);
       }
     } catch (e) {
       showError(userErrorText(e, 'Не удалось импортировать историю'));

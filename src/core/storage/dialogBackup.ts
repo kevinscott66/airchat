@@ -27,6 +27,8 @@ import {
 import { rateLimiter } from '../security/rateLimiter';
 import { dialogKvSnapshotHasBlockList } from './kvKeys';
 import { RAW_CHAT_MESSAGE_MAX_ROWS } from './chatMessageBackup';
+import { dialogBackupRefused } from './dialogBackupReport';
+import type { DialogBackupImportResult, DialogBackupStep } from './dialogBackupReport';
 import {
   GROUP_MAX_ROWS,
   GROUP_MEMBER_MAX_ROWS,
@@ -311,11 +313,19 @@ const DIALOG_BACKUP_MAX_BYTES = 80 * 1024 * 1024;
  * Импорт разрешён только в пустую локальную историю, чтобы не смешать два
  * набора сообщений и не перезаписать существующие строки.
  *
- * @returns число импортированных сообщений — личных и групповых вместе
+ * v4.32.844: отвечает разбором, а не одним числом. Ноль возвращался на десять
+ * разных исходов подряд — и экран на каждый из них печатал «проверьте секретные
+ * слова и убедитесь, что история пуста», что правда ровно в двух случаях из
+ * десяти. Ещё хуже читался успех: список упавших шагов уходил только в журнал,
+ * а человеку говорили «Восстановлено сообщений: N» — в тот самый момент, когда
+ * группы терялись навсегда (повтор упрётся в `existing > 0`, а локальный файл —
+ * единственное, чем группа восстанавливается вообще).
+ *
+ * @returns что восстановлено, что не прошло и почему отказано
  */
-export async function importDialogBackupJson(raw: string): Promise<number> {
+export async function importDialogBackupJson(raw: string): Promise<DialogBackupImportResult> {
   const expectedPub = await getPrimaryWalletPubKeyB64();
-  if (!expectedPub) return 0;
+  if (!expectedPub) return dialogBackupRefused('no_wallet');
   const pid = activeProfileId();
   const existing = await countChatMessages(pid);
   // v4.32.717: «база не ответила» больше не читается как «история пуста».
@@ -327,15 +337,15 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
   // ответе держим импорт: лучше не восстановить, чем затереть.
   if (existing === null) {
     log.warn('dialog_backup_hold_unknown_db_size');
-    return 0;
+    return dialogBackupRefused('db_unreadable');
   }
   if (existing > 0) {
     log.debug('dialog_backup_skip_nonempty_db', { existing });
-    return 0;
+    return dialogBackupRefused('db_not_empty');
   }
   if (typeof raw !== 'string' || raw.length > DIALOG_BACKUP_MAX_BYTES) {
     log.warn('dialog_backup_oversize', { bytes: typeof raw === 'string' ? raw.length : -1 });
-    return 0;
+    return dialogBackupRefused('file_oversize');
   }
   try {
     const data = JSON.parse(raw) as DialogBackupFileV1;
@@ -345,42 +355,42 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
     // летел наружу мимо проверки.
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       log.warn('dialog_backup_bad_format');
-      return 0;
+      return dialogBackupRefused('bad_format');
     }
     if (data.v !== 1 || !data.walletPubKeyB64 || !Array.isArray(data.messages)) {
       log.warn('dialog_backup_bad_format');
-      return 0;
+      return dialogBackupRefused('bad_format');
     }
     if (data.walletPubKeyB64 !== expectedPub) {
       log.info('dialog_backup_wallet_mismatch');
-      return 0;
+      return dialogBackupRefused('wallet_mismatch');
     }
     // v4.32.198 (Round-28 #1): cap untrusted-file sizes. 200k messages +
     // 10k kv covers every legitimate user without allowing an import to churn
     // SQLite for minutes or exhaust the JS heap.
     if (data.messages.length > RAW_CHAT_MESSAGE_MAX_ROWS) {
       log.warn('dialog_backup_messages_oversize', { count: data.messages.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     if (Array.isArray(data.kv) && data.kv.length > 10_000) {
       log.warn('dialog_backup_kv_oversize', { count: data.kv.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     if (Array.isArray(data.conversations) && data.conversations.length > CONVERSATION_META_MAX_ROWS) {
       log.warn('dialog_backup_conversations_oversize', { count: data.conversations.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     if (Array.isArray(data.groups) && data.groups.length > GROUP_MAX_ROWS) {
       log.warn('dialog_backup_groups_oversize', { count: data.groups.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     if (Array.isArray(data.groupMessages) && data.groupMessages.length > GROUP_MESSAGE_MAX_ROWS) {
       log.warn('dialog_backup_group_messages_oversize', { count: data.groupMessages.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     if (Array.isArray(data.groupMembers) && data.groupMembers.length > GROUP_MEMBER_MAX_ROWS) {
       log.warn('dialog_backup_group_members_oversize', { count: data.groupMembers.length });
-      return 0;
+      return dialogBackupRefused('rows_oversize');
     }
     let conversations = 0;
     let restoredMeta = 0;
@@ -398,8 +408,8 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
     // чем группа восстанавливается вообще). Шаги независимы, поэтому сбой
     // одного не повод не выполнять остальные; называем в журнале, какие
     // именно не прошли.
-    const failed: string[] = [];
-    const step = async (name: string, run: () => Promise<void>): Promise<void> => {
+    const failed: DialogBackupStep[] = [];
+    const step = async (name: DialogBackupStep, run: () => Promise<void>): Promise<void> => {
       try {
         await run();
       } catch (e) {
@@ -447,10 +457,15 @@ export async function importDialogBackupJson(raw: string): Promise<number> {
       groupMessages: restoredGroups.messages,
       groupMembers: restoredGroups.members,
     });
-    return restoredMessages + restoredGroups.messages;
+    return {
+      messages: restoredMessages + restoredGroups.messages,
+      groups: restoredGroups.groups,
+      failed,
+      refused: null,
+    };
   } catch {
     log.warn('dialog_backup_invalid_json');
-    return 0;
+    return dialogBackupRefused('bad_json');
   }
 }
 
@@ -479,5 +494,7 @@ export async function tryRestoreDialogBackupFromFile(): Promise<number> {
     log.warn('dialog_backup_read_failed', { err: e instanceof Error ? e.message : String(e) });
     return 0;
   }
-  return importDialogBackupJson(raw);
+  // Наверху этой ветки (автовосстановление после seed-фразы) экрана нет —
+  // человеку показать разбор некому, поэтому наружу едет только число.
+  return (await importDialogBackupJson(raw)).messages;
 }
