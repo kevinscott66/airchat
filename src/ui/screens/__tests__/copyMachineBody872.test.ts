@@ -60,7 +60,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
     for (const [name, rel] of Object.entries(SITES)) {
       const src = codeOnly(read(rel));
       expect([name, src.length > 10000]).toEqual([name, true]);
-      expect([name, src.includes('Clipboard.setString(')]).toEqual([name, true]);
+      // v4.32.883: писать в буфер стали через общий copyText — здесь важно
+      // лишь то, что экран по-прежнему что-то копирует.
+      expect([name, src.includes('copyText(')]).toEqual([name, true]);
     }
   });
 
@@ -224,9 +226,10 @@ describe('все шесть мест спрашивают одно правил�
       const src = codeOnly(read(rel));
       for (const bad of [
         '.map((m) => m.text).join(',
-        'Clipboard.setString(item.text)',
-        'Clipboard.setString(quickReact.text)',
-        'Clipboard.setString(quickReactMsg.text)',
+        'copyText(item.text',
+        'copyText(quickReact.text',
+        'copyText(quickReactMsg.text',
+        'Clipboard.setString(',
       ]) {
         expect([name, bad, src.includes(bad)]).toEqual([name, bad, false]);
       }

@@ -14,7 +14,6 @@ import {
   Platform,
   Vibration,
   ScrollView,
-  Clipboard,
   Keyboard,
   PanResponder,
   Animated as RNAnimated,
@@ -782,6 +781,7 @@ import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
 import { copyableBody, copySelection, copySelectionText, COPY_NOTHING_TEXT } from '../../core/social/copyBody';
 import { COPY_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { copyText } from '../copyText';
 import { buildDmLink } from '../../core/net/appLink';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
 import { SecureContent, isSecureContentSupported, setWindowSecure } from '../../../modules/airchat-screen-guard/src';
@@ -2955,8 +2955,7 @@ function ChatThreadView({
    * он ведёт к самому сообщению, без — на страницу с установкой.
    */
   const copyRowLink = useCallback((id: string) => {
-    Clipboard.setString(buildDmLink(peerB64, id).web);
-    showSuccess(COPIED_LINK);
+    void copyText(buildDmLink(peerB64, id).web, COPIED_LINK);
   }, [peerB64]);
 
   /**
@@ -2991,7 +2990,7 @@ function ChatThreadView({
               // запрете на копирование кнопки здесь тоже нет.
               ...(copyBlockedRef.current
                 ? []
-                : [{ label: COPY_ACTION, onPress: () => { Clipboard.setString(out.text); showSuccess(COPIED_TEXT); } }]),
+                : [{ label: COPY_ACTION, onPress: () => { void copyText(out.text, COPIED_TEXT); } }]),
               { label: 'OK', cancel: true },
             ],
           });
@@ -4080,8 +4079,7 @@ function ChatThreadView({
                   // Копировать нечего — выделение не снимаем: человек ещё
                   // может добавить к нему реплику с текстом.
                   if (sel.copied === 0) { showError(note ?? COPY_NOTHING_TEXT); return; }
-                  Clipboard.setString(sel.text);
-                  showSuccess(note ?? COPIED_TEXT);
+                  void copyText(sel.text, note ?? COPIED_TEXT);
                   setSelectedIds(new Set());
                 }}
               >
@@ -4414,7 +4412,7 @@ function ChatThreadView({
           // рядом с ним быть не должно.
           const body = quickReactMsg ? copyableBody(quickReactMsg) : null;
           if (body === null) showError(COPY_NOTHING_TEXT);
-          else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+          else void copyText(body, COPIED_TEXT);
           setQuickReactMsg(null);
         }}
         copyBlocked={copyBlocked}

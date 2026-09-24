@@ -1,13 +1,13 @@
 import React, { memo, useCallback } from 'react';
-import { View, Text, Clipboard } from 'react-native';
+import { View, Text } from 'react-native';
 import { BrandedQr } from '../../BrandedQr';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { showSuccess } from '../../userFeedback';
 import { primaryInk, QR_CODE, radius, scrim } from '../../../theme';
 import { COPIED_LINK, COPY_LINK_ACTION } from '../../../clipboardText';
+import { copyText } from '../../../copyText';
 
 export interface GroupQrModalProps {
   visible: boolean;
@@ -21,9 +21,7 @@ function GroupQrModalImpl({ visible, onClose, groupName, inviteLinkQr }: GroupQr
   const { colors } = useTheme();
   const stopPropagation = useCallback(() => { /* prevent dismiss */ }, []);
   const handleCopy = useCallback(() => {
-    Clipboard.setString(inviteLinkQr);
-    showSuccess(COPIED_LINK);
-    onClose();
+    void copyText(inviteLinkQr, COPIED_LINK).then(onClose);
   }, [inviteLinkQr, onClose]);
 
   return (

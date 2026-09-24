@@ -23,14 +23,14 @@
  */
 
 import React from 'react';
-import { View, Text, TextInput, Image, StyleSheet, Clipboard } from 'react-native';
+import { View, Text, TextInput, Image, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { GlassSurface } from '../../components/GlassSurface';
-import { showSuccess } from '../../components/userFeedback';
 import { useTheme } from '../../ThemeContext';
 import { avatarShape, contrastingInk, font, radius, spacing, TOUCH_TARGET_MIN } from '../../theme';
 import { COPIED_ID } from '../../clipboardText';
+import { copyText } from '../../copyText';
 import {
   groupProfileRows,
   groupProfileSubtitle,
@@ -91,8 +91,7 @@ export function GroupProfileHeader(props: GroupProfileHeaderProps): React.ReactE
 
   const copyRow = (row: GroupProfileRow): void => {
     if (row.value === null) return;
-    Clipboard.setString(row.value);
-    showSuccess(row.id === 'public_id' ? COPIED_ID : 'Публичный адрес скопирован');
+    void copyText(row.value, row.id === 'public_id' ? COPIED_ID : 'Публичный адрес скопирован');
   };
 
   return (

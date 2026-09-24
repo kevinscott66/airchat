@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Clipboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import { AppModal as Modal } from '../../components/AppModal';
-import { showError, showSuccess } from '../../components/userFeedback';
+import { showError } from '../../components/userFeedback';
 import { userErrorText } from '../../components/userErrorText';
 import { useTheme } from '../../ThemeContext';
 import { bubbleSurface, font, pollInk, radius, scrim } from '../../theme';
@@ -22,6 +22,7 @@ import {
 import { votesLabel } from '../../utils/plural';
 import { shortIdentity } from '../../identity/shortId';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
+import { copyText } from '../../copyText';
 import { PersonAvatar } from '../../components/PersonAvatar';
 
 export function PollBubble({
@@ -226,8 +227,7 @@ export function PollBubble({
                 lines2.push(`${opt}: ${cnt} (${pct}%) ${bar}`);
               });
               lines2.push('', `Всего голосов: ${totalVotes}`);
-              Clipboard.setString(lines2.join('\n'));
-              showSuccess(COPIED_POLL_RESULTS);
+              void copyText(lines2.join('\n'), COPIED_POLL_RESULTS);
             }}
             hitSlop={8}
           >

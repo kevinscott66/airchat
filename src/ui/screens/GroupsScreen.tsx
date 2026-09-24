@@ -19,7 +19,6 @@ import {
   ScrollView,
   Share,
   Image,
-  Clipboard,
   PanResponder,
   Animated as RNAnimated,
   Vibration,
@@ -322,6 +321,7 @@ import {
 } from '../../core/utils/lookupResult';
 import { copyableBody, copySelection, copySelectionText, COPY_NOTHING_TEXT } from '../../core/social/copyBody';
 import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
+import { copyText } from '../copyText';
 export { ruPlural, membersLabel, subscribersLabel };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2520,7 +2520,7 @@ function GroupChatScreen({
       canTranslate ? { text: '🌐 Перевести', onPress: translateMsg } : null,
       isTextMsg ? { text: 'Сохранить в Избранное', onPress: saveToFavorites } : null,
       isSysMsg ? null : { text: starLabel, onPress: toggleStar },
-      isSysMsg ? null : { text: COPY_LINK_ACTION, onPress: () => { Clipboard.setString(msgLink); showSuccess(COPIED_LINK); } },
+      isSysMsg ? null : { text: COPY_LINK_ACTION, onPress: () => { void copyText(msgLink, COPIED_LINK); } },
       isSysMsg ? null : { text: 'Напомнить', onPress: scheduleReminder },
       canClosePoll ? { text: 'Завершить опрос', onPress: closePoll } : null,
       { text: 'Сведения', onPress: () => setGrpMsgInfoTarget(item) },
@@ -2538,7 +2538,7 @@ function GroupChatScreen({
       isTextMsg ? { text: COPY_ACTION, onPress: () => {
         const body = copyableBody(item);
         if (body === null) showError(COPY_NOTHING_TEXT);
-        else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+        else void copyText(body, COPIED_TEXT);
       } } : null,
       isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text)) } : null,
       canEdit ? { text: 'Редактировать', onPress: () => startEdit(item) } : null,
@@ -3739,8 +3739,7 @@ function GroupChatScreen({
             {
               text: COPY_ACTION,
               onPress: () => {
-                Clipboard.setString(link);
-                showSuccess(COPIED_LINK);
+                void copyText(link, COPIED_LINK);
               },
             },
             {
@@ -4259,7 +4258,7 @@ function GroupChatScreen({
           if (!quickReact) return;
           const body = copyableBody(quickReact);
           if (body === null) showError(COPY_NOTHING_TEXT);
-          else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+          else void copyText(body, COPIED_TEXT);
           setQuickReact(null);
         }}
         onForward={() => { if (quickReact) { setForwardText(makeForwardText(outwardName(quickReact.senderName, quickReact.senderUnreadable, shortIdentity(quickReact.senderPubB64)), quickReact.text)); setQuickReact(null); } }}
@@ -4269,8 +4268,7 @@ function GroupChatScreen({
         onCopyLink={() => {
           if (!quickReact) return;
           const link = buildGroupLink(group.id, quickReact.id).web;
-          Clipboard.setString(link);
-          showSuccess(COPIED_LINK);
+          void copyText(link, COPIED_LINK);
           setQuickReact(null);
         }}
         isSys={!!quickReact && isGroupSysMessage(quickReact.text)}
@@ -4533,8 +4531,7 @@ function GroupChatScreen({
                     const sel = copySelection(messages.filter((m) => ids.includes(m.id)));
                     const note = copySelectionText(sel);
                     if (sel.copied === 0) { showError(note ?? COPY_NOTHING_TEXT); return; }
-                    Clipboard.setString(sel.text);
-                    showSuccess(note ?? COPIED_TEXT);
+                    void copyText(sel.text, note ?? COPIED_TEXT);
                     setSelectedGrpIds(new Set());
                   }}
                 >

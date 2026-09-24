@@ -8,7 +8,6 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ExpoClipboardModule from 'expo-clipboard';
 import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { SafeScreen } from '../../SafeScreen';
@@ -20,7 +19,7 @@ import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
 import { galleryCids } from '../../../../core/media/galleryCids';
 import { useResolvedMediaSlots } from '../../../screens/chat-components/useResolvedMediaUrls';
 import { blobResolveText } from '../../../../core/media/blobResolveText';
-import { showError, showSuccess } from '../../userFeedback';
+import { showError } from '../../userFeedback';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
 import { isDocMessage } from '../../../../core/social/docEnvelope';
 import { isVoiceMessage, parseVoiceMeta } from '../../../../core/social/voiceEnvelope';
@@ -33,6 +32,7 @@ import { formatByteSize } from '../../../../core/media/byteSize';
 import { formatClockDuration } from '../../../time/durationLabel';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { COPIED_LINK } from '../../../clipboardText';
+import { copyText } from '../../../copyText';
 import { collectUrls } from '../../../../core/text/entities';
 
 // ─── SharedMediaModal ─────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ export function SharedMediaPane({
             key={`${link.url}_${i}`}
             style={[paneStyles.row, { borderColor: colors.border }]}
             onPress={() => openExternal(link.url, 'chat_shared_link')}
-            onLongPress={() => { void ExpoClipboardModule.setStringAsync(link.url); showSuccess(COPIED_LINK); }}
+            onLongPress={() => { void copyText(link.url, COPIED_LINK); }}
           >
             <Text style={[paneStyles.rowTitle, { color: colors.accent }]} numberOfLines={1}>{link.url}</Text>
             <Text style={[paneStyles.rowSub, { color: colors.textMuted }]}>{numericDate(link.createdAt)}</Text>

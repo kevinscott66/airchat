@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Clipboard, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
-import { showError, showSuccess } from '../../components/userFeedback';
+import { showError } from '../../components/userFeedback';
 import { userErrorText } from '../../components/userErrorText';
 import { useTheme } from '../../ThemeContext';
 import { font, pollInk, radius } from '../../theme';
@@ -19,6 +19,7 @@ import {
 } from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
+import { copyText } from '../../copyText';
 
 // ─── Poll bubble (DM chats) ───────────────────────────────────────────────────
 export function DmPollBubble({
@@ -182,8 +183,7 @@ export function DmPollBubble({
                 return `${opt}: ${cnt} (${pct}%) ${bar}`;
               });
               const resultText = [`📊 ${poll.question}`, '', ...optCounts, '', `Всего голосов: ${total}`].join('\n');
-              Clipboard.setString(resultText);
-              showSuccess(COPIED_POLL_RESULTS);
+              void copyText(resultText, COPIED_POLL_RESULTS);
             }}
             hitSlop={8}
           >
