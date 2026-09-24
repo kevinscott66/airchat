@@ -913,8 +913,12 @@ async function ensureRegistered(myPub: string, epoch = serviceEpoch): Promise<We
 // собственным комментарием: тот обещал 43–48 символов, а код принимал до 64 —
 // то есть строку в полтора ключа длиной сигнальный сервер мог выдать за
 // идентификатор собеседника.
+//
+// v4.32.832: псевдоним `isValidPeerId` убран. С v4.32.830 строка с провода
+// идёт через `canonPubKeyB64`, который проверку формы делает сам, — и
+// псевдоним остался без единого вызывающего, обещая проверку, которой в этом
+// файле больше нет.
 const MAX_SDP_LEN = 64 * 1024;
-const isValidPeerId = isPubKeyB64;
 function isValidSdp(s: unknown): s is string {
   return typeof s === 'string' && s.length > 0 && s.length <= MAX_SDP_LEN;
 }

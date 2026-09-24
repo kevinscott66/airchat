@@ -1003,6 +1003,25 @@ export class MessagingService {
    * Настоящие дубли это не пропускает: отметка снимается ТОЛЬКО когда разбор
    * сказал «не смог». Разобранный конверт остаётся помеченным, и второй его
    * экземпляр с другого входа отсекается по-прежнему.
+   *
+   * v4.32.832. Обёртка знала одно слово — `'deferred'` — и не знала второго
+   * способа не разобрать конверт: брошенного исключения. А оно тут обычное
+   * дело. Групповой конверт едет сюда же и заканчивается в `upsertGroupMember`
+   * и `updateGroupMeta`, где занятая база (SQLITE_BUSY) выходит наружу
+   * исключением; `ownerProfileId` поднимает профиль и на холодном старте бросает
+   * СОЗНАТЕЛЬНО, чтобы кадр перезапросили.
+   *
+   * Что при этом происходило: координатор всё делал правильно — ловил
+   * брошенное, удерживал отметку, ждал повтора. Повтор приходил — и упирался
+   * первой же строкой в `seenMessageIds`, поставленную упавшей попыткой.
+   * Ответ — `'consumed'`, отметка идёт дальше, назад она не ходит. Смена
+   * названия группы, приём и исключение участника, личное сообщение — пропадают
+   * навсегда и молча: в журнале от второго захода нет ни строчки, потому что
+   * заход кончается на самой первой.
+   *
+   * Отсюда правило: помеченным конверт остаётся, только если разбор ДОШЁЛ до
+   * конца и сказал «разобрал». Брошенное — это тоже «не смог», и отличается
+   * оно от `'deferred'` лишь тем, что летит дальше наружу.
    */
   private async persistIncomingFromEnvelope(
     em: EncryptedMessage,
@@ -1011,13 +1030,22 @@ export class MessagingService {
     preDecryptedPt?: Uint8Array,
     allowSelfAuthored = false,
   ): Promise<EnvelopeIntake> {
-    const verdict = await this.persistIncomingFromEnvelopeInner(
-      em,
-      peerPubKeyB64,
-      cid,
-      preDecryptedPt,
-      allowSelfAuthored,
-    );
+    let verdict: EnvelopeIntake;
+    try {
+      verdict = await this.persistIncomingFromEnvelopeInner(
+        em,
+        peerPubKeyB64,
+        cid,
+        preDecryptedPt,
+        allowSelfAuthored,
+      );
+    } catch (e) {
+      // Исключение наружу отдаём как есть: удержание отметки «докуда
+      // прочитано» построено именно на нём. Снимаем только метку «уже видели»,
+      // иначе перезапрошенный кадр отобьётся о неё и пропадёт.
+      this.seenMessageIds.delete(em.messageId);
+      throw e;
+    }
     if (verdict === 'deferred') this.seenMessageIds.delete(em.messageId);
     return verdict;
   }
