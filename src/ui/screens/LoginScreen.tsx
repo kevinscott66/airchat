@@ -23,7 +23,7 @@ import { SafeScreen } from '../components/SafeScreen';
 import { useColors, useThemedStyles } from '../ThemeContext';
 import { font, formColumn, primaryInk, radius } from '../theme';
 import { shortIdentity } from '../identity/shortId';
-import { rawErrorText } from '../components/userErrorText';
+import { rawErrorText, userErrorText } from '../components/userErrorText';
 
 type Props = {
   /** Keys from onboarding / boot (avoids regenerating). */
@@ -120,9 +120,8 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
         }
       })();
     } catch (e) {
-      const msg = rawErrorText(e);
-      log.error('login_init_failed', { err: msg });
-      showError(msg);
+      log.error('login_init_failed', { err: rawErrorText(e) });
+      showError(userErrorText(e, 'Не удалось создать профиль. Попробуйте ещё раз'));
     } finally {
       setBusy(false);
     }

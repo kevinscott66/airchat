@@ -95,6 +95,13 @@ function open(msg: ChatMessageRow): Tree {
   return tree as unknown as Tree;
 }
 
+/** Закрыть окно так же, как это делает React — снятие тоже правит состояние. */
+function close(tree: Tree): void {
+  act(() => {
+    tree.unmount();
+  });
+}
+
 /** Есть ли в окне значок с таким именем. */
 function hasIcon(tree: Tree, name: string): boolean {
   return tree.root.findAllByProps({ name }).length > 0;
@@ -107,16 +114,16 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
   it('окно вообще открывается и показывает свой заголовок', () => {
     const t = open(row('read'));
     expect(texts(t)).toContain('Сведения о сообщении');
-    t.unmount();
+    close(t);
   });
 
   it('прочитанное и доставленное окно называло верно и до правки', () => {
     const r = open(row('read'));
     expect(texts(r)).toContain('Прочитано');
-    r.unmount();
+    close(r);
     const d = open(row('delivered'));
     expect(texts(d)).toContain('Доставлено');
-    d.unmount();
+    close(d);
   });
 });
 
@@ -144,40 +151,40 @@ describe('состояние называют своим словом', () => {
     expect([seen.includes('Не отправлено'), seen.includes('Отправлено')]).toEqual([true, false]);
     expect(hasIcon(t, 'alert-circle-outline')).toBe(true);
     expect(hasIcon(t, 'checkmark-outline')).toBe(false);
-    t.unmount();
+    close(t);
   });
 
   it('пока отправляется — так и написано', () => {
     const t = open(row('sending'));
     expect(texts(t)).toContain('Отправляется…');
-    t.unmount();
+    close(t);
   });
 
   it('отправлено без CID — это ещё очередь', () => {
     const t = open(row('sent', null));
     expect(texts(t)).toContain('В очереди на отправку');
-    t.unmount();
+    close(t);
   });
 
   it('отправлено с CID — отправлено', () => {
     const t = open(row('sent', 'bafy886'));
     expect(texts(t)).toContain('Отправлено');
-    t.unmount();
+    close(t);
   });
 
   it('у неотправленного время создания не подписано отправкой', () => {
     const f = open(row('failed'));
     expect(texts(f)).toContain('Создано');
-    f.unmount();
+    close(f);
     const s = open(row('sent', 'bafy886'));
     expect(texts(s)).not.toContain('Создано');
-    s.unmount();
+    close(s);
   });
 
   it('время доставки показывают только у дошедшего', () => {
     const f = open(row('failed'));
     const times = texts(f).filter((s) => /\d{2}:\d{2}/.test(s));
     expect(times.length).toBe(1);
-    f.unmount();
+    close(f);
   });
 });

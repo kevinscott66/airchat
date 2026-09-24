@@ -52,6 +52,94 @@ const HAND_ROLLED = /(\w+) instanceof Error \? \1\.message/;
 /** Кириллица — признак текста, написанного для человека. */
 const CYRILLIC = /[А-Яа-яЁё]/;
 
+/**
+ * Слепое пятно храповика (v4.32.887).
+ *
+ * Запрет был записан по форме — `x instanceof Error ? x.message` — и ровно
+ * этой формы в приложении больше нет. Но тот же машинный текст доходил до
+ * экрана в обход: `const msg = rawErrorText(e)` и строкой ниже
+ * `showError(msg)`. Форма законная, обе записи из общего дома, а человек
+ * по-прежнему читал `Network request failed` и `send_at_out_of_range` — на
+ * входе в приложение, при отправке сообщения и при публикации в ленту.
+ *
+ * Правило простое и то же, что и было: `rawErrorText` — для журнала.
+ * Показывать его результат человеку нельзя ни прямо, ни через переменную.
+ */
+const SCREEN_SINK = /(showError|showSuccess)\(\s*rawErrorText\(/;
+
+/** Имена переменных, в которые положили сырой текст. */
+function rawVarNames(source: string): string[] {
+  return [...source.matchAll(/const (\w+) = rawErrorText\(/g)].map((m) => m[1]);
+}
+
+/**
+ * Уходит ли такая переменная человеку на экран.
+ *
+ * Законное исключение одно и оно проверяемое: `isUserFacingMessage(raw)`
+ * пропускает на экран ровно наш русский текст и отсекает всё чужое — то же
+ * самое решение, что принимает внутри себя `userErrorText`. Так написан отказ
+ * реакции в ленте (v4.32.689), и запасного текста там нет намеренно.
+ */
+function leaksToScreen(source: string, name: string): boolean {
+  const sink = new RegExp(`(showError|showSuccess)\\(\\s*${name}\\s*[,)]`);
+  return codeLines(source).some(
+    (line) => sink.test(line) && !line.includes(`isUserFacingMessage(${name})`),
+  );
+}
+
+describe('храповик: сырой текст не доходит до экрана и в обход', () => {
+  it('в src/ui никто не отдаёт человеку rawErrorText напрямую', () => {
+    const offenders = FILES.filter(({ key, source }) =>
+      key !== HOME && codeLines(source).some((line) => SCREEN_SINK.test(line)),
+    ).map(({ key }) => key);
+    expect(offenders).toEqual([]);
+  });
+
+  it('и не отдаёт его через переменную', () => {
+    const offenders: string[] = [];
+    for (const { key, source } of FILES) {
+      if (key === HOME) continue;
+      for (const name of rawVarNames(source)) {
+        if (leaksToScreen(source, name)) offenders.push(`${key}: ${name}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('запрет не холостой: исторические строки формой ловятся', () => {
+    expect(SCREEN_SINK.test('          showError(rawErrorText(e));')).toBe(true);
+    const past = [
+      "          const errMsg = rawErrorText(e);",
+      "          log.error('chat_send_failed', { err: errMsg });",
+      "          showError(errMsg);",
+    ].join('\n');
+    expect(rawVarNames(past)).toEqual(['errMsg']);
+    expect(leaksToScreen(past, 'errMsg')).toBe(true);
+  });
+
+  it('проверенный текст показать по-прежнему можно', () => {
+    const guarded = '          if (isUserFacingMessage(raw)) showError(raw);';
+    expect(leaksToScreen(guarded, 'raw')).toBe(false);
+    // А без проверки та же строка — нарушение.
+    expect(leaksToScreen('          showError(raw);', 'raw')).toBe(true);
+  });
+
+  it('законные записи формой НЕ ловятся: журнал сырой текст берёт по-прежнему', () => {
+    const ok = [
+      "      const msg = rawErrorText(e);",
+      "      log.warn('feed_load_failed', { err: msg });",
+      "      showError(userErrorText(e, 'Не удалось загрузить ленту'));",
+    ].join('\n');
+    expect(leaksToScreen(ok, 'msg')).toBe(false);
+    expect(SCREEN_SINK.test(ok)).toBe(false);
+  });
+
+  it('переменные с сырым текстом в приложении есть — обход не выдуман', () => {
+    const withVars = FILES.filter(({ key, source }) => key !== HOME && rawVarNames(source).length > 0);
+    expect(withVars.length).toBeGreaterThan(3);
+  });
+});
+
 describe('храповик: текст ошибки для человека', () => {
   it('в src/ui нет рукописного `x instanceof Error ? x.message`, кроме самого userErrorText.ts', () => {
     const offenders: string[] = [];

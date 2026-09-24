@@ -217,6 +217,6 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('восстановление набранного при исключении осталось на месте', () => {
     const c = codeOnly(CHAT());
-    expect(c).toContain("log.error('chat_send_failed', { err: errMsg });");
+    expect(c).toContain("log.error('chat_send_failed', { err: rawErrorText(e) });");
   });
 });

@@ -2141,13 +2141,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             );
           }
         } catch (e) {
-          const msg = rawErrorText(e);
-          log.error('feed_publish_ui_failed', { err: msg });
+          log.error('feed_publish_ui_failed', { err: rawErrorText(e) });
           // v4.32.91: возвращаем драфт и при throw — иначе контент теряется.
           setDraft(textSnap);
           setUris(urisSnap);
           setPickedDocs(docsSnap);
-          showError(msg);
+          showError(userErrorText(e, 'Не удалось опубликовать. Черновик вернулся в поле'));
           setOptimisticPosts((prev) => prev.filter((p) => p.id !== tempId));
         } finally {
           setPublishing(false);

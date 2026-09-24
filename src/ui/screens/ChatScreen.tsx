@@ -2656,11 +2656,12 @@ function ChatThreadView({
           }
           void appendNewMessages();
         } catch (e) {
-          const errMsg = rawErrorText(e);
           putComposer(text);
           setOptimisticOutgoing(null);
-          log.error('chat_send_failed', { err: errMsg });
-          showError(errMsg);
+          log.error('chat_send_failed', { err: rawErrorText(e) });
+          // Тот же текст, что и у отказа выше: человеку важно одно — не ушло,
+          // и написанное не пропало. Машинный опознаватель ему не поможет.
+          showError(userErrorText(e, 'Отправить не удалось. Текст вернулся в поле ввода'));
         } finally {
           setSending(false);
         }

@@ -148,7 +148,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы цел
     expect(s).toContain('await profileManager.init();');
     expect(s).toContain("log.warn('login_profile_rename_failed', {");
     expect(s).toContain("if (cid) await ownFieldSet('user_profile_cid', cid);");
-    expect(s).toContain("log.error('login_init_failed', { err: msg });");
+    expect(s).toContain("log.error('login_init_failed', { err: rawErrorText(e) });");
     expect(s).toContain('setBusy(false);');
   });
 
