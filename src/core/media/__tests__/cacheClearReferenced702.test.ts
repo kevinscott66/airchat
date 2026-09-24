@@ -24,7 +24,10 @@ let mockDirThrows = false;
 const deleted: string[] = [];
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: '/cache/',
-  readDirectoryAsync: jest.fn(async () => {
+  readDirectoryAsync: jest.fn(async (uri: string) => {
+    // v4.32.856: сброс заходит и в подкаталоги чужих пакетов. Здесь их нет,
+    // и чтение отказывает ровно так же, как отказала бы система.
+    if (uri !== '/cache/' && uri !== '/cache') throw new Error('ENOENT');
     if (mockDirThrows) throw new Error('EIO');
     return mockDirFiles;
   }),

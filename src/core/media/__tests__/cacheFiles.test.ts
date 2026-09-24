@@ -11,13 +11,22 @@
  * шире, чем при ручной чистке; и ни одна из них не трогает чужое.
  */
 let mockDirFiles: string[] = [];
+// v4.32.856: уборка при сбросе заходит и в подкаталоги чужих пакетов, поэтому
+// чтение каталога здесь различает пути. Каталога, которого нет в этой карте,
+// нет и на диске: чтение отказывает, как отказала бы система.
+let mockSubdirs: Record<string, string[]> = {};
 let mockDirThrows = false;
 const deleted: string[] = [];
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: '/cache/',
-  readDirectoryAsync: jest.fn(async () => {
-    if (mockDirThrows) throw new Error('EIO');
-    return mockDirFiles;
+  readDirectoryAsync: jest.fn(async (uri: string) => {
+    if (uri === '/cache/' || uri === '/cache') {
+      if (mockDirThrows) throw new Error('EIO');
+      return mockDirFiles;
+    }
+    const sub = mockSubdirs[uri.replace(/^\/cache\/?/, '')];
+    if (!sub) throw new Error('ENOENT');
+    return sub;
   }),
   deleteAsync: jest.fn(async (uri: string) => {
     deleted.push(uri);
@@ -51,6 +60,7 @@ const nameOf = (uri: string) => uri.slice('/cache/'.length);
 
 beforeEach(() => {
   mockDirFiles = [];
+  mockSubdirs = {};
   mockDirThrows = false;
   deleted.length = 0;
 });

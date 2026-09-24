@@ -71,6 +71,43 @@ export const WIPE_CACHE_PREFIXES = [
   'ipfs_http_add_',
 ] as const;
 
+/**
+ * Подкаталоги кэша, которые заводят себе чужие пакеты (v4.32.856).
+ *
+ * Уборка ходила только по верхнему уровню кэша и сверяла ИМЕНА файлов с
+ * приставками. Но запись голоса, выбор фотографии из галереи, съёмка, сжатие
+ * снимка перед отправкой и выбор документа кладут своё не в корень, а каждый
+ * в свой каталог: имя каталога не совпадает ни с одной приставкой, поэтому
+ * сброс проходил мимо ВСЕГО их содержимого.
+ *
+ * Цена у этого больше, чем у остальных строк модуля. Файл записи после
+ * успешной отправки не удаляется никогда — он нужен, чтобы своё голосовое
+ * игралось мгновенно (см. sendVoice), — то есть в `ExpoAudio` лежит открытым
+ * `.m4a` всё, что человек когда-либо наговорил. После «Выйти и удалить данные
+ * на устройстве» приложение отчитывалось об успехе, а эта запись целиком
+ * доставалась следующему владельцу телефона или ближайшей резервной копии.
+ * Рядом, в `ImagePicker`, `Camera` и `ImageManipulator`, тем же порядком лежат
+ * исходники и сжатые копии всех отправленных снимков, а в `DocumentPicker` —
+ * копии приложенных документов.
+ *
+ * Имена одни и те же на обеих системах, кроме записи голоса: iOS зовёт её
+ * `ExpoAudio`, Android — `Audio` (expo-audio). Лишнее имя в списке ничего не
+ * стоит: каталога просто нет.
+ *
+ * Список только для сброса. «Очистить кэш» в настройках сюда не заходит
+ * намеренно: приложение в этот момент работает, и своё голосовое, снятое этим
+ * же телефоном, играется из этого самого файла — унести его значит повторить
+ * v4.32.702, только уже без возможности перекачать.
+ */
+export const WIPE_CACHE_DIRS = [
+  'ExpoAudio',
+  'Audio',
+  'ImagePicker',
+  'Camera',
+  'ImageManipulator',
+  'DocumentPicker',
+] as const;
+
 /** Расширения медиа, которые «Очистить кэш» убирает независимо от имени. */
 export const CLEARABLE_CACHE_SUFFIXES = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov'] as const;
 
@@ -218,15 +255,53 @@ async function clearUnreferencedBlobFiles(loadLiveIds: LiveBlobIdsLoader): Promi
 }
 
 /**
+ * Стереть подкаталоги чужих пакетов целиком (v4.32.856).
+ *
+ * Каталог сносится одним `deleteAsync`: перебирать его содержимое незачем,
+ * там нет ничего, кроме того, что положил сам пакет. Чтение — это проверка,
+ * что каталог вообще есть: удалять несуществующее значило бы трогать чужой
+ * кэш вслепую, а список имён здесь выписан от руки и когда-нибудь разойдётся
+ * с тем, что пакеты заводят на самом деле. Заодно оно даёт честное число.
+ */
+async function purgeCacheSubdirs(dirs: readonly string[]): Promise<number> {
+  const root = FileSystem.cacheDirectory;
+  if (!root) return 0;
+  let removed = 0;
+  for (const sub of dirs) {
+    const path = `${root}${sub}`;
+    let count: number;
+    try {
+      count = (await FileSystem.readDirectoryAsync(path)).length;
+    } catch {
+      // Каталога нет — значит, этим пакетом ни разу не пользовались.
+      continue;
+    }
+    try {
+      await FileSystem.deleteAsync(path, { idempotent: true });
+      removed += count;
+    } catch (e) {
+      log.warn('cache_wipe_dir_failed', { dir: sub, err: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return removed;
+}
+
+/**
  * Полный сброс устройства: убрать всё расшифрованное из кэша.
  *
  * До v4.32.308 сброс не трогал кэш вовсе, и снимки с голосовыми жили ещё сутки
  * — до суточной чистки, и то если приложение успеют запустить. С v4.32.308
  * уходили вложения, но не расшифровки переписки: у них не было ни общего имени,
  * ни хозяина.
+ *
+ * v4.32.856: и не то, что чужие пакеты кладут в свои подкаталоги, — а это
+ * все записи голоса и все отправленные снимки (см. WIPE_CACHE_DIRS).
  */
 export async function purgeSensitiveCache(): Promise<number> {
-  const removed = await deleteByPrefixes(WIPE_CACHE_PREFIXES, CLEARABLE_CACHE_SUFFIXES);
+  // Каталоги сносятся независимо от обхода по именам: отказ чтения корня
+  // кэша не повод оставить на диске все записи голоса и все снимки.
+  const removed = (await deleteByPrefixes(WIPE_CACHE_PREFIXES, CLEARABLE_CACHE_SUFFIXES))
+    + (await purgeCacheSubdirs(WIPE_CACHE_DIRS));
   if (removed > 0) log.info('cache_purged_on_wipe', { removed });
   return removed;
 }
