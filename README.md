@@ -1,124 +1,103 @@
-<p align="center">
-  <img src="assets/logo/airchat-mark.png" alt="" width="96" height="96">
-</p>
-
 # AirChat
 
-A mobile messenger with no phone number, where the account belongs to the
-person holding the seed phrase and the server holds only ciphertext.
+[English](README.md) · [Русский](README.ru.md)
 
-AirChat is a React Native application. Identity is a self-owned `did:key`
-derived from a BIP39 seed phrase — there is no sign-up, and no operator can
-issue, freeze or recover an account.
+[![CI](https://github.com/kevinscott66/airchat/actions/workflows/ci.yml/badge.svg)](https://github.com/kevinscott66/airchat/actions/workflows/ci.yml) · [MIT](LICENSE)
 
-The account lives online. Conversations, contacts, posts and settings are
-pushed to a sync database as opaque records and pulled back on any other device
-the same seed phrase unlocks, so a reinstall or a second phone restores itself.
-Every record is encrypted on the device with a key derived from the seed; the
-server indexes account, device and entity ids, revisions and cursors, and can
-read none of the payloads. Messages themselves are end-to-end encrypted between
-participants on top of that, and travel as direct peer connections over WebRTC
-where they can, with a signalling relay that sees who is connecting and nothing
-else.
+A messenger without phone numbers or sign-up. Your seed phrase is your account: one identity unlocks encrypted history on another device.
 
-The offline transports are the reserve, not the default: when the internet is
-unavailable, censored or untrusted, the same message routes over LAN discovery,
-Wi-Fi Direct, long-range radio or a store-and-forward mesh instead. They are
-kept, tested and shipped — they are simply not what the ordinary day looks
-like. Sync and calls do not run over them; they catch up when a link returns.
+**Status:** Active development · web available. Current snapshot: September 2026.
 
-## Web build
+[ Case study ](https://dobropalm.tech/case-studies/airchat/) · [Portfolio](https://dobropalm.tech) · [Live product](https://air.dobropalm.tech)
 
-A browser port is deployed at [air.dobropalm.tech](https://air.dobropalm.tech).
+![Actual public web client in a clean browser session. No account was created; no private conversations or seed phrases are present.](https://dobropalm.tech/assets/media/airchat.webp)
 
-It offers only the channels a browser can actually reach — ordinary
-connectivity and WebRTC. LAN discovery over mDNS, Wi-Fi Direct and the
-long-range radio transports are hidden there rather than stubbed: no browser
-can open those sockets or drive that hardware, and a control that pretends
-otherwise is worse than an absent one.
+_Actual public web client in a clean browser session. No account was created; no private conversations or seed phrases are present._
 
-## Transports
+## Problem & outcome
 
-The router ranks available channels per peer and falls back automatically.
+Changing phones often means depending on a phone number, an account operator or a separate backup. The goal is a portable identity and synchronized history without giving the server the keys to the content.
 
-| Channel | Use |
-|---------|-----|
-| `internet` | Ordinary connectivity, used when it is available and trusted |
-| `webrtc` | Direct peer-to-peer connections via a signalling handshake |
-| `ipfs` | Decentralised pubsub over libp2p (noise + yamux, Helia) |
-| `lan` | Local discovery over mDNS with a framed TCP transport |
-| `longrange` | LoRa, HF radio and WiFi mesh with geographic routing |
-| `bypass` | Alternative delivery channels for restricted networks |
-| `whitelist` | Encrypted transport over allowlisted third-party APIs |
+A browser client is available. The source implements portable identity, encrypted account sync, revisions, tombstone deletion and profile boundaries. Native builds add LAN messaging. The visual below shows the actual entry screen, not an end-to-end cryptographic audit.
 
-A store-and-forward mesh (`src/core/mesh`) carries messages across peers that
-are never online at the same time, with hop limits and payload caps.
+## My contribution
 
-## Security
+I define account and recovery behavior, user journeys, client/server trust boundaries and the synchronization design. I own the product logic that explains what is protected, what remains visible and what losing the key means.
 
-- **Self-owned identity.** A BIP39 seed phrase derives an ed25519 keypair and a
-  `did:key` identifier. Keys never leave the device.
-- **End-to-end encryption** on every transport, using `@noble` primitives.
-- **Encryption at rest.** The local SQLite database is encrypted; sensitive
-  values route through a queued SecureStore wrapper.
-- **Log scrubbing.** Secrets are stripped from logs and crash reports before
-  they leave the device — an always-on pass, separate from PII redaction.
-- **Optional SOCKS transport.** An Android Xray integration
-  (`modules/airchat-vpn`) routes the app's supported HTTP requests through a
-  local SOCKS proxy in filtered environments. It is not a device-wide VPN.
+I use AI tools in development; product and architectural decisions are my responsibility.
 
-See [SECURITY.md](SECURITY.md) for the threat model and disclosure process.
+## Engineering highlights
 
-## Servers
+- **Retry delivery, not the mutation.** Idempotent mutations and cursors let a client recover after a connection loss. Signed requests and nonces address the separate problem of replay.
+- **Deletion is synchronized state.** A tombstone preserves the deletion. Otherwise another client can reload an old record and bring a deleted message back.
+- **History and connectivity are separate.** Signaling establishes peer connections; it does not become a second message database.
 
-None of the services is trusted with plaintext. Each is self-hostable, and the
-app degrades to a single-device install without them rather than refusing to
-run.
+## Architecture & stack
 
-- **`server/cloud-vault`** — two jobs in one service. It stores the
-  zero-knowledge backup archive, keyed by material derived from the seed phrase
-  together with a separate cloud password, and it runs the sync database that
-  carries the live account: opaque per-entity records, addressed by account and
-  device, ordered by revision and cursor. It also keeps the username registry,
-  which answers only *taken* or *free* — never who holds a name. It decrypts
-  none of it, and there is no password reset path, by design.
-- **`signaling-server`** — a small WebRTC signalling relay. It brokers
-  handshakes and never sees message content.
-- **`server/ntfy-vps`** — configuration for a self-hosted push relay, so
-  notifications do not have to route through a vendor.
+| Layer | Implementation |
+|---|---|
+| Frontend | React Native, Expo 55, TypeScript; web and native clients |
+| Backend | Node.js, cloud-vault / sync, separate WebRTC signaling |
+| Data | Client SQLite; encrypted entities, revisions and server cursors |
+| Security | BIP39, did:key, @noble; client-side keys and encryption |
 
-Sync protocol and record shapes: [docs/sync-architecture.md](docs/sync-architecture.md).
+A mutation carries an identifier, revision, owner and tombstone. sync_entity_heads tracks local record versions; sync_state stores the cursor and sync state. Schema ownership follows service boundaries rather than one shared database for every client.
 
-## Stack
-
-React Native 0.83 · Expo SDK 55 · Hermes · TypeScript · libp2p / Helia ·
-`@noble/curves`, `@noble/ciphers`, `@noble/hashes` · BIP39 · `did-jwt` ·
-expo-sqlite · React Navigation · Sentry · Gradle / Xcode native modules
-
-176k lines of TypeScript across `src/`, 542 test suites, 7768 tests.
-
-## Build
+## Quick start
 
 ```bash
-npm install --ignore-scripts
-npx expo start --android
+# Requires Node.js 22.22+ (node:sqlite).
+git clone https://github.com/kevinscott66/airchat.git
+cd airchat/server/cloud-vault
+npm ci
+npm test
+CLOUD_VAULT_DIR=/tmp/airchat-demo-data HOST=127.0.0.1 PORT=3010 npm start
 ```
 
-Release build:
+This starts the sync/vault service with a separate local data directory. For the mobile/web client, return to the repository root, run `npm ci`, then `npm run web` or the platform build command. Native modules require a development build, Android SDK or Xcode; the server quick start alone does not launch a complete messenger.
+
+## Checks
 
 ```bash
-cd android && ./gradlew assembleRelease
+# From the repository root
+npm run typecheck
+npm run lint
+npm test -- --runInBand
+npm run test:servers
+npm run web:export
 ```
 
-Prerequisites: Node.js 18+, Android SDK with `ANDROID_HOME` set, and Xcode for
-the iOS target. The Xray core shared libraries are not committed — see
-`modules/airchat-vpn/android/src/main/jniLibs/README.md`.
+The badge links to the actual workflow. Listing a command does not claim every check ran for each README edit.
 
-## Notes on this repository
+## Deployment, observability & API
 
-Host names, IP addresses and deployment identifiers in source, tests and server
-configuration are placeholders. No credentials are committed.
+Sync, signaling and notifications are separate services. Source includes log scrubbing and Sentry integration. Native clients require platform builds and dependencies; web has its own capability limits.
 
-## Licence
+```bash
+curl --fail http://127.0.0.1:3010/health
+# {"ok":true,"service":"airchat-cloud-vault-example","release":null}
+```
 
-MIT — see [LICENSE](LICENSE).
+Sync uses signed envelopes, not anonymous mutations. See `server/cloud-vault/README.md` for push/pull, cursors and enrollment. Never paste a real seed phrase into an API example.
+
+## Security & limits
+
+Servers see metadata. Public-link posts are unencrypted. Browser key storage is weaker than native secure storage. Sync and calls require connectivity. No independent cryptographic audit is claimed here.
+
+Seed-based recovery removes dependence on a phone number, but the operator cannot reset a lost phrase. Encrypted records protect content, not all connection and synchronization metadata.
+
+Disclosure policy: [SECURITY.md](SECURITY.md).
+
+## History & documentation
+
+The repository contains client and self-hostable server source. Public commit and package versions describe source state, not independently audited security or availability of every native build.
+
+- [Sync architecture](docs/sync-architecture.md)
+- [Cloud-vault service](server/cloud-vault/index.js)
+- [Client sync implementation](src/core)
+- [Threat model](SECURITY.md)
+- [Server setup and signed sync API](server/cloud-vault/README.md)
+
+## License
+
+MIT - [LICENSE](LICENSE).
