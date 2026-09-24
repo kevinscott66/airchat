@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { isNbCid, parseNbCid, resolveBlobToLocalFile } from '../../../core/media/mediaBlob';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  isNbCid,
+  parseNbCid,
+  resolveBlobToLocalFileResult,
+  type BlobResolveFailure,
+  type BlobResolveResult,
+} from '../../../core/media/mediaBlob';
 import { gatewayUrl } from '../../../core/media/gatewayUrl';
 // v4.32.359: счёт слотов переехал в core/utils/semaphore, а сам ограничитель —
 // в core/media/mediaResolveLimit: он общий с разбором по требованию, иначе два
@@ -17,14 +23,59 @@ import { rawErrorText } from '../../components/userErrorText';
  * собеседника, а картинка грузится сама при отрисовке, поэтому '../' в «CID»
  * уводил загрузку на чужой сервер и выдавал IP-адрес получателя.
  */
-export function useResolvedMediaUrls(entries: string[], gateway: string): (string | null)[] {
+/**
+ * Что сейчас со снимком (v4.32.875).
+ *
+ * `pending` и `failed` раньше были одним и тем же `null`, и плитка рисовала
+ * «📷 …» в обоих случаях — вечно. Снимок, который не скачался, выглядел ровно
+ * как снимок, который качается прямо сейчас: ждать было нечего, а сказано об
+ * этом не было ничего.
+ */
+export type MediaResolvePhase = 'pending' | 'ready' | 'failed';
+
+export type MediaResolveSlot = {
+  /** Адрес для `<Image>`; есть только у `ready`. */
+  url: string | null;
+  phase: MediaResolvePhase;
+  /** Причина — только у `failed`; её показывает blobResolveText. */
+  reason: BlobResolveFailure | null;
+};
+
+/** Начальное состояние слота: `nb:` качается, всё остальное решается сразу. */
+function initialSlot(entry: string, gateway: string): MediaResolveSlot {
+  if (isNbCid(entry)) return { url: null, phase: 'pending', reason: null };
+  const url = gatewayUrl(gateway, entry) || '';
+  // Адрес шлюза не собрался: CID кривой или шлюза нет вовсе. Появиться ему
+  // неоткуда, поэтому ждать нечего — это отказ, а не загрузка.
+  return url ? { url, phase: 'ready', reason: null } : { url: null, phase: 'failed', reason: 'unsupported' };
+}
+
+/**
+ * Разбор вложений вместе с тем, чем он кончился, и повтором по требованию.
+ *
+ * Повтор общий на сообщение, а не на плитку: отказ почти всегда общий (сеть,
+ * релей), а уже скачанное второй раз не качается — расшифрованный файл лежит
+ * в кэше, и попытка стоит одной проверки его наличия.
+ */
+export function useResolvedMediaSlots(
+  entries: string[],
+  gateway: string,
+): { slots: MediaResolveSlot[]; retry: () => void } {
   const key = entries.join('|');
-  const [resolved, setResolved] = useState<(string | null)[]>(() =>
-    entries.map((e) => (isNbCid(e) ? null : gatewayUrl(gateway, e) || null)),
-  );
+  const [attempt, setAttempt] = useState(0);
+  const [slots, setSlots] = useState<MediaResolveSlot[]>(() => entries.map((e) => initialSlot(e, gateway)));
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
   useEffect(() => {
     let cancelled = false;
-    setResolved(entries.map((e) => (isNbCid(e) ? null : gatewayUrl(gateway, e) || null)));
+    setSlots(entries.map((e) => initialSlot(e, gateway)));
+    const put = (i: number, slot: MediaResolveSlot): void => {
+      setSlots((prev) => {
+        if (prev[i]?.url === slot.url && prev[i]?.phase === slot.phase) return prev;
+        const next = [...prev];
+        next[i] = slot;
+        return next;
+      });
+    };
     entries.forEach((e, i) => {
       const ref = parseNbCid(e);
       if (!ref) return;
@@ -36,31 +87,43 @@ export function useResolvedMediaUrls(entries: string[], gateway: string): (strin
       // Отказ загрузки раньше глотался целиком (`.catch(() => null)`): плитка
       // остаётся серой и так, но отличить «сеть не отдала» от «ключ не подошёл»
       // было нельзя ничем, даже по журналу.
-      const resolveOne = async (): Promise<string | null> => {
+      const resolveOne = async (): Promise<BlobResolveResult | null> => {
+        // null здесь — «уже не нужно», а не отказ: плитку закрытой галереи
+        // помечать неудачей нельзя, её больше никто не видит.
         if (cancelled) return null;
         try {
-          return await resolveBlobToLocalFile(ref, 'img');
+          return await resolveBlobToLocalFileResult(ref, 'img');
         } catch (err) {
           log.warn('media_resolve_failed', {
             err: rawErrorText(err),
           });
-          return null;
+          return { ok: false, reason: 'unknown' };
         }
       };
-      void mediaResolveLimiter.run(resolveOne).then((local) => {
-        if (cancelled || !local) return;
-        setResolved((prev) => {
-          if (prev[i] === local) return prev;
-          const next = [...prev];
-          next[i] = local;
-          return next;
-        });
+      void mediaResolveLimiter.run(resolveOne).then((res) => {
+        if (cancelled || !res) return;
+        put(i, res.ok
+          ? { url: res.uri, phase: 'ready', reason: null }
+          : { url: null, phase: 'failed', reason: res.reason });
       });
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, gateway]);
-  return resolved;
+  }, [key, gateway, attempt]);
+  return { slots, retry };
+}
+
+/**
+ * Прежняя форма: только адреса.
+ *
+ * Оставлена для тех мест, где отказ и ожидание всё равно рисуются одинаково
+ * (аватары, превью в списке общих медиа). Массив запоминается: он приходит в
+ * зависимости эффектов у вызывающих, и новая ссылка на каждый рендер их бы
+ * перезапускала.
+ */
+export function useResolvedMediaUrls(entries: string[], gateway: string): (string | null)[] {
+  const { slots } = useResolvedMediaSlots(entries, gateway);
+  return useMemo(() => slots.map((s) => s.url), [slots]);
 }
 
 /**

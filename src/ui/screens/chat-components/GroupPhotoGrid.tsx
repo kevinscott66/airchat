@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Image, Text, View } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
-import { isNbCid } from '../../../core/media/mediaBlob';
 import { parseMediaCidsColumn } from '../../../core/media/mediaCidPolicy';
-import { useResolvedMediaUrls } from './useResolvedMediaUrls';
+import { useResolvedMediaSlots } from './useResolvedMediaUrls';
+import { blobResolveText } from '../../../core/media/blobResolveText';
+import { showError } from '../../components/userFeedback';
 import { useAutoDownloadGate } from './useAutoDownloadGate';
 import { mediaScrim, radius } from '../../theme';
 
@@ -19,6 +20,11 @@ import { mediaScrim, radius } from '../../theme';
  * Пока вложение качается и расшифровывается, на его месте стоит плитка с
  * индикатором; если адрес собрать нельзя в принципе (нет шлюза или CID кривой),
  * плитка сразу говорит, что снимок недоступен, — вечного индикатора не будет.
+ *
+ * v4.32.875: «недоступно» полагалось только на вид ссылки, поэтому загрузка
+ * `nb:`-вложения, кончившаяся отказом, крутила индикатор до конца жизни пузыря.
+ * Теперь состояние приходит из разбора, а не угадывается: отказ виден, назван
+ * по нажатию и повторяется.
  */
 export function GroupPhotoGrid({
   mediaCids,
@@ -42,13 +48,13 @@ export function GroupPhotoGrid({
   const gated = useAutoDownloadGate();
   const [wanted, setWanted] = useState(false);
   const holdBack = gated && !wanted;
-  const resolved = useResolvedMediaUrls(holdBack ? [] : entries, gateway);
+  const { slots, retry } = useResolvedMediaSlots(holdBack ? [] : entries, gateway);
   /** Просмотрщик листает только готовые адреса, поэтому индекс считаем по ним. */
-  const ready = resolved.filter((u): u is string => typeof u === 'string' && u.length > 0);
+  const ready = slots.map((s) => s.url).filter((u): u is string => typeof u === 'string' && u.length > 0);
 
   const MAX_SHOW = 4;
-  const shown = resolved.slice(0, MAX_SHOW);
-  const extra = resolved.length - MAX_SHOW;
+  const shown = slots.slice(0, MAX_SHOW);
+  const extra = slots.length - MAX_SHOW;
   const TOTAL_W = 220;
   const HALF_W = Math.floor((TOTAL_W - 2) / 2);
 
@@ -73,20 +79,31 @@ export function GroupPhotoGrid({
     radius?: number,
     overlay?: React.ReactNode,
   ): React.ReactElement => {
-    const url = shown[i];
+    const slot = shown[i];
+    const url = slot?.url ?? null;
     if (!url) {
-      // nb: ещё качается — ждём; всё остальное уже не появится.
-      const pending = isNbCid(entries[i] ?? '');
+      const box = { width: w, height: h, borderRadius: radius, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: tileBackground };
+      // Отказ: говорим о нём и даём повторить. Ожидание: крутим индикатор.
+      if (slot?.phase === 'failed') {
+        return (
+          <AppPressable
+            key={i}
+            onPress={() => {
+              showError(blobResolveText(slot.reason ?? 'unknown', 'photo'));
+              retry();
+            }}
+          >
+            <View style={box}>
+              <Text style={{ fontSize: 12, color: mutedColor, textAlign: 'center' }}>
+                {'📷 не загрузилось\nнажмите, чтобы повторить'}
+              </Text>
+            </View>
+          </AppPressable>
+        );
+      }
       return (
-        <View
-          key={i}
-          style={{ width: w, height: h, borderRadius: radius, alignItems: 'center', justifyContent: 'center', backgroundColor: tileBackground }}
-        >
-          {pending ? (
-            <ActivityIndicator size="small" color={mutedColor} />
-          ) : (
-            <Text style={{ fontSize: 12, color: mutedColor }}>📷 недоступно</Text>
-          )}
+        <View key={i} style={box}>
+          <ActivityIndicator size="small" color={mutedColor} />
         </View>
       );
     }
@@ -121,7 +138,7 @@ export function GroupPhotoGrid({
 
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: radius.lg, overflow: 'hidden' }}>
-      {shown.map((_url, i) =>
+      {shown.map((_slot, i) =>
         tile(
           i,
           HALF_W,

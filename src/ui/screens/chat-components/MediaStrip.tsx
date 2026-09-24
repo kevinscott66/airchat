@@ -5,7 +5,9 @@ import { VOICE_UNAVAILABLE_TEXT, VoicePlayer } from '../../components/VoiceMessa
 import { isVoiceMessage, parseVoiceMeta } from '../../../core/social/voiceEnvelope';
 import { isNbCid } from '../../../core/media/mediaBlob';
 import { parseMediaCidsColumn } from '../../../core/media/mediaCidPolicy';
-import { useResolvedMediaUrls } from './useResolvedMediaUrls';
+import { useResolvedMediaSlots, type MediaResolveSlot } from './useResolvedMediaUrls';
+import { blobResolveText } from '../../../core/media/blobResolveText';
+import { showError } from '../../components/userFeedback';
 import { useAutoDownloadGate } from './useAutoDownloadGate';
 import { voicePlaybackUri } from '../../../core/social/voiceUriPolicy';
 import { font, mediaScrim, radius } from '../../theme';
@@ -44,7 +46,7 @@ export function MediaStrip({
   const entries = parseMediaCidsColumn(mediaCids);
   const isVoice = !!(messageText && isVoiceMessage(messageText));
   const holdBack = gated && !wanted;
-  const resolvedUrls = useResolvedMediaUrls(isVoice || holdBack ? [] : entries, gateway);
+  const { slots, retry } = useResolvedMediaSlots(isVoice || holdBack ? [] : entries, gateway);
 
   // Voice note — rendered as VoicePlayer, not image strip
   if (isVoice && messageText) {
@@ -81,7 +83,7 @@ export function MediaStrip({
   if (!entries.length) return null;
   // v4.32.226: nb: entries resolve asynchronously (download+decrypt) — they are
   // null until ready and render as a loading tile.
-  const imageUrls = resolvedUrls;
+  const imageUrls = slots.map((s) => s.url);
   const readyUrls = imageUrls.filter((u): u is string => typeof u === 'string');
   // auto_download_media gate: до нажатия ничего не скачано — первое нажатие
   // запускает загрузку, дальше снимок открывается как обычно.
@@ -95,22 +97,51 @@ export function MediaStrip({
     );
   }
   const maxShow = 4;
-  const shown = imageUrls.slice(0, maxShow);
-  const extra = imageUrls.length - maxShow;
+  const shown = slots.slice(0, maxShow);
+  const extra = slots.length - maxShow;
   const TOTAL_W = 220;
   const HALF_W = Math.floor((TOTAL_W - 2) / 2);
-  // Tile: image when resolved, loading placeholder while an nb: blob downloads.
-  const tile = (url: string | null, w: number, h: number, viewerIndex: number, overlay?: React.ReactNode) =>
-    url ? (
-      <AppPressable key={viewerIndex} onPress={() => onImagePress?.(readyUrls, Math.max(0, readyUrls.indexOf(url)))} style={{ position: 'relative' }}>
-        <Image source={{ uri: url }} style={{ width: w, height: h }} resizeMode="cover" />
-        {overlay}
-      </AppPressable>
-    ) : (
-      <View key={viewerIndex} style={{ width: w, height: h, alignItems: 'center', justifyContent: 'center', backgroundColor: bubble.plate.fill }}>
+  /**
+   * Плитка: снимок, ожидание или отказ.
+   *
+   * v4.32.875: «качается» и «не скачалось» рисовались одинаково — «📷 …»
+   * навсегда. Теперь отказ выглядит иначе, нажатие называет причину и
+   * запускает ещё одну попытку.
+   */
+  const tile = (slot: MediaResolveSlot | undefined, w: number, h: number, viewerIndex: number, overlay?: React.ReactNode) => {
+    const url = slot?.url ?? null;
+    if (url) {
+      return (
+        <AppPressable key={viewerIndex} onPress={() => onImagePress?.(readyUrls, Math.max(0, readyUrls.indexOf(url)))} style={{ position: 'relative' }}>
+          <Image source={{ uri: url }} style={{ width: w, height: h }} resizeMode="cover" />
+          {overlay}
+        </AppPressable>
+      );
+    }
+    const box = { width: w, height: h, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: bubble.plate.fill };
+    if (slot?.phase === 'failed') {
+      return (
+        <AppPressable
+          key={viewerIndex}
+          onPress={() => {
+            showError(blobResolveText(slot.reason ?? 'unknown', 'photo'));
+            retry();
+          }}
+        >
+          <View style={box}>
+            <Text style={{ fontSize: font.xs, color: bubble.plate.ink.secondary, textAlign: 'center' }}>
+              {'📷 не загрузилось\nнажмите, чтобы повторить'}
+            </Text>
+          </View>
+        </AppPressable>
+      );
+    }
+    return (
+      <View key={viewerIndex} style={box}>
         <Text style={{ fontSize: 12, color: bubble.plate.ink.secondary }}>📷 …</Text>
       </View>
     );
+  };
   if (shown.length === 1) {
     return (
       <View style={{ borderRadius: radius.lg, overflow: 'hidden' }}>
@@ -121,7 +152,7 @@ export function MediaStrip({
   if (shown.length === 2) {
     return (
       <View style={{ flexDirection: 'row', gap: 2, borderRadius: radius.lg, overflow: 'hidden' }}>
-        {shown.map((url, i) => tile(url, HALF_W, 160, i))}
+        {shown.map((slot, i) => tile(slot, HALF_W, 160, i))}
       </View>
     );
   }
@@ -138,9 +169,9 @@ export function MediaStrip({
   // 4+ images → 2×2 grid with "+N" overlay on last tile
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, width: TOTAL_W, borderRadius: radius.lg, overflow: 'hidden' }}>
-      {shown.map((url, i) =>
+      {shown.map((slot, i) =>
         tile(
-          url,
+          slot,
           HALF_W,
           HALF_W,
           i,

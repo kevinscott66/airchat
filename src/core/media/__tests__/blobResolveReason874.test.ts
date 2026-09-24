@@ -96,7 +96,7 @@ import {
 } from '../mediaBlob';
 import { blobResolveText } from '../blobResolveText';
 
-const KEY_B64 = Buffer.alloc(32, 7).toString('base64');
+const _KEY_B64 = Buffer.alloc(32, 7).toString('base64');
 const CIPHER_B64 = Buffer.from([1, 2, 3, 4]).toString('base64');
 
 /** Ответ релея с телом. */
