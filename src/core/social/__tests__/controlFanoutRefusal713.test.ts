@@ -205,7 +205,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: null действительно
     expect(code).toContain("code: 'NO_SESSION_DM',");
     // Хвост «маршрута нет»: строка помечается провалом и возвращается null.
     // v4.32.781: запись отвечает исходом — сама строка та же, обёрнута в проверку.
-    expect(code).toContain("saveRow({ ...pending, status: 'failed' })");
+    expect(code).toContain("markDelivered({ cid: null, status: 'failed', transport: null })");
     expect(code).toContain("log.info('dm_send_no_online_route', { peerDid, messageId });");
   });
 

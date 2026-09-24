@@ -1057,7 +1057,18 @@ function GroupChatScreen({
       grpOpenUnreadRef.current = group.unreadCount;
       setGrpOpenUnread(group.unreadCount);
     }
-    await markGroupRead(group.id, pid);
+    // v4.32.833: снятие непрочитанных теперь отвечает отказом (см. local.ts).
+    // Здесь его ловим на месте: жалобы на экран ставить не за что — переписка
+    // открыта и показана, — но и квитанции участникам слать тогда не за что
+    // тоже. Их оправдывает ровно то же, что и саму отметку: мы правда
+    // прочитали. Без этого перехвата отказ ушёл бы в `onError` склейки и лёг
+    // бы в журнал как «не удалось загрузить», чем он не является.
+    try {
+      await markGroupRead(group.id, pid);
+    } catch (e) {
+      log.warn('ui_group_mark_read_failed', { groupId: group.id, err: rawErrorText(e) });
+      return;
+    }
     if (!isMountedRef.current) return;
     // v4.32.226: removed blind `view_count + 1` per-open increment. It counted the
     // local user's own re-opens (no viewer identity, no dedup) and inflated channel

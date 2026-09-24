@@ -131,7 +131,16 @@ describe('отправка: вторую строку никто не завод
   });
 
   it('экран по-прежнему кладёт свою строку под номером сессии', () => {
-    expect(read('ui', 'screens', 'ChatScreen.tsx')).toContain('upsertChatMessage({ id: payload.liveId,');
+    // v4.32.833: поля такта собраны в `row` — он пишется дважды за посылку
+    // («отправляется», затем исход), и номер сессии обязан быть один и тот же.
+    const screen = read('ui', 'screens', 'ChatScreen.tsx');
+    const at = screen.indexOf('        const row = {\n          id: payload.liveId,');
+    expect(at).toBeGreaterThan(0);
+    const tail = screen.slice(at, at + 1200);
+    expect(tail).toContain("await upsertChatMessage({ ...row, status: 'sending' });");
+    expect(tail).toContain("await upsertChatMessage({ ...row, status: ok ? 'sent' : 'failed' });");
+    // Других строк живая геолокация не заводит.
+    expect(screen.split('upsertChatMessage({').length - 1).toBe(2);
   });
 });
 

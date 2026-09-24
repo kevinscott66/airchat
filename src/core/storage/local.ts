@@ -4858,6 +4858,70 @@ export async function updateChatMessageStatusChecked(
 }
 
 /**
+ * Отметить исход отправки на УЖЕ лежащей строке (v4.32.833).
+ *
+ * Дефект. Отправка кладёт свою строку в переписку ДО сети, а по исходу
+ * переписывала её целиком — тем же `upsertChatMessageChecked` и тем же
+ * снимком `pending`, снятым до сети. Снимок хранит текст, время и цитату.
+ * Между ним и записью проходит вся отправка: публикация с повторами, затем
+ * объявление ссылки по каналам. На плохой сети это десятки секунд, и всё это
+ * время сообщение лежит в переписке со своим обычным меню.
+ *
+ * Цена. Удалили его за эти секунды — перезапись вставляет строку заново:
+ * «удалить у всех» ушло, у собеседника пусто, а у себя сообщение вернулось
+ * живым и с пометкой «доставлено». Исправили текст — перезапись возвращает
+ * прежний; метки правки (`edited_at`) в списке DO UPDATE нет, и она
+ * остаётся: в пузыре прежний текст с подписью «изменено». Убранные из
+ * сообщения адрес или сумма встают на место сами, и признака этого нет
+ * нигде.
+ *
+ * Правка. Исход отправки знает ровно три поля — ссылку, состояние и
+ * маршрут. Их и пишем, обычным UPDATE по ключу. Нет строки — `'missing'`,
+ * и воскрешать нечего: её унесли осознанно.
+ *
+ * Тот же снимок отматывал назад и галочку «прочитано». Собеседник получает
+ * сообщение из общей темы сразу после публикации, а объявление ссылки
+ * (`announceCid`) после неё идёт по каналам ещё секунды: за это время он
+ * успевает открыть переписку и прислать отметку о прочтении, и она ложится
+ * в ту же строку отдельным путём — входящим конвертом. Следом приходил
+ * «доставлено» от собственной отправки и затирал её. Второй отметки по тому
+ * же сообщению собеседник не шлёт, так что синяя галочка не возвращалась уже
+ * никогда. Поэтому `AND status != 'read'`: прочитанное — конец пути, назад
+ * оно не идёт. Ноль строк при живой строке — это `'overtaken'`, а не
+ * `'missing'`: разница в том, повторять ли.
+ */
+export type ChatDeliveryWrite = 'updated' | 'missing' | 'overtaken' | 'failed';
+
+export async function markChatMessageDeliveredChecked(
+  id: string,
+  ownerProfileId: number,
+  delivery: { cid: string | null; status: string; transport: string | null }
+): Promise<ChatDeliveryWrite> {
+  try {
+    const d = await db();
+    const res = await d.runAsync(
+      `UPDATE chat_messages SET cid = ?, status = ?, transport = ?
+       WHERE id = ? AND owner_profile_id = ? AND status != 'read'`,
+      [delivery.cid, delivery.status, delivery.transport, id, ownerProfileId]
+    );
+    if (anyChanged(res)) {
+      emitChatWrites();
+      return 'updated';
+    }
+    // Ноль строк — либо её удалили, либо она уже прочитана. Разница видна
+    // только чтением, и оно здесь дёшево: путь редкий.
+    const still = await d.getFirstAsync<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM chat_messages WHERE id = ? AND owner_profile_id = ?',
+      [id, ownerProfileId]
+    );
+    return (still?.n ?? 0) > 0 ? 'overtaken' : 'missing';
+  } catch (e) {
+    log.warn('chat_message_delivery_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
+  }
+}
+
+/**
  * v4.32.181 (Round-11 #3): Boot-time sweep for orphan 'sending' messages.
  * If the process crashed / was killed mid-flush, rows get stuck in 'sending'
  * status forever and the UI shows an eternal spinner. Mark anything older than
@@ -6982,6 +7046,16 @@ export async function touchGroupConversation(
  * версия будила их всегда, а GroupsScreen на каждый сигнал перечитывает
  * переписку и в конце чтения зовёт сюда же — круг замыкался и крутился с
  * периодом дебаунса. Подробности в writeEcho.ts.
+ *
+ * v4.32.833: отказ ещё и отдаётся наверх. Журнальная строка появилась в
+ * v4.32.526 взамен пустого `catch { }` — но гасить отказ она не перестала, и
+ * вызывающий об этом не узнавал. А вызывающий — `runRowOp` в GroupsScreen: он
+ * обёрнут в `try` с готовым текстом «Не удалось отметить прочитанным», и
+ * текст этот был недостижим. Человек жал пункт меню, счётчик оставался на
+ * месте, и никто не говорил почему. Соседи по тому же `runRowOp`
+ * (`setGroupPinned`, `setGroupMuted`, `setGroupArchived`) бросают — эта тройка
+ * была единственным исключением. `markGroupUnread` к тому же обещает уход с
+ * экрана: `runGuardedOp` уводил назад и при неудаче.
  */
 export async function markGroupRead(groupId: string, ownerProfileId: number): Promise<void> {
   try {
@@ -6996,6 +7070,7 @@ export async function markGroupRead(groupId: string, ownerProfileId: number): Pr
     // v4.32.526: было `catch { }` — сбой снятия непрочитанных не оставлял
     // следа нигде, и «счётчик не гаснет» было нечем объяснить.
     log.warn('mark_group_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -7010,6 +7085,7 @@ export async function markAllGroupsRead(ownerProfileId: number): Promise<void> {
     if (anyChanged(res)) emitChatWrites();
   } catch (e) {
     log.warn('mark_all_groups_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -7026,6 +7102,7 @@ export async function markGroupUnread(groupId: string, ownerProfileId: number): 
     if (anyChanged(res)) emitChatWrites();
   } catch (e) {
     log.warn('mark_group_unread_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -8365,48 +8442,63 @@ export async function deleteGroupMessageChecked(
   }
 }
 
-/** Очистить историю сообщений группы (локально). */
+/**
+ * Очистить историю сообщений группы (локально).
+ *
+ * v4.32.833: своей ловушки у этой очистки больше нет — отказ идёт наружу.
+ *
+ * `eraseAtomically` внутри устроен именно так, чтобы о сорванном стирании
+ * узнали: он откатывает транзакцию и бросает дальше. Но всё тело лежало в
+ * `try`, который писал строчку в журнал и возвращался как ни в чём не бывало,
+ * а подпись `Promise<void>` другого способа признаться не оставляла. Экран
+ * групп ловушку на этот случай уже держал (`showError(userErrorText(e, 'Не
+ * удалось очистить историю'))`), только попасть в неё было нельзя: человеку
+ * говорилось «История очищена», список перечитывался — и все сообщения
+ * оставались на месте. «Это действие нельзя отменить» из вопроса про очистку
+ * звучит так, будто переписки больше нет; повторить нажатие в голову уже не
+ * придёт.
+ *
+ * Соседи по смыслу так и написаны: `clearChatHistory` и `deleteGroup` своей
+ * ловушки не имеют вовсе, `clearAllMessageHistory` отвечает `false`. Из
+ * четырёх стираний молчало одно.
+ */
 export async function clearGroupMessages(groupId: string, ownerProfileId: number): Promise<void> {
-  try {
-    const d = await db();
-    const dek = await getOrCreateDataEncryptionKey();
-    const doomed = newAttachmentRefs();
-    await collectAttachmentRefs(
-      d,
-      dek,
-      'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
-      [groupId, ownerProfileId],
-      doomed,
-      'own'
-    );
-    await eraseAtomically(
-      d,
-      'clear_group_messages',
-      async () => {
-        await deletePollArtifactsBySelect(
-          d,
-          'SELECT id FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
-          [groupId, ownerProfileId],
-          ownerProfileId
-        );
-        await d.runAsync(
-          'DELETE FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
-          [groupId, ownerProfileId]
-        );
-        await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(groupId));
-        // v4.32.296: строку groups здесь не трогали вовсе. После «очистить
-        // историю» в списке оставались превью последнего сообщения и имя того, кто
-        // его написал, счётчик непрочитанных не обнулялся, а в шапке продолжал
-        // висеть баннер с закреплённым сообщением целиком — pinned_message_text
-        // хранит копию текста, и удаление group_messages её не касается.
-        await d.runAsync(clearTracesSql('groups', 'row'), [ownerProfileId, groupId]);
-      },
-      () => dropOrphanBlobCache(doomed)
-    );
-    emitChatWrites();
-  } catch (e) {
-    log.warn('clear_group_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-  }
+  const d = await db();
+  const dek = await getOrCreateDataEncryptionKey();
+  const doomed = newAttachmentRefs();
+  await collectAttachmentRefs(
+    d,
+    dek,
+    'SELECT text, media_cids, 0 AS mine FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
+    [groupId, ownerProfileId],
+    doomed,
+    'own'
+  );
+  await eraseAtomically(
+    d,
+    'clear_group_messages',
+    async () => {
+      await deletePollArtifactsBySelect(
+        d,
+        'SELECT id FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
+        [groupId, ownerProfileId],
+        ownerProfileId
+      );
+      await d.runAsync(
+        'DELETE FROM group_messages WHERE group_id = ? AND owner_profile_id = ?',
+        [groupId, ownerProfileId]
+      );
+      await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(groupId));
+      // v4.32.296: строку groups здесь не трогали вовсе. После «очистить
+      // историю» в списке оставались превью последнего сообщения и имя того, кто
+      // его написал, счётчик непрочитанных не обнулялся, а в шапке продолжал
+      // висеть баннер с закреплённым сообщением целиком — pinned_message_text
+      // хранит копию текста, и удаление group_messages её не касается.
+      await d.runAsync(clearTracesSql('groups', 'row'), [ownerProfileId, groupId]);
+    },
+    () => dropOrphanBlobCache(doomed)
+  );
+  emitChatWrites();
 }
 
 /** Изменить текст сообщения группы (только своё). */

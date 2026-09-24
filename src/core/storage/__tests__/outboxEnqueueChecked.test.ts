@@ -113,7 +113,7 @@ describe('отправка без онлайн-пути не маскирует�
   it('сообщение помечается failed при отсутствии маршрута', () => {
     expect(MESSAGING).toContain("log.info('dm_send_no_online_route', { peerDid, messageId });");
     // v4.32.781: запись отвечает исходом — сама строка та же, обёрнута в проверку.
-    expect(MESSAGING).toContain("saveRow({ ...pending, status: 'failed' })");
+    expect(MESSAGING).toContain("markDelivered({ cid: null, status: 'failed', transport: null })");
   });
 
   it('кнопка повтора в чате живёт именно на статусе failed', () => {

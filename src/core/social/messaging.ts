@@ -21,6 +21,7 @@ import {
   readChatMessageWindow,
   upsertChatMessage,
   upsertChatMessageChecked,
+  markChatMessageDeliveredChecked,
   saveChatMessageChecked,
   saveChatMessageWithTouch,
   updateChatMessageStatusChecked,
@@ -2126,6 +2127,24 @@ export class MessagingService {
       if (control || callerOwnsRow) return 'skipped';
       return await upsertChatMessageChecked(row);
     };
+    /**
+     * v4.32.833: исход отправки пишется отдельно от самой строки.
+     *
+     * Прежде он шёл тем же `saveRow` и тем же снимком `pending` — то есть
+     * полной перезаписью, снятой ДО сети. Между снимком и записью проходит вся
+     * отправка, и всё это время сообщение лежит в переписке со своим меню:
+     * успели удалить — перезапись воскрешала его, успели исправить —
+     * возвращала прежний текст, оставив подпись «изменено» на месте. Разбор в
+     * `markChatMessageDeliveredChecked`.
+     */
+    const markDelivered = async (delivery: {
+      cid: string | null;
+      status: string;
+      transport: string | null;
+    }): Promise<'updated' | 'missing' | 'overtaken' | 'failed' | 'skipped'> => {
+      if (control || callerOwnsRow) return 'skipped';
+      return await markChatMessageDeliveredChecked(messageId, ownerPid, delivery);
+    };
     const touchConv = (): void => {
       if (!control) {
         void touchConversation(contactPubB64, ownerPid, previewLabelForText(text).slice(0, 120), 'out', false);
@@ -2174,12 +2193,7 @@ export class MessagingService {
       if (fallbackVia) {
         log.info('message_sent_via_fallback', { peerDid, messageId, transport: fallbackVia });
         const fallbackRef = `fallback:${messageId}`;
-        await saveRow({
-          ...pending,
-          cid: fallbackRef,
-          status: 'delivered',
-          transport: fallbackVia,
-        });
+        await markDelivered({ cid: fallbackRef, status: 'delivered', transport: fallbackVia });
         // v4.32.128 (AUDIT): NEVER write fallback:/lan: refs to conversation
         // tip. Receive-side has been guarded since v120 (#6) — send-side was
         // still writing the placeholder, which broke syncDmHistoryFromProfile's
@@ -2198,7 +2212,7 @@ export class MessagingService {
       // переписке, — но кнопки «Повторить» у неё нет, а признаться в этом
       // ответом уже нельзя: вернуть текст в поле значило бы написать его
       // дважды. Остаётся назвать в журнале.
-      if ((await saveRow({ ...pending, status: 'failed' })) === 'failed') {
+      if ((await markDelivered({ cid: null, status: 'failed', transport: null })) === 'failed') {
         log.warn('dm_failed_mark_row_failed', { messageId, peerDid });
       }
       touchConv();
@@ -2210,12 +2224,7 @@ export class MessagingService {
       return { outcome: control || callerOwnsRow ? 'refused' : 'stored', cid: null };
     }
 
-    await saveRow({
-      ...pending,
-      cid,
-      status: 'sent',
-      transport: 'ipfs',
-    });
+    await markDelivered({ cid, status: 'sent', transport: 'ipfs' });
     const announced = await this.store.announceCid(myDid, peerDid, cid);
     /**
      * v4.32.732: «Доставлено» ставится по подтверждению канала, а не просто
@@ -2238,7 +2247,7 @@ export class MessagingService {
     const markHandedOver = async (): Promise<void> => {
       if (handedOver) return;
       handedOver = true;
-      await saveRow({ ...pending, cid, status: 'delivered', transport: 'ipfs' });
+      await markDelivered({ cid, status: 'delivered', transport: 'ipfs' });
     };
     // v4.32.118 Stage 2: also publish the wire envelope to recipient's
     // self-inbox so strangers (not yet in our contacts, and not yet with

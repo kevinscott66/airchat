@@ -1,6 +1,7 @@
 import React, { type ReactNode } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { AppPressable } from './components/AppPressable';
+import { isUserFacingMessage } from './components/userErrorText';
 import { ErrorHandler, ErrorSeverity, type AppError } from '../core/errorHandler';
 import { log } from '../core/logger';
 import { contrastingInk, darkColors, radius } from './theme';
@@ -8,6 +9,24 @@ import { contrastingInk, darkColors, radius } from './theme';
 type Props = { children: ReactNode };
 
 type State = { hasError: boolean; message: string };
+
+/**
+ * v4.32.833: этот экран — последнее, что человек видит от приложения.
+ *
+ * Показывался здесь `error.message`, и запасной текст стоял в ветке `||`, то
+ * есть срабатывал только на пустом сообщении — а его почти не бывает. Значит
+ * на весь экран выводилось `undefined is not an object (evaluating
+ * 'e.cid')` или `Maximum update depth exceeded`, вместо единственного, что
+ * человеку тут можно сделать. Тот же дефект, что разобрали в v4.32.428 на 54
+ * местах сразу; храповик `errorTextCallSites` ловит рукописную развёртку
+ * `e instanceof Error ? e.message`, а здесь сообщение приходит из
+ * `getDerivedStateFromError` уже строкой и мимо неё проскочило.
+ *
+ * Правило берём оттуда же и целиком: наш текст для человека написан
+ * кириллицей, чужой — нет. Техническая подробность при этом не теряется — её
+ * пишет `componentDidCatch` и в журнал, и в ErrorHandler.
+ */
+const ADVICE = 'Перезапустите приложение. Если проблема повторится, обновите AirChat.';
 
 export class AppErrorBoundary extends React.Component<Props, State> {
   state: State = { hasError: false, message: '' };
@@ -47,7 +66,7 @@ export class AppErrorBoundary extends React.Component<Props, State> {
         <View style={styles.errorContainer}>
           <Text style={styles.title}>Произошла ошибка</Text>
           <Text style={styles.body}>
-            {this.state.message || 'Перезапустите приложение. Если проблема повторится, обновите AirChat.'}
+            {isUserFacingMessage(this.state.message) ? this.state.message : ADVICE}
           </Text>
           <AppPressable
             style={styles.btn}

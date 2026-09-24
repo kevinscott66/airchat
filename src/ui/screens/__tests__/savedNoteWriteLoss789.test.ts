@@ -113,7 +113,11 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: осознанные молчал�
   it('живая геолокация по-прежнему пишет гасящей формой', () => {
     // Её строку переписывает каждый такт сессии: отказ чинится сам собой, а
     // ошибка на экране мешала бы разговору каждые полминуты.
-    expect(CHAT).toContain('await upsertChatMessage({ id: payload.liveId,');
+    // v4.32.833: записей за такт стало две — «отправляется» и исход посылки, —
+    // но обе по-прежнему гасящие, и ровно по той же причине.
+    expect(CHAT).toContain("await upsertChatMessage({ ...row, status: 'sending' });");
+    expect(CHAT).toContain("await upsertChatMessage({ ...row, status: ok ? 'sent' : 'failed' });");
+    expect(CHAT).toContain('        const row = {\n          id: payload.liveId,');
   });
 
   it('обычная отправка защищена своим способом и он не тронут (v4.32.781)', () => {

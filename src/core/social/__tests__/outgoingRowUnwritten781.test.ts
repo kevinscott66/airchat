@@ -123,7 +123,9 @@ describe('отправка собеседнику: без строки не от
 
   it('отказ пометки «не отправлено» назван в журнале, но текст не отбирает', () => {
     const w = work();
-    const mark = w.indexOf("if ((await saveRow({ ...pending, status: 'failed' })) === 'failed') {");
+    const mark = w.indexOf(
+      "if ((await markDelivered({ cid: null, status: 'failed', transport: null })) === 'failed') {"
+    );
     expect(mark).toBeGreaterThan(0);
     expect(w).toContain("log.warn('dm_failed_mark_row_failed'");
     // Здесь строка `sending` уже легла выше — текст на месте, и возвращать его
@@ -188,8 +190,12 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const w = work();
     // Между записью строки-заготовки и словом `stored` не должно быть ни одного
     // пути, на котором строки нет: оба места, где она пишется, проверены.
-    expect(w.match(/saveRow\(/g)?.length).toBeGreaterThanOrEqual(4);
+    // v4.32.833: исход отправки пишет не saveRow, а markDelivered — но обеих
+    // записей по-прежнему четыре, и каждая отвечает исходом.
+    expect(w.match(/markDelivered\(/g)?.length).toBeGreaterThanOrEqual(4);
     expect(w).not.toContain('await saveRow(pending);');
-    expect(w).not.toContain("await saveRow({ ...pending, status: 'failed' });");
+    expect(w).not.toContain(
+      "await markDelivered({ cid: null, status: 'failed', transport: null });"
+    );
   });
 });

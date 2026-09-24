@@ -68,7 +68,9 @@ function body(from: string, to: string): string {
 describe('отправка записывает путь', () => {
   it('успешная публикация помечается как ipfs — и в «отправлено», и в «доставлено»', () => {
     const work = MSG.slice(MSG.indexOf('private async sendMessageWork'));
-    expect(work).toContain("status: 'sent',\n      transport: 'ipfs',");
+    // v4.32.833: маршрут пишется отдельной, узкой записью — тремя полями, а
+    // не перезаписью всей строки снимком, снятым до сети.
+    expect(work).toContain("await markDelivered({ cid, status: 'sent', transport: 'ipfs' });");
     // v4.32.732: «доставлено» пишется из markHandedOver, одной строкой.
     expect(work).toContain("status: 'delivered', transport: 'ipfs'");
   });
@@ -121,7 +123,9 @@ describe('отправка записывает путь', () => {
   it('запасной путь пишет тот транспорт, который подтвердил доставку', () => {
     const work = MSG.slice(MSG.indexOf('private async sendMessageWork'));
     expect(work).toContain('const fallbackVia = await multiTransportRouter.sendVia(payload, peerDid);');
-    expect(work).toContain('transport: fallbackVia,');
+    expect(work).toContain(
+      "await markDelivered({ cid: fallbackRef, status: 'delivered', transport: fallbackVia });"
+    );
   });
 
   it('веерная раздача через контакты по-прежнему запускается, когда никто не довёз', () => {

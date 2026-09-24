@@ -1937,8 +1937,40 @@ function ChatThreadView({
         // пропускалось: пузырь не появлялся, а собеседник узнавал о том, что
         // с ним поделились геолокацией, только через полминуты.
         const txt = makeLiveLocText(payload);
-        await upsertChatMessage({ id: payload.liveId, contactPubB64: peerB64, cid: `live:${payload.liveId}`, text: txt, direction: 'out', status: 'delivered', mediaCids: null, createdAt: payload.expireAt - durationMinutes * 60_000, ownerProfileId: activeProfileId, replyToId: null, replyToPreview: null });
-        await svc.sendMessage(peerB64, txt);
+        /**
+         * v4.32.833: такт отчитывается о том, что с ним стало.
+         *
+         * Строка писалась сразу со `status: 'delivered'` — двойная галочка и
+         * «Доставлено» в озвучке, — а ответ отправки не читался вовсе. У живой
+         * геолокации это единственная строка на всю сессию (см. callerOwnsRow в
+         * messaging.ts): она перезаписывается каждые полминуты, и другого места,
+         * где о посылке можно узнать, нет. Без маршрута отправка отвечает
+         * `'refused'`, а `requireOnlineWrite` и вовсе бросает — служба такт гасит
+         * в журнал, и человек восемь часов смотрит на «Доставлено», уверенный,
+         * что его ведут. Ровно та же подмена, что и в v4.32.732 у обычных
+         * сообщений, только там её уже убрали.
+         */
+        const row = {
+          id: payload.liveId,
+          contactPubB64: peerB64,
+          cid: `live:${payload.liveId}`,
+          text: txt,
+          direction: 'out' as const,
+          mediaCids: null,
+          createdAt: payload.expireAt - durationMinutes * 60_000,
+          ownerProfileId: activeProfileId,
+          replyToId: null,
+          replyToPreview: null,
+        };
+        await upsertChatMessage({ ...row, status: 'sending' });
+        void appendNewMessages();
+        let ok = false;
+        try {
+          ok = (await svc.sendMessageResult(peerB64, txt)).outcome !== 'refused';
+        } catch (e) {
+          log.warn('chat_live_location_tick_failed', { err: rawErrorText(e) });
+        }
+        await upsertChatMessage({ ...row, status: ok ? 'sent' : 'failed' });
         void appendNewMessages();
       },
       onExpire: () => setActiveLiveLocId(null),

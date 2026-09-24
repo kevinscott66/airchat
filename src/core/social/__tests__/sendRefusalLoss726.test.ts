@@ -108,7 +108,7 @@ describe('отсутствие маршрута — не отказ: строк�
     const w = work();
     // v4.32.781: запись обёрнута в проверку исхода — строка та же, слово
     // `stored` по-прежнему стоит после неё.
-    const saved = w.indexOf("saveRow({ ...pending, status: 'failed' })");
+    const saved = w.indexOf("markDelivered({ cid: null, status: 'failed', transport: null })");
     const verdict = w.indexOf(
       "return { outcome: control || callerOwnsRow ? 'refused' : 'stored', cid: null };"
     );
