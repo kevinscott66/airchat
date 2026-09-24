@@ -63,8 +63,10 @@ import { rateLimiter } from '../security/rateLimiter';
 import {
   commitGroupControlTs,
   commitGroupMessageTs,
+  commitGroupPinTs,
   groupControlTsFresh,
   groupMessageTsFresh,
+  groupPinTsFresh,
 } from './controlWatermark';
 import { GROUP_BANLIST_MAX, countBanned, countsAsMember, roleChangeSysText } from './groupRolePolicy';
 import { clearGroupRemoval, markGroupRemoval, wasRemovedFromGroup } from './groupRemovalMark';
@@ -1965,6 +1967,22 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.warn('group_ctl_pin_denied', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12), role: actor.role });
       return 'consumed';
     }
+    // v4.32.792: знак свежести. До него закрепление было единственным
+    // управляющим состоянием группы без него, и это стояло в коде как данность.
+    // Между тем оно скалярно: у пары «группа + сообщение» два положения, и
+    // повтор перехваченного кадра их переключает — сохранённый `on` возвращает
+    // в шапку снятый баннер, сохранённый `off` снимает нынешний. Право же
+    // проверяется по текущему составу и подписанту оригинала, так что участник,
+    // у которого закрепление отобрали настройкой adminOnlyPinning, проходит
+    // по-прежнему. Проверка стоит ДО чтения цели: повтор не должен стоить даже
+    // обращения к таблице сообщений.
+    if (!(await groupPinTsFresh(env.msgId, pid, env.ts))) {
+      log.warn('group_ctl_pin_replay_drop', {
+        gid: env.groupId.slice(0, 8),
+        msgId: env.msgId.slice(0, 8),
+      });
+      return 'consumed';
+    }
     // Текст баннера берётся из своей строки group_messages, а не из конверта:
     // иначе закрепление стало бы способом показать группе произвольный текст.
     // Неизвестное сообщение просто выпадет при resolvePinned.
@@ -2005,10 +2023,12 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       return 'deferred';
     }
     // v4.32.774: и строка о закреплении — по тому же доводу, что запись самого
-    // закрепления строкой выше. Знака свежести у закрепления нет, applyLocalPin
-    // идемпотентен, поэтому повтор кадра просто напишет недостающую строку.
+    // закрепления строкой выше. Знак при этом остаётся на месте (v4.32.792):
+    // applyLocalPin идемпотентен, поэтому повтор, которого мы сами и попросили,
+    // просто допишет недостающую строку.
     const said = await insertCtlSysMessage(env, pid, env.on ? 'Сообщение закреплено' : 'Сообщение откреплено');
     if (said === 'failed') return deferCtlSysRow(env, 'pin');
+    await commitGroupPinTs(env.msgId, pid, env.ts);
     log.info('group_ctl_pin_applied', { gid: env.groupId.slice(0, 8), on: env.on });
     return 'consumed';
   }

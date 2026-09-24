@@ -89,8 +89,10 @@ jest.mock('../../storage/local', () => ({
 jest.mock('../controlWatermark', () => ({
   commitGroupControlTs: jest.fn(async () => {}),
   commitGroupMessageTs: jest.fn(async () => {}),
+  commitGroupPinTs: jest.fn(async () => {}),
   groupControlTsFresh: jest.fn(async () => true),
   groupMessageTsFresh: jest.fn(async () => true),
+  groupPinTsFresh: jest.fn(async () => true),
 }));
 jest.mock('../groupPinSync', () => ({
   applyLocalPin: jest.fn(async () => { mockApplied.push('pin'); return { ok: true }; }),

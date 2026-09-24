@@ -212,6 +212,40 @@ export async function commitGroupMessageTs(msgId: string, pid: number, ts: numbe
   await commitTs(groupMessageWatermarkKey(msgId), 'grp:msg', pid, ts);
 }
 
+/**
+ * Слот ЗАКРЕПЛЕНИЯ одного сообщения группы (v4.32.792).
+ *
+ * До этой версии у закрепления не было знака вовсе, и это было записано прямо
+ * в коде обработчика как данность. Между тем состояние скалярное — у пары
+ * «группа + сообщение» ровно два положения, `on` и `off`, — и повтор кадра его
+ * переключает: сохранённый `pin:on` возвращает в шапку снятый баннер, а
+ * сохранённый `pin:off` снимает нынешний. Право при этом проверяется по
+ * ТЕКУЩЕМУ составу и подписанту оригинала, так что участник, у которого
+ * закрепление отобрали настройкой `adminOnlyPinning`, всё равно проходит, если
+ * его старый кадр был перехвачен.
+ *
+ * Ячейка своя, отдельная от `grp:msg:` (правка и удаление того же сообщения):
+ * закрепление и правка спорят за разные значения, и общий знак выбросил бы
+ * законную правку, пришедшую следом за более поздним закреплением. Порядок
+ * между ними relay не держит — накопленное отдаётся пачкой.
+ *
+ * Идентификатор сообщения последний по той же причине, что и в соседних
+ * ключах: кодек ограничивает его только длиной, двоеточия внутри допустимы.
+ */
+export function groupPinWatermarkKey(msgId: string): string {
+  return `${WATERMARK_PREFIX}grp:pin:${msgId}`;
+}
+
+/** Свежесть закрепления — без сдвига отметки (см. groupControlTsFresh). */
+export async function groupPinTsFresh(msgId: string, pid: number, ts: number): Promise<boolean> {
+  return freshTs(groupPinWatermarkKey(msgId), 'grp:pin', pid, ts);
+}
+
+/** Сдвинуть отметку закрепления — после того, как оно применено и рассказано. */
+export async function commitGroupPinTs(msgId: string, pid: number, ts: number): Promise<void> {
+  await commitTs(groupPinWatermarkKey(msgId), 'grp:pin', pid, ts);
+}
+
 function groupKindLabel(slot: GroupControlSlot): string {
   return `grp:${slot.split(':')[0]}`;
 }
