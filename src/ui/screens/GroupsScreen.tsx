@@ -2324,7 +2324,9 @@ function GroupChatScreen({
   const deleteMsg = useCallback((msg: GroupMessageRow) => {
     const isOwn = msg.senderPubB64 === myPubB64;
     if (!isOwn && !amAdmin) return;
-    Alert.alert('Удалить сообщение?', '', [
+    // v4.32.888: тело было пустой строкой. Человек не видел ни того, что
+    // сообщение пропадёт и у остальных, ни того, что копия останется у него.
+    Alert.alert('Удалить сообщение?', 'Оно удалится у всех участников группы. Копия останется в «Недавно удалённых».', [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Удалить', style: 'destructive',
@@ -3084,7 +3086,7 @@ function GroupChatScreen({
           <View style={{ flex: 1, height: 1, backgroundColor: colors.accent }} />
           <View style={{ backgroundColor: activeTint.fill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4, borderWidth: 1, borderColor: colors.accent }}>
             <Text style={{ color: activeTint.ink, fontSize: 12, fontWeight: '600' }}>
-              {grpOpenUnread} непрочитанных
+              {grpOpenUnread} {pluralRu(grpOpenUnread, 'непрочитанное', 'непрочитанных', 'непрочитанных')}
             </Text>
           </View>
           <View style={{ flex: 1, height: 1, backgroundColor: colors.accent }} />
@@ -4431,7 +4433,14 @@ function GroupChatScreen({
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
                     const ids = [...selectedGrpIds];
-                    Alert.alert('Удалить выбранные?', `${ids.length} сообщ.`, [
+                    // v4.32.888: «N сообщ.» не говорило главного — удаление
+                    // здесь уходит `op: 'del'` всем участникам, то есть стирает
+                    // сообщение и на чужих устройствах. Отменить это нельзя.
+                    Alert.alert(
+                      'Удалить выбранные?',
+                      `${ids.length} ${pluralRu(ids.length, 'сообщение удалится', 'сообщения удалятся', 'сообщений удалятся')} `
+                        + 'у всех участников группы.',
+                      [
                       { text: 'Отмена', style: 'cancel' },
                       { text: 'Удалить', style: 'destructive', onPress: () => {
                         runGuardedOp(async () => {

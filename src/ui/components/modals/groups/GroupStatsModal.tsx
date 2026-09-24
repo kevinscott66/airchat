@@ -8,6 +8,7 @@ import { avatarShape, badgeTint, font, radius, scrim } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupStats } from '../../../../core/storage/local';
 import { dayMonthLongYear } from '../../../../core/time/ruDateTime';
+import { pluralRu } from '../../../../core/storage/ruPlural';
 import { shownName } from '../../../../core/social/unreadableName';
 import { shortIdentity } from '../../../identity/shortId';
 
@@ -98,7 +99,7 @@ function GroupStatsModalImpl({ visible, onClose, grpStats, memberCount }: GroupS
                           <Text style={[styles.senderName, { color: s.unreadable ? colors.warning : colors.text }]}>
                             {shownName(s.name, s.unreadable, shortIdentity(s.pub))}
                           </Text>
-                          <Text style={[styles.senderCount, { color: colors.textMuted }]}>{s.count} сообщ.</Text>
+                          <Text style={[styles.senderCount, { color: colors.textMuted }]}>{s.count} {pluralRu(s.count, 'сообщение', 'сообщения', 'сообщений')}</Text>
                         </View>
                       ))}
                     </>

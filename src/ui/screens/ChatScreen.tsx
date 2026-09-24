@@ -3123,7 +3123,8 @@ function ChatThreadView({
           if (msgCount === openUnreadCount) {
             withDates.splice(i + 1, 0, {
               type: 'date_sep',
-              label: `↓ ${openUnreadCount} новых`,
+              // v4.32.888: при одном непрочитанном полоса писала «1 новых».
+              label: `↓ ${openUnreadCount} ${pluralRu(openUnreadCount, 'новое сообщение', 'новых сообщения', 'новых сообщений')}`,
               key: 'unread_sep',
             });
             break;
@@ -3998,7 +3999,15 @@ function ChatThreadView({
                   const ids = [...selectedIds];
                   const msgs = lines.filter((m) => ids.includes(m.id));
                   if (msgs.length === 0) return;
-                  Alert.alert('Удалить выбранные?', `${ids.length} сообщ.`, [
+                  // v4.32.888: в теле стояло «N сообщ.» — число и обрубок слова.
+                  // Одиночное удаление спрашивает выбором: «Удалить у себя» или
+                  // «Удалить у всех». Пачка молча делает первое, и человек,
+                  // только что выбиравший второе, вправе ждать того же.
+                  Alert.alert(
+                    'Удалить выбранные?',
+                    `${ids.length} ${pluralRu(ids.length, 'сообщение удалится', 'сообщения удалятся', 'сообщений удалятся')} `
+                      + `только у вас. У собеседника ${pluralRu(ids.length, 'оно останется', 'они останутся', 'они останутся')}.`,
+                    [
                     { text: 'Отмена', style: 'cancel' },
                     { text: 'Удалить', style: 'destructive', onPress: () => {
                       const svc = getMessagingService();
