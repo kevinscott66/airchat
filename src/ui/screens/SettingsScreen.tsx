@@ -27,6 +27,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { authGuard } from '../../core/security/authGuard';
 import { APPLE_BINDING_STORED, parseAppleBindingHint } from '../../core/security/appleBindingHint';
 import type { AppleBindingHint } from '../../core/security/appleBindingHint';
+import { logoutConfirmText } from '../../core/security/recoveryRoutes';
 import { APPLE_BINDING_HINT_KEY } from '../../core/security/appleBindingStale';
 import {
   markPasswordBoundCopiesStale,
@@ -317,7 +318,10 @@ function SettingsScreenImpl({
    * проверена. Пока флаг стоит, в меню висит напоминание, а в окне слов есть
    * «Проверить запись».
    */
-  const [seedBackupPending, setSeedBackupPendingState] = useState(false);
+  // v4.32.870: третье значение — `null`, «не прочиталось». Прежде отказ
+  // хранилища отвечал `false`, то есть самым успокаивающим из возможных
+  // ответов, и подтверждение выхода строилось на нём как на факте.
+  const [seedBackupPending, setSeedBackupPendingState] = useState<boolean | null>(false);
   const [seedVerifyMode, setSeedVerifyMode] = useState(false);
   const [cloudPasswordModal, setCloudPasswordModal] = useState(false);
   const [cloudPasswordInput, setCloudPasswordInput] = useState('');
@@ -424,7 +428,7 @@ function SettingsScreenImpl({
     setSubScreen((s) => (s === 'relay' || s === 'diagnostics' ? null : s));
   }, [devMode]);
   useEffect(() => {
-    void hasSeedBackupPending().then(setSeedBackupPendingState).catch(() => setSeedBackupPendingState(false));
+    void hasSeedBackupPending().then(setSeedBackupPendingState).catch(() => setSeedBackupPendingState(null));
   }, []);
   // v4.32.869: отказ чтения оставляет `null` — молчание, а не «копии нет».
   useEffect(() => { void readCloudVaultCopy().then(setCloudCopy); }, []);
@@ -949,7 +953,14 @@ function SettingsScreenImpl({
       }
       if (!alive || !providers.includes('apple')) return;
       setAppleBindReady(true);
-      const hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
+      // v4.32.870: чтение стояло голым внутри `void (async …)()` — отказ базы
+      // уходил необработанным reject, а строка молча оставалась «привязать».
+      let hint: AppleBindingHint = 'none';
+      try {
+        hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
+      } catch (e) {
+        log.warn('apple_binding_hint_read_failed', { err: rawErrorText(e) });
+      }
       if (!alive) return;
       setAppleBound(hint === 'bound');
       setAppleBindStale(hint === 'stale');
@@ -1038,9 +1049,17 @@ function SettingsScreenImpl({
 
   const confirmLogout = useCallback(() => {
     if (!onLogout || logoutBusy) return;
+    // v4.32.870: текст был один на всех и обещал «сохранённую копию слов» тому,
+    // кто на заведении аккаунта выбрал «Сделаю позже». Выход стирает всё, и
+    // проверить обещание человек смог бы только после согласия. Свидетели все
+    // тут же, рядом: и отложенная запись, и обе копии, запертые паролем.
     Alert.alert(
       'Выйти из аккаунта',
-      'Удалить секретные слова и все локальные данные на этом устройстве? Восстановление будет возможно только из сохранённой копии слов.',
+      logoutConfirmText({
+        wordsVerified: seedBackupPending === null ? null : !seedBackupPending,
+        apple: appleBound ? 'bound' : appleBindStale ? 'stale' : 'none',
+        cloud: cloudCopy,
+      }),
       [
         { text: 'Отмена', style: 'cancel' },
         {
@@ -1053,7 +1072,7 @@ function SettingsScreenImpl({
         },
       ]
     );
-  }, [onLogout, logoutBusy]);
+  }, [onLogout, logoutBusy, seedBackupPending, appleBound, appleBindStale, cloudCopy]);
 
   const handleExportBackup = useCallback(async () => {
     setBackupBusy(true);
