@@ -2,6 +2,7 @@ import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import * as SecureStore from '../core/storage/secureStoreQueued';
 import { loadConfig } from '../core/config';
 import { authGuard } from '../core/security/authGuard';
+import { autoLockEnabled } from '../ui/autoLockDecision';
 import { log } from '../core/logger';
 import { vibrationFor } from './vibrationPattern';
 import { getMessagingService, subscribeInAppNotifications } from '../core/social/messaging';
@@ -55,10 +56,52 @@ const CHANNEL_FEED = 'airchat_feed_v2';
  * решается в пользу закрытого баннера — в отличие от фоновых настроек (см.
  * backgroundNotifyPrefs), где она решается в пользу показа: там ценой ошибки
  * было молча съеденное сообщение, здесь — чужой текст на чужом экране.
+ *
+ * v4.32.858: одного `isSessionUnlocked` оказалось мало, и ровно в том случае,
+ * ради которого всё писалось. Запирает сессию App.tsx — но только при
+ * ВОЗВРАЩЕНИИ в приложение: ветка с `lockSession` живёт внутри
+ * `nextState === 'active'`. Пока телефон лежит в кармане, сессия числится
+ * открытой, а баннеры приходят именно тогда. Человек включал автоблокировку,
+ * сворачивал приложение — и следующее сообщение выкладывало имя и текст на
+ * заблокированный экран; замок срабатывал потом, когда читать было уже поздно.
  */
 async function previewAllowed(): Promise<boolean> {
   if ((await kvGet('notify_preview')) === 'false') return false;
-  return authGuard.isSessionUnlocked();
+  if (!authGuard.isSessionUnlocked()) return false;
+  return !(await lockAwaitsReturn());
+}
+
+/**
+ * Запрётся ли приложение к тому моменту, когда человек возьмёт телефон в руки.
+ *
+ * Спрашивается не «заперто ли сейчас», а «заперто ли будет»: баннер остаётся
+ * на экране блокировки часами, и прочитает его тот, кто телефон нашёл. Три
+ * условия — приложение не на переднем плане, замок на выходе включён, пароль
+ * заведён — вместе означают, что переписку человек закрыл, и текст в баннере
+ * был бы дырой ровно в той стене, которую он построил.
+ *
+ * Задержка автоблокировки («1 мин», «30 мин») здесь намеренно не смотрится.
+ * Она про удобство возвращения в приложение, а не про экран блокировки: там
+ * баннер переживёт любую задержку и дождётся чужих рук.
+ *
+ * Передним планом считается только явное `'active'`. В фоновом запуске JS
+ * (headless-обработчик push на Android) состояния нет вовсе — и это как раз
+ * тот случай, когда приложение заведомо не открыто.
+ *
+ * Отказ чтения решается в пользу замка, как и везде рядом: `autoLockEnabled`
+ * держит это правило для настройки, а исключение из хранилища ключей — обычно
+ * телефон, не разблокированный после включения, то есть ровно тот момент,
+ * когда текст на экране опаснее всего.
+ */
+async function lockAwaitsReturn(): Promise<boolean> {
+  if (AppState.currentState === 'active') return false;
+  try {
+    if (!autoLockEnabled(await kvTryGet('auto_lock_on_exit'))) return false;
+    return await authGuard.hasPassword();
+  } catch (e) {
+    log.warn('preview_lock_state_unreadable', { err: e instanceof Error ? e.message : String(e) });
+    return true;
+  }
 }
 
 /**

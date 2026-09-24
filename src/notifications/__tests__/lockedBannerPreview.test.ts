@@ -46,6 +46,7 @@ jest.mock('../pushEnvelope', () => ({
 const mockKv = new Map<string, string>();
 jest.mock('../../core/storage/local', () => ({
   kvGet: jest.fn(async (k: string) => mockKv.get(k) ?? null),
+  kvTryGet: jest.fn(async (k: string) => ({ value: mockKv.get(k) ?? null })),
   kvSet: jest.fn(async () => undefined),
 }));
 
@@ -57,8 +58,15 @@ jest.mock('@notifee/react-native', () => ({
   AndroidCategory: { CALL: 'call' },
 }));
 
+import { AppState } from 'react-native';
+
 import { authGuard } from '../../core/security/authGuard';
 import { notifyFeedEvent } from '../pushNotifications';
+
+/** Состояние приложения в тестовой среде не задано вовсе — задаём явно. */
+function setAppState(state: 'active' | 'background'): void {
+  (AppState as unknown as { currentState: string }).currentState = state;
+}
 
 const PUSH = fs.readFileSync(path.join(__dirname, '..', 'pushNotifications.ts'), 'utf8');
 
@@ -68,6 +76,7 @@ describe('содержимое баннера при запертом прило
   beforeEach(() => {
     mockDisplay.mockClear();
     mockKv.clear();
+    setAppState('active');
   });
 
   it('приложение открыто — имя и текст на месте', async () => {
@@ -110,7 +119,7 @@ describe('один ответ на все три места показа', () =>
   });
 
   it('и это место спрашивает замок', () => {
-    expect(PUSH).toContain('return authGuard.isSessionUnlocked();');
+    expect(PUSH).toContain('if (!authGuard.isSessionUnlocked()) return false;');
   });
 
   it('личное, групповое и лента берут ответ оттуда же', () => {
