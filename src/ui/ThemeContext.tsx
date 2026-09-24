@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Appearance, StyleSheet } from 'react-native';
-import { kvGet, kvSet } from '../core/storage/local';
+import { kvGet, kvSetChecked } from '../core/storage/local';
+import { showError } from './components/userFeedback';
 import { applyAccent, colorsForScheme, normalizeAccent, resolveScheme, type AppColors, type ColorScheme, type ThemeMode } from './theme';
 
 export const FONT_SIZE_OPTIONS = [
@@ -21,30 +22,49 @@ type ThemeContextValue = {
    */
   scheme: ColorScheme;
   colors: AppColors;
-  setMode: (mode: ThemeMode) => Promise<void>;
+  /** `false` — не легло на диск: вид возвращён прежний, человеку сказано. */
+  setMode: (mode: ThemeMode) => Promise<boolean>;
   fontSize: FontSizeValue;
-  setFontSize: (size: FontSizeValue) => Promise<void>;
+  setFontSize: (size: FontSizeValue) => Promise<boolean>;
   autoNightEnabled: boolean;
   autoNightStart: number;
   autoNightEnd: number;
-  setAutoNight: (enabled: boolean, start: number, end: number) => Promise<void>;
+  setAutoNight: (enabled: boolean, start: number, end: number) => Promise<boolean>;
   accentColor: string | null;
-  setAccentColor: (color: string | null) => Promise<void>;
+  setAccentColor: (color: string | null) => Promise<boolean>;
 };
+
+/**
+ * Настройка вида не легла на диск (v4.32.878).
+ *
+ * До этого тема, акцент, размер шрифта и часы ночного режима писались через
+ * `kvSet` — он гасит отказ базы и возвращает void, то есть отказа не терялось
+ * даже, его неоткуда было взять. Экран перекрашивался сразу, и выглядело всё
+ * сделанным; на диске при этом оставался прежний выбор, и настройка молча
+ * откатывалась при следующем запуске. Слова те же, что у остальных настроек
+ * (applyPref в настройках), — беда одна и та же.
+ */
+export const THEME_SAVE_FAILED_TEXT = 'Настройка не сохранилась. Попробуйте ещё раз.';
+
+/** Записать значения вида; `false` — хотя бы одно не легло. */
+async function persistTheme(entries: readonly (readonly [string, string])[]): Promise<boolean> {
+  const done = await Promise.all(entries.map(([k, v]) => kvSetChecked(k, v)));
+  return done.every(Boolean);
+}
 
 const ThemeContext = createContext<ThemeContextValue>({
   mode: 'dark',
   scheme: 'dark',
   colors: colorsForScheme('dark'),
-  setMode: async () => {},
+  setMode: async () => true,
   fontSize: 15,
-  setFontSize: async () => {},
+  setFontSize: async () => true,
   autoNightEnabled: false,
   autoNightStart: 21,
   autoNightEnd: 7,
-  setAutoNight: async () => {},
+  setAutoNight: async () => true,
   accentColor: null,
-  setAccentColor: async () => {},
+  setAccentColor: async () => true,
 });
 
 /** Returns whether the current hour falls within [start, end) wrapping midnight. */
@@ -75,7 +95,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   // Keep refs in sync for the timer callback
   const modeRef = useRef<ThemeMode>('dark');
   const autoNightRef = useRef({ enabled: false, start: 21, end: 7 });
+  // v4.32.878: прежний выбор нужен для отката, а отката раньше не было вовсе.
+  const fontSizeRef = useRef<FontSizeValue>(15);
+  const accentRef = useRef<string | null>(null);
 
+  useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
+  useEffect(() => { accentRef.current = accentColor; }, [accentColor]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { autoNightRef.current = { enabled: autoNightEnabled, start: autoNightStart, end: autoNightEnd }; }, [autoNightEnabled, autoNightStart, autoNightEnd]);
 
@@ -119,7 +144,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
       if (accentVal) {
         const safe = normalizeAccent(accentVal);
         if (safe) setAccentColorState(safe);
-        if (safe !== accentVal) void kvSet('app_accent_color', safe ?? '');
+        if (safe !== accentVal) void kvSetChecked('app_accent_color', safe ?? '');
       }
     });
   }, [applyEffectiveColors]);
@@ -148,34 +173,84 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     return () => clearInterval(id);
   }, [applyEffectiveColors]);
 
-  const setMode = useCallback(async (newMode: ThemeMode) => {
-    setModeState(newMode);
+  /**
+   * Смена темы, размера шрифта, акцента и часов ночного режима.
+   *
+   * v4.32.878: вид меняется сразу — ждать записи, глядя на неперекрашенный
+   * экран, было бы хуже. Но если запись не легла, вид возвращается прежний и
+   * об этом говорят: иначе человек выбирает светлую тему, видит светлую тему,
+   * а после перезапуска получает обратно тёмную и не знает почему.
+   */
+  const setMode = useCallback(async (newMode: ThemeMode): Promise<boolean> => {
+    const prev = modeRef.current;
     const { enabled, start, end } = autoNightRef.current;
+    setModeState(newMode);
+    modeRef.current = newMode;
     applyEffectiveColors(newMode, enabled, start, end);
-    await kvSet('app_theme_mode', newMode);
+    const ok = await persistTheme([['app_theme_mode', newMode]]);
+    if (!ok) {
+      setModeState(prev);
+      modeRef.current = prev;
+      applyEffectiveColors(prev, enabled, start, end);
+      showError(THEME_SAVE_FAILED_TEXT);
+    }
+    return ok;
   }, [applyEffectiveColors]);
 
-  const setFontSize = useCallback(async (size: FontSizeValue) => {
+  const setFontSize = useCallback(async (size: FontSizeValue): Promise<boolean> => {
+    const prev = fontSizeRef.current;
     setFontSizeState(size);
-    await kvSet('app_font_size', String(size));
+    fontSizeRef.current = size;
+    const ok = await persistTheme([['app_font_size', String(size)]]);
+    if (!ok) {
+      setFontSizeState(prev);
+      fontSizeRef.current = prev;
+      showError(THEME_SAVE_FAILED_TEXT);
+    }
+    return ok;
   }, []);
 
-  const setAutoNight = useCallback(async (enabled: boolean, start: number, end: number) => {
-    setAutoNightEnabled(enabled);
-    setAutoNightStart(start);
-    setAutoNightEnd(end);
-    applyEffectiveColors(modeRef.current, enabled, start, end);
-    await Promise.all([
-      kvSet('auto_night_mode', String(enabled)),
-      kvSet('auto_night_start', String(start)),
-      kvSet('auto_night_end', String(end)),
+  const setAutoNight = useCallback(async (enabled: boolean, start: number, end: number): Promise<boolean> => {
+    const prev = autoNightRef.current;
+    const apply = (v: { enabled: boolean; start: number; end: number }): void => {
+      setAutoNightEnabled(v.enabled);
+      setAutoNightStart(v.start);
+      setAutoNightEnd(v.end);
+      autoNightRef.current = v;
+      applyEffectiveColors(modeRef.current, v.enabled, v.start, v.end);
+    };
+    apply({ enabled, start, end });
+    const ok = await persistTheme([
+      ['auto_night_mode', String(enabled)],
+      ['auto_night_start', String(start)],
+      ['auto_night_end', String(end)],
     ]);
+    if (!ok) {
+      apply(prev);
+      // Три ключа пишутся вместе, и лечь могла часть: возвращаем на диск
+      // прежние значения, чтобы расписание не осталось наполовину новым.
+      void persistTheme([
+        ['auto_night_mode', String(prev.enabled)],
+        ['auto_night_start', String(prev.start)],
+        ['auto_night_end', String(prev.end)],
+      ]);
+      showError(THEME_SAVE_FAILED_TEXT);
+    }
+    return ok;
   }, [applyEffectiveColors]);
 
-  const setAccentColor = useCallback(async (color: string | null) => {
+  const setAccentColor = useCallback(async (color: string | null): Promise<boolean> => {
+    const prev = accentRef.current;
     const safe = color ? normalizeAccent(color) : null;
     setAccentColorState(safe);
-    await kvSet('app_accent_color', safe ?? '');
+    accentRef.current = safe;
+    const ok = await persistTheme([['app_accent_color', safe ?? '']]);
+    if (!ok) {
+      setAccentColorState(prev);
+      accentRef.current = prev;
+      showError(THEME_SAVE_FAILED_TEXT);
+    }
+    return ok;
   }, []);
 
   // Значение контекста — тоже мемоизировано, по той же причине: объектный литерал
