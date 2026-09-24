@@ -802,6 +802,13 @@ function SettingsScreenImpl({
       setNewPwd2('');
       refreshPasswordFlag();
       await markCopiesStaleAfterPasswordChange();
+    } catch (e) {
+      // v4.32.882: здесь стоял try/finally без catch. Если хранилище откажет
+      // на записи нового пароля, окно просто переставало быть занятым — и
+      // молчало. Человек видел те же поля и ту же кнопку и не знал,
+      // сменился пароль или нет; следующая попытка входа отвечала бы на это
+      // за него.
+      showError(userErrorText(e, 'Не удалось сменить пароль. Попробуйте ещё раз.'));
     } finally { setPwdBusy(false); }
   };
 
@@ -1145,6 +1152,11 @@ function SettingsScreenImpl({
       setBackupUnlockModal(false);
       setBackupPwdInput('');
       setSubScreen('backup');
+    } catch (e) {
+      // v4.32.882: отказ проверки выглядел как неудачное нажатие — окно
+      // оставалось на месте без единого слова, и человек нажимал снова,
+      // списывая попытки на пароле, который ни при чём.
+      showError(userErrorText(e, 'Не удалось проверить пароль. Попробуйте ещё раз.'));
     } finally { setBackupUnlockBusy(false); }
   };
 
@@ -1160,6 +1172,11 @@ function SettingsScreenImpl({
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Секретные слова не найдены'); return; }
       setSeedPhrase(mnemonic);
+    } catch (e) {
+      // v4.32.882: молчание тут читается страшнее всего — слова не показались,
+      // и непонятно, есть ли они ещё. Отказ чтения надо называть отказом
+      // чтения, иначе человек идёт восстанавливать кошелёк с нуля.
+      showError(userErrorText(e, 'Не удалось прочитать секретные слова. Попробуйте ещё раз.'));
     } finally { setSeedBusy(false); }
   }, [seedPwdInput]);
 
