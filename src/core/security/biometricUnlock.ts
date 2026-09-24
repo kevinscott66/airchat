@@ -63,25 +63,51 @@ export async function enableBiometricUnlock(password: string): Promise<boolean> 
   if (!password || !isBiometricAvailable()) return false;
   try {
     await SecureStore.setItemAsync(BIOMETRIC_SECRET_KEY, password, SECRET_OPTIONS);
+  } catch (e) {
+    log.warn('biometric_enable_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+  try {
     // Признак ставится ПОСЛЕ записи: иначе при отказе на системном запросе
     // приложение считало бы биометрию включённой, а открывать было бы нечего.
     await SecureStore.setItemAsync(BIOMETRIC_FLAG_KEY, '1');
     return true;
   } catch (e) {
+    // v4.32.810: пароль уже лёг, а признака нет — включения не состоялось, и
+    // запись под биометрией осталась бы висеть ради возможности, которой нет.
+    // Человек об этом не узнал бы ничего: экран говорит лишь «не удалось
+    // включить». Убираем за собой.
     log.warn('biometric_enable_failed', { err: e instanceof Error ? e.message : String(e) });
+    await disableBiometricUnlock();
     return false;
   }
 }
 
-export async function disableBiometricUnlock(): Promise<void> {
+/**
+ * Выключить вход по биометрии.
+ *
+ * Возвращает `false` ровно об одном: пароль приложения остался лежать в
+ * хранилище устройства, хотя человек попросил его оттуда убрать (v4.32.810).
+ * Прежде функция отдавала `void` — отказ гасился в логе, а оба вызывающих
+ * вели себя так, будто запись снята: экран настроек переставлял переключатель
+ * и молчал, а смена пароля оставляла под биометрией ПРЕЖНИЙ пароль, ради
+ * избавления от которого её и вызывали.
+ *
+ * Сама биометрия выключается в любом случае: признак снимается первым и без
+ * системного запроса. `false` — это не «не выключилось», это «копия пароля
+ * осталась».
+ */
+export async function disableBiometricUnlock(): Promise<boolean> {
   // Признак снимается ПЕРВЫМ: удаление запертой записи на части устройств
   // тоже поднимает системный запрос, и отказ на нём не должен оставлять
   // приложение с включённой биометрией, которая ничего не открывает.
   try { await SecureStore.deleteItemAsync(BIOMETRIC_FLAG_KEY); } catch { /* всё равно стираем секрет */ }
   try {
     await SecureStore.deleteItemAsync(BIOMETRIC_SECRET_KEY, SECRET_OPTIONS);
+    return true;
   } catch (e) {
     log.warn('biometric_disable_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 

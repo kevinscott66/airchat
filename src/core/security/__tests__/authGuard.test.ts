@@ -18,7 +18,7 @@ jest.mock('bip39', () => ({ validateMnemonic: jest.fn(() => true) }));
 jest.mock('../biometricUnlock', () => ({
   isBiometricUnlockEnabled: jest.fn(async () => false),
   enableBiometricUnlock: jest.fn(async () => true),
-  disableBiometricUnlock: jest.fn(async () => {}),
+  disableBiometricUnlock: jest.fn(async () => true),
 }));
 jest.mock('../../identity/profileManager', () => ({
   profileManager: { init: jest.fn(async () => {}), getActiveProfile: jest.fn(() => null) },
@@ -323,6 +323,7 @@ describe('AuthGuard — биометрия переживает смену па�
   beforeEach(() => {
     mockBiometric.isBiometricUnlockEnabled.mockResolvedValue(false);
     mockBiometric.enableBiometricUnlock.mockResolvedValue(true);
+    mockBiometric.disableBiometricUnlock.mockResolvedValue(true);
     mockBiometric.disableBiometricUnlock.mockClear();
     mockBiometric.enableBiometricUnlock.mockClear();
   });
@@ -348,5 +349,22 @@ describe('AuthGuard — биометрия переживает смену па�
     mockBiometric.enableBiometricUnlock.mockResolvedValue(false);
     await guard.setPassword('пароль3');
     expect(mockBiometric.disableBiometricUnlock).toHaveBeenCalled();
+  });
+
+  test('не удалось и выключить — в логе остаётся прежний пароль под биометрией', async () => {
+    // v4.32.810: выключение отвечает false ровно об одном — запертая запись
+    // осталась, а в ней ПРЕЖНИЙ пароль. Экрана здесь нет, сказать некому, но
+    // единственное место, где это видно, молчать не должно.
+    const guard = freshGuard();
+    mockBiometric.isBiometricUnlockEnabled.mockResolvedValue(true);
+    mockBiometric.enableBiometricUnlock.mockResolvedValue(false);
+    mockBiometric.disableBiometricUnlock.mockResolvedValue(false);
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(await guard.setPassword('пароль4')).toBe(true);
+      expect(spy.mock.calls.some(([line]) => String(line).includes('auth_stale_biometric_secret_kept'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

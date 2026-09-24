@@ -118,7 +118,12 @@ export class AuthGuard {
       // Не вышло перезаписать — выключаем: молчаливо неработающий Face ID
       // хуже, чем его отсутствие.
       if (await isBiometricUnlockEnabled()) {
-        if (!(await enableBiometricUnlock(password))) await disableBiometricUnlock();
+        // v4.32.810: если и снять не вышло, в хранилище остался ПРЕЖНИЙ пароль
+        // — тот самый, от которого человек уходил, сменив его. Экрана здесь
+        // нет и сказать некому, но молчать об этом в логе тоже нельзя.
+        if (!(await enableBiometricUnlock(password)) && !(await disableBiometricUnlock())) {
+          log.error('auth_stale_biometric_secret_kept');
+        }
       }
       return true;
     } catch (e) {
