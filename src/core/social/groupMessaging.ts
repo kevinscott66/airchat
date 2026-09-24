@@ -2367,10 +2367,33 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       if (!target) return 'consumed';
       const said = await insertCtlSysMessage(env, pid, isMe ? `Вас исключили из группы (${actorLabel})` : `${label} исключён(а) из группы`);
       if (said === 'failed') return deferCtlSysRow(env, 'kick');
+      /**
+       * v4.32.817: отметка ставится ДО удаления из состава, а её отказ
+       * откладывает кадр.
+       *
+       * Строки в group_members больше нет — память об исключении хранится
+       * отдельно, иначе исключённый вернётся сам по старой ссылке: `join`
+       * прав не спрашивает, а пригласительный токен есть только у
+       * администраторов. Отказ базы отметка глотала: разбор шёл дальше,
+       * знак времени вставал вперёд, кадр с relay исчезал. Запас в памяти
+       * (v4.32.787) держал отметку до закрытия приложения — а старую ссылку
+       * пересылают когда угодно, и после перезапуска исключённый возвращался
+       * ко всем, кроме администраторов.
+       *
+       * Порядок здесь и есть правка. Откладывать ПОСЛЕ удаления бесполезно:
+       * повтор того же конверта упирается в `if (!target)` пятью строками
+       * выше и выходит, ничего не починив. Пока участник на месте, повтор
+       * доходит сюда снова и дописывает отметку. Цена обратного порядка —
+       * отметка на ещё состоящем участнике, если разбор оборвётся между
+       * строками: такой человек пойдёт в заявки к администратору вместо
+       * прямого входа. Это неудобство, а не дыра, и `add`/`unban` его
+       * снимают.
+       */
+      if (!(await markGroupRemoval(env.groupId, env.target, pid, env.ts))) {
+        log.warn('group_ctl_kick_mark_deferred', { gid: env.groupId.slice(0, 8), target: env.target.slice(0, 12) });
+        return 'deferred';
+      }
       await removeGroupMember(env.groupId, env.target, pid);
-      // Строки в group_members больше нет — память об исключении хранится
-      // отдельно, иначе исключённый вернётся сам по старой ссылке.
-      await markGroupRemoval(env.groupId, env.target, pid, env.ts);
       await recountGroupMembers(env.groupId, pid);
       break;
     }

@@ -98,9 +98,12 @@ describe('отметка об исключении', () => {
     expect(await wasRemovedFromGroup(GID, PEER, PID)).toBe(false);
   });
 
-  it('неудачная запись отметки не роняет разбор конверта', async () => {
+  it('неудачная запись отметки не роняет разбор конверта, но и не выдаёт себя за успех', async () => {
+    // v4.32.817: ответ — «легла ли на диск». По нему разбор откладывает кадр.
     mockKvWriteFails = true;
-    await expect(markGroupRemoval(GID, PEER, PID, 1000)).resolves.toBeUndefined();
+    await expect(markGroupRemoval(GID, PEER, PID, 1000)).resolves.toBe(false);
+    mockKvWriteFails = false;
+    await expect(markGroupRemoval(GID, PEER, PID, 1000)).resolves.toBe(true);
   });
 });
 

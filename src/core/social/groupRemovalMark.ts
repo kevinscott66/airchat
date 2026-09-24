@@ -60,24 +60,30 @@ export function removalMarkKey(peerPubB64: string, groupId: string): string {
  * всем, у кого нет пригласительного токена, то есть ко всем, кроме
  * администраторов. Теперь отказ виден, и не легшая отметка живёт в памяти
  * процесса до первого чтения.
+ *
+ * v4.32.817: отвечает словом, легла ли отметка НА ДИСК. Запас в памяти держит
+ * её, пока приложение не закрыли, — а конверт-приглашение приходит когда
+ * угодно, хоть через неделю. Позвавшему ответ нужен, чтобы отложить кадр:
+ * пока он на relay, отметку есть чем починить, после `'consumed'` — нечем.
  */
 export async function markGroupRemoval(
   groupId: string,
   peerPubB64: string,
   pid: number,
   ts: number
-): Promise<void> {
+): Promise<boolean> {
   const at = Math.floor(ts);
   try {
     if (await scopedKvSetCheckedFor(pid, removalMarkKey(peerPubB64, groupId), String(at))) {
       unsavedRemovals.forget(pid, fallbackKey(peerPubB64, groupId));
-      return;
+      return true;
     }
   } catch (e) {
     log.warn('group_removal_mark_failed', { err: e instanceof Error ? e.message : String(e) });
   }
   unsavedRemovals.remember(pid, fallbackKey(peerPubB64, groupId), at);
   log.warn('group_removal_mark_unsaved', { at });
+  return false;
 }
 
 /** Дописать на диск отметку, которую база не приняла в прошлый раз. */
