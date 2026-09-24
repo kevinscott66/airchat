@@ -13,6 +13,7 @@ import { MAX_DOWNLOAD_B64_CHARS } from '../media/blobRef';
 import { signBytes, signJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sanitizeDisplayName } from '../social/sysLineGuard';
+import { browserDeviceModel, browserOsVersion } from './browserAgent';
 import { bytesToBase64Url } from '../utils/base64url';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import * as SecureStore from '../storage/secureStoreQueued';
@@ -70,17 +71,23 @@ function currentDeviceInfo(): SyncDeviceInfo {
     ? `${nativeConstants.Manufacturer || 'Android'} ${nativeConstants.Model || 'device'}`
     : platform === 'ios'
       ? (Constants.platform?.ios?.model || (Platform.OS === 'ios' && Platform.isPad ? 'iPad' : 'iPhone'))
-      : platform === 'web' ? 'Web browser' : platform;
+      : platform === 'web' ? browserDeviceModel() : platform;
+  // v4.32.848: на вебе здесь стояло `Platform.Version`, а оно на вебе равно
+  // «0.0.0» — не версия чего бы то ни было, а признак «не знаем». Система под
+  // браузером читается из той же строки агента, что и сам браузер; не
+  // прочиталась — пусто, и список сессий про неё промолчит.
   const osVersion = platform === 'android'
     ? String(nativeConstants.Release || Platform.Version)
     : platform === 'ios'
       ? String(nativeConstants.osVersion || Platform.Version)
-      : String(Platform.Version || 'unknown');
+      : platform === 'web'
+        ? browserOsVersion()
+        : String(Platform.Version || 'unknown');
   const appVersion = String(Constants.expoConfig?.version || Constants.nativeAppVersion || 'unknown');
   return {
     platform,
     model: model.replace(/\s+/g, ' ').trim().slice(0, 96) || 'Unknown device',
-    osVersion: osVersion.slice(0, 32) || 'unknown',
+    osVersion: osVersion.slice(0, 32) || (platform === 'web' ? '' : 'unknown'),
     appVersion: appVersion.slice(0, 32) || 'unknown',
   };
 }

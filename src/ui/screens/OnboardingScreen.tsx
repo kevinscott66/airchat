@@ -532,6 +532,27 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     setStep('restore');
   };
 
+  /**
+   * Вход через Apple ID с первого экрана (v4.32.848).
+   *
+   * До этой версии кнопка стояла только внутри «Восстановить аккаунт», то есть
+   * ровно за той дверью, за которую человек с привязкой и не идёт: он не
+   * восстанавливает ничего вручную, он входит. На первом экране ему
+   * предлагалось два действия, и оба неверных — «создать новый» стирает
+   * аккаунт, «восстановить» просит 24 слова, которые он привязал именно затем,
+   * чтобы их не вводить.
+   *
+   * Дорога дальше та же самая: экран восстановления умеет показать поле пароля
+   * поверх полученного конверта, и переиспользуется он целиком. Поэтому здесь
+   * сначала переход, а потом системное окно Apple: если человек передумает или
+   * привязки не окажется, он остаётся на экране, где может ввести слова
+   * руками, а не возвращается на первый без объяснений.
+   */
+  const handleWelcomeApple = (): void => {
+    setStep('restore');
+    void handleAppleRestore();
+  };
+
   const doWipeAndGoBack = useCallback(async (): Promise<void> => {
     // Важно: чистим реально сохранённые seed/флаги и ключи, иначе boot пропустит экран сидки.
     //
@@ -649,6 +670,24 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                 загрузить. Кнопка не должна обещать только один из двух. */}
             <Text style={styles.btnTextDark}>Восстановить аккаунт</Text>
           </AppPressable>
+          {appleReady ? (
+            <>
+              <AppPressable
+                style={[styles.btnSecondary, styles.appleRow]}
+                onPress={handleWelcomeApple}
+                disabled={busy}
+                testID="btn_welcome_apple"
+                accessibilityRole="button"
+                accessibilityLabel="Войти через Apple ID"
+              >
+                <Text style={styles.btnTextDark}>Войти через Apple ID</Text>
+              </AppPressable>
+              <Text style={styles.encHint}>
+                Если вы привязывали секретные слова к Apple ID, вводить их заново не нужно —
+                понадобится только пароль приложения.
+              </Text>
+            </>
+          ) : null}
         </GlassSurface>
         </WelcomeLayout>
       </ScrollView>

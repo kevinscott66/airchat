@@ -53,9 +53,60 @@ export function sessionLocation(device: SyncDevice): string {
   return [device.city, country].filter(Boolean).join(', ') || 'Регион не определён';
 }
 
+/**
+ * Как приложение до v4.32.848 называло любой браузер. Сессии с этой подписью
+ * уже лежат на сервере и будут лежать ещё долго: строку пишет то устройство,
+ * которое входило, и задним числом её не исправить.
+ */
+const UNNAMED_BROWSER = 'Web browser';
+
 /** Чем заходили. Модель точнее данной пользователем подписи, поэтому первая. */
 export function sessionDeviceName(device: SyncDevice): string {
-  return device.deviceModel || device.label || 'Неизвестное устройство';
+  const model = device.deviceModel ?? '';
+  // v4.32.848: «Web browser» — не название браузера, а признак того, что его
+  // не спросили. По-русски это и написано: человек, читающий список ради
+  // вопроса «чей это вход», должен видеть, что здесь ответа нет, а не
+  // англоязычную подпись, похожую на имя программы.
+  if (model === UNNAMED_BROWSER) return device.label || 'Неизвестный браузер';
+  return model || device.label || 'Неизвестное устройство';
+}
+
+/** Как платформа называется по-русски. Веб — это для человека браузер. */
+const PLATFORM_LABEL: Record<string, string> = {
+  ios: 'iOS',
+  android: 'Android',
+  web: 'Браузер',
+  macos: 'macOS',
+  windows: 'Windows',
+};
+
+/**
+ * Чем платформа обозначает «версию не знаю». На вебе `Platform.Version` —
+ * ровно «0.0.0», и до v4.32.848 оно так и печаталось рядом со словом Web:
+ * версия, которой никогда не существовало, в списке, по которому решают, свой
+ * это вход или чужой.
+ */
+const NO_VERSION = new Set(['', '0', '0.0', '0.0.0', 'unknown', 'undefined', 'null', 'nan']);
+
+/**
+ * Вторая строка сессии: система и версия приложения.
+ *
+ * Правило склейки одно и держится на том, что записано в поле. Если версия —
+ * голое число (iOS «26.0», Android «14»), она принадлежит названию платформы и
+ * пишется с ним слитно. Если там названная система («macOS 14.6» из строки
+ * агента браузера), она сама себя называет и стоит отдельным словом.
+ */
+export function sessionSystemLine(device: SyncDevice): string {
+  const platform = device.platform ? PLATFORM_LABEL[device.platform] ?? device.platform : '';
+  const os = (device.osVersion ?? '').trim();
+  const known = os !== '' && !NO_VERSION.has(os.toLowerCase());
+  const head = !known
+    ? platform
+    : /^[0-9]/.test(os)
+      ? `${platform} ${os}`.trim()
+      : [platform, os].filter(Boolean).join(' · ');
+  const app = (device.appVersion ?? '').trim();
+  return [head, app ? `AirChat ${app}` : ''].filter(Boolean).join(' · ');
 }
 
 /**

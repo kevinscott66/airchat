@@ -145,6 +145,32 @@ export function makeStyles(c: AppColors, sf: (base: number) => number) {
       paddingVertical: 9, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, backgroundColor: c.surfaceHigh,
     },
     themeBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
+    // Плашка в переносящейся строке — выбор языка перевода (v4.32.848).
+    //
+    // Языки стояли в контейнере с `flexWrap: 'wrap'`, а стиль им достался от
+    // `themeBtn` — кнопки из строки на три штуки, где `flex: 1` делит ширину
+    // поровну. В переносящейся строке то же `flex: 1` значит другое: вместе с
+    // ним приходит `flexBasis: 0`, то есть «своей ширины у меня нет», и
+    // двенадцать плашек ужимаются до ширины одной буквы. Подпись после этого
+    // разваливается в столбик по букве на строку: «Русский» читался как
+    // Р-у-с-с-к-и-й, и экран выбора языка нельзя было прочитать вовсе.
+    //
+    // Поэтому здесь ширина не делится, а берётся по содержимому: плашка ровно
+    // такая, каково слово внутри. `flex` не переопределяется, а отсутствует —
+    // дописывать `flexGrow: 0` поверх чужого `flex: 1` значило бы оставить в
+    // стиле два указания об одном и том же.
+    langBtn: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      gap: 5,
+      paddingVertical: 9,
+      paddingHorizontal: 14,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surfaceHigh,
+    },
     themeBtnText: { color: c.textSecondary, fontSize: sf(12), fontWeight: '500' },
     // Выбор кегля (v4.32.594). Две вещи, из-за которых «Очень крупный» и его
     // «А» вылезали за плашку, и обе исправлены здесь, а не подрезкой строки:

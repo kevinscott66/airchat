@@ -56,7 +56,7 @@ import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAI
 import { settingsVisibility } from './settingsVisibility';
 import { makeStyles } from './settings/settingsStyles';
 import { createSettingsChrome } from './settings/settingsChrome';
-import { autoDeleteLabel, sessionDeviceName, sessionLocation } from './settings/settingsLabels';
+import { autoDeleteLabel, sessionDeviceName, sessionLocation, sessionSystemLine } from './settings/settingsLabels';
 import { HourStepper } from './settings/HourStepper';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
@@ -2567,8 +2567,8 @@ function SettingsScreenImpl({
           ] as const).map(({ code, label }) => {
             const active = translateLang === code;
             return (
-              <AppPressable key={code} style={[styles.themeBtn, active && styles.themeBtnActive, { paddingHorizontal: 10 }]} onPress={() => { const prev = translateLang; setTranslateLang(code); applyScopedPref(TRANSLATION_TARGET_LANG_KEY, code, () => setTranslateLang(prev)); }}>
-                <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive]}>{label}</Text>
+              <AppPressable key={code} style={[styles.langBtn, active && styles.themeBtnActive]} onPress={() => { const prev = translateLang; setTranslateLang(code); applyScopedPref(TRANSLATION_TARGET_LANG_KEY, code, () => setTranslateLang(prev)); }} accessibilityRole="radio" accessibilityState={{ selected: active }}>
+                <Text numberOfLines={1} style={[styles.themeBtnText, active && styles.themeBtnTextActive]}>{label}</Text>
               </AppPressable>
             );
           })}
@@ -2626,7 +2626,6 @@ function SettingsScreenImpl({
                 {syncDevices.map((device) => {
                   const isCurrent = device.deviceId === currentSyncDeviceId;
                   const lastSeen = device.lastSeenAt ? fullDateTime(device.lastSeenAt) : 'Нет данных';
-                  const platformLabel = device.platform === 'ios' ? 'iOS' : device.platform === 'android' ? 'Android' : device.platform === 'web' ? 'Web' : device.platform || 'AirChat';
                   return (
                     <View key={device.deviceId} style={{ paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
                       <View style={{ ...avatarShape(38), backgroundColor: isCurrent ? colors.primary : colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
@@ -2637,7 +2636,7 @@ function SettingsScreenImpl({
                           <Text style={styles.label} numberOfLines={1}>{sessionDeviceName(device)}</Text>
                           {isCurrent ? <StatusBadge tone="success" text="Это устройство" /> : null}
                         </View>
-                        <Text style={styles.desc}>{platformLabel}{device.osVersion ? ` ${device.osVersion}` : ''}{device.appVersion ? ` · AirChat ${device.appVersion}` : ''}</Text>
+                        <Text style={styles.desc}>{sessionSystemLine(device)}</Text>
                         <Text style={[styles.desc, { marginTop: 2 }]}>
                           <Ionicons name="location-outline" size={12} color={colors.textMuted} /> {sessionLocation(device)}
                         </Text>
