@@ -102,6 +102,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние причины от
     expect(fanoutReasonText('all_failed', 'group')).toBe('нет связи');
     expect(fanoutReasonText('no_peer', 'group')).toBe('некому отправить');
     expect(fanoutReasonText('no_peer', 'dm')).toBe('собеседник не определён');
-    expect(groupControlProblem({ op: 'leave', sent: true, recipients: 3 })).toBeNull();
+    // v4.32.850: успех теперь несёт и знаменатель — приняли трое из троих.
+    expect(groupControlProblem({ op: 'leave', sent: true, recipients: 3, of: 3 })).toBeNull();
   });
 });

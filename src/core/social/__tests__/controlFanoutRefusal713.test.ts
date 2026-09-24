@@ -80,7 +80,8 @@ describe('v4.32.713 — непринятый конверт не выдаётс�
       kind: 'group',
       recipients: ['a', 'b', 'c'],
     });
-    expect(res).toEqual({ sent: true, recipients: 1 });
+    // v4.32.850: знаменатель рядом — «принял один из троих», а не «принял один».
+    expect(res).toEqual({ sent: true, recipients: 1, of: 3 });
   });
 
   it('пустая строка тоже отказ: идентификатор конверта не бывает пустым', async () => {
@@ -112,7 +113,7 @@ describe('v4.32.713 — непринятый конверт не выдаётс�
       kind: 'group',
       recipients: ['a', 'b'],
     });
-    expect(res).toEqual({ sent: true, recipients: 2 });
+    expect(res).toEqual({ sent: true, recipients: 2, of: 2 });
   });
 });
 
@@ -120,7 +121,7 @@ describe('v4.32.713 — правка не задела остальные исх
   it('группа без других участников остаётся законной: успех с нулём', async () => {
     mockSvc = { sendMessage: async () => null };
     const res = await fanoutControlEnvelope('gctl', 'p', { kind: 'group', recipients: [] });
-    expect(res).toEqual({ sent: true, recipients: 0 });
+    expect(res).toEqual({ sent: true, recipients: 0, of: 0 });
   });
 
   it('личка без собеседника — no_peer, до всякой отправки', async () => {

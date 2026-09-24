@@ -55,7 +55,8 @@ describe('потерянное отложенное сообщение назв�
   it('все три снятия недоставленной строки зовут отчёт', () => {
     const flush = codeOnly(FLUSH());
     // v4.32.782: пятый вызов — своя копия группового сообщения не легла.
-    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(6); // объявление + пять вызовов
+    // v4.32.850: шестой — рассылка в группу дошла не до всех.
+    expect(flush.match(/\breportScheduledLost\(/g)?.length).toBe(7); // объявление + шесть вызовов
     // v4.32.714: четвёртый вызов — отказ sendMessage у личного отложенного сообщения.
     expect(countOf(flush, "'SCHEDULED_REFUSED',")).toBe(1);
     expect(flush).toContain("'SCHEDULED_DENIED',");

@@ -1145,7 +1145,7 @@ export async function fanoutGroupControl(
     of: recipients.size,
   });
   return res.sent
-    ? { op: ctl.op, sent: true, recipients: res.recipients }
+    ? { op: ctl.op, sent: true, recipients: res.recipients, of: res.of }
     : { op: ctl.op, sent: false, reason: res.reason };
 }
 
@@ -1172,7 +1172,7 @@ export async function sendGroupControlTo(
   // Операция вшивается в исход здесь, а не у вызывающего: иначе отказ ответа
   // на заявку можно было бы по недосмотру объявить отказом чего-то другого.
   return res.sent
-    ? { op: ctl.op, sent: true, recipients: res.recipients }
+    ? { op: ctl.op, sent: true, recipients: res.recipients, of: res.of }
     : { op: ctl.op, sent: false, reason: res.reason };
 }
 
@@ -1395,7 +1395,7 @@ export async function sendGroupInvite(
   const res = await fanoutControlEnvelope('group_invite', payload, { kind: 'group', recipients });
   if (res.sent) log.info('group_invite_sent', { gid: groupId.slice(0, 8), to: res.recipients });
   return res.sent
-    ? { op: 'invite', sent: true, recipients: res.recipients }
+    ? { op: 'invite', sent: true, recipients: res.recipients, of: res.of }
     : { op: 'invite', sent: false, reason: res.reason };
 }
 

@@ -54,7 +54,8 @@ const closeBody = (): string => bodyOf(src, 'export async function closeAndSyncP
 describe('v4.32.446 — итог доставки конверта опроса обязан быть назван', () => {
   it('FanoutResult — размеченное объединение, у каждой ветки своё обязательное поле', () => {
     expect(fanoutSrc).toContain('export type FanoutResult =');
-    expect(fanoutSrc).toContain('| { sent: true; recipients: number }');
+    // v4.32.850: к принявшим добавлен знаменатель — скольким предназначалось.
+    expect(fanoutSrc).toContain('| { sent: true; recipients: number; of: number }');
     expect(fanoutSrc).toContain('| { sent: false; reason: FanoutUndelivered };');
     // Необязательных полей быть не должно: «recipients?» снова позволил бы
     // вернуть успех, ничего никому не отправив.
@@ -121,7 +122,7 @@ describe('v4.32.446 — воронка не может назвать успех
     expect(b).toContain('if (accepted === 0 && recipients.length > 0) {');
     expect(b).toContain("return { sent: false, reason: 'all_failed' };");
     const fail = b.indexOf("reason: 'all_failed'");
-    const ok = b.indexOf('return { sent: true, recipients: accepted };');
+    const ok = b.indexOf('return { sent: true, recipients: accepted, of: recipients.length };');
     expect(fail).toBeGreaterThan(-1);
     expect(ok).toBeGreaterThan(-1);
     expect(fail).toBeLessThan(ok);
@@ -130,8 +131,10 @@ describe('v4.32.446 — воронка не может назвать успех
   it('успех считает принятые конверты, а не список получателей', () => {
     const b = funnelBody();
     expect(b).toContain('accepted += 1;');
-    expect(b).toContain('return { sent: true, recipients: accepted };');
-    expect(b).not.toContain('return { sent: true, recipients: recipients.length };');
+    expect(b).toContain('return { sent: true, recipients: accepted, of: recipients.length };');
+    // Числитель по-прежнему считается, а не берётся из длины списка: подмена
+    // одного другим и была правкой v4.32.713.
+    expect(b).not.toContain('return { sent: true, recipients: recipients.length,');
   });
 });
 

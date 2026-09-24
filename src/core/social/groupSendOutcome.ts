@@ -28,7 +28,13 @@ import { sendDenyText, type SendDenyCode } from './groupSendPolicy';
  */
 export type GroupSendProblem =
   | { kind: 'denied'; code: SendDenyCode }
-  | { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };
+  | { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' }
+  /**
+   * Приняли не все (v4.32.850). Третий вид намеренно отделён от 'undelivered':
+   * повтор здесь не лечит, а вредит — те, кто сообщение уже принял, получат
+   * его вторым экземпляром. Единственное верное действие — сказать человеку.
+   */
+  | { kind: 'partial'; sent: number; members: number };
 
 /** Беда рассылки, либо null — если сообщение принял хотя бы кто-то. */
 export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | null {
@@ -43,6 +49,11 @@ export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | nul
   // ok:true с нулём принявших — не успех. Пустая группа (адресатов не было
   // вовсе) бедой не считается: рассылать было некому и незачем.
   if (res.members > 0 && res.sent === 0) return { kind: 'undelivered', reason: 'all_failed' };
+  // v4.32.850: и «принял один из девятнадцати» — тоже не успех. До этой версии
+  // бедой считался только круглый ноль, поэтому отправка, дошедшая до одного
+  // человека, выглядела на экране ровно как дошедшая до всех. Повтора у
+  // группового сообщения нет: остальные восемнадцать его не увидят никогда.
+  if (res.sent < res.members) return { kind: 'partial', sent: res.sent, members: res.members };
   return null;
 }
 
@@ -53,6 +64,14 @@ export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | nul
  */
 export function groupSendProblemText(problem: GroupSendProblem): string {
   if (problem.kind === 'denied') return `${sendDenyText(problem.code)}. Сообщение осталось только у вас.`;
+  if (problem.kind === 'partial') {
+    // Ни одного согласуемого с числом слова: «приняли 1 из 19» верно при любом
+    // числе, а «1 участник принял / 2 участника приняли» пришлось бы склонять.
+    return (
+      `Сообщение дошло не всем: приняли ${problem.sent} из ${problem.members}. ` +
+      'Остальные его не увидят — повтора у групповых сообщений нет.'
+    );
+  }
   if (problem.reason === 'members_unreadable') {
     return 'Не удалось прочитать состав группы, отправлять было некому. Сообщение осталось только у вас.';
   }
@@ -65,5 +84,6 @@ export function groupSendProblemText(problem: GroupSendProblem): string {
  */
 export function groupSendProblemShort(problem: GroupSendProblem): string {
   if (problem.kind === 'denied') return sendDenyText(problem.code).toLowerCase();
+  if (problem.kind === 'partial') return `приняли ${problem.sent} из ${problem.members}`;
   return problem.reason === 'members_unreadable' ? 'состав не прочитан' : 'нет связи';
 }

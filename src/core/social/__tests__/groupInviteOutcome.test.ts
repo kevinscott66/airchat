@@ -73,7 +73,7 @@ describe('отправки называют исход, а не молчат', (
     const body = bodyOf(SOURCE, 'sendGroupControlTo');
     expect(body).toContain('): Promise<GroupControlOutcome> {');
     expect(body).toContain('fanoutControlEnvelope(');
-    expect(body).toContain("{ op: ctl.op, sent: true, recipients: res.recipients }");
+    expect(body).toContain("{ op: ctl.op, sent: true, recipients: res.recipients, of: res.of }");
     expect(body).toContain("{ op: ctl.op, sent: false, reason: res.reason }");
     expect(body).not.toContain('Promise.allSettled');
     expect(body).not.toContain('getMessagingService');
@@ -83,7 +83,7 @@ describe('отправки называют исход, а не молчат', (
     const body = bodyOf(SOURCE, 'sendGroupInvite');
     expect(body).toContain('): Promise<GroupControlOutcome> {');
     expect(body).toContain("fanoutControlEnvelope('group_invite', payload, { kind: 'group', recipients })");
-    expect(body).toContain("{ op: 'invite', sent: true, recipients: res.recipients }");
+    expect(body).toContain("{ op: 'invite', sent: true, recipients: res.recipients, of: res.of }");
     expect(body).toContain("{ op: 'invite', sent: false, reason: res.reason }");
     expect(body).not.toContain('Promise.allSettled');
     expect(body).not.toContain('getMessagingService');

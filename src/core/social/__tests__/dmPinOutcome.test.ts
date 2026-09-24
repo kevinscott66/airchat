@@ -60,7 +60,7 @@ describe('v4.32.454 — отправка закрепления в личке н
     expect(OUTCOME).toContain('export type DmPinOutcome = { op: DmPinOp } & FanoutResult;');
     expect(OUTCOME).toContain('const DIVERGENCE: Record<DmPinOp, string> = {');
     const send = bodyOf(PIN, 'async function sendDmPin(');
-    expect(send).toContain('? { op, sent: true, recipients: res.recipients }');
+    expect(send).toContain('? { op, sent: true, recipients: res.recipients, of: res.of }');
     expect(send).toContain(': { op, sent: false, reason: res.reason };');
   });
 

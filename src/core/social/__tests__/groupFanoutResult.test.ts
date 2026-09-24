@@ -98,7 +98,12 @@ describe('итог групповой рассылки различает отк
     const body = bodyOf(scheduler, 'async function flushDueOnce(');
     const code = codeLines(body);
     const denied = code.findIndex((l) => l.includes("problem?.kind === 'denied'"));
-    const noRecipient = code.findIndex((l) => l.trim() === 'if (problem) {');
+    // v4.32.850: у частичной доставки своя ветка выше, а повторяющая ветка
+    // теперь её исключает — повтор задвоил бы сообщение у принявших.
+    const partial = code.findIndex((l) => l.includes("problem?.kind === 'partial'"));
+    const noRecipient = code.findIndex((l) => l.trim() === "if (problem && problem.kind !== 'partial') {");
+    expect(partial).toBeGreaterThan(0);
+    expect(noRecipient).toBeGreaterThan(partial);
     // v4.32.782: своя копия пишется неделимо со своим следом и отвечает исходом.
     const insert = code.findIndex((l) => l.includes('await insertGroupMessageWithTouch('));
     expect(denied).toBeGreaterThanOrEqual(0);
@@ -123,7 +128,11 @@ describe('итог групповой рассылки различает отк
     // Отказ по правам и отказ по связи разведены: решения по ним обратные.
     expect(outcome).toContain("| { kind: 'denied'; code: SendDenyCode }");
     expect(outcome).toContain(
-      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };"
+      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' }"
+    );
+    // v4.32.850: и «приняли не все» — третьим видом, тоже одним правилом.
+    expect(outcome).toContain(
+      "if (res.sent < res.members) return { kind: 'partial', sent: res.sent, members: res.members };"
     );
   });
 

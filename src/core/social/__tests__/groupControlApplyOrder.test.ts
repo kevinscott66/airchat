@@ -253,13 +253,17 @@ describe('G3: рассылка в группу считает только со�
     expect(groupSendProblem(res)).toEqual({ kind: 'undelivered', reason: 'all_failed' });
   });
 
-  it('частичная доставка остаётся доставкой', async () => {
-    // Ратчет с другой стороны: правка не должна объявлять сбоем то, что ушло
-    // хотя бы одному.
+  it('частичная доставка названа частичной — ни провалом, ни успехом', async () => {
+    // v4.32.850: прежде здесь стояло `toBeNull()` — «ушло хотя бы одному,
+    // значит доставлено». Ратчет остался прежним: это НЕ 'all_failed', по
+    // которому планировщик повторяет рассылку, — повтор дослал бы второй
+    // экземпляр тому, кто сообщение уже принял. Но и не молчание: второй
+    // участник не увидит сообщения никогда, а на экране оно выглядит
+    // отправленным.
     mockSendReply = (peer) => (peer === A ? 'echo' : null);
     const res = await fanoutGroupMessage(GID, 'привет', 'Я', ME, 'm2');
     expect(res).toEqual({ ok: true, members: 2, sent: 1, failed: 1 });
-    expect(groupSendProblem(res)).toBeNull();
+    expect(groupSendProblem(res)).toEqual({ kind: 'partial', sent: 1, members: 2 });
   });
 
   it('успех остаётся успехом', async () => {

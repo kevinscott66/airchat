@@ -249,7 +249,7 @@ async function sendDmPin(
     peerPubB64,
   });
   return res.sent
-    ? { op, sent: true, recipients: res.recipients }
+    ? { op, sent: true, recipients: res.recipients, of: res.of }
     : { op, sent: false, reason: res.reason };
 }
 

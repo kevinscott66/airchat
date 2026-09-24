@@ -17,7 +17,7 @@ import {
   bumpScheduledAttemptChecked,
 } from '../storage/local';
 import { fanoutGroupMessage } from './groupMessaging';
-import { groupSendProblem } from './groupSendOutcome';
+import { groupSendProblem, groupSendProblemText } from './groupSendOutcome';
 import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { log } from '../logger';
 import { ErrorHandler, ErrorSeverity } from '../errorHandler';
@@ -343,7 +343,21 @@ async function flushDueOnce(): Promise<void> {
         //   отправка КАЖДОМУ участнику бросила исключение.
         // В обоих сообщение не ушло никому, поэтому строка остаётся до
         // следующего тика — но не дольше ABANDON_AFTER_ATTEMPTS.
-        if (problem) {
+        /**
+         * v4.32.850: «приняли не все» — беда, но единственная, по которой
+         * повторять нельзя. Ниже по этой же ветке стоит `continue`, то есть
+         * строка расписания остаётся и на следующем тике рассылка идёт заново;
+         * для частичной доставки это значит второй экземпляр сообщения у всех,
+         * кто его уже принял. Поэтому здесь только слова — и падение дальше, к
+         * записи своей копии и снятию строки, как при обычной отправке.
+         */
+        if (problem?.kind === 'partial') {
+          log.warn('scheduled_group_message_partial', {
+            id: msg.id.slice(0, 8), groupId: msg.groupId.slice(0, 8), sent: problem.sent, of: problem.members,
+          });
+          reportScheduledLost('SCHEDULED_PARTIAL', `Отложенное сообщение: ${groupSendProblemText(problem)}`);
+        }
+        if (problem && problem.kind !== 'partial') {
           if (attempt >= ABANDON_AFTER_ATTEMPTS) {
             await deleteScheduledMessage(msg.id, pid);
             log.warn('scheduled_group_message_abandoned', {

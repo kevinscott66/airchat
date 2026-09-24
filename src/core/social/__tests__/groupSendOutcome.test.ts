@@ -46,8 +46,12 @@ describe('v4.32.450 — беда рассылки названа в одном �
     // Она обязана быть именно недоставкой, а не отказом в правах: по 'denied'
     // планировщик СНИМАЕТ строку расписания, а сбой чтения повторить стоит.
     expect(outcomeSrc).toContain(
-      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' };"
+      "| { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' }"
     );
+    // v4.32.850: третий вид — «приняли не все». Отдельно от 'undelivered'
+    // ровно по тому же правилу: по нему повторять НЕЛЬЗЯ (повтор задвоит
+    // сообщение у принявших), а по 'undelivered' — только повтор и помогает.
+    expect(outcomeSrc).toContain("| { kind: 'partial'; sent: number; members: number };");
   });
 
   it('успех с нулём принявших бедой считается, пустая группа — нет', () => {

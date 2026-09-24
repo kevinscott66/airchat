@@ -41,7 +41,17 @@ export type FanoutUndelivered = 'no_service' | 'no_peer' | 'all_failed' | 'membe
  * без «удалось ли» и наоборот — это и есть та пара, которую путали.
  */
 export type FanoutResult =
-  | { sent: true; recipients: number }
+  /**
+   * `recipients` — сколько адресатов конверт приняли, `of` — скольким он
+   * предназначался (v4.32.850). Порознь их и путали: до этой версии успех нёс
+   * только принявших, и «принял один» выглядело точно так же, как «приняли
+   * все». Для кика это значит, что исключённый остался в чужих списках —
+   * читает, пишет и проходит анти-спуф-фильтр, — а администратор прочитал
+   * «Участник удалён». Повтора у служебного конверта нет (см. выше), поэтому
+   * разница между числами — это не задержка, а то, чего адресат не узнает
+   * никогда.
+   */
+  | { sent: true; recipients: number; of: number }
   | { sent: false; reason: FanoutUndelivered };
 
 /**
@@ -110,7 +120,7 @@ export async function fanoutControlEnvelope(
     return { sent: false, reason: 'all_failed' };
   }
   log.info('control_fanout_sent', { op, to: accepted, of: recipients.length });
-  return { sent: true, recipients: accepted };
+  return { sent: true, recipients: accepted, of: recipients.length };
 }
 
 /**

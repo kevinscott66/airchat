@@ -122,8 +122,13 @@ describe('v4.32.449 — фраза есть у каждой операции', (
     expect(outcomeSrc).toContain('return `${DIVERGENCE[outcome.op]} (${why(outcome.reason)}).`;');
   });
 
-  it('успех молчит', () => {
-    expect(outcomeSrc).toContain('if (outcome.sent) return null;');
+  it('молчит только полная доставка', () => {
+    // v4.32.850: прежде здесь стояло `if (outcome.sent) return null;` — молчал
+    // любой успех, в том числе «принял один из девятнадцати». Теперь молчание
+    // заслуживает только рассылка, у которой не осталось неохваченных.
+    expect(outcomeSrc).toContain('const missed = outcome.of - outcome.recipients;');
+    expect(outcomeSrc).toContain('if (!(missed > 0)) return null;');
+    expect(outcomeSrc).not.toContain('if (outcome.sent) return null;');
   });
 });
 

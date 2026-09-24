@@ -85,6 +85,14 @@ export function ForwardModal({
       // отказала ли группа в праве писать и был ли вообще транспорт для лички.
       let sent = 0;
       const denied: string[] = [];
+      /**
+       * v4.32.850: «переслано, но не всем» — третий исход, и он не денется ни
+       * в один из двух прежних. В «Не отправлено» ему нельзя: сообщение в
+       * группе есть, и человек пойдёт пересылать второй раз. В «Переслано в N
+       * чатов» — тоже нельзя: часть участников его не увидит, и повтора у
+       * группового сообщения нет.
+       */
+      const partial: string[] = [];
       for (const id of selected) {
         const contact = contacts.find((c) => c.peerPublicKey === id);
         const group = groups.find((g) => g.id === id);
@@ -119,12 +127,16 @@ export function ForwardModal({
           const problem = groupSendProblem(
             await fanoutGroupMessage(group.id, msgText, myName, myPub, row.id)
           );
-          if (problem) denied.push(`«${group.name}» — ${groupSendProblemShort(problem)}`);
+          if (problem?.kind === 'partial') {
+            partial.push(`«${group.name}» — ${groupSendProblemShort(problem)}`);
+            sent += 1;
+          } else if (problem) denied.push(`«${group.name}» — ${groupSendProblemShort(problem)}`);
           else sent += 1;
         }
       }
       if (sent > 0) showSuccess(`Переслано в ${sent} ${ruPlural(sent, ['чат', 'чата', 'чатов'])}`);
       if (denied.length > 0) showError(`Не отправлено: ${denied.join('; ')}`);
+      if (partial.length > 0) showError(`Дошло не всем: ${partial.join('; ')}`);
       onForwarded();
       onClose();
     } catch (e) {
