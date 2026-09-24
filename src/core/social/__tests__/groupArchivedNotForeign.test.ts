@@ -115,6 +115,18 @@ jest.mock('../controlFanout', () => ({
   fanoutControlEnvelope: async () => ({ sent: 0, failed: 0, skipped: 0 }),
 }));
 jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
+// v4.32.795: до этой версии набор обходился настоящим ограничителем — и
+// молча пользовался тем самым дефектом: блок-лист в тесте не поднимается
+// ниоткуда, а `isBlocked` отвечал на это «не заблокирован». Теперь «список не
+// прочитан» — отдельный ответ, и приглашение при нём откладывается. Предмет
+// набора другой, поэтому база здесь открыта, а запретов в ней нет.
+jest.mock('../../security/rateLimiter', () => ({
+  rateLimiter: {
+    whenReady: async () => {},
+    blockedListReadable: () => true,
+    isBlocked: () => false,
+  },
+}));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryBoolFor: async () => false,
   privacyPrefBoolFor: async () => false,

@@ -918,6 +918,14 @@ export class MessagingService {
       // Блок-лист поднимается с диска асинхронно; пока чтение не закончилось,
       // isBlocked отвечает «не заблокирован» на кого угодно (v4.32.317).
       await rateLimiter.whenReady();
+      // v4.32.795: не прочитав список, isBlocked отвечает «не заблокирован» —
+      // и заблокированный заводит у меня строку контакта. Тот же ответ, что и
+      // у сорвавшейся записи контакта двадцатью строками ниже: «сейчас не
+      // смогли», перезапросите.
+      if (!rateLimiter.blockedListReadable()) {
+        log.warn('lan_block_list_unreadable_defer', { from: peerPubKeyB64.slice(0, 12) });
+        return 'deferred';
+      }
       if (rateLimiter.isBlocked(peerPubKeyB64)) {
         if (!survivesBlock(peekPayloadText(pt))) {
           log.info('dm_blocked_no_implicit_contact', { from: peerPubKeyB64.slice(0, 12) });
@@ -1174,6 +1182,20 @@ export class MessagingService {
     // ставить реакции, менять закреплённое, переписывать своё имя и фото в
     // моих контактах и класть сторис в мою ленту. Конверты, адресованные
     // группе, исключены намеренно — см. blockPolicy.
+    //
+    // v4.32.795: у `isBlocked` нет ответа «не знаю» — не подняв список, он
+    // говорит «не заблокирован», то есть ровно то, что снимает запрет. Выше
+    // стоит `whenReady`, и он даёт чтению второй заход; но если не удался и
+    // тот, дальше шла беззащитная дорога. Спрашиваем отдельно, прочитан ли
+    // список вообще (`blockedListReadable`, v4.32.635), и не разбираем конверт
+    // на этот раз: relay держит его тридцать суток, координатор перезапросит
+    // кадр ещё раз, и к тому времени база, скорее всего, откроется. Цена
+    // отказа честная: если чтение сорвётся и в повторе, кадр будет отпущен —
+    // но три подряд неудачных чтения означают, что не работает база целиком.
+    if (inbound && !survivesBlock((payload as { text?: unknown }).text) && !rateLimiter.blockedListReadable()) {
+      log.warn('dm_block_list_unreadable_defer', { from: peerPubKeyB64.slice(0, 12), kind: payload.kind ?? 'text' });
+      return 'deferred';
+    }
     if (inbound && !survivesBlock((payload as { text?: unknown }).text) && rateLimiter.isBlocked(peerPubKeyB64)) {
       log.info('dm_blocked_drop', { from: peerPubKeyB64.slice(0, 12), kind: payload.kind ?? 'text' });
       return 'consumed';

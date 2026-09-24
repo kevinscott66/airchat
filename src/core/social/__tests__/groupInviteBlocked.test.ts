@@ -25,6 +25,8 @@ const mockCreated: unknown[][] = [];
 const mockUpserts: Array<{ peerPubB64: string; role: string }> = [];
 const mockContacts: FakeContact[] = [];
 const mockBlocked = new Set<string>();
+/** Поднялся ли блок-лист с диска (v4.32.795). */
+let mockReadable = true;
 let mockOnlyContacts: boolean | null = false;
 
 jest.mock('../../storage/local', () => ({
@@ -79,7 +81,14 @@ jest.mock('../controlFanout', () => ({
 }));
 jest.mock('../contacts', () => ({ listContactsFor: async () => mockContacts }));
 jest.mock('../../security/rateLimiter', () => ({
-  rateLimiter: { whenReady: async () => {}, isBlocked: (p: string) => mockBlocked.has(p) },
+  rateLimiter: {
+    whenReady: async () => {},
+    // v4.32.795: «список прочитан» — предмет отдельного вопроса, а не
+    // молчаливого «не заблокирован»; непрочитанный отвечал «не заблокирован»
+    // на кого угодно, и приглашение проходило.
+    blockedListReadable: () => mockReadable,
+    isBlocked: (p: string) => (mockReadable ? mockBlocked.has(p) : false),
+  },
 }));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryBoolFor: async () => mockOnlyContacts,
@@ -122,6 +131,7 @@ beforeEach(() => {
   mockUpserts.length = 0;
   mockContacts.length = 0;
   mockBlocked.clear();
+  mockReadable = true;
   mockOnlyContacts = false;
   jest.clearAllMocks();
 });
@@ -145,6 +155,32 @@ describe('приглашение в неизвестную группу', () => 
     mockBlocked.add(PEER);
     mockContacts.push({ peerPublicKey: PEER, implicit: true });
     await handleIncomingGroupControl(invite(), RCPT, PEER);
+    expect(mockCreated).toEqual([]);
+  });
+});
+
+describe('блок-лист не прочитался (v4.32.795)', () => {
+  it('группа не заводится: ответ «не заблокирован» тут не заслужен', async () => {
+    mockReadable = false;
+    expect(await handleIncomingGroupControl(invite(), RCPT, PEER)).toBe('deferred');
+    expect(mockCreated).toEqual([]);
+    expect(mockUpserts).toEqual([]);
+  });
+
+  it('база открылась — то же приглашение применяется', async () => {
+    mockReadable = false;
+    await handleIncomingGroupControl(invite(), RCPT, PEER);
+    mockReadable = true;
+    expect(await handleIncomingGroupControl(invite(), RCPT, PEER)).toBe('consumed');
+    expect(mockCreated).toHaveLength(1);
+  });
+
+  it('база открылась, а человек в списке — приглашение выбрасывается', async () => {
+    mockReadable = false;
+    await handleIncomingGroupControl(invite(), RCPT, PEER);
+    mockReadable = true;
+    mockBlocked.add(PEER);
+    expect(await handleIncomingGroupControl(invite(), RCPT, PEER)).toBe('consumed');
     expect(mockCreated).toEqual([]);
   });
 });

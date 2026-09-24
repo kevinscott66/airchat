@@ -1515,6 +1515,17 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // человеку новую группу на моём устройстве — ровно то, от чего запрет и
     // ставят. Остальные операции идут как раньше.
     await rateLimiter.whenReady();
+    // v4.32.795: не поднявшись с диска, список отвечает «не заблокирован» на
+    // кого угодно — и приглашение от заблокированного заводит у меня группу,
+    // от чего проверка выше и поставлена. Откладываем: relay подаст конверт
+    // ещё раз, а первый ответ базы тут решает слишком многое.
+    if (!rateLimiter.blockedListReadable()) {
+      log.warn('group_ctl_invite_block_list_unreadable_defer', {
+        gid: env.groupId.slice(0, 8),
+        from: senderPubB64.slice(0, 12),
+      });
+      return 'deferred';
+    }
     if (rateLimiter.isBlocked(senderPubB64)) {
       log.info('group_ctl_invite_blocked_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';

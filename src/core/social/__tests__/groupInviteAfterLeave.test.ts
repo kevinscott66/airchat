@@ -78,7 +78,13 @@ jest.mock('../../storage/local', () => ({
 }));
 
 jest.mock('../../security/rateLimiter', () => ({
-  rateLimiter: { whenReady: async () => {}, isBlocked: () => false },
+  rateLimiter: {
+    whenReady: async () => {},
+    // v4.32.795: «список прочитан» — предмет отдельного вопроса, а не
+    // молчаливого «не заблокирован». Здесь база открыта.
+    blockedListReadable: () => true,
+    isBlocked: () => false,
+  },
 }));
 jest.mock('../../identity/profileManager', () => ({
   profileManager: { getActiveProfile: () => ({ id: 1 }) },
