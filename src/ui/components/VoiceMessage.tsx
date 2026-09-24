@@ -86,6 +86,9 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
   // v4.32.562: запись заканчивает себя сама, дойдя до предела. Ссылка нужна
   // потому, что таймер заводится раньше, чем объявлено само окончание.
   const stopSelfRef = useRef<(() => void) | null>(null);
+  // v4.32.860: сворачивание приложения выбросило готовую запись. Сказать об
+  // этом можно только по возвращении — см. слушателя AppState ниже.
+  const droppedRef = useRef(false);
 
   // v4.32.174: check-only on mount. Раньше компонент на каждом монтировании чата
   // вызывал requestPermissionsAsync, что провоцировало системный диалог ещё до
@@ -135,7 +138,23 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
   // recording. iOS can leave the component mounted while the app is inactive.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') return;
+      if (state === 'active') {
+        // v4.32.860: до этой версии здесь не было ничего. Запись — единственное,
+        // что человек не может восстановить: текст остаётся в поле ввода, а
+        // пятиминутный рассказ, прерванный входящим звонком или переключением
+        // на другое приложение, останавливался, стирался из кэша и исчезал
+        // молча. Вернувшись, человек видел прежний экран и был уверен, что
+        // запись идёт (или что она отправлена).
+        //
+        // Сказать в момент потери нельзя: приложение в этот миг свёрнуто, и
+        // тоста, показанного тогда, никто не увидит — он истечёт за спиной.
+        // Поэтому потеря запоминается, а слово ждёт возвращения.
+        if (droppedRef.current) {
+          droppedRef.current = false;
+          showError('Запись прервана: приложение свернулось. Запишите заново');
+        }
+        return;
+      }
       gateRef.current = pressOut(gateRef.current).gate;
       stopPulse();
       setIsRecording(false);
@@ -144,6 +163,7 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
       const rec = recordingRef.current;
       recordingRef.current = null;
       if (rec) {
+        droppedRef.current = true;
         void rec.stop()
           .then(() => rec.uri ? deleteCachedFileUris([rec.uri]) : undefined)
           .catch(() => {});

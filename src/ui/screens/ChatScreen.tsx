@@ -102,7 +102,7 @@ import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { profileManager } from '../../core/identity/profileManager';
 import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
-import { reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
+import { reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
 import { exportBody } from '../../core/social/exportLine';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
@@ -1927,7 +1927,7 @@ function ChatThreadView({
       // v4.32.726: отказ отправки не бросает — и точка на карте не уходила
       // никуда молча, при обычном виде экрана. См. sendMessageResult.
       const res = await svc.sendMessageResult(peerB64, locText);
-      if (res.outcome === 'refused' && isMountedRef.current) showError('Геолокация не отправлена. Попробуйте ещё раз');
+      if (res.outcome === 'refused' && isMountedRef.current) reportSendRefusal(res, 'Геолокация не отправлена. Попробуйте ещё раз');
     } catch (e) {
       log.error('chat_send_location_failed', { err: rawErrorText(e) });
       if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить геолокацию'));
@@ -2043,7 +2043,7 @@ function ChatThreadView({
       // v4.32.726: та же дыра, что закрывали в v4.32.543, но со стороны тихого
       // отказа: исключения нет, карточки у собеседника тоже.
       const res = await svc.sendMessageResult(peerB64, cardText);
-      if (res.outcome === 'refused' && isMountedRef.current) showError('Карточка контакта не отправлена. Попробуйте ещё раз');
+      if (res.outcome === 'refused' && isMountedRef.current) reportSendRefusal(res, 'Карточка контакта не отправлена. Попробуйте ещё раз');
     } catch (e) {
       log.error('chat_share_contact_failed', { err: rawErrorText(e) });
       if (isMountedRef.current) showError(userErrorText(e, 'Не удалось отправить карточку контакта'));
@@ -2221,7 +2221,7 @@ function ChatThreadView({
       // v4.32.726: файл уже загружен, а отказ отправки молчит — до этой версии
       // документ не появлялся ни в переписке, ни в единственном баннере.
       const res = await svc.sendMessageResult(peerB64, docText);
-      if (res.outcome === 'refused') { showError('Документ не отправлен. Попробуйте ещё раз'); return; }
+      if (res.outcome === 'refused') { reportSendRefusal(res, 'Документ не отправлен. Попробуйте ещё раз'); return; }
       void appendNewMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить документ'));
@@ -2261,8 +2261,8 @@ function ChatThreadView({
             setMsg(text);
             msgRef.current = text;
             setOptimisticOutgoing(null);
-            log.warn('chat_send_media_refused');
-            showError('Отправить не удалось. Попробуйте ещё раз');
+            log.warn('chat_send_media_refused', { explained: res.explained === true });
+            reportSendRefusal(res, 'Отправить не удалось. Попробуйте ещё раз');
             return;
           }
           void appendNewMessages();
@@ -2372,7 +2372,19 @@ function ChatThreadView({
           // уверен, что голосовое ушло. Отказ здесь равен неудаче загрузки
           // строкой выше, поэтому и обрабатывается одинаково.
           const res = await svc.sendMessageResult(peerB64, voiceText);
-          if (res.outcome === 'refused') throw new Error('Голосовое не отправлено. Запишите заново.');
+          if (res.outcome === 'refused') {
+            // v4.32.860: отказ перестал быть исключением. Общий catch говорит
+            // «Голосовое не отправлено. Запишите заново» — и поверх баннера о
+            // настоящей причине («Контакт заблокирован») это читалось как
+            // обещание: запишите ещё раз, и уйдёт. Не уйдёт. Убирать за собой
+            // всё равно надо тем же способом, поэтому ветка повторяет уборку
+            // catch и молчит, когда причина уже названа.
+            setOptimisticOutgoing(null);
+            await deleteCachedFileUris([result.uri]).catch(() => {});
+            log.warn('voice_send_refused', { explained: res.explained === true });
+            reportSendRefusal(res, 'Голосовое не отправлено. Запишите заново');
+            return;
+          }
           // Сначала настоящая строка из базы, только потом снимается заглушка:
           // иначе между её снятием и приходом строки пузырь моргает. Обычное
           // сличение по тексту (см. appendNewMessages) здесь не сработает —
@@ -2423,7 +2435,7 @@ function ChatThreadView({
         if (!svc) { showError(NOT_READY_TEXT); return; }
         // v4.32.726: см. остальные отправки — отказ не бросает.
         const res = await svc.sendMessageResult(peerB64, gifText);
-        if (res.outcome === 'refused') { showError('GIF не отправлен. Попробуйте ещё раз'); return; }
+        if (res.outcome === 'refused') { reportSendRefusal(res, 'GIF не отправлен. Попробуйте ещё раз'); return; }
         void appendNewMessages();
         scrollToNewest();
       }
@@ -2601,8 +2613,8 @@ function ChatThreadView({
             msgRef.current = text;
             setReplyTo(replyRef);
             setOptimisticOutgoing(null);
-            log.warn('chat_send_refused');
-            showError('Отправить не удалось. Текст вернулся в поле ввода');
+            log.warn('chat_send_refused', { explained: res.explained === true });
+            reportSendRefusal(res, 'Отправить не удалось. Текст вернулся в поле ввода');
             return;
           }
           void appendNewMessages();

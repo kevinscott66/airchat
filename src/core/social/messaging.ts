@@ -103,7 +103,25 @@ export type { PeerDelivery, TwoSidedOutcome } from './twoSidedEdit';
  * нет нигде, кроме поля ввода. Подробнее — в `sendMessageResult`.
  */
 export type DmSendOutcome = 'sent' | 'stored' | 'refused';
-export type DmSendResult = { outcome: DmSendOutcome; cid: string | null };
+export type DmSendResult = {
+  outcome: DmSendOutcome;
+  cid: string | null;
+  /**
+   * Отказ уже объяснён человеку — своими словами и с настоящей причиной
+   * (v4.32.860).
+   *
+   * Часть отказов показывает баннер прямо отсюда: заблокированный контакт,
+   * часовой лимит, отсутствующий защищённый канал. Экран об этом не знал и
+   * добавлял поверх собственное «Попробуйте ещё раз» — вторым сообщением о
+   * том же самом событии, причём тост вытесняет прежний тост, а совет
+   * «повторите» прямо противоречит причине: заблокированному контакту не
+   * поможет ни одна повторная попытка.
+   *
+   * Флаг необязателен намеренно: отказов без объяснения больше (не лёг ряд в
+   * базу, нет DID, служебный конверт), и им по-прежнему нужно слово экрана.
+   */
+  explained?: boolean;
+};
 
 type InnerPayload =
   | { kind?: 'text'; text: string; mediaCids?: string[]; replyToId?: string; replyToPreview?: string }
@@ -1907,7 +1925,7 @@ export class MessagingService {
         severity: ErrorSeverity.ERROR,
         retryable: false,
       });
-      return { outcome: 'refused', cid: null };
+      return { outcome: 'refused', cid: null, explained: true };
     }
     // v4.32.329: служебный конверт (реакция, галочка о прочтении, голос в
     // опросе, рассылка группы) тратит свой запас, а не полусотню человеческих
@@ -1933,7 +1951,7 @@ export class MessagingService {
         severity: ErrorSeverity.ERROR,
         retryable: false,
       });
-      return { outcome: 'refused', cid: null };
+      return { outcome: 'refused', cid: null, explained: true };
     }
     const t0 = Date.now();
     return new Promise<DmSendResult>((resolve, reject) => {
@@ -2018,7 +2036,7 @@ export class MessagingService {
         });
         // v4.32.726: строки в переписке ещё нет и не будет — набранное живёт
         // только в поле ввода экрана. Исход зовётся отказом именно поэтому.
-        return { outcome: 'refused', cid: null };
+        return { outcome: 'refused', cid: null, explained: true };
       }
     }
     const peerDid = didFromPubB64(contactPubB64);

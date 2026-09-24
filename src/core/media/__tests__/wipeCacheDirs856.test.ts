@@ -88,15 +88,27 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('запись голоса после успешной отправки остаётся на диске', () => {
     // Если бы её удаляли, каталог был бы пустым и цена дефекта — нулевой.
-    // Удаление в sendVoice стоит только в ветке отказа (общий catch).
+    // Удаляют запись только там, где она никуда не ушла.
     const chat = read('ui/screens/ChatScreen.tsx');
     const at = chat.indexOf('const sendVoice = useCallback(');
     expect(at).toBeGreaterThan(0);
     const body = chat.slice(at, chat.indexOf('const sendGif = useCallback(', at));
-    expect(body).toContain('deleteCachedFileUris([result.uri])');
-    // Единственное удаление — и оно в ветке отказа.
-    expect(body.split('deleteCachedFileUris').length - 1).toBe(1);
-    expect(body.slice(0, body.indexOf('deleteCachedFileUris'))).toContain('} catch (e) {');
+    // v4.32.860: удалений стало два — отказ отправки перестал быть исключением
+    // и убирает за собой сам. Важно не их число, а то, что оба стоят на путях
+    // неудачи: после успешной отправки файл остаётся лежать.
+    const spots = [...body.matchAll(/deleteCachedFileUris\(\[result\.uri\]\)/g)].map((m) => m.index ?? 0);
+    expect(spots).toHaveLength(2);
+    const refused = body.indexOf("if (res.outcome === 'refused') {");
+    const caught = body.indexOf('} catch (e) {');
+    expect(refused).toBeGreaterThan(0);
+    expect(caught).toBeGreaterThan(refused);
+    expect(spots[0]).toBeGreaterThan(refused);
+    expect(spots[0]).toBeLessThan(caught);
+    expect(spots[1]).toBeGreaterThan(caught);
+    // Успешный путь — между веткой отказа и catch — файл не трогает.
+    expect(body.slice(body.indexOf('await appendNewMessages();'), caught)).not.toContain(
+      'deleteCachedFileUris'
+    );
   });
 
   it('суточная уборка в подкаталоги тоже не ходит', () => {

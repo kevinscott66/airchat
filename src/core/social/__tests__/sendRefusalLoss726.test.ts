@@ -51,9 +51,12 @@ describe('исход отправки называется словом', () => 
   it('три состояния, и ни одно не необязательное поле', () => {
     const src = codeOnly(MESSAGING());
     expect(src).toContain("export type DmSendOutcome = 'sent' | 'stored' | 'refused';");
-    expect(src).toContain(
-      'export type DmSendResult = { outcome: DmSendOutcome; cid: string | null };'
-    );
+    // v4.32.860: у исхода появилось третье поле, и запись стала многострочной.
+    // Обязательными остались прежние два — необязателен только `explained`.
+    const type = slice(src, 'export type DmSendResult = {', '};');
+    expect(type).toContain('outcome: DmSendOutcome;');
+    expect(type).toContain('cid: string | null;');
+    expect(type).toContain('explained?: boolean;');
   });
 
   it('отправка отвечает исходом, а прежний sendMessage — обёртка над ней', () => {
@@ -74,7 +77,9 @@ describe('отказ до строки в переписке зовётся от
 
   it('блокировка и оба часовых лимита', () => {
     const b = body();
-    expect(b.split("return { outcome: 'refused', cid: null };").length - 1).toBe(3);
+    // v4.32.860: два из трёх отказов помечены как уже объяснённые человеку —
+    // счёт ведётся по общему началу строки, а не по её точному виду.
+    expect(b.split("return { outcome: 'refused', cid: null").length - 1).toBe(3);
     expect(b).toContain("code: 'BLOCKED_CONTACT',");
     expect(b).toContain("code: 'RATE_LIMIT_DM',");
     expect(b).toContain('if (!rateLimiter.canSendControl(contactPubB64)) {');
@@ -138,7 +143,9 @@ describe('экран переписки возвращает набранное'
     expect(b).toContain('msgRef.current = text;');
     expect(b).toContain('setReplyTo(replyRef);');
     expect(b).toContain('setOptimisticOutgoing(null);');
-    expect(b).toContain("showError('Отправить не удалось. Текст вернулся в поле ввода');");
+    expect(b).toContain(
+      "reportSendRefusal(res, 'Отправить не удалось. Текст вернулся в поле ввода');"
+    );
   });
 
   it('вложение: подпись — назад', () => {
@@ -149,12 +156,13 @@ describe('экран переписки возвращает набранное'
     expect(b).toContain('setOptimisticOutgoing(null);');
   });
 
-  it('голосовое: отказ равен неудаче загрузки — тот же catch, та же уборка', () => {
+  it('голосовое: отказ убирает за собой то же, что убрал бы catch', () => {
     const b = slice(chat(), 'const voiceText = makeVoiceText(result.uri, result.durationMs, blob);', 'await appendNewMessages();');
     expect(b).toContain('const res = await svc.sendMessageResult(peerB64, voiceText);');
-    expect(b).toContain(
-      "if (res.outcome === 'refused') throw new Error('Голосовое не отправлено. Запишите заново.');"
-    );
+    expect(b).toContain("if (res.outcome === 'refused') {");
+    // v4.32.860: отказ перестал быть исключением — уборка выписана здесь.
+    expect(b).toContain('setOptimisticOutgoing(null);');
+    expect(b).toContain('await deleteCachedFileUris([result.uri]).catch(() => {});');
   });
 
   it('видео: отказ считается отдельно от непомещающихся файлов', () => {
@@ -176,10 +184,10 @@ describe('экран переписки возвращает набранное'
   it('документ, GIF, геолокация и карточка контакта больше не уходят в тишину', () => {
     const c = chat();
     for (const text of [
-      "showError('Документ не отправлен. Попробуйте ещё раз'); return;",
-      "showError('GIF не отправлен. Попробуйте ещё раз'); return;",
-      "showError('Геолокация не отправлена. Попробуйте ещё раз');",
-      "showError('Карточка контакта не отправлена. Попробуйте ещё раз');",
+      "reportSendRefusal(res, 'Документ не отправлен. Попробуйте ещё раз'); return;",
+      "reportSendRefusal(res, 'GIF не отправлен. Попробуйте ещё раз'); return;",
+      "reportSendRefusal(res, 'Геолокация не отправлена. Попробуйте ещё раз');",
+      "reportSendRefusal(res, 'Карточка контакта не отправлена. Попробуйте ещё раз');",
     ]) {
       expect(c).toContain(text);
     }
