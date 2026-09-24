@@ -11,11 +11,14 @@
 
 import { AppState, type AppStateStatus } from 'react-native';
 import {
+  scopedKvDeleteFor,
   scopedKvGetFor,
+  scopedKvListKeysByPrefixFor,
   scopedKvSetCheckedFor,
   scopedKvSetFor,
   scopedKvTryGetFor,
 } from '../storage/profileScopedKv';
+import { keyNameDigest, looksLikeKeyNameDigest } from '../storage/keyNameDigest';
 import { ownerPidForPublicKeyB64 } from '../identity/ownerPidLookup';
 import { ownFieldGetFor } from '../identity/ownProfile';
 import { pubsubPublish, pubsubSubscribe } from '../transport/ipfs/pubsub';
@@ -50,8 +53,24 @@ const KV_PREFIX = 'presence:last_seen:';
  * v4.32.278: удаление контакта тоже стирает эту запись, и до этой версии оно
  * собирало ключ своим литералом. Один источник — чтобы «удалили контакт, а
  * время его последнего входа осталось» не появилось при первом же переименовании.
+ *
+ * v4.32.813: в имени стоит дайджест, а не сам открытый ключ собеседника.
+ * Столбцы таблицы kv лежат открытыми, и набор таких имён был готовым графом
+ * связей: с кем человек переписывается и когда каждый был в сети — то есть
+ * ровно то, от чтения чего файла базы защищает всё остальное шифрование.
+ * Поэтому функция стала асинхронной: дайджест берётся на ключе из Keychain.
  */
-export function presenceLastSeenKey(peerPubB64: string): string {
+export async function presenceLastSeenKey(peerPubB64: string): Promise<string> {
+  return `${KV_PREFIX}${await keyNameDigest(peerPubB64)}`;
+}
+
+/**
+ * Имя ключа времён, когда в нём стоял сам открытый ключ собеседника.
+ *
+ * Нужно ровно двоим: переносу (v4.32.813) и удалению контакта — там старую
+ * запись надо снять, даже если перенос до неё ещё не дошёл.
+ */
+export function legacyPresenceLastSeenKey(peerPubB64: string): string {
   return `${KV_PREFIX}${peerPubB64}`;
 }
 /**
@@ -236,9 +255,9 @@ export async function setPeerLastSeenAllowedFor(
     lastSeenCache.delete(peerPubB64);
     // Стирание собранного времени — часть той же просьбы: не сложилось оно,
     // значит просьба исполнена наполовину, и говорить «исполнена» нельзя.
-    stored = await scopedKvSetCheckedFor(
-      presencePid, presenceLastSeenKey(peerPubB64), '0'
-    ).catch(() => false);
+    stored = await presenceLastSeenKey(peerPubB64)
+      .then((key) => scopedKvSetCheckedFor(presencePid, key, '0'))
+      .catch(() => false);
   } else if (next) {
     hiddenPeers.delete(peerPubB64);
   }
@@ -276,7 +295,8 @@ async function persistHiddenPeerFor(
 ): Promise<boolean> {
   try {
     if (!allow) {
-      if (!(await scopedKvSetCheckedFor(ownerProfileId, presenceLastSeenKey(peerPubB64), '0'))) {
+      const key = await presenceLastSeenKey(peerPubB64);
+      if (!(await scopedKvSetCheckedFor(ownerProfileId, key, '0'))) {
         log.warn('presence_last_seen_reset_failed', { pid: ownerProfileId });
         return false;
       }
@@ -355,7 +375,7 @@ export function recordPeerActivityFor(
     if (oldestKey !== undefined) lastSeenCache.delete(oldestKey);
   }
   lastSeenCache.set(peerPubB64, now);
-  void scopedKvSetFor(presencePid, presenceLastSeenKey(peerPubB64), String(now)).catch(() => { /* ignore */ });
+  void persistLastSeen(presencePid, peerPubB64, now);
   emitPresence(peerPubB64);
 }
 
@@ -392,8 +412,58 @@ async function recordForeignActivity(
     const read = await scopedKvTryGetFor(ownerProfileId, HIDDEN_PEERS_KEY);
     if (read === null) return;
     if (parseHiddenPeers(read.value).includes(peerPubB64)) return;
-    await scopedKvSetFor(ownerProfileId, presenceLastSeenKey(peerPubB64), String(now));
+    await persistLastSeen(ownerProfileId, peerPubB64, now);
   } catch { /* ignore */ }
+}
+
+/**
+ * Записать время последней активности под дайджестом имени.
+ *
+ * Ключ к данным недоступен — не пишем вовсе. Подставить вместо дайджеста сам
+ * открытый ключ значило бы вернуть в базу ровно ту запись, от которой уходим,
+ * и вернуть её незаметно: время последнего входа собирается заново из любого
+ * входящего, а имя ключа осталось бы навсегда.
+ */
+async function persistLastSeen(pid: number, peerPubB64: string, now: number): Promise<void> {
+  try {
+    await scopedKvSetFor(pid, await presenceLastSeenKey(peerPubB64), String(now));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Разовый перенос имён на дайджесты (v4.32.813).
+ *
+ * Идёт по всем записям префикса, а не по списку контактов: время последнего
+ * входа копится и для тех, кто в контакты не попал, — именно их набор и был
+ * самой говорящей частью утечки. Записи, чьё окончание уже похоже на
+ * дайджест, пропускаются.
+ *
+ * Старое имя снимается только после того, как легло новое. Не легло —
+ * оставляем как есть: следующий запуск попробует снова, а потерять здесь
+ * нечего, кроме времени последнего входа, зато удалить, не скопировав, —
+ * значит потерять его наверняка.
+ */
+async function migrateLastSeenKeyNames(pid: number): Promise<void> {
+  let keys: string[];
+  try {
+    keys = await scopedKvListKeysByPrefixFor(pid, KV_PREFIX);
+  } catch { return; }
+  for (const key of keys) {
+    const suffix = key.slice(KV_PREFIX.length);
+    if (!suffix || looksLikeKeyNameDigest(suffix)) continue;
+    try {
+      const read = await scopedKvTryGetFor(pid, key);
+      // База не ответила — общую запись не трогаем: удалить, не скопировав,
+      // значит потерять её насовсем.
+      if (read === null) continue;
+      if (read.value != null) {
+        if (!(await scopedKvSetCheckedFor(pid, `${KV_PREFIX}${await keyNameDigest(suffix)}`, read.value))) {
+          continue;
+        }
+      }
+      await scopedKvDeleteFor(pid, key);
+    } catch { /* следующий запуск попробует снова */ }
+  }
 }
 
 /** Загрузить сохранённые last-seen и просьбы собеседников из KV при старте. */
@@ -411,10 +481,13 @@ export async function loadPersistedPresence(peerPubB64List: string[], ownerPid: 
   // v4.32.642: не прочитался — так и остаётся «не знаем», а не «пустой»;
   // до первого удачного чтения действует осторожное peerMayBeHidden.
   await loadHiddenPeers();
+  // Перенос имён — до чтения: иначе первый запуск после обновления не нашёл
+  // бы ни одной записи и показал бы всех «не в сети», хотя данные на месте.
+  await migrateLastSeenKeyNames(presencePid);
   await runWithConcurrency(peerPubB64List, 12, async (k) => {
     try {
       if (hiddenPeers.has(k)) return;
-      const v = await scopedKvGetFor(presencePid, presenceLastSeenKey(k));
+      const v = await scopedKvGetFor(presencePid, await presenceLastSeenKey(k));
       if (v) {
         const ts = parseInt(v, 10);
         if (ts > 0) lastSeenCache.set(k, ts);

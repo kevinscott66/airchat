@@ -25,6 +25,14 @@ jest.mock('../../storage/local', () => ({
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
+  kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
+  kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+}));
+
+// v4.32.813: служба присутствия считает имена ключей на ключе данных —
+// без подмены сюда подтягивается expo-secure-store и набор не поднимается.
+jest.mock('../../storage/localEncryption', () => ({
+  getOrCreateDataEncryptionKey: async () => new Uint8Array(32).fill(7),
 }));
 
 jest.mock('../../identity/profileManager', () => ({
@@ -81,8 +89,8 @@ describe('опоздавшее входящее чужого аккаунта', 
     await loadPersistedPresence([], ON_SCREEN);
     recordPeerActivityFor(LATE, PEER, 1_700_000_000_000);
     await settle();
-    expect(mockKv.get(`p${LATE}:${presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
-    expect(mockKv.has(`p${ON_SCREEN}:${presenceLastSeenKey(PEER)}`)).toBe(false);
+    expect(mockKv.get(`p${LATE}:${await presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
+    expect(mockKv.has(`p${ON_SCREEN}:${await presenceLastSeenKey(PEER)}`)).toBe(false);
   });
 
   it('не показывается в аккаунте на экране', async () => {
@@ -118,7 +126,7 @@ describe('опоздавшее входящее чужого аккаунта', 
     recordPeerActivityFor(LATE, PEER, 1_700_000_000_000);
     await settle();
     // '0' записала сама просьба; главное — что новое время сюда не легло.
-    expect(mockKv.get(`p${LATE}:${presenceLastSeenKey(PEER)}`)).toBe('0');
+    expect(mockKv.get(`p${LATE}:${await presenceLastSeenKey(PEER)}`)).toBe('0');
     expect(getPresenceState(PEER).lastActiveAt).toBe(0);
   });
 
@@ -128,7 +136,7 @@ describe('опоздавшее входящее чужого аккаунта', 
     await settle();
     recordPeerActivityFor(LATE, PEER, 1_700_000_000_000);
     await settle();
-    expect(mockKv.get(`p${LATE}:${presenceLastSeenKey(PEER)}`)).toBe('0');
+    expect(mockKv.get(`p${LATE}:${await presenceLastSeenKey(PEER)}`)).toBe('0');
   });
 
   it('просьба стирает уже накопленное время у адресата', async () => {
@@ -137,7 +145,7 @@ describe('опоздавшее входящее чужого аккаунта', 
     await settle();
     setPeerLastSeenAllowedFor(LATE, PEER, false);
     await settle();
-    expect(mockKv.get(`p${LATE}:${presenceLastSeenKey(PEER)}`)).toBe('0');
+    expect(mockKv.get(`p${LATE}:${await presenceLastSeenKey(PEER)}`)).toBe('0');
   });
 
   it('снятие просьбы у чужого аккаунта убирает его из списка', async () => {
@@ -164,7 +172,7 @@ describe('аккаунт на экране работает как прежде'
     recordPeerActivityFor(ON_SCREEN, PEER, 1_700_000_000_000);
     await settle();
     expect(getPresenceState(PEER).lastActiveAt).toBe(1_700_000_000_000);
-    expect(mockKv.get(`p${ON_SCREEN}:${presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
+    expect(mockKv.get(`p${ON_SCREEN}:${await presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
   });
 
   it('просьба действует немедленно, без похода в базу', async () => {

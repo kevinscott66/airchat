@@ -32,6 +32,14 @@ jest.mock('../../storage/local', () => ({
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
+  kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
+  kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+}));
+
+// v4.32.813: служба присутствия считает имена ключей на ключе данных —
+// без подмены сюда подтягивается expo-secure-store и набор не поднимается.
+jest.mock('../../storage/localEncryption', () => ({
+  getOrCreateDataEncryptionKey: async () => new Uint8Array(32).fill(7),
 }));
 
 jest.mock('../../identity/profileManager', () => ({
@@ -109,7 +117,7 @@ describe('проверка не пустая: с читаемым списком
     await loadPersistedPresence([], ON_SCREEN);
     recordPeerActivity(OTHER, TS);
     await settle();
-    expect(mockKv.get(`p${ON_SCREEN}:${presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
+    expect(mockKv.get(`p${ON_SCREEN}:${await presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
     expect(getPresenceState(OTHER).lastActiveAt).toBe(TS);
   });
 
@@ -117,7 +125,7 @@ describe('проверка не пустая: с читаемым списком
     await loadPersistedPresence([], ON_SCREEN);
     recordPeerActivityFor(LATE, OTHER, TS);
     await settle();
-    expect(mockKv.get(`p${LATE}:${presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
+    expect(mockKv.get(`p${LATE}:${await presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
   });
 
   it('а просьба ложится в список, не трогая соседние', async () => {
@@ -136,12 +144,12 @@ describe('список не прочитался', () => {
     await loadPersistedPresence([], ON_SCREEN);
     recordPeerActivity(OTHER, TS);
     await settle();
-    expect(mockKv.has(`p${ON_SCREEN}:${presenceLastSeenKey(OTHER)}`)).toBe(false);
+    expect(mockKv.has(`p${ON_SCREEN}:${await presenceLastSeenKey(OTHER)}`)).toBe(false);
     expect(getPresenceState(OTHER).lastActiveAt).toBe(0);
   });
 
   it('и не показывается то, что уже лежит на диске', async () => {
-    mockKv.set(`p${ON_SCREEN}:${presenceLastSeenKey(OTHER)}`, String(TS));
+    mockKv.set(`p${ON_SCREEN}:${await presenceLastSeenKey(OTHER)}`, String(TS));
     mockFailHidden = true;
     await loadPersistedPresence([OTHER], ON_SCREEN);
     expect(getPresenceState(OTHER).lastActiveAt).toBe(0);
@@ -152,12 +160,12 @@ describe('список не прочитался', () => {
     await loadPersistedPresence([], ON_SCREEN);
     recordPeerActivity(OTHER, TS);
     await settle();
-    expect(mockKv.has(`p${ON_SCREEN}:${presenceLastSeenKey(OTHER)}`)).toBe(false);
+    expect(mockKv.has(`p${ON_SCREEN}:${await presenceLastSeenKey(OTHER)}`)).toBe(false);
     // База ответила — следующая же активность записывается, без перезапуска.
     mockFailHidden = false;
     recordPeerActivity(OTHER, TS);
     await settle();
-    expect(mockKv.get(`p${ON_SCREEN}:${presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
+    expect(mockKv.get(`p${ON_SCREEN}:${await presenceLastSeenKey(OTHER)}`)).toBe(String(TS));
     expect(getPresenceState(OTHER).lastActiveAt).toBe(TS);
   });
 
@@ -170,10 +178,10 @@ describe('список не прочитался', () => {
     // Перечитывание идёт объединением, а не заменой: записи на диске может ещё
     // не быть, но в памяти просьба уже принята. Само поле не пустое — просьба
     // затирает прежнее время нулём, — поэтому проверяем именно значение.
-    expect(mockKv.get(`p${ON_SCREEN}:${presenceLastSeenKey(PEER)}`)).toBe('0');
+    expect(mockKv.get(`p${ON_SCREEN}:${await presenceLastSeenKey(PEER)}`)).toBe('0');
     recordPeerActivity(PEER, TS);
     await settle();
-    expect(mockKv.get(`p${ON_SCREEN}:${presenceLastSeenKey(PEER)}`)).toBe('0');
+    expect(mockKv.get(`p${ON_SCREEN}:${await presenceLastSeenKey(PEER)}`)).toBe('0');
     expect(getPresenceState(PEER).lastActiveAt).toBe(0);
   });
 
@@ -182,7 +190,7 @@ describe('список не прочитался', () => {
     mockFailHidden = true;
     recordPeerActivityFor(LATE, OTHER, TS);
     await settle();
-    expect(mockKv.has(`p${LATE}:${presenceLastSeenKey(OTHER)}`)).toBe(false);
+    expect(mockKv.has(`p${LATE}:${await presenceLastSeenKey(OTHER)}`)).toBe(false);
   });
 
   it('и его список запретов не затирается новой просьбой', async () => {

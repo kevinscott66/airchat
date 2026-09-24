@@ -36,6 +36,16 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvGetFor: async (pid: number, k: string) => mockKv.get(`p${pid}:${k}`) ?? null,
   scopedKvSetFor: async (pid: number, k: string, v: string) => { mockKv.set(`p${pid}:${k}`, v); },
   scopedKvTryGetFor: async (pid: number, k: string) => ({ value: mockKv.get(`p${pid}:${k}`) ?? null }),
+  scopedKvSetCheckedFor: async (pid: number, k: string, v: string) => { mockKv.set(`p${pid}:${k}`, v); return true; },
+  scopedKvDeleteFor: async (pid: number, k: string) => { mockKv.delete(`p${pid}:${k}`); },
+  scopedKvListKeysByPrefixFor: async (pid: number, pref: string) =>
+    [...mockKv.keys()].filter((k) => k.startsWith(`p${pid}:${pref}`)).map((k) => k.slice(`p${pid}:`.length)),
+}));
+
+// v4.32.813: служба присутствия считает имена ключей на ключе данных —
+// без подмены сюда подтягивается expo-secure-store и набор не поднимается.
+jest.mock('../../storage/localEncryption', () => ({
+  getOrCreateDataEncryptionKey: async () => new Uint8Array(32).fill(7),
 }));
 
 const MY_PUB = 'мояПара==';
@@ -94,6 +104,7 @@ import {
   startPresenceBroadcast,
   stopPresenceBroadcast,
   presenceOwnerPid,
+  presenceLastSeenKey,
   recordPeerActivityFor,
   getPresenceState,
 } from '../presenceService';
@@ -196,7 +207,10 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы цел
     await settle();
     recordPeerActivityFor(OWNER, MY_PEER, 1_700_000_000_000);
     await settle();
-    expect(mockKv.get(`p${OWNER}:presence:last_seen:${MY_PEER}`)).toBe('1700000000000');
+    // v4.32.813: имя ключа — дайджест, и открытого ключа собеседника в нём
+    // больше нет; номер аккаунта в имени по-прежнему назван.
+    expect(mockKv.get(`p${OWNER}:${await presenceLastSeenKey(MY_PEER)}`)).toBe('1700000000000');
+    expect([...mockKv.keys()].some((k) => k.includes(MY_PEER))).toBe(false);
     expect(getPresenceState(MY_PEER).lastActiveAt).toBe(1_700_000_000_000);
   });
 

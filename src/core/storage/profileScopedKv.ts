@@ -193,7 +193,17 @@ export async function scopedKvDeleteCheckedFor(pid: number, key: string): Promis
  * их не видят: скан по `p<id>:<prefix>` до общих имён не достаёт.
  */
 export async function scopedKvListKeysByPrefix(prefix: string): Promise<string[]> {
-  const pid = activeProfileId();
+  return scopedKvListKeysByPrefixFor(activeProfileId(), prefix);
+}
+
+/**
+ * То же у названного профиля (v4.32.813).
+ *
+ * Понадобилось переносу имён ключей присутствия: он идёт для того аккаунта,
+ * чьи записи загружают, а не для того, что сейчас на экране, — и брать номер
+ * из profileManager там было бы догадкой.
+ */
+export async function scopedKvListKeysByPrefixFor(pid: number, prefix: string): Promise<string[]> {
   const cut = profileScopedKey(pid, '').length;
   const keys = new Set(
     (await kvListKeysByPrefix(profileScopedKey(pid, prefix))).map((k) => k.slice(cut)),

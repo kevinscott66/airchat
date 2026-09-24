@@ -35,6 +35,14 @@ jest.mock('../../storage/local', () => ({
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
+  kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
+  kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+}));
+
+// v4.32.813: служба присутствия считает имена ключей на ключе данных —
+// без подмены сюда подтягивается expo-secure-store и набор не поднимается.
+jest.mock('../../storage/localEncryption', () => ({
+  getOrCreateDataEncryptionKey: async () => new Uint8Array(32).fill(7),
 }));
 
 jest.mock('../../identity/profileManager', () => ({

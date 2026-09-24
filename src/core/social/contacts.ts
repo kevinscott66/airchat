@@ -955,10 +955,17 @@ export async function deleteContact(peerPublicKeyB64: string): Promise<void> {
   // this peer so it doesn't leak across contact churn.
   try {
     // v4.32.482: запись живёт в namespace профиля — удаляется оттуда же.
-    const { presenceLastSeenKey } = await import('./presenceService');
+    // v4.32.813: имён теперь два. Новое — дайджест; старое, с открытым ключом
+    // в имени, снимается здесь же и безусловно: перенос мог до этой записи не
+    // дойти, а именно она и выдаёт, с кем человек переписывался.
+    const { presenceLastSeenKey, legacyPresenceLastSeenKey } = await import('./presenceService');
     const { kvDeleteScoped } = await import('../storage/local');
-    await kvDeleteScoped(pid, presenceLastSeenKey(peerPublicKeyB64));
-    if (pid === 1) await kvDelete(presenceLastSeenKey(peerPublicKeyB64));
+    const legacyKey = legacyPresenceLastSeenKey(peerPublicKeyB64);
+    await kvDeleteScoped(pid, legacyKey);
+    if (pid === 1) await kvDelete(legacyKey);
+    const digestKey = await presenceLastSeenKey(peerPublicKeyB64);
+    await kvDeleteScoped(pid, digestKey);
+    if (pid === 1) await kvDelete(digestKey);
   } catch { /* ignore */ }
   /**
    * v4.32.277: личная заметка о человеке и корзина удалённых сообщений

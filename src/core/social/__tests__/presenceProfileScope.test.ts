@@ -19,6 +19,13 @@ jest.mock('../../storage/local', () => ({
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
+  kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
+  kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
+}));
+
+// v4.32.813: имя ключа времени входа считается на ключе из Keychain.
+jest.mock('../../storage/localEncryption', () => ({
+  getOrCreateDataEncryptionKey: async () => new Uint8Array(32).fill(7),
 }));
 
 let mockActivePid = 1;
@@ -74,8 +81,8 @@ describe('время последнего входа', () => {
     await loadPersistedPresence([], 2);
     recordPeerActivity(PEER, 1_700_000_000_000);
     await settle();
-    expect(mockKv.get(`p2:${presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
-    expect(mockKv.has(presenceLastSeenKey(PEER))).toBe(false);
+    expect(mockKv.get(`p2:${await presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
+    expect(mockKv.has(await presenceLastSeenKey(PEER))).toBe(false);
   });
 
   it('чужая запись не поднимается вторым профилем', async () => {
@@ -119,7 +126,7 @@ describe('просьба не отмечать', () => {
     // не присылал, поэтому запись активности проходит.
     recordPeerActivity(PEER, 1_700_000_000_000);
     await settle();
-    expect(mockKv.get(`p1:${presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
+    expect(mockKv.get(`p1:${await presenceLastSeenKey(PEER)}`)).toBe('1700000000000');
   });
 });
 
@@ -128,7 +135,10 @@ describe('форма исходников', () => {
     const s = src('presenceService.ts');
     expect(s).not.toContain("import { kvGet, kvSet } from '../storage/local';");
     expect(s).toContain('let presencePid = 1;');
-    expect(s).toContain('scopedKvSetFor(presencePid, presenceLastSeenKey(peerPubB64)');
+    // v4.32.813: запись ушла в persistLastSeen — имя ключа теперь считается
+    // асинхронно, но номер профиля по-прежнему называется, а не угадывается.
+    expect(s).toContain('void persistLastSeen(presencePid, peerPubB64, now);');
+    expect(s).toContain('await scopedKvSetFor(pid, await presenceLastSeenKey(peerPubB64), String(now));');
     // v4.32.642: чтение того же ключа стало отличимым от «ничего не записано»,
     // и требование усилено: номер профиля назван по-прежнему, но теперь ещё и
     // провал чтения виден вызывающему. Прежняя форма запрещена явно — иначе
@@ -148,9 +158,10 @@ describe('форма исходников', () => {
   });
 
   it('удаление контакта снимает запись из своего профиля', () => {
-    expect(src('contacts.ts')).toContain(
-      'await kvDeleteScoped(pid, presenceLastSeenKey(peerPublicKeyB64));'
-    );
+    // v4.32.813: имён два — старое, с открытым ключом внутри, и дайджест.
+    // Снимаются оба: перенос мог до этой записи ещё не дойти.
+    expect(src('contacts.ts')).toContain('await kvDeleteScoped(pid, legacyKey);');
+    expect(src('contacts.ts')).toContain('await kvDeleteScoped(pid, digestKey);');
   });
 
   it('проводка «профиль по ключу» одна на всех', () => {
