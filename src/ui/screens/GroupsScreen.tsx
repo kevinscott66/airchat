@@ -183,6 +183,7 @@ import { ContactCardBubble } from './chat-components/ContactCardBubble';
 import { serializeMediaCids } from '../../core/media/mediaCidPolicy';
 import { resolveMediaCidsToUris } from '../../core/media/resolveMediaCids';
 import { guessImageMime, MAX_BLOB_BYTES } from '../../core/media/blobRef';
+import { batchSendReport } from '../../core/media/mediaSendReport';
 import { deleteCachedFileUris, uploadEncryptedBlob } from '../../core/media/mediaBlob';
 import { fileSizeBytes } from '../../core/media/fileSize';
 import { voiceUploadRefusal } from '../components/voiceLimit';
@@ -1824,7 +1825,7 @@ function GroupChatScreen({
       // Раньше порог был один (25 МБ) — файл принимался, а отправка молча
       // падала на «Не удалось загрузить видео».
       const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, formatLimit, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+      const { uploadLimitBytes, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       const viaBlob = !isIpfsEnabled();
       const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
       const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
@@ -1842,7 +1843,7 @@ function GroupChatScreen({
       setSending(true);
       try {
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
-        let sentAny = false;
+        let sentCount = 0;
         // v4.32.248: запасной счётчик к проверке выше. Та смотрит на fileSize
         // из галереи, а его отдают не все системы: при отсутствующем размере
         // ролик проходил проверку и падал на общем «Не удалось загрузить
@@ -1851,6 +1852,11 @@ function GroupChatScreen({
         // единого ограничения сверху. Размер теперь спрашивается у файловой
         // системы до чтения, и запасной счётчик стал именно запасным.
         let skippedTooLarge = 0;
+        // v4.32.842: причин отказа две, и считаются теперь обе. Раньше ролик,
+        // не загрузившийся не по размеру, пропадал молча, стоило уйти хоть
+        // одному другому.
+        let failedCount = 0;
+        let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
           const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
           const up = await uploadMediaToCid(va.uri, {
@@ -1858,7 +1864,8 @@ function GroupChatScreen({
             ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
           });
           if (!up.ok) {
-            if (up.reason === 'oversize') skippedTooLarge++;
+            if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
+            else failedCount++;
             continue;
           }
           const cid = up.cid;
@@ -1867,10 +1874,14 @@ function GroupChatScreen({
           await insertGroupMessage(row);
           await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
           announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
-          sentAny = true;
+          sentCount++;
         }
-        if (skippedTooLarge > 0) showError(`Видео больше ${formatLimit(videoMaxBytes)} отправить нельзя (пропущено: ${skippedTooLarge})`);
-        else if (!sentAny) showError('Не удалось загрузить видео');
+        const warn = batchSendReport(
+          { total: videoAssets.length, sent: sentCount, oversize: skippedTooLarge, failed: failedCount, refused: 0 },
+          'video',
+          oversizeLimit,
+        );
+        if (warn) showError(warn);
         await loadMessages();
       } catch (e) {
         showError(userErrorText(e, 'Не удалось отправить видео'));
@@ -1903,20 +1914,28 @@ function GroupChatScreen({
       // после. Снимок читался целиком в память, и второй раз его читал
       // uploadEncryptedBlob. Теперь путь и предел выбирает mediaUpload.
       const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
-      const { formatLimit } = await import('../../core/media/uploadRoute');
       const cids: string[] = [];
-      let limitBytes = MAX_BLOB_BYTES;
+      // v4.32.842: причину потери больше не выдумывают. До этой версии любая
+      // неудача объявлялась превышением размера, и к ней приписывался предел —
+      // MAX_BLOB_BYTES по умолчанию, даже когда ни одного превышения не было.
+      let oversize = 0;
+      let failed = 0;
+      let oversizeLimit: number | null = null;
       for (const uri of uris) {
         const up = await uploadMediaToCid(uri, { mime: guessImageMime(uri) });
-        if (up.ok) cids.push(up.cid);
-        else if (up.reason === 'oversize') limitBytes = up.limitBytes;
+        if (up.ok) { cids.push(up.cid); continue; }
+        if (up.reason === 'oversize') { oversize += 1; oversizeLimit = up.limitBytes; }
+        else failed += 1;
       }
-      if (cids.length === 0) { showError('Не удалось загрузить фото'); return; }
       // v4.32.245: молчать о выпавших снимках нельзя — человек видит в чате
       // меньше фотографий, чем выбрал, и не понимает почему.
-      if (cids.length < uris.length) {
-        showError(`Загружено ${cids.length} из ${uris.length} фото — остальные слишком большие (предел ${formatLimit(limitBytes)})`);
-      }
+      const warn = batchSendReport(
+        { total: uris.length, sent: cids.length, oversize, failed, refused: 0 },
+        'photo',
+        oversizeLimit,
+      );
+      if (warn) showError(warn);
+      if (cids.length === 0) return;
       const baseText = caption.trim() || ' ';
       const msgText = viewOnce ? makeViewOnceText(baseText) : baseText;
       const row: GroupMessageRow = {
@@ -2085,10 +2104,12 @@ function GroupChatScreen({
       setSending(true);
       try {
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
-        const { formatLimit, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
-        let sentAny = false;
+        const { IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+        // v4.32.842: см. тот же цикл выше — причины считаются обе.
+        let sentCount = 0;
         let tooLarge = 0;
-        let limitBytes = MAX_BLOB_BYTES;
+        let failedCount = 0;
+        let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
           const name = va.uri.split('/').pop() ?? 'video.mp4';
           const up = await uploadMediaToCid(va.uri, {
@@ -2096,7 +2117,8 @@ function GroupChatScreen({
             ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
           });
           if (!up.ok) {
-            if (up.reason === 'oversize') { tooLarge++; limitBytes = up.limitBytes; }
+            if (up.reason === 'oversize') { tooLarge++; oversizeLimit = up.limitBytes; }
+            else failedCount++;
             continue;
           }
           const cid = up.cid;
@@ -2107,10 +2129,14 @@ function GroupChatScreen({
           await insertGroupMessage(row);
           await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
           announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
-          sentAny = true;
+          sentCount++;
         }
-        if (tooLarge > 0) showError(`Видео больше ${formatLimit(limitBytes)} отправить нельзя (пропущено: ${tooLarge})`);
-        else if (!sentAny) showError('Не удалось загрузить видео');
+        const warn = batchSendReport(
+          { total: videoAssets.length, sent: sentCount, oversize: tooLarge, failed: failedCount, refused: 0 },
+          'video',
+          oversizeLimit,
+        );
+        if (warn) showError(warn);
         await loadMessages();
       } catch (e) {
         showError(userErrorText(e, 'Не удалось отправить видео'));

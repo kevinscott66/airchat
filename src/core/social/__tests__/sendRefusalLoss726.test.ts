@@ -161,12 +161,16 @@ describe('экран переписки возвращает набранное'
     const c = chat();
     expect(c.split("if (res.outcome === 'refused') { refusedCount++; continue; }").length - 1).toBe(2);
     expect(c.split('let refusedCount = 0;').length - 1).toBe(2);
-    expect(
-      c.split('showError(`Отправить не удалось (видео: ${refusedCount}). Попробуйте ещё раз`)').length - 1
-    ).toBe(2);
-    // «Не удалось загрузить видео» о неудаче ОТПРАВКИ больше не врёт: до этой
-    // строки дело доходит, только когда ни один файл не загрузился.
-    expect(c).toContain("else if (!sentAny) showError('Не удалось загрузить видео');");
+    // v4.32.842: отчёт о пачке стал общим, и отказ отправки едет в него своим
+    // полем — рядом с превышением размера, а не вместо него. Прежняя цепочка
+    // `else if` называла только первую причину и молчала, когда не совпала ни
+    // одна; здесь важно, что счётчик отказов по-прежнему свой и доезжает.
+    expect(c.split('refused: refusedCount }').length - 1).toBe(2);
+    expect(c.split('const warn = batchSendReport(').length - 1).toBe(2);
+    expect(c.split('if (warn) showError(warn);').length - 1).toBe(2);
+    // Превышение размера — отдельное поле того же отчёта, а не то же самое.
+    expect(c).toContain('oversize: skippedTooLarge,');
+    expect(c).toContain('oversize: tooLargeCount,');
   });
 
   it('документ, GIF, геолокация и карточка контакта больше не уходят в тишину', () => {

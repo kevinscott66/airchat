@@ -58,6 +58,7 @@ import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { listContacts, type Contact } from '../../core/social/contacts';
 import { getMessagingService, previewLabelForText } from '../../core/social/messaging';
 import { deleteCachedFileUris, uploadEncryptedBlob, MAX_BLOB_BYTES } from '../../core/media/mediaBlob';
+import { batchSendReport } from '../../core/media/mediaSendReport';
 import { resolveMediaCidsToUris } from '../../core/media/resolveMediaCids';
 import { shareTextExport } from '../../core/media/cacheFiles';
 import { parseMediaCidsColumn } from '../../core/media/mediaCidPolicy';
@@ -1786,7 +1787,7 @@ function ChatThreadView({
       // записан своим числом, а размер брался из галереи, которая сообщает его
       // не всегда: ролик без заявленного размера проходил проверку целиком.
       const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, formatLimit, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+      const { uploadLimitBytes, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       const viaBlob = !isIpfsEnabled();
       const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
       const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
@@ -1805,9 +1806,14 @@ function ChatThreadView({
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
         const peerDid = didFromPubB64(peerB64);
         if (!peerDid) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
-        let sentAny = false;
+        // v4.32.842: причин отказа три, и считаются теперь все. Раньше ролик,
+        // не загрузившийся не по размеру, пропадал без единого слова, стоило
+        // уйти хоть одному другому: ни одна ветка отчёта про него не знала.
+        let sentCount = 0;
         let refusedCount = 0;
         let skippedTooLarge = 0;
+        let failedCount = 0;
+        let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
           const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
           const up = await uploadMediaToCid(va.uri, {
@@ -1816,7 +1822,8 @@ function ChatThreadView({
             ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
           });
           if (!up.ok) {
-            if (up.reason === 'oversize') skippedTooLarge++;
+            if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
+            else failedCount++;
             continue;
           }
           const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, up.cid);
@@ -1825,11 +1832,14 @@ function ChatThreadView({
           // ни в единственный баннер о неудаче — молчание было полным.
           const res = await svc.sendMessageResult(peerB64, docText);
           if (res.outcome === 'refused') { refusedCount++; continue; }
-          sentAny = true;
+          sentCount++;
         }
-        if (refusedCount > 0) showError(`Отправить не удалось (видео: ${refusedCount}). Попробуйте ещё раз`);
-        else if (skippedTooLarge > 0) showError(`Видео больше ${formatLimit(videoMaxBytes)} отправить нельзя (пропущено: ${skippedTooLarge})`);
-        else if (!sentAny) showError('Не удалось загрузить видео');
+        const warn = batchSendReport(
+          { total: videoAssets.length, sent: sentCount, oversize: skippedTooLarge, failed: failedCount, refused: refusedCount },
+          'video',
+          oversizeLimit,
+        );
+        if (warn) showError(warn);
         void appendNewMessages();
       } catch (e) {
         showError(userErrorText(e, 'Не удалось отправить видео'));
@@ -2099,16 +2109,18 @@ function ChatThreadView({
       // v4.32.245: та же заглушка стояла и здесь, во втором входе в галерею.
       setSending(true);
       let tooLargeCount = 0;
+      let failedCount = 0;
       try {
         // v4.32.358: здесь размер проверялся дважды и оба раза по уже
         // прочитанному в память файлу — то есть от переполнения не спасало ни
         // одно из двух чисел. Теперь размер спрашивается до чтения.
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
-        const { formatLimit, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+        const { IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
         const peerDid = publicKeyToDidKey(new Uint8Array(Buffer.from(peerB64, 'base64')));
-        let sentAny = false;
+        // v4.32.842: см. тот же цикл выше — причины считаются все.
+        let sentCount = 0;
         let refusedCount = 0;
-        let limitBytes = MAX_BLOB_BYTES;
+        let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
           try {
             const up = await uploadMediaToCid(va.uri, {
@@ -2117,7 +2129,8 @@ function ChatThreadView({
               ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
             });
             if (!up.ok) {
-              if (up.reason === 'oversize') { tooLargeCount++; limitBytes = up.limitBytes; }
+              if (up.reason === 'oversize') { tooLargeCount++; oversizeLimit = up.limitBytes; }
+              else failedCount++;
               continue;
             }
             const name = va.uri.split('/').pop() ?? 'video.mp4';
@@ -2126,12 +2139,20 @@ function ChatThreadView({
             // `sentAny` о нём не спрашивал.
             const res = await svc.sendMessageResult(peerB64, docText);
             if (res.outcome === 'refused') { refusedCount++; continue; }
-            sentAny = true;
-          } catch (e) { log.warn('attachsheet_video_send_failed', { err: rawErrorText(e) }); }
+            sentCount++;
+          } catch (e) {
+            // v4.32.842: сорвавшийся с исключением ролик тоже потерян. Раньше он
+            // уходил только в журнал и не попадал ни в один счётчик.
+            failedCount++;
+            log.warn('attachsheet_video_send_failed', { err: rawErrorText(e) });
+          }
         }
-        if (refusedCount > 0) showError(`Отправить не удалось (видео: ${refusedCount}). Попробуйте ещё раз`);
-        else if (tooLargeCount > 0) showError(`Видео больше ${formatLimit(limitBytes)} отправить нельзя (пропущено: ${tooLargeCount})`);
-        else if (!sentAny) showError('Не удалось загрузить видео');
+        const warn = batchSendReport(
+          { total: videoAssets.length, sent: sentCount, oversize: tooLargeCount, failed: failedCount, refused: refusedCount },
+          'video',
+          oversizeLimit,
+        );
+        if (warn) showError(warn);
         void appendNewMessages();
       } finally { setSending(false); }
     }
