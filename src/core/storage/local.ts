@@ -8432,13 +8432,6 @@ export async function getChatMessageTexts(
   return out;
 }
 
-export async function deleteGroupMessage(
-  messageId: string,
-  ownerProfileId: number
-): Promise<void> {
-  await deleteGroupMessageChecked(messageId, ownerProfileId);
-}
-
 /**
  * Исход удаления строки группы тремя словами (v4.32.772).
  *

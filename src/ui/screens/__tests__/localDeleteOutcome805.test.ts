@@ -182,8 +182,12 @@ describe('форма исходников: правка стоит там, гд�
   });
 
   it('удаление пачки считает оставшиеся', () => {
-    expect(CHAT).toContain('const outcomes = await Promise.all(ids.map((id) => svc.deleteMessageLocally(id)));');
-    expect(CHAT).toContain("const stuck = outcomes.filter((o) => o === 'failed').length;");
+    // v4.32.865: ждём всех — брошенное исключение одной строки отменяло
+    // остаток обработчика вместе с этим самым отчётом.
+    expect(CHAT).toContain('const outcomes = await Promise.allSettled(ids.map((id) => svc.deleteMessageLocally(id)));');
+    expect(CHAT).toContain(
+      "const stuck = outcomes.filter((o) => o.status === 'rejected' || o.value === 'failed').length;",
+    );
     // Окончание считает общее правило, а не четвёртая копия на месте.
     expect(CHAT).toContain('pluralRu(stuck,');
   });

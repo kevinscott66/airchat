@@ -277,16 +277,15 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(LOCAL).toContain("log.warn('delete_group_message_no_row'");
   });
 
-  it('сплющивающая форма осталась — и осталась ровно обёрткой', () => {
-    // Её зовёт экран групп: там уборка своей копии, и отвечать там нечем.
-    const a = LOCAL.indexOf('export async function deleteGroupMessage(');
-    const b = LOCAL.indexOf('export async function deleteGroupMessageChecked(');
-    expect(a).toBeGreaterThan(0);
-    expect(b).toBeGreaterThan(a);
-    expect(LOCAL.slice(a, b)).toContain(
-      'await deleteGroupMessageChecked(messageId, ownerProfileId);'
-    );
-    expect(LOCAL.slice(a, b)).not.toContain('DELETE FROM group_messages');
+  it('сплющивающей формы больше нет — отвечать словом есть чем везде', () => {
+    // v4.32.865: обёртка `deleteGroupMessage` отвечала `void` и гасила отказ
+    // сама. Оправдание у неё было одно — «её зовёт экран групп, там уборка
+    // своей копии, и отвечать там нечем», — и оно оказалось неверным: экран
+    // как раз и молчал об отказе, объявляя участникам удаление строки,
+    // оставшейся на месте. Форма убрана, чтобы слепой вызов нельзя было
+    // написать снова.
+    expect(LOCAL).not.toContain('export async function deleteGroupMessage(');
+    expect(LOCAL).toContain('export async function deleteGroupMessageChecked(');
   });
 
   it('приёмник читает исход записи и откладывает отказ', () => {

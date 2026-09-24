@@ -64,7 +64,7 @@ describe('удаление одного сообщения', () => {
   it('копия делается до удаления и её итог запомнен', () => {
     const b = body();
     const kept = b.indexOf('const kept = await saveGrpRecentlyDeleted(msg);');
-    const del = b.indexOf('await deleteGroupMessage(msg.id, pid);');
+    const del = b.indexOf('await deleteGroupMessageChecked(msg.id, pid);');
     expect(kept).toBeGreaterThan(-1);
     expect(del).toBeGreaterThan(kept);
   });
@@ -87,7 +87,7 @@ describe('удаление пачкой', () => {
     const b = body();
     expect(b).toContain('if (!(await saveGrpRecentlyDeleted(m))) allKept = false;');
     const copy = b.indexOf('saveGrpRecentlyDeleted');
-    const del = b.indexOf('await Promise.all(ids.map((id) => deleteGroupMessage(id, pid)));');
+    const del = b.indexOf('await Promise.all(ids.map((id) => deleteGroupMessageChecked(id, pid)));');
     expect(copy).toBeGreaterThan(-1);
     expect(del).toBeGreaterThan(copy);
   });
@@ -114,7 +114,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 
   it('удаление в группе жёсткое: восстановить можно только из корзины', () => {
-    expect(CODE).toContain('await deleteGroupMessage(msg.id, pid);');
+    expect(CODE).toContain('await deleteGroupMessageChecked(msg.id, pid);');
     expect(CODE).toContain('const GRP_RECENTLY_DELETED_TTL_MS');
   });
 });

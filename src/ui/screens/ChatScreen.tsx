@@ -3960,8 +3960,13 @@ function ChatThreadView({
                         // одной строки: отметка выбора снималась, список
                         // перечитывался, и сообщения возвращались на место без
                         // единого слова.
-                        const outcomes = await Promise.all(ids.map((id) => svc.deleteMessageLocally(id)));
-                        const stuck = outcomes.filter((o) => o === 'failed').length;
+                        // v4.32.865: `allSettled`, а не `all`. Исход считался
+                        // (805-я), но только тот, который вернулся: брошенное
+                        // исключение отменяло весь остаток обработчика —
+                        // выделение не снималось, список не перечитывался, и
+                        // удалённое оставалось показанным на месте.
+                        const outcomes = await Promise.allSettled(ids.map((id) => svc.deleteMessageLocally(id)));
+                        const stuck = outcomes.filter((o) => o.status === 'rejected' || o.value === 'failed').length;
                         setSelectedIds(new Set());
                         void appendNewMessages();
                         if (stuck > 0) {
@@ -4027,9 +4032,17 @@ function ChatThreadView({
                   const allStarred = msgs.every((m) => m.starred);
                   runGuardedOp(async () => {
                     const mod = await import('../../core/storage/local');
-                    await Promise.all(msgs.map((m) => mod.setMessageStarred(m.id, !allStarred)));
+                    // v4.32.865: одна упавшая запись отменяла весь остаток —
+                    // и снятие выделения, и перечитывание списка. Звёзды у
+                    // остальных выбранных сообщений уже стояли в базе, а
+                    // переписка показывала прежнее: человек видел, что ничего
+                    // не произошло, и звёзды появлялись сами при следующем
+                    // открытии. Считаем отказавшие и говорим о них числом.
+                    const res = await Promise.allSettled(msgs.map((m) => mod.setMessageStarred(m.id, !allStarred)));
                     setSelectedIds(new Set());
                     void appendNewMessages();
+                    const failed = res.filter((r) => r.status === 'rejected').length;
+                    if (failed > 0) throw new Error(`Не удалось изменить избранное: ${failed} из ${msgs.length}`);
                   }, 'Не удалось изменить избранное', 'ui_chat_star_selected_failed');
                 }}
               >

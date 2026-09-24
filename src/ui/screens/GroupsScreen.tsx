@@ -69,7 +69,6 @@ import {
   updateGroupMemberRole,
   updateGroupMeta,
   updateGroupMessageText,
-  deleteGroupMessage,
   deleteGroupMessageChecked,
   clearGroupMessages,
   searchGroupMessages,
@@ -98,6 +97,7 @@ import {
   type GroupMessageSearchResult,
   recentlyDeletedGroupKey,
 } from '../../core/storage/local';
+import { pluralRu } from '../../core/storage/ruPlural';
 // v4.32.168: зеркалим group/channel mute в muteStore (FCM gate).
 import { setMuted as muteSet, unmute as muteUnset, type MuteKind } from '../../core/notifications/muteStore';
 import { decidePage, shouldApplyRows } from '../../core/storage/readResult';
@@ -2286,11 +2286,20 @@ function GroupChatScreen({
           // которая просто иногда не срабатывает.
           runGuardedOp(async () => {
             const kept = await saveGrpRecentlyDeleted(msg);
-            await deleteGroupMessage(msg.id, pid);
-            // v4.32.232: удаление чистило только свою БД — у остальных
-            // сообщение оставалось на месте.
-            announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: msg.id }, myDisplayName));
+            // v4.32.865: `deleteGroupMessage` — обёртка, которая гасит свой
+            // отказ и отвечает `void`: сторож 622-й караулил исключение,
+            // которого не бывает. Отказ базы снова выглядел кнопкой, которая
+            // иногда не срабатывает, — и хуже: участникам уходило «удалено»
+            // для строки, оставшейся здесь на месте. Читаем исход словом,
+            // как это делает свайп рядом.
+            const write = await deleteGroupMessageChecked(msg.id, pid);
+            if (write !== 'failed') {
+              // v4.32.232: удаление чистило только свою БД — у остальных
+              // сообщение оставалось на месте.
+              announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: msg.id }, myDisplayName));
+            }
             await loadMessages();
+            if (write === 'failed') throw new Error('Сообщение осталось в группе — удалить не получилось');
             if (!kept) showError('Сообщение удалено. Копия в «Недавно удалённые» не сохранилась');
           }, 'Не удалось удалить сообщение', 'group_msg_delete_failed');
         },
@@ -4362,14 +4371,32 @@ function GroupChatScreen({
                           for (const m of messages.filter((x) => ids.includes(x.id))) {
                             if (!(await saveGrpRecentlyDeleted(m))) allKept = false;
                           }
-                          await Promise.all(ids.map((id) => deleteGroupMessage(id, pid)));
+                          // v4.32.865: `allSettled`, а не `all`. Одна упавшая
+                          // запись отменяла весь остаток: остальные сообщения
+                          // уже были удалены здесь, но участникам об этом не
+                          // говорили — у них они оставались навсегда, — а
+                          // список не перечитывался, и здесь они тоже были
+                          // видны. Расходятся устройства молча.
+                          // v4.32.865: исход читается словом. `allSettled` над
+                          // обёрткой был бы пустой формальностью: она гасит
+                          // отказ сама и всегда отвечает `fulfilled`.
+                          const res = await Promise.all(ids.map((id) => deleteGroupMessageChecked(id, pid)));
                           // v4.32.232: массовое удаление, как и одиночное,
                           // чистило только свою БД.
-                          for (const id of ids) {
+                          // v4.32.865: участникам говорим ровно о тех, что
+                          // действительно удалились здесь.
+                          ids.forEach((id, i) => {
+                            if (res[i] === 'failed') return;
                             announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: id }, myDisplayName));
-                          }
+                          });
                           setSelectedGrpIds(new Set());
                           void loadMessages();
+                          const failed = res.filter((r) => r === 'failed').length;
+                          if (failed > 0) {
+                            throw new Error(
+                              `${failed} ${pluralRu(failed, 'сообщение осталось', 'сообщения остались', 'сообщений остались')} в группе — удалить не получилось`,
+                            );
+                          }
                           if (!allKept) showError('Часть сообщений удалена без копии в «Недавно удалённые»');
                         }, 'Не удалось удалить сообщения', 'ui_group_delete_selected_failed');
                       }},
@@ -4407,11 +4434,16 @@ function GroupChatScreen({
                   onPress={() => {
                     const ids = [...selectedGrpIds];
                     runGuardedOp(async () => {
-                      await Promise.all(ids.map((id) => setGroupMessageStarred(id, true)));
+                      // v4.32.865: та же пачка, что у удаления. Одна упавшая
+                      // запись отменяла и снятие выделения, и перечитывание, и
+                      // человек не видел ни звёзд, ни причины.
+                      const res = await Promise.allSettled(ids.map((id) => setGroupMessageStarred(id, true)));
                       setSelectedGrpIds(new Set());
-                      showSuccess('Добавлено в избранное');
                       await loadMessages();
-                    }, 'Не удалось добавить в избранное');
+                      const failed = res.filter((r) => r.status === 'rejected').length;
+                      if (failed > 0) throw new Error(`Не удалось добавить в избранное: ${failed} из ${ids.length}`);
+                      showSuccess('Добавлено в избранное');
+                    }, 'Не удалось добавить в избранное', 'ui_group_star_selected_failed');
                   }}
                 >
                   <Ionicons name="star-outline" size={22} color={colors.accent} />
