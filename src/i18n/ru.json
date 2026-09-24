@@ -200,6 +200,8 @@
     "groupSubs": "{{n}} подп.",
     "groupMembers": "{{n}} уч.",
     "viewsTitle": "Просмотры",
+    "viewersFailedTitle": "Не удалось прочитать список",
+    "viewersFailedHint": "Нажмите, чтобы повторить.",
     "viewersEmptyTitle": "Пока никто не просмотрел",
     "viewersEmptyHint": "Как только контакты откроют публикацию в ленте, они появятся здесь.",
     "viewerSaw": "Просмотрел {{when}}",

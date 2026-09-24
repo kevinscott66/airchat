@@ -1511,6 +1511,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [viewersPostId, setViewersPostId] = useState<string | null>(null);
   const [viewersList, setViewersList] = useState<FeedViewerRow[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
+  // v4.32.881: отказ чтения раньше подменялся пустым списком.
+  const [viewersFailed, setViewersFailed] = useState(false);
   const commentInputRef = useRef<TextInput>(null);
   // v4.32.51: автоскролл комментариев в конец — при открытии модалки + после submit + при
   // входящих комментариях (feedTick). Без этого новые комментарии оказывались ниже viewport'а,
@@ -2711,13 +2713,21 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     setViewersPostId(postId);
     viewersPostIdRef.current = postId;
     setViewersList([]);
+    setViewersFailed(false);
     setViewersLoading(true);
     try {
       const list = await listFeedPostViewers(postId);
       if (viewersPostIdRef.current !== postId) return;
       setViewersList(list);
-    } catch {
-      if (viewersPostIdRef.current === postId) setViewersList([]);
+    } catch (e) {
+      // v4.32.881: то же, что чинили комментариям в v4.32.538. Отказ чтения
+      // подменялся пустым списком, и человек читал «Пока никто не просмотрел»
+      // — вывод о чужом поведении там, где база просто не ответила.
+      log.warn('feed_viewers_load_failed', { err: rawErrorText(e) });
+      if (viewersPostIdRef.current === postId) {
+        setViewersList([]);
+        setViewersFailed(true);
+      }
     } finally {
       if (viewersPostIdRef.current === postId) setViewersLoading(false);
     }
@@ -2727,6 +2737,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     setViewersPostId(null);
     viewersPostIdRef.current = null;
     setViewersList([]);
+    setViewersFailed(false);
   }, []);
 
   const submitComment = useCallback(async () => {
@@ -4286,6 +4297,19 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                 <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                   <ActivityIndicator size="small" color={colors.accent} />
                 </View>
+              ) : viewersFailed ? (
+                <AppPressable
+                  onPress={() => { if (viewersPostId) void openViewers(viewersPostId); }}
+                  style={{ paddingVertical: 40, paddingHorizontal: 20, alignItems: 'center' }}
+                >
+                  <Ionicons name="alert-circle-outline" size={36} color={colors.textMuted} style={{ marginBottom: 8 }} />
+                  <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: font.md, marginBottom: 4 }}>
+                    {t('feed.viewersFailedTitle')}
+                  </Text>
+                  <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: font.xs }}>
+                    {t('feed.viewersFailedHint')}
+                  </Text>
+                </AppPressable>
               ) : viewersList.length === 0 ? (
                 <View style={{ paddingVertical: 40, paddingHorizontal: 20, alignItems: 'center' }}>
                   <Ionicons name="eye-off-outline" size={36} color={colors.textMuted} style={{ marginBottom: 8 }} />
