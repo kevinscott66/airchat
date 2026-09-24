@@ -147,9 +147,10 @@ describe('экран настроек: переключатель возвращ
     const s = screen();
     // Седьмое — предпросмотр входящих ссылок (v4.32.807). Оно писалось через
     // kvSet, то есть мимо и общего правила, и namespace аккаунта.
-    // Восемь вхождений: семь переключателей и сам applyKvPref, написанный
-    // поверх того же правила для настроек без namespace (v4.32.808).
-    expect((s.match(/void applyPref\(/g) ?? []).length).toBe(8);
+    // Девять вхождений: семь переключателей и два помощника, написанные
+    // поверх того же правила, — applyKvPref для настроек без namespace
+    // (v4.32.808) и applyScopedPref для настроек внутри него (v4.32.809).
+    expect((s.match(/void applyPref\(/g) ?? []).length).toBe(9);
     expect((s.match(/void applyPref\(\(\) => privacyPrefSet/g) ?? []).length).toBe(4);
     for (const gone of [
       'void kvSet(LINK_PREVIEW_INCOMING_KEY, String(v)); }',

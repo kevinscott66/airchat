@@ -30,6 +30,7 @@ import {
   hintAfterPasswordChange,
   parseAppleBindingHint,
 } from '../../core/security/appleBindingHint';
+import type { AppleBindingHint } from '../../core/security/appleBindingHint';
 import {
   SENSITIVE_NO_PASSWORD_TEXT,
   sensitiveAccessGate,
@@ -65,7 +66,7 @@ import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 import { DiagnosticScreen } from './DiagnosticScreen';
 import { ProfileSelector } from '../components/ProfileSelector';
 import { profileManager } from '../../core/identity/profileManager';
-import { scopedKvGet, scopedKvSet } from '../../core/storage/profileScopedKv';
+import { scopedKvGet, scopedKvSetChecked } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
@@ -564,6 +565,20 @@ function SettingsScreenImpl({
   );
 
   /**
+   * То же для настроек, лежащих в namespace профиля (v4.32.809).
+   *
+   * `scopedKvSet` — такой же void поверх проверяемой записи, что и `kvSet`:
+   * `scopedKvSetCheckedFor` внутри отдаёт ответ базы, а обёртка его роняет.
+   * Дверь та же и закрывается тем же.
+   */
+  const applyScopedPref = useCallback(
+    (key: string, value: string, revert: () => void): void => {
+      void applyPref(() => scopedKvSetChecked(key, value), revert);
+    },
+    [applyPref],
+  );
+
+  /**
    * v4.32.253: шаблоны быстрых ответов читались и создавались с зашитым
    * профилем 1, а показывает их в переписке AttachSheet по АКТИВНОМУ профилю.
    * На втором профиле это значило: список в настройках — чужой, а всё
@@ -758,24 +773,53 @@ function SettingsScreenImpl({
   };
 
   /**
+   * Записать подсказку о привязке и честно сказать, легла ли она (v4.32.809).
+   *
+   * Все три места писали её через `scopedKvSet`, а он отдаёт void: «легло» и
+   * «не влезло» приходили одинаково. Здесь ответ базы возвращается, а бросок
+   * гасится — но гасится осознанно: к этому моменту конверт на сервере уже
+   * создан, удалён или устарел, и ронять на подсказке работу, которая
+   * сделана, нельзя. Соврать про неё — можно и нужно запретить, а отменить
+   * её эта строчка всё равно не отменит.
+   */
+  const storeAppleBindingHint = useCallback(async (hint: AppleBindingHint): Promise<boolean> => {
+    try {
+      return await scopedKvSetChecked(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED[hint]);
+    } catch (e) {
+      log.warn('apple_binding_hint_write_failed', { err: rawErrorText(e) });
+      return false;
+    }
+  }, []);
+
+  /**
    * Пароль сменился — конверт на сервере остался под старым.
    *
    * Перешифровать его молча нечем: `putSeedBinding` требует свежий вход через
    * Apple. Поэтому помечаем привязку устаревшей и говорим об этом сразу, пока
    * слова ещё на устройстве, — а не в день, когда их уже нет.
+   *
+   * v4.32.809. Пометка в интерфейсе теперь стоит ДО записи и не зависит от
+   * неё: прежде обе строчки шли после `scopedKvSet` внутри одного `try`, и
+   * подпись у `catch` — «привязка и так помечена в интерфейсе» — описывала то,
+   * чего при броске как раз не случалось. Не помечено было ничего, и человек
+   * даже предупреждения не видел.
    */
   const markAppleBindingStaleAfterPasswordChange = async (): Promise<void> => {
+    let next: AppleBindingHint | null;
     try {
-      const now = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
-      const next = hintAfterPasswordChange(now);
-      if (!next) return;
-      await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED[next]);
-      setAppleBound(false);
-      setAppleBindStale(true);
-      showError('Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.');
+      next = hintAfterPasswordChange(parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY)));
     } catch {
-      /* подсказка местная: не удалось — привязка и так помечена в интерфейсе */
+      // Прочитать не вышло — судим по тому, что стоит на экране: это последнее,
+      // что человек видел про привязку, и другого свидетеля здесь нет.
+      next = appleBound ? 'stale' : null;
     }
+    if (!next) return;
+    setAppleBound(false);
+    setAppleBindStale(true);
+    const stored = await storeAppleBindingHint(next);
+    showError(stored
+      ? 'Привязка к Apple ID больше не откроется новым паролем — привяжите слова заново.'
+      : 'Привязка к Apple ID больше не откроется новым паролем, а пометить её не удалось: после перезапуска настройки снова покажут «привязаны». Привяжите слова заново сейчас.');
   };
 
   /**
@@ -889,11 +933,16 @@ function SettingsScreenImpl({
       const identity = await signInWithApple();
       if (!identity) return;
       await putSeedBinding('apple', identity.idToken, mnemonic, appleBindPwd);
-      await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED.bound);
       setAppleBound(true);
       setAppleBindStale(false);
       setAppleBindModal(false);
-      showSuccess('Секретные слова привязаны к Apple ID');
+      // Конверт на сервере уже лежит: дальше речь только о подсказке, и отказ
+      // на ней не делает привязку несостоявшейся — но и молчать о нём нельзя,
+      // иначе строка после перезапуска снова позовёт привязывать, а отвязать
+      // штатно станет нечем: кнопка «отвязать» живёт под этой же подсказкой.
+      showSuccess(await storeAppleBindingHint('bound')
+        ? 'Секретные слова привязаны к Apple ID'
+        : 'Слова привязаны к Apple ID, но пометка не сохранилась: после перезапуска настройки снова предложат привязать. Копия на сервере при этом есть.');
     } catch (e) {
       showError(userErrorText(e, 'Не удалось привязать секретные слова'));
     } finally {
@@ -921,10 +970,16 @@ function SettingsScreenImpl({
                 const identity = await signInWithApple();
                 if (!identity) return;
                 const removed = await deleteSeedBinding('apple', identity.idToken);
-                await scopedKvSet(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED.none);
                 setAppleBound(false);
                 setAppleBindStale(false);
-                showSuccess(removed ? 'Apple ID отвязан' : 'Привязки на сервере не было');
+                if (await storeAppleBindingHint('none')) {
+                  showSuccess(removed ? 'Apple ID отвязан' : 'Привязки на сервере не было');
+                } else {
+                  // Копии на сервере уже нет, а подсказка осталась прежней:
+                  // после перезапуска строка пообещает запасной путь, которого
+                  // больше не существует.
+                  showError('Apple ID отвязан, но пометка не сохранилась: после перезапуска настройки снова покажут привязку, хотя копии на сервере уже нет.');
+                }
               } catch (e) {
                 showError(userErrorText(e, 'Не удалось отвязать Apple ID'));
               } finally {
@@ -936,7 +991,7 @@ function SettingsScreenImpl({
         { label: 'Отмена', cancel: true },
       ],
     });
-  }, []);
+  }, [storeAppleBindingHint]);
 
   const confirmLogout = useCallback(() => {
     if (!onLogout || logoutBusy) return;
@@ -2452,7 +2507,7 @@ function SettingsScreenImpl({
           ] as const).map(({ code, label }) => {
             const active = translateLang === code;
             return (
-              <AppPressable key={code} style={[styles.themeBtn, active && styles.themeBtnActive, { paddingHorizontal: 10 }]} onPress={() => { setTranslateLang(code); void scopedKvSet(TRANSLATION_TARGET_LANG_KEY, code); }}>
+              <AppPressable key={code} style={[styles.themeBtn, active && styles.themeBtnActive, { paddingHorizontal: 10 }]} onPress={() => { const prev = translateLang; setTranslateLang(code); applyScopedPref(TRANSLATION_TARGET_LANG_KEY, code, () => setTranslateLang(prev)); }}>
                 <Text style={[styles.themeBtnText, active && styles.themeBtnTextActive]}>{label}</Text>
               </AppPressable>
             );
