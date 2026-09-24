@@ -28,6 +28,7 @@ import {
   createPendingPollCloses,
   createPendingPollVotes,
   isRetriablePollVoteCode,
+  type ParkedClose,
   type ParkedVote,
 } from './pollVotePending';
 import {
@@ -374,27 +375,106 @@ async function applyIncomingPollVote(
 }
 
 /**
+ * Сколько раз полка пытается заново, прежде чем признать отсрочку пропажей
+ * (v4.32.797).
+ *
+ * Три попытки поверх первой. Дальше держать нечего: голос всё равно живёт на
+ * полке не дольше PENDING_VOTE_TTL_MS, а база, не отпустившая строку за
+ * полминуты, сломана не на секунду.
+ */
+const FLUSH_RETRY_ATTEMPTS = 3;
+
+/**
+ * Пауза перед повтором выкладки номер `attempt` (нумерация с единицы), мс.
+ *
+ * Дольше, чем у readRetry: там повтор стоит внутри одного обращения и его ждёт
+ * человек, а здесь ждать некому — выкладка идёт фоном, и торопиться в занятую
+ * базу значит мешать тому, кто её занял.
+ */
+function flushRetryDelayMs(attempt: number): number {
+  if (!Number.isFinite(attempt) || attempt < 1) return 0;
+  return Math.min(30_000, 2_000 * 2 ** (Math.floor(attempt) - 1));
+}
+
+/** Назначенные повторы: на пару «профиль + сообщение» не больше одного. */
+const flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const flushRetryKey = (msgId: string, pid: number): string => `${pid}\u0000${msgId}`;
+
+/**
+ * Назначить повтор выкладки (v4.32.797).
+ *
+ * Звать больше некому. Кадр, лежащий на полке, разобран давно и метку
+ * ретранслятора прошёл: его никто не перезапросит. Вызывающие выкладку —
+ * приёмники сообщения-опроса, и второй раз то же сообщение они не запишут
+ * (`duplicate` уходит раньше). То есть если выкладка сама себя не повторит,
+ * отсрочка на ней — это молчаливая потеря.
+ */
+function scheduleFlushRetry(msgId: string, pid: number, attempt: number): void {
+  if (attempt > FLUSH_RETRY_ATTEMPTS) {
+    log.warn('poll_flush_gave_up', { msgId: msgId.slice(0, 8), attempts: FLUSH_RETRY_ATTEMPTS });
+    return;
+  }
+  const key = flushRetryKey(msgId, pid);
+  // Голоса и завершения выкладываются подряд и могут попросить повтор оба;
+  // повтор разбирает обе полки, значит второй таймер лишний.
+  if (flushRetryTimers.has(key)) return;
+  const timer = setTimeout(() => {
+    flushRetryTimers.delete(key);
+    void flushPendingPollEnvelopes(msgId, pid, Date.now(), attempt).catch((e) =>
+      log.warn('poll_flush_retry_failed', { err: e instanceof Error ? e.message : String(e) })
+    );
+  }, flushRetryDelayMs(attempt));
+  // В Node таймер держит процесс живым, и набор проверок не завершался бы,
+  // пока не выйдут все паузы. В RN unref нет — там это просто число.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  flushRetryTimers.set(key, timer);
+}
+
+/** Только для проверок: отменить назначенные повторы. */
+export function resetPollFlushRetriesForTests(): void {
+  for (const t of flushRetryTimers.values()) clearTimeout(t);
+  flushRetryTimers.clear();
+}
+
+/**
  * Снимает с полки голоса, ждавшие это сообщение, и применяет их.
  *
  * Зовут те, кто только что записал входящее сообщение-опрос: личный приём и
  * приём в группе. Все проверки прав проходят заново — на полке лежит конверт,
- * а не разрешение, — и второй раз на полку голос уже не ложится: сообщение
- * есть, а любой другой отказ со временем не меняется.
+ * а не разрешение, — и второй раз на полку по причине «сообщения нет» голос уже
+ * не ложится: сообщение есть, а любой другой отказ со временем не меняется.
+ *
+ * v4.32.797: кроме одного — «сейчас не смогли». `take` снимает голоса с полки
+ * безвозвратно, а `canPark = false` не даёт им лечь обратно; значит занятая
+ * секунда базы ровно в этот миг стоила голоса насовсем, и молча: в журнале
+ * оставалась одна строка `poll_votes_flushed` со счётчиком failed. Перезапросить
+ * такой кадр нельзя — он разобран давно и метку ретранслятора прошёл. Поэтому
+ * отложенный голос возвращается на полку и выкладка назначает себе повтор.
  */
 export async function flushPendingPollVotes(
   msgId: string,
   pid: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  attempt = 0
 ): Promise<number> {
   const votes = pendingVotes.take(msgId, pid, now);
   if (votes.length === 0) return 0;
   let applied = 0;
   let failed = 0;
+  /** Вернуть голос на полку: срок отсчитывается от первой укладки, не от сейчас. */
+  const repark = (v: ParkedVote): void => {
+    if (!pendingVotes.park(v)) {
+      log.warn('poll_vote_repark_refused', { msgId: v.msgId.slice(0, 8) });
+    }
+  };
   for (const v of votes) {
     // v4.32.623: отказ на одном голосе больше не уносит остальные. Голоса уже
-    // сняты с полки строкой выше (take), и обратно они не лягут — значит
-    // исключение на середине списка теряло безвозвратно весь его хвост, и
-    // теряло молча: вызывающие пишут в журнал один общий poll_vote_flush_failed.
+    // сняты с полки строкой выше (take) — значит исключение на середине списка
+    // теряло безвозвратно весь его хвост, и теряло молча: вызывающие пишут в
+    // журнал один общий poll_vote_flush_failed.
+    // v4.32.797: сам этот голос тоже больше не теряется — он ложится обратно
+    // (repark), и выкладка назначает себе повтор.
     try {
       // v4.32.755: отказ записи теперь называется словом, а не исключением, и
       // счётчик обязан его увидеть — иначе «применено N» включало бы голоса,
@@ -415,10 +495,13 @@ export async function flushPendingPollVotes(
         now,
         false
       );
-      if (intake === 'deferred') failed += 1;
-      else applied += 1;
+      if (intake === 'deferred') {
+        failed += 1;
+        repark(v);
+      } else applied += 1;
     } catch (e) {
       failed += 1;
+      repark(v);
       log.warn('poll_vote_apply_failed', {
         msgId: v.msgId.slice(0, 8),
         from: v.senderPubB64.slice(0, 12),
@@ -427,6 +510,7 @@ export async function flushPendingPollVotes(
     }
   }
   log.info('poll_votes_flushed', { count: applied, failed, msgId: msgId.slice(0, 8) });
+  if (failed > 0) scheduleFlushRetry(msgId, pid, attempt + 1);
   return applied;
 }
 
@@ -434,18 +518,30 @@ export async function flushPendingPollVotes(
  * Снимает с полки завершения, ждавшие это сообщение, и применяет их
  * (v4.32.764).
  *
- * Права проверяются заново, как и у голосов. Второй раз на полку конверт не
- * ложится: сообщение есть, а любой другой отказ со временем не меняется.
+ * Права проверяются заново, как и у голосов. Второй раз по причине «сообщения
+ * нет» конверт на полку не ложится: сообщение есть, а любой другой отказ со
+ * временем не меняется.
+ *
+ * v4.32.797: отложенный конверт возвращается на полку и выкладка назначает себе
+ * повтор — ровно как у голосов, и по той же причине. Цена здесь выше: голос это
+ * строка и разошедшиеся счётчики, а потерянное завершение оставляет опрос
+ * открытым навсегда (второй посылки у него нет, закрыть опрос можно один раз).
  */
 export async function flushPendingPollCloses(
   msgId: string,
   pid: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  attempt = 0
 ): Promise<number> {
   const closes = pendingCloses.take(msgId, pid, now);
   if (closes.length === 0) return 0;
   let applied = 0;
   let failed = 0;
+  const repark = (c: ParkedClose): void => {
+    if (!pendingCloses.park(c)) {
+      log.warn('poll_close_repark_refused', { msgId: c.msgId.slice(0, 8) });
+    }
+  };
   for (const c of closes) {
     // Отказ на одном конверте не уносит остальные — то же правило, что у
     // голосов в v4.32.623: сняты они уже все и обратно не лягут.
@@ -457,10 +553,13 @@ export async function flushPendingPollCloses(
         now,
         false
       );
-      if (intake === 'deferred') failed += 1;
-      else applied += 1;
+      if (intake === 'deferred') {
+        failed += 1;
+        repark(c);
+      } else applied += 1;
     } catch (e) {
       failed += 1;
+      repark(c);
       log.warn('poll_close_apply_failed', {
         msgId: c.msgId.slice(0, 8),
         from: c.senderPubB64.slice(0, 12),
@@ -469,6 +568,7 @@ export async function flushPendingPollCloses(
     }
   }
   log.info('poll_closes_flushed', { count: applied, failed, msgId: msgId.slice(0, 8) });
+  if (failed > 0) scheduleFlushRetry(msgId, pid, attempt + 1);
   return applied;
 }
 
@@ -484,10 +584,11 @@ export async function flushPendingPollCloses(
 export async function flushPendingPollEnvelopes(
   msgId: string,
   pid: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  attempt = 0
 ): Promise<void> {
-  await flushPendingPollVotes(msgId, pid, now);
-  await flushPendingPollCloses(msgId, pid, now);
+  await flushPendingPollVotes(msgId, pid, now, attempt);
+  await flushPendingPollCloses(msgId, pid, now, attempt);
 }
 
 /**

@@ -325,6 +325,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('снятый с полки голос учитывается по слову, а не по факту возврата', () => {
     const body = codeOnly(read('pollVoteSync.ts'));
-    expect(body).toContain("if (intake === 'deferred') failed += 1;");
+    // v4.32.797: у отсрочки появилось второе действие — вернуть голос на полку;
+    // счётчик по-прежнему двигает само слово, а не удавшаяся запись.
+    expect(body).toMatch(/if \(intake === 'deferred'\) \{\n\s+failed \+= 1;\n\s+repark\(v\);\n\s+\} else applied \+= 1;/);
+    expect(body).toMatch(/if \(intake === 'deferred'\) \{\n\s+failed \+= 1;\n\s+repark\(c\);\n\s+\} else applied \+= 1;/);
   });
 });

@@ -368,8 +368,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: оба места приёма 
 
   it('общий разбор берёт голоса первыми', () => {
     const body = codeOnly(read('core', 'social', 'pollVoteSync.ts'));
-    const votes = body.indexOf('await flushPendingPollVotes(msgId, pid, now);');
-    const closes = body.indexOf('await flushPendingPollCloses(msgId, pid, now);');
+    // v4.32.797: у обеих выкладок появился номер попытки — повтор назначает
+    // себя сам, и порядок «сперва голоса» он обязан повторять тоже.
+    const votes = body.indexOf('await flushPendingPollVotes(msgId, pid, now, attempt);');
+    const closes = body.indexOf('await flushPendingPollCloses(msgId, pid, now, attempt);');
     expect(votes).toBeGreaterThan(-1);
     expect(closes).toBeGreaterThan(votes);
   });
