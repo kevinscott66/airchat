@@ -26,6 +26,17 @@ export type AccountSyncResult = {
   status: 'synced' | 'offline' | 'reset';
   pushed: SyncPushResponse | null;
   pulled: SyncPullResponse | null;
+  /**
+   * Сколько приехавших строк признано испорченными и пропущено насовсем
+   * (v4.32.845).
+   *
+   * Курсор уходит за такую строку, и сервер её больше не отдаст — значит на
+   * этом устройстве её не будет уже никогда, а на том, откуда она приехала,
+   * она есть. Поле обязательное нарочно: необязательное со значением по
+   * умолчанию ноль — ровно тот молчаливый пропуск, ради которого это и
+   * заведено.
+   */
+  poisoned: number;
 };
 
 const locks = new Map<number, Promise<AccountSyncResult>>();
@@ -130,17 +141,19 @@ async function detectServerReset(
 }
 
 async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> {
+  /** Строки, которые этот заход выбросил как неисправимые. */
+  let poisoned = 0;
   if (options.shouldContinue && !options.shouldContinue()) {
-    return { status: 'offline', pushed: null, pulled: null };
+    return { status: 'offline', pushed: null, pulled: null, poisoned };
   }
   const online = await checkOnlineWrite();
-  if (!online.ok) return { status: 'offline', pushed: null, pulled: null };
+  if (!online.ok) return { status: 'offline', pushed: null, pulled: null, poisoned };
 
   const state = await getSyncState(options.ownerProfileId);
   let pushed: SyncPushResponse | null = null;
   if (options.pendingMutations && options.pendingMutations.length > 0) {
     if (options.shouldContinue && !options.shouldContinue()) {
-      return { status: 'offline', pushed: null, pulled: null };
+      return { status: 'offline', pushed: null, pulled: null, poisoned };
     }
     pushed = await pushSyncMutations(options.mnemonic, options.pair, options.pendingMutations);
     // v4.32.624: форма ответа на отправку проверяется ДО того, как по нему
@@ -157,10 +170,10 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
       throw new Error('Сервер вернул некорректный ответ синхронизации.');
     }
     if (options.shouldContinue && !options.shouldContinue()) {
-      return { status: 'offline', pushed, pulled: null };
+      return { status: 'offline', pushed, pulled: null, poisoned };
     }
     if (await detectServerReset(options, state.serverEpoch, pushed.serverEpoch)) {
-      return { status: 'reset', pushed, pulled: null };
+      return { status: 'reset', pushed, pulled: null, poisoned };
     }
     await saveSyncState(options.ownerProfileId, {
       serverEpoch: pushed.serverEpoch,
@@ -202,7 +215,7 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
   // or decryption error therefore causes a safe replay instead of data loss.
   for (const mutation of pulled.mutations) {
     if (options.shouldContinue && !options.shouldContinue()) {
-      return { status: 'offline', pushed, pulled: null };
+      return { status: 'offline', pushed, pulled: null, poisoned };
     }
     if (!isDeliverable(mutation, options.ownerProfileId)) {
       log.warn('sync_pull_row_rejected', {
@@ -243,6 +256,7 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
         throw e;
       }
       poisonAttempts.delete(attemptKey);
+      poisoned += 1;
       log.warn('sync_pull_row_poisoned', {
         entityKind: mutation.entityKind,
         ownerProfileId: mutation.ownerProfileId,
@@ -253,18 +267,18 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
     }
   }
   if (options.shouldContinue && !options.shouldContinue()) {
-    return { status: 'offline', pushed, pulled: null };
+    return { status: 'offline', pushed, pulled: null, poisoned };
   }
   if (options.afterProjection) await options.afterProjection();
   if (await detectServerReset(options, state.serverEpoch, pulled.serverEpoch)) {
-    return { status: 'reset', pushed, pulled };
+    return { status: 'reset', pushed, pulled, poisoned };
   }
   await saveSyncState(options.ownerProfileId, {
     cursor: pulled.nextCursor,
     serverEpoch: pulled.serverEpoch,
     lastPullAt: Date.now(),
   });
-  return { status: 'synced', pushed, pulled };
+  return { status: 'synced', pushed, pulled, poisoned };
 }
 
 /** Serialize sync per profile so two reconnect events cannot race the cursor. */
@@ -273,11 +287,13 @@ export function syncAccountOnce(options: AccountSyncOptions): Promise<AccountSyn
     status: 'synced' as const,
     pushed: null,
     pulled: null,
+    poisoned: 0,
   });
   const current = previous.catch(() => ({
     status: 'synced' as const,
     pushed: null,
     pulled: null,
+    poisoned: 0,
   })).then(() => runSync(options));
   locks.set(options.ownerProfileId, current);
   return current.finally(() => {

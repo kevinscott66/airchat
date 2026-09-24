@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { runWithConcurrency } from '../../core/utils/runWithConcurrency';
 import { useTabRef } from '../TabRefContext';
@@ -87,6 +87,8 @@ import {
 } from '../../core/storage/defaultDisappear';
 import { exportDialogBackupToFile, importDialogBackupJson } from '../../core/storage/dialogBackup';
 import { dialogBackupReport } from '../../core/storage/dialogBackupReport';
+import { syncStuckBadge, syncStuckText } from '../../core/sync/syncStuckReport';
+import { readSyncStuck, subscribeSyncStuck } from '../../core/sync/syncStuckState';
 import { clearCacheFiles } from '../../core/media/cacheFiles';
 // v4.32.311: переключатели приватности — свои у каждого аккаунта, см. privacyPrefs.
 import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs';
@@ -302,6 +304,11 @@ function SettingsScreenImpl({
 
   // ── Backup state ───────────────────────────────────────────────────────────
   const [backupBusy, setBackupBusy] = useState(false);
+  // v4.32.845: сколько записей не уезжает наверх. Подписка, а не разовое
+  // чтение: проход заканчивается уже при открытом экране, и число, снятое на
+  // входе, к этому моменту устареет.
+  const stuck = useSyncExternalStore(subscribeSyncStuck, readSyncStuck, readSyncStuck);
+  const stuckText = syncStuckText(stuck);
   const [backupUnlockModal, setBackupUnlockModal] = useState(false);
   const [backupPwdInput, setBackupPwdInput] = useState('');
   const [backupUnlockBusy, setBackupUnlockBusy] = useState(false);
@@ -2041,16 +2048,24 @@ function SettingsScreenImpl({
             {/* Состояние спрашиваем, а не рисуем: сборка без адреса хранилища
                 собирается молча и работает без облака (config.ts пишет
                 config_cloud_backup_placeholder). Зелёная галочка в такой
-                сборке сказала бы человеку, что копии уходят, — а их нет. */}
+                сборке сказала бы человеку, что копии уходят, — а их нет.
+
+                v4.32.845: и по той же причине обещание «открываются на других
+                устройствах» молчит, когда часть записей не уезжает. Она не
+                уезжает насовсем — слишком велика, не читается здесь или её не
+                принял сервер, — и человек на этом телефоне видит её как ни в
+                чём не бывало. */}
             <Text style={styles.desc}>
-              {isCloudVaultConfigured()
-                ? 'Переписка и настройки открываются на других ваших устройствах'
-                : 'В этой версии приложения синхронизации нет'}
+              {!isCloudVaultConfigured()
+                ? 'В этой версии приложения синхронизации нет'
+                : stuckText ?? 'Переписка и настройки открываются на других ваших устройствах'}
             </Text>
           </View>
           <StatusBadge
-            tone={isCloudVaultConfigured() ? 'success' : 'muted'}
-            text={isCloudVaultConfigured() ? 'Вкл' : 'Не настроено'}
+            tone={!isCloudVaultConfigured() ? 'muted' : stuckText ? 'warning' : 'success'}
+            text={
+              !isCloudVaultConfigured() ? 'Не настроено' : syncStuckBadge(stuck) ?? 'Вкл'
+            }
           />
         </View>
       </View>

@@ -45,6 +45,8 @@ import { getConfigSync } from '../config';
 import { log } from '../logger';
 import { feedCommentIsHeldFromSync, feedPostIsHeldFromSync } from '../social/feedPostGuard';
 import { heldEntityCount, presentEntityKeys, pushableEntities } from './entityHold';
+import { NO_SYNC_STUCK, type SyncStuck } from './syncStuckReport';
+import { recordSyncStuck } from './syncStuckState';
 import { syncAccountOnce } from './accountSync';
 import { markAccountSyncEnd, markAccountSyncStart } from '../net/connectionStatus';
 import { base64UrlToUtf8, bytesToBase64Url, utf8ToBase64Url } from '../utils/base64url';
@@ -326,7 +328,13 @@ async function collectLocalEntities(ownerProfileId: number): Promise<LocalEntity
 async function collectPending(
   mnemonic: string,
   ownerProfileId: number,
-): Promise<{ mutations: SyncMutation[]; pendingHeads: Map<string, PendingHead> }> {
+): Promise<{
+  mutations: SyncMutation[];
+  pendingHeads: Map<string, PendingHead>;
+  /** Записи, которые этот проход собрать не смог: слишком велики или придержаны. */
+  oversize: number;
+  held: number;
+}> {
   // v4.32.686: строка альбома, у которой не вышла общая копия, придерживается
   // — и адрес ей писался ровно один раз, при вставке. Одна минута без сети
   // оставляла альбом навсегда невидимым на втором устройстве аккаунта, причём
@@ -353,6 +361,10 @@ async function collectPending(
   const currentKeys = presentEntityKeys(entities, (e) => entityKey(e.entityKind, e.entityId));
   const held = heldEntityCount(entities);
   if (held > 0) log.warn('live_sync_entities_held_unreadable', { held });
+  // v4.32.845: сущность, которую не удалось зашифровать в предел, выбывает
+  // навсегда — головы ей не пишут, значит следующий проход соберёт её заново и
+  // выбросит так же. Считаем, чтобы об этом можно было сказать вслух.
+  let oversize = 0;
   const mutations: SyncMutation[] = [];
   const pendingHeads = new Map<string, PendingHead>();
   const now = Date.now();
@@ -369,7 +381,10 @@ async function collectPending(
         { entityKind: entity.entityKind, entityId: entity.entityId, ownerProfileId, revision },
         now,
       );
-      if (!ciphertextB64) continue;
+      if (!ciphertextB64) {
+        oversize += 1;
+        continue;
+      }
       const mutationId = `m:${entity.entityKind}:${ownerProfileId}:${encodedId}:${revision}`;
       mutations.push({
         mutationId,
@@ -408,7 +423,10 @@ async function collectPending(
       value: entity.value,
     };
     const ciphertextB64 = encryptEntity(mnemonic, encoded);
-    if (!ciphertextB64) continue;
+    if (!ciphertextB64) {
+      oversize += 1;
+      continue;
+    }
     const encodedId = encodedEntityId(entity.entityId);
     const mutationId = `m:${entity.entityKind}:${ownerProfileId}:${encodedId}:${revision}`;
     const mutation: SyncMutation = {
@@ -451,7 +469,10 @@ async function collectPending(
         },
         now,
       );
-      if (!ciphertextB64) continue;
+      if (!ciphertextB64) {
+        oversize += 1;
+        continue;
+      }
       const mutationId = `m:${previous.entityKind}:${ownerProfileId}:${encodedId}:${revision}`;
       mutations.push({
         mutationId,
@@ -474,7 +495,7 @@ async function collectPending(
       if (mutations.length >= MAX_PUSH_MUTATIONS) break;
     }
   }
-  return { mutations, pendingHeads };
+  return { mutations, pendingHeads, oversize, held };
 }
 
 /**
@@ -622,6 +643,9 @@ async function runLiveSync(
   if (!shouldContinue()) return;
   /** Набор, отвергнутый прошлым проходом. Подпись, а не список: нужен только факт совпадения. */
   let lastRejected: string | null = null;
+  // v4.32.845: испорченные строки считаются за весь заход — каждый проход
+  // выбрасывает свои, и человеку важна сумма, а не последнее слагаемое.
+  let poisonedTotal = 0;
   for (let pass = 0; pass < MAX_SYNC_PASSES; pass += 1) {
     if (!shouldContinue()) return;
     const collected = await collectPending(mnemonic, ownerProfileId);
@@ -731,6 +755,19 @@ async function runLiveSync(
     const rejectedSignature = hasRejected ? [...rejected].sort().join(',') : null;
     const stuck = hasRejected && accepted === 0 && rejectedSignature === lastRejected;
     lastRejected = rejectedSignature;
+    // v4.32.845: итог прохода — наружу, а не только в журнал. Считается ЗДЕСЬ,
+    // после ответа сервера: до него неизвестно, отвергнут ли набор, а проход,
+    // не дошедший даже до сбора (нет сети, отмена), сюда не попадает вовсе —
+    // заменить настоящее число нулём значило бы объявить, что всё уехало.
+    poisonedTotal += result.poisoned;
+    const seen: SyncStuck = {
+      ...NO_SYNC_STUCK,
+      oversize: collected.oversize,
+      held: collected.held,
+      rejected: stuck ? rejected.length : 0,
+      poisoned: poisonedTotal,
+    };
+    recordSyncStuck(seen);
     if (stuck) {
       log.warn('live_sync_push_stuck', { ownerProfileId, rejected: rejected.length, pass });
       // Тянуть входящее это не мешает: там движение есть.
