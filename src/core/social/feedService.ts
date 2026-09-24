@@ -50,6 +50,8 @@ import {
 import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
 import { listContacts, listContactsReadFor } from './contacts';
+import { NO_ATTACH_LOSS, attachLostCount } from './feedAttachLoss';
+import type { FeedAttachLoss } from './feedAttachLoss';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
@@ -220,9 +222,17 @@ type QueuedFeedItem = {
  * `publishOutcome.ts`, тут только форма ответа наружу.
  */
 export type PublishFeedResult =
-  | { ok: true; cid: string; report: PublishReport; mediaDropped?: number }
-  | { ok: true; queued: true; report: 'queued'; mediaDropped?: number }
-  | { ok: false; reason?: 'empty' | 'too_large' | 'offline' | 'other'; mediaDropped?: number };
+  | { ok: true; cid: string; report: PublishReport; mediaDropped?: number; attachLoss?: FeedAttachLoss }
+  | { ok: true; queued: true; report: 'queued'; mediaDropped?: number; attachLoss?: FeedAttachLoss }
+  | {
+      ok: false;
+      // v4.32.843: `attachments` — вложения не дошли, и записи без них нет.
+      // Раньше этот исход выдавался за `too_large`, и человеку советовали
+      // сократить текст, даже когда ничего большого не было.
+      reason?: 'empty' | 'too_large' | 'offline' | 'other' | 'attachments';
+      mediaDropped?: number;
+      attachLoss?: FeedAttachLoss;
+    };
 
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 /**
@@ -390,16 +400,33 @@ export async function applyFeedSyncCommentDelete(
 }
 
 /**
+ * Отказ чтения вложения (v4.32.843).
+ *
+ * Причин ровно две, и различать их обязательно: «слишком большое» лечится
+ * уменьшением файла, «не прочиталось» — нет. Раньше обе (и ещё «файла нет на
+ * месте») возвращались одним `null`, и наверху любую из них объявляли
+ * превышением размера.
+ */
+type FeedReadFail = { ok: false; reason: 'oversize' | 'failed' };
+
+/**
  * Читает URI и возвращает base64 + mime. v4.32.24: медиа едет inline в envelope
  * (не через IPFS), поэтому применяем лимит на байт raw-файла.
  */
-async function readMediaAsBase64(uri: string): Promise<{ b64: string; mime: string } | null> {
+async function readMediaAsBase64(
+  uri: string,
+): Promise<{ ok: true; b64: string; mime: string } | FeedReadFail> {
   try {
     const info = await FileSystem.getInfoAsync(uri);
-    if (!info.exists) return null;
+    // v4.32.843: пропавший файл — не «слишком большой». Раньше человеку в этом
+    // случае советовали уменьшить файл, которого уже нет.
+    if (!info.exists) {
+      log.warn('feed_media_missing');
+      return { ok: false, reason: 'failed' };
+    }
     if (info.size && info.size > FEED_MEDIA_MAX_BASE64_BYTES) {
       log.warn('feed_media_too_large', { size: info.size, limit: FEED_MEDIA_MAX_BASE64_BYTES });
-      return null;
+      return { ok: false, reason: 'oversize' };
     }
     const b64 = await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -409,10 +436,10 @@ async function readMediaAsBase64(uri: string): Promise<{ b64: string; mime: stri
       : /\.webp$/i.test(uri) ? 'image/webp'
       : /\.gif$/i.test(uri) ? 'image/gif'
       : 'application/octet-stream';
-    return { b64, mime };
+    return { ok: true, b64, mime };
   } catch (e) {
     log.warn('feed_media_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return { ok: false, reason: 'failed' };
   }
 }
 
@@ -422,27 +449,30 @@ const FEED_DOC_MAX_RAW_BYTES = 1.2 * 1024 * 1024; // 1.2 MB
 /** Сколько документов максимум можно прикрепить к одному посту. */
 const FEED_DOC_MAX_PER_POST = 3;
 
-/** Вход: { uri, name, mime, size }. Возврат: base64 + реальный size, либо null при превышении лимита. */
+/** Вход: { uri, name, mime, size }. Возврат: base64 + реальный size, либо названная причина отказа. */
 export type FeedDocumentInput = { uri: string; name: string; mime: string; size?: number };
 
 async function readDocumentAsBase64(
   input: FeedDocumentInput,
-): Promise<{ name: string; mime: string; size: number; b64: string } | null> {
+): Promise<{ ok: true; name: string; mime: string; size: number; b64: string } | FeedReadFail> {
   try {
     const info = await FileSystem.getInfoAsync(input.uri);
-    if (!info.exists) return null;
+    if (!info.exists) {
+      log.warn('feed_doc_missing', { name: input.name });
+      return { ok: false, reason: 'failed' };
+    }
     const size = (info as { size?: number }).size ?? input.size ?? 0;
     if (size > FEED_DOC_MAX_RAW_BYTES) {
       log.warn('feed_doc_too_large', { size, limit: FEED_DOC_MAX_RAW_BYTES, name: input.name });
-      return null;
+      return { ok: false, reason: 'oversize' };
     }
     const b64 = await FileSystem.readAsStringAsync(input.uri, {
       encoding: FileSystem.EncodingType.Base64,
     });
-    return { name: input.name, mime: input.mime || 'application/octet-stream', size, b64 };
+    return { ok: true, name: input.name, mime: input.mime || 'application/octet-stream', size, b64 };
   } catch (e) {
     log.warn('feed_doc_read_failed', { err: e instanceof Error ? e.message : String(e), name: input.name });
-    return null;
+    return { ok: false, reason: 'failed' };
   }
 }
 
@@ -1598,11 +1628,16 @@ type TryPublishResult =
   | {
       postId: null;
       tooLarge?: boolean;
+      // v4.32.843: ни одно вложение не дошло, и записи без них не существует —
+      // публиковать нечего. Это не «слишком большой пост»: причина названа в
+      // attachLoss, и она может не иметь к размеру никакого отношения.
+      attachAllLost?: boolean;
       // v4.32.48: число фото, которые были выбраны, но отброшены из-за превышения
       // FEED_MEDIA_MAX_BASE64_BYTES. UI покажет предупреждение пользователю.
       mediaDropped?: number;
+      attachLoss?: FeedAttachLoss;
     }
-  | { postId: string; tooLarge?: false; report: PublishReport; mediaDropped?: number };
+  | { postId: string; tooLarge?: false; attachAllLost?: false; report: PublishReport; mediaDropped?: number; attachLoss?: FeedAttachLoss };
 
 async function tryPublishFeedPostComplete(
   pair: KeyPairBytes,
@@ -1638,30 +1673,49 @@ async function tryPublishFeedPostComplete(
       : [];
   const media: string[] = [];
   const mediaMime: string[] = [];
-  let mediaDropped = 0;
+  // v4.32.843: причины считаются порознь. Один счётчик на три исхода заставлял
+  // называть человеку ту причину, которой не было.
+  const loss: FeedAttachLoss = { ...NO_ATTACH_LOSS };
   for (const m of mediaResults) {
-    if (m) {
+    if (m.ok) {
       media.push(m.b64);
       mediaMime.push(m.mime);
+    } else if (m.reason === 'oversize') {
+      loss.photoOversize += 1;
     } else {
-      mediaDropped += 1;
+      loss.photoFailed += 1;
     }
-  }
-  // v4.32.48: если все фото превысили лимит — не публикуем пустой пост. Пропускаем
-  // только если пользователь собирался отправить медиа + текст, но медиа не прошло.
-  if (mediaDropped > 0 && media.length === 0 && !text && (!opts.documents || opts.documents.length === 0)) {
-    log.warn('feed_publish_all_media_too_large', { dropped: mediaDropped });
-    return { postId: null, tooLarge: true, mediaDropped };
   }
 
   // v4.32.48: чтение документов. Ограничение FEED_DOC_MAX_PER_POST + per-doc size guard.
+  // v4.32.843: раньше не сложившийся документ исчезал вообще без счёта — ни
+  // цифры наверх, ни слова человеку: запись выходила без него, и узнать об этом
+  // было неоткуда.
   const docs: { name: string; mime: string; size: number; b64: string }[] = [];
   if (opts.documents && opts.documents.length > 0) {
     const limited = opts.documents.slice(0, FEED_DOC_MAX_PER_POST);
+    // v4.32.843: отрезанные `slice` документы тоже потеряны. Раньше они не
+    // попадали даже в журнал: человек прикреплял пять файлов, доезжали три.
+    loss.docTooMany = opts.documents.length - limited.length;
+    if (loss.docTooMany > 0) {
+      log.warn('feed_docs_over_limit', { picked: opts.documents.length, limit: FEED_DOC_MAX_PER_POST });
+    }
     for (const input of limited) {
       const read = await readDocumentAsBase64(input);
-      if (read) docs.push(read);
+      if (read.ok) docs.push({ name: read.name, mime: read.mime, size: read.size, b64: read.b64 });
+      else if (read.reason === 'oversize') loss.docOversize += 1;
+      else loss.docFailed += 1;
     }
+  }
+  const mediaDropped = loss.photoOversize + loss.photoFailed;
+
+  // v4.32.48: если вложения не прошли — не публикуем пустую запись.
+  // v4.32.843: проверка переехала сюда, за чтение документов, и больше не врёт
+  // про размер. До неё пост из одних документов, ни один из которых не
+  // прочитался, уходил в ленту пустым — без текста и без единого вложения.
+  if (attachLostCount(loss) > 0 && media.length === 0 && docs.length === 0 && !text) {
+    log.warn('feed_publish_all_attachments_lost', { ...loss });
+    return { postId: null, attachAllLost: true, mediaDropped, attachLoss: loss };
   }
 
   const myDid = publicKeyToDidKey(pair.publicKey);
@@ -1687,7 +1741,7 @@ async function tryPublishFeedPostComplete(
       docsN: docs.length,
     });
     // v4.32.48: вернуть tooLarge=true — caller покажет конкретную ошибку вместо generic.
-    return { postId: null, tooLarge: true, mediaDropped };
+    return { postId: null, tooLarge: true, mediaDropped, attachLoss: loss };
   }
 
   // 1. Сохранить локально НЕМЕДЛЕННО — оптимистично. Пост виден у автора даже если
@@ -1796,7 +1850,7 @@ async function tryPublishFeedPostComplete(
       reachability: online.reachability,
       disposition: dispositionOf('skipped-offline'),
     });
-    return { postId: null, mediaDropped };
+    return { postId: null, mediaDropped, attachLoss: loss };
   }
 
   const result = await signAndBroadcastFeedEnvelope(pair, payload);
@@ -1804,7 +1858,7 @@ async function tryPublishFeedPostComplete(
     // Envelope слишком большой или подпись провалилась — откатывать локальный пост НЕ будем,
     // но дадим caller'у понять что ретрай имеет смысл только если проблема временная.
     log.warn('feed_publish_envelope_null', { postId });
-    return { postId: null, mediaDropped };
+    return { postId: null, mediaDropped, attachLoss: loss };
   }
 
   // Успешной считаем публикацию если контактов нет (локальная лента) или хоть один транспорт сработал.
@@ -1823,7 +1877,7 @@ async function tryPublishFeedPostComplete(
     // v4.32.739: «отправлять некому» — не «отправлено». Так и написано в
     // docblock publishOutcome.ts с самого его появления, но исход сюда не
     // доходил, и лента поздравляла с отправкой человека без единого контакта.
-    return { postId, report: reportOf(attempt, false), mediaDropped };
+    return { postId, report: reportOf(attempt, false), mediaDropped, attachLoss: loss };
   }
   if (attempt !== 'failed') {
     // v4.32.47: partial delivery → ставим в очередь для последующего ретрая.
@@ -1858,13 +1912,13 @@ async function tryPublishFeedPostComplete(
       } catch (e) {
         log.warn('feed_publish_partial_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
       }
-      return { postId, report: reportOf(attempt, queueAccepted), mediaDropped };
+      return { postId, report: reportOf(attempt, queueAccepted), mediaDropped, attachLoss: loss };
     }
     log.info('feed_publish_ok', { postId: postId.slice(0, 24), delivered: result.delivered.success, total: contactsCount });
-    return { postId, report: reportOf(attempt, false), mediaDropped };
+    return { postId, report: reportOf(attempt, false), mediaDropped, attachLoss: loss };
   }
   log.warn('feed_publish_no_delivery', { postId, contacts: contactsCount });
-  return { postId: null, mediaDropped };
+  return { postId: null, mediaDropped, attachLoss: loss };
 }
 
 /**
@@ -1903,14 +1957,20 @@ export async function publishFeedPost(
   // v4.32.48: если пост отказан из-за размера — не ставим в очередь (retry бесполезен),
   // возвращаем reason='too_large' чтобы UI показал конкретный Alert.
   if (tryResult.tooLarge) {
-    return { ok: false, reason: 'too_large', mediaDropped: tryResult.mediaDropped };
+    return { ok: false, reason: 'too_large', mediaDropped: tryResult.mediaDropped, attachLoss: tryResult.attachLoss };
+  }
+  // v4.32.843: вложения не дошли, и записи без них не существует. Повтор тут
+  // так же бесполезен, как при превышении, но совет человеку — другой: причина
+  // названа в attachLoss и может не иметь отношения к размеру.
+  if (tryResult.attachAllLost) {
+    return { ok: false, reason: 'attachments', mediaDropped: tryResult.mediaDropped, attachLoss: tryResult.attachLoss };
   }
   if (tryResult.postId) {
     emitFeedUpdate();
     // v4.32.739: исход рассылки доносится как есть. Здесь он и терялся: три
     // разных ответа сходились в один `{ ok: true, cid }`, и лента печатала
     // «Публикация отправлена» над постом, которого не получил никто.
-    return { ok: true, cid: tryResult.postId, report: tryResult.report, mediaDropped: tryResult.mediaDropped };
+    return { ok: true, cid: tryResult.postId, report: tryResult.report, mediaDropped: tryResult.mediaDropped, attachLoss: tryResult.attachLoss };
   }
   try {
     await enqueuePendingFeedPost(pair, {
@@ -1924,7 +1984,7 @@ export async function publishFeedPost(
     emitFeedUpdate();
     // v4.32.554: mediaDropped доносим и здесь — иначе человек, у которого часть
     // фотографий не влезла, узнавал об этом только при удачной отправке.
-    return { ok: true, queued: true, report: 'queued', mediaDropped: tryResult.mediaDropped };
+    return { ok: true, queued: true, report: 'queued', mediaDropped: tryResult.mediaDropped, attachLoss: tryResult.attachLoss };
   } catch (e) {
     log.warn('feed_enqueue_failed', { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, reason: 'other' };

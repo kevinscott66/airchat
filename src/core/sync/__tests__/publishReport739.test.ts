@@ -91,8 +91,15 @@ describe('исход называется словом, которое можн�
 
 describe('исход доходит до вызывающего', () => {
   it('тип ответа требует назвать его у каждого успеха', () => {
-    expect(FEED).toContain('| { ok: true; cid: string; report: PublishReport; mediaDropped?: number }');
-    expect(FEED).toContain("| { ok: true; queued: true; report: 'queued'; mediaDropped?: number }");
+    // v4.32.843: к успеху приехал `attachLoss` — счёт потерянных вложений с
+    // названной причиной. Он не отменяет требования: `report` по-прежнему
+    // обязателен у каждого варианта с `ok: true`.
+    expect(FEED).toContain(
+      '| { ok: true; cid: string; report: PublishReport; mediaDropped?: number; attachLoss?: FeedAttachLoss }'
+    );
+    expect(FEED).toContain(
+      "| { ok: true; queued: true; report: 'queued'; mediaDropped?: number; attachLoss?: FeedAttachLoss }"
+    );
     // Прежние формы успеха без исхода.
     expect(FEED).not.toContain('| { ok: true; cid: string; mediaDropped?: number }');
     expect(FEED).not.toContain('| { ok: true; queued: true; mediaDropped?: number }');
@@ -100,7 +107,7 @@ describe('исход доходит до вызывающего', () => {
 
   it('внутренний результат раздвоен: где есть postId, там обязан быть исход', () => {
     expect(FEED).toContain(
-      '| { postId: string; tooLarge?: false; report: PublishReport; mediaDropped?: number };'
+      '| { postId: string; tooLarge?: false; attachAllLost?: false; report: PublishReport; mediaDropped?: number; attachLoss?: FeedAttachLoss };'
     );
     expect(FEED).not.toContain('  postId: string | null;');
   });
@@ -114,7 +121,7 @@ describe('исход доходит до вызывающего', () => {
     expect(branch.indexOf('await enqueuePendingFeedPost(')).toBeLessThan(
       branch.indexOf('queueAccepted = true;')
     );
-    expect(branch).toContain('return { postId, report: reportOf(attempt, queueAccepted), mediaDropped };');
+    expect(branch).toContain('return { postId, report: reportOf(attempt, queueAccepted), mediaDropped, attachLoss: loss };');
   });
 
   it('«контактов нет» больше не уходит наружу как обычный успех', () => {

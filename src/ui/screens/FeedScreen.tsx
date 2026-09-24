@@ -83,6 +83,7 @@ import {
   type FeedCommentRow,
   type PublishFeedResult,
 } from '../../core/social/feedService';
+import { feedAttachLossText } from '../../core/social/feedAttachLoss';
 import { subscribeToPostCommentsTopic } from '../../core/social/feedTransport';
 import type { FeedViewerRow } from '../../core/storage/feedStorage';
 import { profileManager } from '../../core/identity/profileManager';
@@ -2067,23 +2068,26 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           setOptimisticPosts((prev) => prev.filter((p) => p.id !== tempId));
           if (result.ok) {
             announcePublishResult(result, t);
-            // v4.32.48: предупреждение если часть фото была дропнута из-за размера,
-            // но пост всё же опубликовался (текст + остальные фото).
-            if (result.mediaDropped && result.mediaDropped > 0) {
-              Alert.alert(
-                t('feed.mediaPartialSkipped'),
-                t('feed.mediaDroppedDetail', { count: result.mediaDropped })
-              );
-            }
+            // v4.32.48: предупреждение, если часть вложений не дошла, но запись
+            // всё же опубликовалась (текст + остальные вложения).
+            // v4.32.843: причина называется та, которая случилась, и документы
+            // считаются наравне с фотографиями — раньше они пропадали молча.
+            const lostText = result.attachLoss ? feedAttachLossText(result.attachLoss, true) : null;
+            if (lostText) Alert.alert(t('feed.attachPartial'), lostText);
             void getFeedPublishQueueLength(pair).then(setQueueLen);
             await loadFeed();
-          } else if (result.reason === 'too_large') {
+          } else if (result.reason === 'too_large' || result.reason === 'attachments') {
             // v4.32.48: явный Alert при отказе из-за размера — раньше показывался generic
             // «Не удалось опубликовать» и пост молча оставался в БД без ретрая (dead entry).
-            Alert.alert(
-              t('feed.postTooLarge'),
-              t('feed.postTooLargeDetail')
-            );
+            // v4.32.843: «вложения не дошли» больше не выдаётся за превышение
+            // размера. Совет «сократите текст» человеку с пропавшим файлом не
+            // помогает ничем — он и так ничего не сокращал.
+            if (result.reason === 'attachments') {
+              const why = result.attachLoss ? feedAttachLossText(result.attachLoss, false) : null;
+              Alert.alert(t('feed.attachAllLost'), why ?? t('feed.publishFailedDetail'));
+            } else {
+              Alert.alert(t('feed.postTooLarge'), t('feed.postTooLargeDetail'));
+            }
             // Возвращаем черновик и URIs, чтобы пользователь мог скорректировать.
             setDraft(textSnap);
             setUris(urisSnap);
@@ -2510,7 +2514,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             // себя в ленте запись, которая отличается от той, что он репостил.
             if (result.mediaDropped && result.mediaDropped > 0) {
               Alert.alert(
-                t('feed.mediaPartialSkipped'),
+                t('feed.attachPartial'),
                 t('feed.repostMediaDroppedDetail', { count: result.mediaDropped })
               );
             }
