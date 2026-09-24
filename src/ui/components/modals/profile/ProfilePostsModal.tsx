@@ -42,6 +42,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+// v4.32.852: вложение, которое не открылось, остаётся местом в ряду.
+import { mediaSlotsNotice, unopenedSlotLabel, type MediaSlot } from '../../../../core/media/mediaSlots';
 
 import { ActionSheet, type ActionSheetState } from '../../ActionSheet';
 import { AppModal as Modal } from '../../AppModal';
@@ -126,7 +128,7 @@ export function ProfilePostsPane({
   const { colors } = useTheme();
   const [posts, setPosts] = useState<FeedPostRow[]>([]);
   const [stories, setStories] = useState<StoryRow[]>([]);
-  const [media, setMedia] = useState<Record<string, string[]>>({});
+  const [media, setMedia] = useState<Record<string, MediaSlot[]>>({});
   // Пока не дочитали — это «ещё не знаем», а не «пусто». Разница видна на
   // экране: подпись «Ничего не найдено» появляется только после чтения.
   const [loaded, setLoaded] = useState(false);
@@ -405,11 +407,24 @@ export function ProfilePostsPane({
           <Text style={[styles.postText, { color: colors.text }]}>{p.text}</Text>
         ) : null}
         {uris.length > 0 ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbs}>
-            {uris.map((u, i) => (
-              <Image key={`${p.id}_${i}`} source={{ uri: u }} style={styles.thumb} resizeMode="cover" />
-            ))}
-          </ScrollView>
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbs}>
+              {uris.map((u, i) => (u ? (
+                <Image key={`${p.id}_${i}`} source={{ uri: u }} style={styles.thumb} resizeMode="cover" />
+              ) : (
+                <View
+                  key={`${p.id}_${i}`}
+                  style={[styles.thumb, styles.thumbMissing, { borderColor: colors.border }]}
+                  accessibilityLabel={unopenedSlotLabel(i, uris.length)}
+                >
+                  <Ionicons name="cloud-offline-outline" size={26} color={colors.textMuted} />
+                </View>
+              )))}
+            </ScrollView>
+            {mediaSlotsNotice(uris) ? (
+              <Text style={[styles.mediaNotice, { color: colors.warning }]}>{mediaSlotsNotice(uris)}</Text>
+            ) : null}
+          </>
         ) : null}
       </View>
     );
@@ -735,6 +750,9 @@ const styles = StyleSheet.create({
   unreadable: { fontStyle: 'italic' },
   thumbs: { marginTop: spacing.xs },
   thumb: { width: 120, height: 120, borderRadius: radius.md, marginRight: spacing.xs },
+  // v4.32.852: место вложения, которое не открылось.
+  thumbMissing: { alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  mediaNotice: { fontSize: font.xs, marginTop: 4 },
   empty: { alignItems: 'center', paddingVertical: spacing.xl, gap: spacing.sm },
   emptyText: { fontSize: font.sm, textAlign: 'center' },
 });

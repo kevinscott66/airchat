@@ -565,16 +565,26 @@ export async function saveFeedDocumentToCache(
   }
 }
 
-/** Пакетный резолв для списка постов. Возвращает map postId → список готовых URI.
+/** Пакетный резолв для списка постов. Возвращает map postId → слоты вложений.
  *  v4.32.64: добавлен concurrency-лимит — раньше `Promise.all(posts.map(... Promise.all(mediaCids.map(...))))`
  *  давал неконтролируемый параллелизм: лента из 20 постов × 3 медиа = 60+ одновременных
  *  kvGet'ов, на Android flash это приводило к write-lock contention и подвисаниям UI.
- *  Теперь все resolve-операции (пост × медиа) идут через один общий пул `FEED_IMAGE_READ_CONCURRENCY`. */
+ *  Теперь все resolve-операции (пост × медиа) идут через один общий пул `FEED_IMAGE_READ_CONCURRENCY`.
+ *
+ *  v4.32.852: слот, который не открылся, остаётся в списке значением `null`, а
+ *  список — ровно той длины, какая записана в посте. Прежде тут стоял
+ *  `filter`, и пустые слоты схлопывались: пост с тремя снимками показывал два,
+ *  подпись для незрячих говорила «фото 2 из 2», а пост, у которого не открылся
+ *  ни один снимок, вообще не попадал в map и выглядел как пост без снимков.
+ *  Отличить «фотографий не было» от «фотографии не открылись» было нечем.
+ *
+ *  Все чтения здесь дожидаются ответа, поэтому `null` тут — окончательный
+ *  отказ, а не «ещё грузится»: вызывающему есть что сказать словами. */
 export async function resolveFeedMediaUris(
   posts: Array<{ id: string; mediaCids: string[] | null }>,
   gateway: string | null,
-): Promise<Record<string, string[]>> {
-  const map: Record<string, string[]> = {};
+): Promise<Record<string, (string | null)[]>> {
+  const map: Record<string, (string | null)[]> = {};
   // Сначала соберём все (postId, index, cid) и параллельно пройдёмся через пул.
   type Task = { postId: string; idx: number; cid: string };
   const tasks: Task[] = [];
@@ -584,17 +594,18 @@ export async function resolveFeedMediaUris(
       tasks.push({ postId: p.id, idx: i, cid: p.mediaCids[i] });
     }
   }
-  // Храним разрешённые uri по postId, индексируем по idx чтобы сохранить порядок.
-  const byPost: Record<string, (string | null)[]> = {};
+  // Слоты заводятся сразу все и по длине поста: иначе отказ на первом же
+  // вложении оставил бы в массиве дыру, а дыру `Array.prototype.map` при
+  // отрисовке пропускает молча — ровно та потеря, от которой здесь уходим.
+  for (const p of posts) {
+    if (!p.mediaCids || p.mediaCids.length === 0) continue;
+    map[p.id] = new Array<string | null>(p.mediaCids.length).fill(null);
+  }
   await runWithConcurrency(tasks, FEED_IMAGE_READ_CONCURRENCY, async (t) => {
     const uri = await resolveFeedMediaUri(t.cid, gateway);
-    if (!byPost[t.postId]) byPost[t.postId] = [];
-    byPost[t.postId][t.idx] = uri && uri.length > 0 ? uri : null;
+    const slots = map[t.postId];
+    if (slots) slots[t.idx] = uri && uri.length > 0 ? uri : null;
   });
-  for (const pid of Object.keys(byPost)) {
-    const clean = byPost[pid].filter((u): u is string => !!u && u.length > 0);
-    if (clean.length > 0) map[pid] = clean;
-  }
   return map;
 }
 

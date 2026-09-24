@@ -45,6 +45,14 @@ import { showPermissionDeniedAlert } from '../permissionAlert';
 import { AppModal } from '../components/AppModal';
 import * as Network from 'expo-network';
 import { Ionicons } from '@expo/vector-icons';
+// v4.32.852: слоты вложений — что открылось, что нет и как об этом сказать.
+import {
+  mediaSlotsNotice,
+  openedIndexOf,
+  openedSlots,
+  unopenedSlotLabel,
+  type MediaSlot,
+} from '../../core/media/mediaSlots';
 import { appleColorEmojiTextStyle } from '../emojiStyles';
 import * as ImagePicker from 'expo-image-picker';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
@@ -472,7 +480,8 @@ interface FeedPostItemProps {
   isSelf: boolean;
   styles: ReturnType<typeof makeStyles>;
   colors: AppColors;
-  mediaUrls: string[];
+  /** v4.32.852: слот на каждое вложение публикации; null — не открылось. */
+  mediaUrls: MediaSlot[];
   commentCount: number;
   viewCount: number;
   translatedText: string | undefined;
@@ -626,20 +635,41 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
         const u = item.text && !item.text.startsWith('\x04') ? extractFirstUrl(item.text) : null;
         return u ? <LinkPreview url={u} isOutgoing={false} fromPeer={!isSelf} /> : null;
       })()}
+      {/* v4.32.852: место в ряду занимает каждое вложение публикации, в том
+          числе не открывшееся. Прежде такие слоты выбрасывались ещё в ядре:
+          три снимка показывались двумя, подпись для незрячих называла «2 из
+          2», а публикация, у которой не открылся ни один, шла как публикация
+          без снимков. Подпись под рядом сверяется с тем, что человек сам
+          выкладывал: оба числа названы. */}
       {item.mediaCids && item.mediaCids.length > 0 && mediaUrls.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.mediaRow}>
-          {mediaUrls.map((url, idx) => (
-            <AppPressable
-              key={`${item.id}_${idx}`}
-              onPress={() => onMediaPress(mediaUrls, idx)}
-              hitSlop={4}
-              accessibilityRole="imagebutton"
-              accessibilityLabel={t('feed.a11yImageN', { n: idx + 1, total: mediaUrls.length })}
-            >
-              <Image source={{ uri: url }} style={styles.thumb} />
-            </AppPressable>
-          ))}
-        </ScrollView>
+        <>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.mediaRow}>
+            {mediaUrls.map((url, idx) => (url ? (
+              <AppPressable
+                key={`${item.id}_${idx}`}
+                onPress={() => onMediaPress(openedSlots(mediaUrls), openedIndexOf(mediaUrls, idx))}
+                hitSlop={4}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={t('feed.a11yImageN', { n: idx + 1, total: mediaUrls.length })}
+              >
+                <Image source={{ uri: url }} style={styles.thumb} />
+              </AppPressable>
+            ) : (
+              <View
+                key={`${item.id}_${idx}`}
+                style={[styles.thumb, styles.thumbMissing, { borderColor: colors.border }]}
+                accessibilityLabel={unopenedSlotLabel(idx, mediaUrls.length)}
+              >
+                <Ionicons name="cloud-offline-outline" size={26} color={colors.textMuted} />
+              </View>
+            )))}
+          </ScrollView>
+          {mediaSlotsNotice(mediaUrls) ? (
+            <Text style={[styles.mediaNotice, { color: colors.warning }]}>
+              {mediaSlotsNotice(mediaUrls)}
+            </Text>
+          ) : null}
+        </>
       ) : null}
 
       {item.documents && item.documents.length > 0 ? (
@@ -919,7 +949,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [gateway, setGateway] = useState('');
   /** v4.32.29: resolved URIs for feed media. Ключ = post.id, значение = список
    *  либо `data:<mime>;base64,...` (inline) либо `https://<gateway>/ipfs/<cid>` (legacy). */
-  const [mediaUrlsMap, setMediaUrlsMap] = useState<Record<string, string[]>>({});
+  const [mediaUrlsMap, setMediaUrlsMap] = useState<Record<string, MediaSlot[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   /** Публикация в фоне после закрытия модалки — не блокирует UI. */
   const [publishing, setPublishing] = useState(false);
@@ -2887,19 +2917,37 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
               место — то есть обсуждение без предмета обсуждения. Ссылки берутся
               из той же карты, что и в ленте, и открываются тем же просмотром. */}
           {pinnedMediaUrls.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-              {pinnedMediaUrls.map((url, idx) => (
-                <AppPressable
-                  key={`${commentPost.id}_pin_${idx}`}
-                  onPress={() => openFeedMedia(pinnedMediaUrls, idx)}
-                  hitSlop={4}
-                  accessibilityRole="imagebutton"
-                  accessibilityLabel={t('feed.a11yImageN', { n: idx + 1, total: pinnedMediaUrls.length })}
-                >
-                  <Image source={{ uri: url }} style={cmStyles.pinnedThumb} />
-                </AppPressable>
-              ))}
-            </ScrollView>
+            <>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                {pinnedMediaUrls.map((url, idx) => (url ? (
+                  <AppPressable
+                    key={`${commentPost.id}_pin_${idx}`}
+                    onPress={() => openFeedMedia(openedSlots(pinnedMediaUrls), openedIndexOf(pinnedMediaUrls, idx))}
+                    hitSlop={4}
+                    accessibilityRole="imagebutton"
+                    accessibilityLabel={t('feed.a11yImageN', { n: idx + 1, total: pinnedMediaUrls.length })}
+                  >
+                    <Image source={{ uri: url }} style={cmStyles.pinnedThumb} />
+                  </AppPressable>
+                ) : (
+                  // v4.32.852: предмет обсуждения, который не загрузился, —
+                  // тоже предмет обсуждения. Молча пропустить его в шапке
+                  // значит вернуть тред без того, к чему он написан.
+                  <View
+                    key={`${commentPost.id}_pin_${idx}`}
+                    style={[cmStyles.pinnedThumb, styles.thumbMissing, { borderColor: colors.border }]}
+                    accessibilityLabel={unopenedSlotLabel(idx, pinnedMediaUrls.length)}
+                  >
+                    <Ionicons name="cloud-offline-outline" size={22} color={colors.textMuted} />
+                  </View>
+                )))}
+              </ScrollView>
+              {mediaSlotsNotice(pinnedMediaUrls) ? (
+                <Text style={[styles.mediaNotice, { color: colors.warning }]}>
+                  {mediaSlotsNotice(pinnedMediaUrls)}
+                </Text>
+              ) : null}
+            </>
           ) : null}
           {commentPost.reactions && Object.keys(commentPost.reactions).length > 0 ? (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -2921,7 +2969,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         </View>
       </View>
     );
-  }, [commentPost, did, cmStyles, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor, handleHashtagPress, handleMentionPress]);
+  }, [commentPost, did, cmStyles, styles, colors, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor, handleHashtagPress, handleMentionPress]);
 
   useEffect(() => {
     if (bookmarkFilter) {
@@ -4725,6 +4773,10 @@ function makeStyles(c: AppColors) {
   unreadableText: { color: c.warning, fontSize: 15, fontStyle: 'italic', flex: 1 },
   mediaRow: { marginTop: 8 },
   thumb: { width: 120, height: 120, borderRadius: radius.md, marginRight: 8, backgroundColor: c.primaryMuted },
+  // v4.32.852: место не открывшегося вложения. Рамка и значок, а не пустота:
+  // пустое место в ряду неотличимо от конца ряда.
+  thumbMissing: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, backgroundColor: c.surface },
+  mediaNotice: { fontSize: font.xs, marginTop: 4 },
   modalOverlay: {
     flex: 1,
     backgroundColor: scrim.modal,
