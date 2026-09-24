@@ -2466,6 +2466,24 @@ export default function App(): React.ReactElement {
     };
   }, [gate, pair]);
 
+  /**
+   * Последний шаг запуска: есть ли у приложения пароль.
+   *
+   * v4.32.866. Вопрос задаётся хранилищу ключей, а оно умеет отказывать —
+   * телефон перезагрузили и приложение подняли до первого разблокирования,
+   * и `hasPassword` бросает `errSecInteractionNotAllowed`. Бросок уходил в
+   * `void (async () => …)()`, ловить его было некому, и `passwordGateResolved`
+   * навсегда оставался ложным: экран держал «Завершаем вход…» без ошибки, без
+   * повтора и без единого выхода, кроме убийства приложения. Соседний эффект
+   * автоблокировки этот же бросок разбирает с v4.32.613 — сюда правку не
+   * донесли.
+   *
+   * Гадать здесь нельзя: отпереть без пароля — открыть переписку тому, кто
+   * поднял телефон; запереть при его отсутствии — запереть навсегда, пароля-то
+   * нет. Поэтому запуск честно останавливается с тем же текстом и той же
+   * кнопкой повтора, что и остальные отказы хранилища, а при «телефон был
+   * заблокирован» повторяется сам, когда приложение вернётся активным.
+   */
   useEffect(() => {
     if (gate !== 'ready' || !pair || savedSession === undefined) {
       setPasswordGateResolved(false);
@@ -2475,7 +2493,20 @@ export default function App(): React.ReactElement {
     }
     let cancelled = false;
     void (async () => {
-      const hasPwd = await authGuard.hasPassword();
+      let hasPwd: boolean;
+      try {
+        hasPwd = await authGuard.hasPassword();
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        log.error('boot_password_gate_failed', { err: msg });
+        setBootError(
+          isKeychainLockedMessage(msg)
+            ? KEYCHAIN_LOCKED_TEXT
+            : (diagnoseStorageFailure(msg, currentStorageEnv()) ?? msg)
+        );
+        return;
+      }
       if (cancelled) return;
       hadPasswordRef.current = hasPwd;
       if (!hasPwd) {
@@ -2490,7 +2521,9 @@ export default function App(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [gate, pair, savedSession]);
+    // `walletBootNonce` — чтобы «Повторить» доходило и сюда: повтор не меняет
+    // ни `gate`, ни `pair`, ни `savedSession`, и без нонса эффект бы не ожил.
+  }, [gate, pair, savedSession, walletBootNonce]);
 
   // Автоблокировка при сворачивании приложения
   useEffect(() => {

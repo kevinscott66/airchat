@@ -51,7 +51,9 @@ describe('повод для правки жив', () => {
 
   it('отсутствие пароля по-прежнему открывает приложение без замка', () => {
     const a = APP();
-    const body = slice(a, 'const hasPwd = await authGuard.hasPassword();', 'setPasswordGateResolved(true);');
+    // v4.32.866: объявление уехало выше — ответ хранилища теперь берут под
+    // `try`, иначе его отказ вешал запуск на «Завершаем вход…» навсегда.
+    const body = slice(a, 'hasPwd = await authGuard.hasPassword();\n      } catch', 'setPasswordGateResolved(true);');
     expect(body).toContain('if (!hasPwd) {');
     expect(body).toContain('authGuard.unlockSession();');
     expect(body).toContain('setAppUnlocked(true);');
