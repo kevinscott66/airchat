@@ -390,8 +390,24 @@ function persistCallLog(profileId: number, entries = callLog): Promise<boolean> 
  * v4.32.277: кнопка «Очистить» в истории звонков писала `[]` в глобальный
  * legacy-ключ — не в тот, откуда журнал читается, и не в память сервиса.
  * Список на экране пустел, а после перезапуска приложения возвращался целиком.
+ *
+ * v4.32.800: ровно та же ложь возвращалась через провалившееся удаление.
+ * `kvDelete` гасит ошибку по замыслу (уборка мусора не должна валить
+ * вызывающего), сверху стоял ещё и пустой `catch`, а наружу шёл `void` — то
+ * есть занятая база означала «список пуст на экране, журнал цел на диске», и
+ * узнавал об этом человек только при следующем запуске. Для метаданных
+ * переписки — кому звонил, когда и чем кончилось — цена такого молчания
+ * несоразмерна: человек уверен, что стёр их, и на этом строит остальное.
+ *
+ * Теперь удаление отвечает за себя: проверяемый `kvDeleteChecked`, тот же
+ * повтор, что у записи (причина отказа одна — занятая база), а на окончательный
+ * провал журнал возвращается в память и на экран. Показывать уцелевшее
+ * неприятно, но честно; ответ уходит наверх, чтобы экран сказал словами.
+ *
+ * @returns `true`, если журнал действительно стёрт.
  */
-export async function clearCallLog(): Promise<void> {
+export async function clearCallLog(): Promise<boolean> {
+  const previous = callLog;
   callLog = [];
   emitCallLog();
   // v4.32.658: удаляем журнал того профиля, которому он принадлежит, а не того,
@@ -402,16 +418,42 @@ export async function clearCallLog(): Promise<void> {
   // владелец неизвестен — журнала в памяти всё равно нет, и трогать хранилище
   // нельзя.
   const pid = callProfileId;
-  if (pid === null) return;
-  await enqueueCallLogPersistence(pid, async () => {
-    try {
-      const { kvDelete } = await import('../storage/local');
-      await kvDelete(callLogKey(pid));
-      // И legacy-ключ: иначе следующий loadCallLog поднимет старый журнал как
-      // «миграцию» и очистка отменится сама собой.
-      await kvDelete(LEGACY_CALL_LOG_KEY);
-    } catch { /* ignore */ }
+  // Служба не поднята — журнал не читался, в памяти его нет, и стирать с экрана
+  // нечего: человеку не показали ничего, что пережило бы это нажатие.
+  if (pid === null) return true;
+  const ok = await enqueueCallLogPersistence(pid, async () => {
+    const { kvDeleteChecked } = await import('../storage/local');
+    // И legacy-ключ: иначе следующий loadCallLog поднимет старый журнал как
+    // «миграцию» и очистка отменится сама собой.
+    const wipe = async (): Promise<void> => {
+      await kvDeleteChecked(callLogKey(pid));
+      await kvDeleteChecked(LEGACY_CALL_LOG_KEY);
+    };
+    let last: unknown = null;
+    for (let attempt = 0; attempt <= READ_RETRY_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, readRetryDelayMs(attempt)); });
+      }
+      try {
+        await wipe();
+        return true;
+      } catch (e) {
+        last = e;
+      }
+    }
+    log.warn('call_log_clear_failed', {
+      pid,
+      err: last instanceof Error ? last.message : String(last),
+    });
+    return false;
   });
+  if (!ok) {
+    // Вернуть журнал на экран. За время попыток мог лечь новый звонок — он
+    // остаётся, порядок тот же, что у записи: свежие сверху.
+    callLog = [...callLog, ...previous].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_LOG);
+    emitCallLog();
+  }
+  return ok;
 }
 
 /**

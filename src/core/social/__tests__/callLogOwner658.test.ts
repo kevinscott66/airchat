@@ -35,11 +35,15 @@ const mockGetActiveProfile = jest.fn(() => ({ id: mockActivePid.current }));
 const mockKvGetSecret = jest.fn(async (_key: string): Promise<string | null> => null);
 const mockKvSetSecret = jest.fn(async (_key: string, _value: string): Promise<boolean> => true);
 const mockKvDelete = jest.fn(async (_key: string): Promise<void> => undefined);
+// v4.32.800: очистка перешла на проверяемое удаление — молчащий kvDelete
+// оставлял журнал на диске при занятой базе, а экран отчитывался об успехе.
+const mockKvDeleteChecked = jest.fn(async (_key: string): Promise<void> => undefined);
 
 jest.mock('../../storage/local', () => ({
   kvGetSecret: (key: string) => mockKvGetSecret(key),
   kvSetSecret: (key: string, value: string) => mockKvSetSecret(key, value),
   kvDelete: (key: string) => mockKvDelete(key),
+  kvDeleteChecked: (key: string) => mockKvDeleteChecked(key),
 }));
 
 jest.mock('../../identity/profileManager', () => ({
@@ -102,6 +106,7 @@ describe('владелец журнала звонков — тот, под ке
     mockKvGetSecret.mockClear();
     mockKvSetSecret.mockClear();
     mockKvDelete.mockClear();
+    mockKvDeleteChecked.mockClear();
   });
 
   afterEach(async () => {
@@ -133,13 +138,13 @@ describe('владелец журнала звонков — тот, под ке
 
   it('«Очистить» стирает журнал владельца, даже если аккаунт уже переключили', async () => {
     await initCallService(me.pair, OWNER_PID);
-    mockKvDelete.mockClear();
+    mockKvDeleteChecked.mockClear();
     // Человек переключился на другой аккаунт уже после запуска службы.
     mockActivePid.current = OTHER_PID;
 
-    await clearCallLog();
+    expect(await clearCallLog()).toBe(true);
 
-    const deleted = keysOf(mockKvDelete);
+    const deleted = keysOf(mockKvDeleteChecked);
     // ПРОВЕРКА НЕ ПУСТАЯ: очистка дошла до хранилища.
     expect(deleted.length).toBeGreaterThan(0);
     expect(deleted).toContain(OWNER_KEY);
@@ -149,7 +154,7 @@ describe('владелец журнала звонков — тот, под ке
 
   it('без поднятой службы очистка не трогает чужое хранилище', async () => {
     await clearCallLog();
-    expect(mockKvDelete).not.toHaveBeenCalled();
+    expect(mockKvDeleteChecked).not.toHaveBeenCalled();
   });
 
   it('ни чтение, ни очистка не спрашивают активный профиль', async () => {

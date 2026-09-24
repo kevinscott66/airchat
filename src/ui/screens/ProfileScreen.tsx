@@ -925,7 +925,14 @@ function ProfileScreenImpl({
                 <Text style={{ fontSize: scaleFont(17), fontWeight: '700', color: colors.text, flex: 1 }}>История звонков</Text>
                 {callLogEntries.length > 0 ? (
                   <AppPressable hitSlop={8} onPress={() => {
-                    void clearCallLog().then(() => setCallLogEntries([]));
+                    // v4.32.800: пустой список ставим только если журнал
+                    // действительно стёрт. Иначе служба вернула его в память и
+                    // на экран — а человеку надо сказать словами, иначе он
+                    // уйдёт уверенным, что метаданные звонков удалены.
+                    void clearCallLog().then((ok) => {
+                      if (ok) setCallLogEntries([]);
+                      else Alert.alert('История звонков', 'Не удалось очистить: хранилище занято. Попробуйте ещё раз.');
+                    });
                   }} style={{ marginRight: 12 }}>
                     <Text style={{ color: colors.error, fontSize: scaleFont(13) }}>Очистить</Text>
                   </AppPressable>
