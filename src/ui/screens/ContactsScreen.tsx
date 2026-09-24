@@ -40,7 +40,8 @@ import { log } from '../../core/logger';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
-import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID } from '../clipboardText';
+import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID, COPY_FAILED } from '../clipboardText';
+import { runGuardedOp } from '../components/runGuardedOp';
 import { CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
 
 type Props = {
@@ -650,7 +651,13 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             // разборщик, и человек отправлял его собеседнику как свой адрес.
             const did = didFromPubB64(c.peerPublicKey);
             if (!did) { showError(CONTACT_KEY_BROKEN_TEXT); return; }
-            void Clipboard.setStringAsync(did).then(() => showSuccess(COPIED_ID));
+            // v4.32.837: подтверждение стояло в `.then` без `.catch` — отказ
+            // буфера уходил в неперехваченное отклонение, и человек не узнавал
+            // ни об успехе, ни о промахе.
+            runGuardedOp(async () => {
+              await Clipboard.setStringAsync(did);
+              showSuccess(COPIED_ID);
+            }, COPY_FAILED, 'ui_contacts_copy_id_failed');
           },
         },
         {

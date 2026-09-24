@@ -55,7 +55,7 @@ import { SafeScreen } from '../components/SafeScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WallpaperBackground } from '../components/WallpaperBackground';
 import { defaultWallpaper, feedGround } from '../wallpapers';
-import { showSuccess } from '../components/userFeedback';
+import { showError, showSuccess } from '../components/userFeedback';
 import { accentOnFill, avatarShape, BRAND_X, font, glass, inkOn, primaryInk, QR_CODE, radius, scrim, spacing, TOUCH_TARGET_MIN, withAlpha, type AppColors } from '../theme';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
@@ -66,7 +66,8 @@ import { shortIdentity } from '../identity/shortId';
 import { findEntities } from '../../core/text/entities';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
 import { userErrorText } from '../components/userErrorText';
-import { COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
+import { COPY_LINK_ACTION, COPIED_LINK, COPY_FAILED } from '../clipboardText';
+import { runGuardedOp } from '../components/runGuardedOp';
 import { buildContactLink } from '../../core/net/appLink';
 
 /**
@@ -385,8 +386,16 @@ function ProfileScreenImpl({
    * самый, так что «Новый контакт» принимает обе записи (см. parseContactId).
    */
   const copyDid = async (): Promise<void> => {
-    await Clipboard.setStringAsync(buildContactLink(did).web);
-    showSuccess(COPIED_LINK);
+    // v4.32.837: отказ буфера больше не пропадает. `useAsyncButton`, через
+    // который эта кнопка нажимается, ловит отказ в `console.warn` — то есть
+    // в никуда: подтверждение стоит после `await` и не показывалось, но и
+    // «не скопировано» человек не слышал. Образец — `UserProfilePeek`.
+    try {
+      await Clipboard.setStringAsync(buildContactLink(did).web);
+      showSuccess(COPIED_LINK);
+    } catch {
+      showError(COPY_FAILED);
+    }
   };
 
   const pickAvatar = async (): Promise<void> => {
@@ -804,7 +813,10 @@ function ProfileScreenImpl({
               <AppPressable
                 style={styles.btn}
                 onPress={() => {
-                  void Clipboard.setStringAsync(buildContactLink(did).web).then(() => showSuccess(COPIED_LINK));
+                  runGuardedOp(async () => {
+                    await Clipboard.setStringAsync(buildContactLink(did).web);
+                    showSuccess(COPIED_LINK);
+                  }, COPY_FAILED, 'ui_profile_copy_link_failed');
                 }}
               >
                 <Text style={styles.btnText}>{COPY_LINK_ACTION}</Text>

@@ -30,7 +30,7 @@ import * as Clipboard from 'expo-clipboard';
 import { AppPressable } from '../../AppPressable';
 import { SheetShell } from '../../SheetShell';
 import { showError, showSuccess } from '../../userFeedback';
-import { COPIED_TEXT, COPY_ACTION } from '../../../clipboardText';
+import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../../../clipboardText';
 import { openExternal } from '../../../utils/openExternal';
 import { useColors } from '../../../ThemeContext';
 import { font, glass, radius, spacing, withAlpha } from '../../../theme';
@@ -173,7 +173,10 @@ export function LinkProofSheet({
       await Clipboard.setStringAsync(statement);
       showSuccess(COPIED_TEXT);
     } catch {
-      showError('Не удалось скопировать');
+      // v4.32.837: текст из общего словаря. Тот же самый, но свой литерал
+      // разъезжается с ним при первой же правке — ровно то, ради чего
+      // clipboardText и заведён.
+      showError(COPY_FAILED);
     }
   }, [statement]);
 

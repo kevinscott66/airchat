@@ -178,6 +178,7 @@
     "menuCopyText": "Копировать текст",
     "menuCopyLink": "Копировать ссылку",
     "menuCopied": "Скопировано",
+    "menuCopyFailed": "Не удалось скопировать",
     "menuHideTranslation": "Скрыть перевод",
     "menuTranslate": "Перевести",
     "menuShowAuthor": "Показывать публикации",

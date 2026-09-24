@@ -95,6 +95,10 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
 import { GlassSurface } from '../components/GlassSurface';
 import { showError, showSuccess } from '../components/userFeedback';
+// v4.32.837: общий `runGuardedOp` вместо своей копии. Их было две с
+// v4.32.546 — одинаковых, кроме метки для журнала, которой у местной не
+// было: отказ в ленте не оставлял следа нигде.
+import { runGuardedOp } from '../components/runGuardedOp';
 import { buildPostLink } from '../../core/net/appLink';
 import { usePostLinkSharing } from '../hooks/usePostLinkSharing';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
@@ -840,26 +844,6 @@ function applyIfRead(
     if (shouldApplyRows(rows)) set([...rows]);
     else log.warn('ui_feed_list_read_failed', { where });
   };
-}
-
-/**
- * Запустить операцию с базой так, чтобы отказ дошёл до человека.
- *
- * v4.32.534: пункты меню публикации висели в коде как `void doSomething(...)`
- * без `.catch` — скрыть автора, отключить уведомления, удалить запись. Функции
- * хранилища бросают: занятая база, сорванная транзакция, пропавший профиль.
- * Отказ уходил в неперехваченное отклонение обещания: список не менялся,
- * ошибка не показывалась, и пункт меню выглядел как иногда не срабатывающий.
- * Тот же вход, что у списка групп (v4.32.531), — один на все действия ленты.
- */
-function runGuardedOp(op: () => Promise<unknown>, fallback: string): void {
-  void (async () => {
-    try {
-      await op();
-    } catch (e) {
-      showError(userErrorText(e, fallback));
-    }
-  })();
 }
 
 /**
@@ -4481,7 +4465,17 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                 </Text>
                 <ScrollView style={{ maxHeight: 440 }}>
                   {row('happy-outline', t('feed.menuReaction'), () => setReactionTarget(p.id))}
-                  {hasText ? row('copy-outline', t('feed.menuCopyText'), () => { void Clipboard.setStringAsync(p.text ?? '').then(() => showSuccess(t('feed.menuCopied'))); }) : null}
+                  {hasText ? row('copy-outline', t('feed.menuCopyText'), () => {
+                    // v4.32.837: подтверждение стояло в `.then` без `.catch`.
+                    // Системе есть чем отказать (на Android запись в буфер
+                    // приложению не в фокусе запрещена), и тогда отказ уходил
+                    // в неперехваченное отклонение: «Скопировано» человек не
+                    // видел, но и «не скопировано» — тоже.
+                    runGuardedOp(async () => {
+                      await Clipboard.setStringAsync(p.text ?? '');
+                      showSuccess(t('feed.menuCopied'));
+                    }, t('feed.menuCopyFailed'), 'ui_feed_copy_text_failed');
+                  }) : null}
                   {/* v4.32.606: ссылка на публикацию. Раньше её нельзя было
                       получить нигде: «поделиться» отдавало отрывок текста, и
                       вернуться к самой записи было не по чему. */}

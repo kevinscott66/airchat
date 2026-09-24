@@ -25,8 +25,9 @@ import { BrandedQr } from './BrandedQr';
 import { font, radius } from '../theme';
 import { useThemedStyles } from '../ThemeContext';
 import { showConfirm, showError, showSuccess } from './userFeedback';
-import { userErrorText } from './userErrorText';
-import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
+import { rawErrorText, userErrorText } from './userErrorText';
+import { log } from '../../core/logger';
+import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../clipboardText';
 import { loadConfig } from '../../core/config';
 import { DEFAULT_RELAY_BASE } from '../../core/transport/internet/relayConfig';
 import {
@@ -134,7 +135,17 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
 
   const copyKey = useCallback(async () => {
     if (!accessKey) return;
-    await Clipboard.setStringAsync(accessKey);
+    // v4.32.837: отказ буфера больше не пропадает. Зовут отсюда `void
+    // copyKey()` без `.catch`, и отказ уходил в неперехваченное отклонение:
+    // человек соглашался на предупреждение, ничего не происходило, и он шёл
+    // вставлять агенту то, что лежало в буфере до этого.
+    try {
+      await Clipboard.setStringAsync(accessKey);
+    } catch (e) {
+      log.warn('agent_bridge_key_copy_failed', { err: rawErrorText(e) });
+      showError(COPY_FAILED);
+      return;
+    }
     // Текст подтверждения — из общего словаря (ui/clipboardText): у копирования
     // в приложении одно слово на всех, и заводить здесь своё значит разойтись.
     showSuccess(COPIED_TEXT);

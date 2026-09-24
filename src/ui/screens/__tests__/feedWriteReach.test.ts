@@ -126,7 +126,11 @@ describe('правка уходит ровно в том виде, в каком
 
 describe('действия над публикацией идут через один вход', () => {
   it('вход объявлен и снабжён запасным текстом', () => {
-    expect(SCREEN).toContain('function runGuardedOp(op: () => Promise<unknown>, fallback: string): void');
+    // v4.32.837: своя копия `runGuardedOp` из экрана убрана — теперь берётся
+    // общая. Копий было две с v4.32.546, и отличались они только меткой для
+    // журнала, которой у местной не было.
+    expect(SCREEN).toContain("import { runGuardedOp } from '../components/runGuardedOp';");
+    expect(SCREEN).not.toContain('function runGuardedOp(');
     expect(SCREEN).toContain('const runFeedOp = useCallback((op: () => Promise<unknown>, fallback: string): void =>');
     expect(SCREEN).toContain('showError(userErrorText(e, fallback));');
   });
