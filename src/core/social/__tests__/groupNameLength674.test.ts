@@ -86,7 +86,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 
   it('получатель заводит группу именно этим названием', () => {
-    expect(MESSAGING).toMatch(/createGroup\(env\.groupId, pid, env\.groupName,/);
+    // v4.32.816: тот же env.groupName, но уже одной записью вместе с составом.
+    expect(MESSAGING).toMatch(/id: env\.groupId, ownerProfileId: pid, name: env\.groupName,/);
   });
 
   it('имя человека мерится своим, коротким числом', () => {

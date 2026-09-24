@@ -30,7 +30,7 @@ import {
   deleteGroupMessageChecked,
   markGroupMessageSeenChecked,
   insertGroupJoinRequest,
-  createGroup,
+  createGroupWithRoster,
   upsertGroupMember,
   updateGroupMemberRole,
   removeGroupMember,
@@ -43,6 +43,7 @@ import {
   type GroupMessageRow,
   type GroupMessageWrite,
   type MemberRole,
+  type GroupMemberRow,
 } from '../storage/local';
 import { type GroupRecipient } from './groupRecipient';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
@@ -1562,19 +1563,41 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     // распоряжается (см. ownerPub в кодеке).
     const inviteRole = (pub: string, fallback: 'admin' | 'member'): MemberRole =>
       env.ownerPub && pub === env.ownerPub ? 'owner' : fallback;
-    // isAdmin=false — приглашённый не администратор (см. createGroup).
-    await createGroup(env.groupId, pid, env.groupName, env.groupType ?? 'group', undefined, false);
+    /**
+     * v4.32.816: группа и её состав ложатся одной записью.
+     *
+     * Раньше здесь шла россыпь: createGroup, следом upsertGroupMember на
+     * каждого. Обе функции о своём отказе сообщают исключением, и занятая база
+     * на любом участнике уносила разбор, оставив группу заведённой, а состав
+     * недоложенным — навсегда: повтор этого же конверта упирается в
+     * `if (group) return 'consumed'` двумя десятками строк выше. Первым в
+     * списке идёт пригласивший, по роли которого мы решаем, принимать ли от
+     * него управление группой; без его строки группа остаётся без хозяина.
+     */
     // Пригласивший — администратор: именно его ctl-конверты мы будем принимать.
     // v4.32.371: `|| null`, а не `?? null`. Разбор конверта отдаёт пустую
     // строку там, где имя ничего не рисует, и через `??` она доезжала до
     // списка участников как полноценное имя — участник без подписи, которого
     // не отличить от соседнего такого же.
-    await upsertGroupMember({ groupId: env.groupId, peerPubB64: senderPubB64, role: inviteRole(senderPubB64, 'admin'), displayName: env.actorName || null, joinedAt: env.ts, ownerProfileId: pid });
+    const roster: GroupMemberRow[] = [
+      { groupId: env.groupId, peerPubB64: senderPubB64, role: inviteRole(senderPubB64, 'admin'), displayName: env.actorName || null, joinedAt: env.ts, ownerProfileId: pid },
+    ];
     for (const m of env.members) {
       if (m.pub === senderPubB64 || m.pub === myPub) continue;
-      await upsertGroupMember({ groupId: env.groupId, peerPubB64: m.pub, role: inviteRole(m.pub, 'member'), displayName: m.name || null, joinedAt: env.ts, ownerProfileId: pid });
+      roster.push({ groupId: env.groupId, peerPubB64: m.pub, role: inviteRole(m.pub, 'member'), displayName: m.name || null, joinedAt: env.ts, ownerProfileId: pid });
     }
-    if (myPub) await upsertGroupMember({ groupId: env.groupId, peerPubB64: myPub, role: inviteRole(myPub, 'member'), displayName: myName, joinedAt: env.ts, ownerProfileId: pid });
+    if (myPub) roster.push({ groupId: env.groupId, peerPubB64: myPub, role: inviteRole(myPub, 'member'), displayName: myName, joinedAt: env.ts, ownerProfileId: pid });
+    // isAdmin=false — приглашённый не администратор (см. createGroup).
+    if (!(await createGroupWithRoster(
+      { id: env.groupId, ownerProfileId: pid, name: env.groupName, type: env.groupType ?? 'group', isAdmin: false },
+      roster
+    ))) {
+      log.warn('group_ctl_invite_roster_failed', {
+        gid: env.groupId.slice(0, 8),
+        members: roster.length,
+      });
+      return 'deferred';
+    }
     // v4.32.267: считаем по только что записанным строкам, а не по env.members:
     // приглашение от создателя группы список себя не содержит, приглашение
     // одобренному заявителю — содержит (там снимок group_members админа

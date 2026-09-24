@@ -70,6 +70,17 @@ jest.mock('../../storage/local', () => ({
   profileKvGet: jest.fn(async () => null),
   kvDeleteScoped: jest.fn(async () => {}),
   createGroup: jest.fn(async (...a: unknown[]) => { mockCreated.push(a); }),
+  // v4.32.816: группа и её состав теперь ложатся одной записью. Подмена
+  // наполняет те же ручки, что и прежняя пара вызовов: первый аргумент —
+  // заведение группы, второй — состав целиком.
+  createGroupWithRoster: jest.fn(async (
+    g: { id: string; ownerProfileId: number; name: string; type?: string; isAdmin?: boolean },
+    members: Array<{ peerPubB64: string; role: string }>,
+  ) => {
+    mockCreated.push([g.id, g.ownerProfileId, g.name, g.type, undefined, g.isAdmin]);
+    for (const m of members) mockUpserts.push(m);
+    return true;
+  }),
   upsertGroupMember: jest.fn(async (m: { peerPubB64: string; role: string }) => { mockUpserts.push(m); }),
   updateGroupMemberRole: jest.fn(async () => {}),
   removeGroupMember: jest.fn(async () => {}),

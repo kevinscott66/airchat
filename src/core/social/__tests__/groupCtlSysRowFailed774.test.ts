@@ -85,6 +85,28 @@ jest.mock('../../storage/local', () => ({
       anonymousPosting: false, slowModeSeconds: 0,
     });
   }),
+  // v4.32.816: приглашение кладёт группу и состав одной записью. Подмена
+  // оставляет тот же след, что и прежняя россыпь вызовов, — порядок отметок
+  // в mockApplied не меняется.
+  createGroupWithRoster: jest.fn(async (
+    g: { id: string; ownerProfileId: number; name: string },
+    members: Array<{ groupId: string; peerPubB64: string; role: string; ownerProfileId: number }>,
+  ) => {
+    mockApplied.push(`createGroup:${g.name}`);
+    mockGroups.push({
+      id: g.id, ownerProfileId: g.ownerProfileId, name: g.name, type: 'group', archived: false, isAdmin: false,
+      adminOnlyPosting: false, adminOnlyPinning: false, requireApproval: false,
+      anonymousPosting: false, slowModeSeconds: 0,
+    });
+    for (const row of members) {
+      mockApplied.push(`upsert:${row.peerPubB64.slice(0, 1)}:${row.role}`);
+      const list = mockMembers[row.groupId] ?? (mockMembers[row.groupId] = []);
+      const found = list.find((m) => m.peerPubB64 === row.peerPubB64);
+      if (found) found.role = row.role;
+      else list.push({ peerPubB64: row.peerPubB64, role: row.role, ownerProfileId: row.ownerProfileId });
+    }
+    return true;
+  }),
   upsertGroupMember: jest.fn(async (row: { groupId: string; peerPubB64: string; role: string; ownerProfileId: number }) => {
     mockApplied.push(`upsert:${row.peerPubB64.slice(0, 1)}:${row.role}`);
     const list = mockMembers[row.groupId] ?? (mockMembers[row.groupId] = []);
@@ -389,7 +411,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const at = GRP.indexOf("if (env.op === 'invite') {");
     expect(at).toBeGreaterThan(0);
     const branch = GRP.slice(at, GRP.indexOf('group_ctl_invite_applied', at));
-    expect(branch.indexOf('insertCtlSysMessage(')).toBeLessThan(branch.indexOf('await createGroup('));
+    // v4.32.816: заведение и состав идут одной записью — её имя и проверяем.
+    expect(branch.indexOf('insertCtlSysMessage(')).toBeLessThan(branch.indexOf('createGroupWithRoster('));
   });
 
   it('вступление и выход: строка пишется до сдвига знака', () => {

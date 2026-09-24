@@ -68,6 +68,8 @@ jest.mock('../../storage/local', () => ({
   profileKvGet: jest.fn(async () => null),
   kvDeleteScoped: jest.fn(async () => {}),
   createGroup: jest.fn(async (id: string) => { mockCreated.push(id); }),
+  // v4.32.816: группа и состав ложатся одной записью — отметка та же.
+  createGroupWithRoster: jest.fn(async (g: { id: string }) => { mockCreated.push(g.id); return true; }),
   upsertGroupMember: jest.fn(async () => {}),
   updateGroupMemberRole: jest.fn(async () => {}),
   removeGroupMember: jest.fn(async () => {}),

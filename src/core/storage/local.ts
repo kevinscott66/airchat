@@ -6732,11 +6732,38 @@ export async function createGroup(
    * кого это право есть.
    */
   const inviteToken = isAdmin ? makeInviteToken(randomBytes) : null;
+  await insertGroupRow(d, dek, { id, ownerProfileId, name, type, description, isAdmin, inviteToken });
+}
+
+/** Поля строки группы, уже собранные вызывающим. */
+type GroupInsert = {
+  id: string;
+  ownerProfileId: number;
+  name: string;
+  type: GroupType;
+  description?: string;
+  isAdmin: boolean;
+  inviteToken: string | null;
+};
+
+/**
+ * Сама вставка строки группы, без ключа и без транзакции.
+ *
+ * Отдельным именем, потому что тех же байтов просит `createGroupWithRoster`:
+ * там она идёт под общим BEGIN IMMEDIATE вместе с составом, и повторять SQL
+ * во второй раз значило бы завести вторую правду о том, что такое группа.
+ */
+async function insertGroupRow(
+  d: SQLite.SQLiteDatabase,
+  dek: Uint8Array,
+  g: GroupInsert
+): Promise<void> {
   await d.runAsync(
     `INSERT OR IGNORE INTO groups (id, owner_profile_id, name, type, description, is_admin, invite_token, created_at, last_message_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, ownerProfileId, encryptAtRestString(name, dek), type, encryptAtRestNullable(description ?? null, dek),
-     isAdmin ? 1 : 0, encryptAtRestNullable(inviteToken, dek), Date.now(), Date.now()]
+    [g.id, g.ownerProfileId, encryptAtRestString(g.name, dek), g.type,
+     encryptAtRestNullable(g.description ?? null, dek),
+     g.isAdmin ? 1 : 0, encryptAtRestNullable(g.inviteToken, dek), Date.now(), Date.now()]
   );
 }
 
@@ -7123,12 +7150,24 @@ export async function upsertGroupMember(member: GroupMemberRow): Promise<void> {
   // здесь лежал тот же состав, целиком и независимо от того, писал человек
   // хоть раз.
   const dek = await getOrCreateDataEncryptionKey();
-  // v4.32.382: INSERT OR REPLACE переписывал строку целиком, а joined_at сюда
-  // приходит из конверта — из того же ts, что и у события. Значит, каждый бан,
-  // разбан и смена роли ставили участнику НОВУЮ дату вступления: после первой
-  // же выдачи прав человек становился самым молодым в группе. Дата вступления
-  // задаётся один раз, при вступлении, и обновлению не подлежит — поэтому
-  // здесь ON CONFLICT, обновляющий только роль и имя.
+  await upsertMemberRow(d, dek, member);
+}
+
+/**
+ * Сама вставка участника, без ключа и без транзакции (см. `insertGroupRow`).
+ *
+ * v4.32.382: INSERT OR REPLACE переписывал строку целиком, а joined_at сюда
+ * приходит из конверта — из того же ts, что и у события. Значит, каждый бан,
+ * разбан и смена роли ставили участнику НОВУЮ дату вступления: после первой
+ * же выдачи прав человек становился самым молодым в группе. Дата вступления
+ * задаётся один раз, при вступлении, и обновлению не подлежит — поэтому
+ * здесь ON CONFLICT, обновляющий только роль и имя.
+ */
+async function upsertMemberRow(
+  d: SQLite.SQLiteDatabase,
+  dek: Uint8Array,
+  member: GroupMemberRow
+): Promise<void> {
   await d.runAsync(
     `INSERT INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -7147,6 +7186,77 @@ export async function upsertGroupMember(member: GroupMemberRow): Promise<void> {
       member.ownerProfileId,
     ]
   );
+}
+
+/**
+ * Завести группу вместе с её составом — целиком или никак (v4.32.816).
+ *
+ * Дефект. Приглашение раскладывалось россыпью: `createGroup`, следом
+ * `upsertGroupMember` на каждого участника. Обе функции отвечают `void` и о
+ * своём отказе сообщают исключением — то есть занятая база на третьем
+ * участнике уносила разбор конверта, оставив группу заведённой, а состав
+ * недоложенным. Починить это повтором нельзя: тот же конверт, поданный
+ * заново, упирается в `if (group) return 'consumed'` — группа-то уже есть.
+ *
+ * Цена. Состав замирал в том виде, в каком его застал сбой, и другого случая
+ * его сложить не представлялось: приглашение приходит один раз. Хуже всего,
+ * когда не доложен первый же участник — пригласивший: именно по его роли
+ * `admin` мы решаем, принимать ли от него управляющие конверты. Человек
+ * оказывался в группе, где никто ничем не распоряжается: ни переименование,
+ * ни бан, ни исключение до него больше не доходят.
+ *
+ * Правка. Одна транзакция на строку группы и весь состав: либо легло всё,
+ * либо ROLLBACK и не легло ничего — и тогда конверт откладывается, а повтор
+ * начинает с чистого места. Ключ данных берётся ДО BEGIN IMMEDIATE: обращение
+ * к хранилищу ключей внутри транзакции держало бы write-lock (та же причина,
+ * что в `touchConversation`).
+ */
+export async function createGroupWithRoster(
+  group: {
+    id: string;
+    ownerProfileId: number;
+    name: string;
+    type?: GroupType;
+    description?: string;
+    isAdmin?: boolean;
+  },
+  members: GroupMemberRow[]
+): Promise<boolean> {
+  try {
+    const d = await db();
+    const dek = await getOrCreateDataEncryptionKey();
+    const isAdmin = group.isAdmin ?? true;
+    const inviteToken = isAdmin ? makeInviteToken(randomBytes) : null;
+    const txn = await beginImmediate(d);
+    try {
+      await insertGroupRow(d, dek, {
+        id: group.id,
+        ownerProfileId: group.ownerProfileId,
+        name: group.name,
+        type: group.type ?? 'group',
+        description: group.description,
+        isAdmin,
+        inviteToken,
+      });
+      for (const m of members) await upsertMemberRow(d, dek, m);
+      await txn.commit();
+      return true;
+    } catch (e) {
+      try {
+        await txn.rollback();
+      } catch {
+        /* откат не удался — фиксации всё равно не было */
+      }
+      throw e;
+    }
+  } catch (e) {
+    log.warn('create_group_with_roster_failed', {
+      groupId: group.id.slice(0, 8),
+      members: members.length,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
 }
 
 /**
