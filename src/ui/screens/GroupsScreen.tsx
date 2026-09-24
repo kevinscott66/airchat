@@ -126,6 +126,7 @@ import { isDocMessage, makeDocText } from '../../core/social/docEnvelope';
 import { isLocationMessage, parseLocationMeta, makeLocationText } from '../../core/social/locationEnvelope';
 import { reverseGeocodeLabel } from '../../core/social/geocode';
 import { makeViewOnceText } from './chat-utils/viewOnce';
+import { runJump } from './chat-utils/jumpToMessage';
 import { ForwardModal } from '../components/modals/chat/ChatForwardModal';
 import { ScheduleModal } from '../components/modals/chat/ChatScheduleModal';
 import { WallpaperPickerModal } from '../components/modals/chat/ChatWallpaperPickerModal';
@@ -2968,44 +2969,73 @@ function GroupChatScreen({
     return map;
   }, [messages]);
 
-  const scrollToReply = useCallback((replyToId: string) => {
-    const list = displayGroupMessages;
-    const idx = list.findIndex((it) => {
+  // v4.32.877: переход догружает страницы сам, поэтому и список, и догрузка,
+  // и «есть ещё история» держатся в ссылках: зовут переход из строк ленты, и
+  // менять его личность на каждое новое сообщение незачем.
+  const displayGroupMessagesRef = useRef(displayGroupMessages);
+  displayGroupMessagesRef.current = displayGroupMessages;
+  const grpHasMoreRef = useRef(hasMore);
+  grpHasMoreRef.current = hasMore;
+  const grpLoadMoreRef = useRef(loadMore);
+  grpLoadMoreRef.current = loadMore;
+
+  const indexOfGrpMessage = useCallback((id: string): number => (
+    displayGroupMessagesRef.current.findIndex((it) => {
       const t = (it as GrpDateSepItem).type;
       if (t === 'date_sep' || t === 'unread_sep') return false;
-      return (it as GroupMessageRow).id === replyToId;
+      return (it as GroupMessageRow).id === id;
+    })
+  ), []);
+
+  /**
+   * Переход к сообщению: цитата в ответе, плашка закрепа, список закреплённых.
+   *
+   * v4.32.877: здесь стояло `if (idx < 0) return;` — и нажатие не делало
+   * ничего. Группа открывается последней страницей в PAGE_SIZE сообщений, а
+   * закреплённое читается по всей истории, то есть почти всегда старше окна.
+   * Теперь недостающие страницы догружаются тем же путём, что и при прокрутке,
+   * а если сообщения нет вовсе или до него слишком далеко — об этом говорят.
+   */
+  const scrollToReply = useCallback((replyToId: string) => {
+    void runJump({
+      found: () => indexOfGrpMessage(replyToId) >= 0,
+      hasMore: () => grpHasMoreRef.current,
+      loadOlder: () => grpLoadMoreRef.current(),
+      settle: () => new Promise<void>((r) => setTimeout(r, 0)),
+      alive: () => isMountedRef.current,
+      fail: (text) => showError(text),
+      scroll: () => {
+        try {
+          groupFlashRef.current?.scrollToIndex({ index: indexOfGrpMessage(replyToId), animated: true, viewPosition: 0.5 });
+          setJumpHighlightId(replyToId);
+          jumpHighlightAnim.setValue(1);
+          RNAnimated.timing(jumpHighlightAnim, {
+            toValue: 0,
+            duration: 1400,
+            delay: 300,
+            useNativeDriver: false,
+          }).start(() => setJumpHighlightId(null));
+        } catch { /* ignore */ }
+      },
     });
-    if (idx < 0) return;
-    try {
-      groupFlashRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-      setJumpHighlightId(replyToId);
-      jumpHighlightAnim.setValue(1);
-      RNAnimated.timing(jumpHighlightAnim, {
-        toValue: 0,
-        duration: 1400,
-        delay: 300,
-        useNativeDriver: false,
-      }).start(() => setJumpHighlightId(null));
-    } catch { /* ignore */ }
-  }, [displayGroupMessages, jumpHighlightAnim]);
+  }, [indexOfGrpMessage, jumpHighlightAnim]);
 
   /**
    * Переход к сообщению из ссылки (v4.32.606).
    *
-   * Один раз за открытие группы и только когда сообщение уже загружено: до
-   * этого scrollToReply не нашёл бы строки и промолчал бы, а ссылка выглядела
-   * бы сработавшей вхолостую. Задержка та же, что у перехода из поиска в
-   * переписке: список успевает разложиться до прокрутки.
+   * Один раз за открытие группы и не раньше первой страницы: до неё списка
+   * нет вовсе. Прежде здесь ждали само сообщение — scrollToReply не нашёл бы
+   * строки и промолчал бы, — но теперь переход догружает историю сам
+   * (v4.32.877). Задержка та же, что у перехода из поиска в переписке: список
+   * успевает разложиться до прокрутки.
    */
   const grpInitialJumpDoneRef = useRef(false);
   useEffect(() => {
     if (!initialJumpMsgId || grpInitialJumpDoneRef.current) return;
-    const found = displayGroupMessages.some((it) => {
-      const t = (it as GrpDateSepItem).type;
-      if (t === 'date_sep' || t === 'unread_sep') return false;
-      return (it as GroupMessageRow).id === initialJumpMsgId;
-    });
-    if (!found) return;
+    // v4.32.877: ждём только первую страницу — раньше здесь стояла проверка
+    // «сообщение уже загружено», и ссылка на старое сообщение открывала группу
+    // и замирала. Дальше переход догрузит историю сам.
+    if (displayGroupMessages.length === 0) return;
     grpInitialJumpDoneRef.current = true;
     const t = setTimeout(() => scrollToReply(initialJumpMsgId), 450);
     return () => clearTimeout(t);

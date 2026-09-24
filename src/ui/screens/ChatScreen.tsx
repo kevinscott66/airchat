@@ -165,6 +165,7 @@ type Props = {
 };
 
 import { PAGE, DM_SYS_PREFIX } from './chat-utils/constants';
+import { runJump } from './chat-utils/jumpToMessage';
 import { matchesSearch } from '../../core/social/searchableText';
 import { parseReactionMap } from '../../core/social/reactionMapPolicy';
 import { anchorStillPresent, clampHitIndex, hitIndexForAnchor, hitLabel, hitSetKey, stepHitIndex } from '../../core/social/searchCursor';
@@ -1685,6 +1686,14 @@ function ChatThreadView({
       if (isMountedRef.current) setLoadingMore(false);
     }
   }, [hasMore, sending, peerB64]);
+
+  // v4.32.877: переход к сообщению догружает страницы сам, а зовут его из
+  // обработчиков со стабильной ссылкой (цитата, закреп) — поэтому и «есть ещё
+  // история», и сама догрузка держатся в ссылках, а не в замыкании.
+  const hasMoreRef = useRef(hasMore);
+  hasMoreRef.current = hasMore;
+  const loadOlderRef = useRef(loadOlder);
+  loadOlderRef.current = loadOlder;
 
   /** Единственная точка записи черновика переписки (v4.32.583). */
   const writeDraft = useCallback((next: string | null) => {
@@ -3253,19 +3262,40 @@ function ChatThreadView({
   // and MessageRow's onReplyTap memo check fails for every row on each update.
   const displayMessagesRef = useRef(displayMessages);
   displayMessagesRef.current = displayMessages;
-  const scrollToReply = useCallback((replyToId: string) => {
-    const displayList = displayMessagesRef.current;
-    const idx = displayList.findIndex((item) => {
+  const indexOfMessage = useCallback((id: string): number => (
+    displayMessagesRef.current.findIndex((item) => {
       if ((item as DateSeparatorItem).type === 'date_sep') return false;
-      return (item as ChatMessageRow).id === replyToId;
+      return (item as ChatMessageRow).id === id;
+    })
+  ), []);
+
+  /**
+   * Переход к сообщению: цитата в ответе, плашка закрепа, список закреплённых.
+   *
+   * v4.32.877: здесь стояло `if (idx < 0) return;` — и нажатие не делало
+   * ничего. Переписка открывается последней страницей в PAGE сообщений, а
+   * закреп читается по всей истории (resolveDmPinned), то есть почти всегда
+   * старше окна: нажатие на плашку закрепа не работало практически всегда.
+   * Теперь недостающие страницы догружаются тем же путём, что и при прокрутке,
+   * а если сообщения нет вовсе или до него слишком далеко — об этом говорят.
+   */
+  const scrollToReply = useCallback((replyToId: string) => {
+    void runJump({
+      found: () => indexOfMessage(replyToId) >= 0,
+      hasMore: () => hasMoreRef.current,
+      loadOlder: () => loadOlderRef.current(),
+      settle: () => new Promise<void>((r) => setTimeout(r, 0)),
+      alive: () => isMountedRef.current,
+      fail: (text) => showError(text),
+      scroll: () => {
+        try {
+          flashListRef.current?.scrollToIndex({ index: indexOfMessage(replyToId), animated: true, viewPosition: 0.5 });
+          setJumpHighlightId(replyToId);
+          setTimeout(() => setJumpHighlightId(null), 1500);
+        } catch { /* ignore */ }
+      },
     });
-    if (idx < 0) return;
-    try {
-      flashListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-      setJumpHighlightId(replyToId);
-      setTimeout(() => setJumpHighlightId(null), 1500);
-    } catch { /* ignore */ }
-  }, []);
+  }, [indexOfMessage]);
 
   const jumpToPinned = useCallback((id: string, idx: number) => {
     scrollToReply(id);
@@ -3362,8 +3392,10 @@ function ChatThreadView({
   const initialJumpDoneRef = useRef(false);
   useEffect(() => {
     if (!initialJumpMsgId || initialJumpDoneRef.current || lines.length === 0) return;
-    const found = lines.some((m) => m.id === initialJumpMsgId);
-    if (!found) return;
+    // v4.32.877: здесь стояло `if (!found) return;` — переход из глобального
+    // поиска срабатывал только по сообщению из последней страницы, а найденное
+    // поиском по всей истории открывало переписку и замирало. Ждать нужно лишь
+    // первую страницу: дальше переход догрузит остальное сам.
     initialJumpDoneRef.current = true;
     const t = setTimeout(() => scrollToReply(initialJumpMsgId), 450);
     return () => clearTimeout(t);
