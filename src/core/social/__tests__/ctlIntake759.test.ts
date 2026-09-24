@@ -173,6 +173,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     ['COPY_GUARD_PREFIX', 'handleIncomingCopyGuard'],
     ['PRESENCE_PREF_PREFIX', 'handleIncomingLastSeenPref'],
     ['PROFILE_PREFIX', 'handleIncomingPeerProfile'],
+    // v4.32.798: просьба прислать профиль встала в тот же ряд, см. ниже.
+    ['PROFILE_REQ_PREFIX', 'handleIncomingProfileRequest'],
   ];
 
   it.each(HANDLERS)('%s: ответ обработчика — ответ ветки', (prefix, fn) => {
@@ -190,6 +192,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     ['copyGuardSync.ts', 'handleIncomingCopyGuard'],
     ['presencePrefSync.ts', 'handleIncomingLastSeenPref'],
     ['profileSync.ts', 'handleIncomingPeerProfile'],
+    ['profileSync.ts', 'handleIncomingProfileRequest'],
   ])('%s отвечает словом, а не булевым', (file, fn) => {
     const body = codeOnly(read('core/social', file));
     const at = body.indexOf(`export async function ${fn}(`);
@@ -201,12 +204,17 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(body.slice(at)).toContain("return 'deferred';");
   });
 
-  it('просьба прислать профиль отложению не подлежит — и остаётся булевой', () => {
-    // Отказ у неё один: слишком частые просьбы. Он окончательный по замыслу,
-    // повтор кадра его не изменит — откладывать нечего.
+  it('окно на пять минут не занимается ответом, которого не было', () => {
+    // v4.32.798. Здесь стояло обратное: «отказ у просьбы один — слишком частые
+    // просьбы, он окончательный, откладывать нечего». Отказ оказался не один.
+    // Отправка ответной карточки молчала обо всех своих осечках, и кадр уходил
+    // «разобранным» при занятом на пять минут окне — у собеседника всё это
+    // время пустая карточка, а переспросить ему нечем: своё окно он занял тоже.
     const body = codeOnly(read('core/social/profileSync.ts'));
     const at = body.indexOf('export async function handleIncomingProfileRequest(');
     expect(at).toBeGreaterThan(0);
-    expect(body.slice(at, at + 260)).toContain('): Promise<boolean> {');
+    const tail = body.slice(at);
+    expect(tail).toContain('reqAnsweredAt.delete(senderPubB64);');
+    expect(tail).toContain("if (outcome === 'failed') {");
   });
 });

@@ -405,15 +405,35 @@ export async function broadcastMyProfile(): Promise<void> {
 }
 
 /**
+ * Чем кончилась отправка профиля собеседнику.
+ *
+ * v4.32.798. Раньше кончалась она ничем: все три исхода — отправили, не нужно,
+ * не смогли — были одним и тем же `void`, и отличить их вызывающему было
+ * нечем. Для досылки при открытии переписки это ещё сходило (её зовут снова на
+ * каждое открытие), но ответ на просьбу прислать профиль зовут ровно один раз
+ * на конверт, и тишина в ответ там означала пустую карточку у собеседника.
+ *
+ * `skipped` — посылать нечего или незачем: профиль пуст, либо эта версия у
+ * собеседника уже есть. Повтор ничего не изменит. `failed` — не смогли сейчас:
+ * служба не поднята, дороги нет, отправку отклонили, запись сорвалась. Вот это
+ * стоит попробовать ещё раз.
+ */
+type ProfileSendOutcome = 'sent' | 'skipped' | 'failed';
+
+/**
  * Отправить профиль конкретному собеседнику.
  *
  * `force` — отправить, даже если эта версия ему уже уходила. Так отвечают на
  * просьбу прислать профиль: у просящего карточки нет, а карта отправленного
  * говорит, что есть, — и без `force` ответом на просьбу было бы молчание.
  */
-async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): Promise<void> {
+async function sendProfileTo(
+  pid: number,
+  peerPubB64: string,
+  force: boolean
+): Promise<ProfileSendOutcome> {
   const svc = getMessagingService();
-  if (!svc) return;
+  if (!svc) return 'failed';
   // v4.32.540: этот путь охватывает и тех, кого нет в контактах, — значит для
   // настройки «фото видят только контакты» он и есть та граница, за которую
   // фотография не уходит. Но собеседник МОЖЕТ быть в контактах: тогда фото ему
@@ -427,13 +447,15 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
       ? 'direct'
       : 'contacts';
   const built = await buildEnvelope(pid, audience, visibility);
-  if (!built) return;
+  // Профиль пуст — посылать нечего, и это не осечка: заполнит человек, уедет
+  // само (см. broadcastMyProfile).
+  if (!built) return 'skipped';
   const { version } = built;
   if (!force) {
     const sent = (await loadSent(pid)) ?? {};
-    if (sent[peerPubB64] === version) return;
+    if (sent[peerPubB64] === version) return 'skipped';
   }
-  if (!(await canReachPeer(peerPubB64))) return;
+  if (!(await canReachPeer(peerPubB64))) return 'failed';
   try {
     // v4.32.715: см. broadcastMyProfile — отказ не записывается как доставка.
     // Здесь цена ошибки та же: карта скажет «эту версию он видел», и досылка
@@ -441,14 +463,16 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
     const cid = await svc.sendMessage(peerPubB64, encodeProfileEnvelope(built.env));
     if (!cid) {
       log.info('profile_sync_refused', { to: peerPubB64.slice(0, 12) });
-      return;
+      return 'failed';
     }
     await recordSent(pid, { [peerPubB64]: version });
+    return 'sent';
   } catch (e) {
     log.debug('profile_sync_failed', {
       to: peerPubB64.slice(0, 12),
       err: e instanceof Error ? e.message : String(e),
     });
+    return 'failed';
   }
 }
 
@@ -459,6 +483,8 @@ async function sendProfileTo(pid: number, peerPubB64: string, force: boolean): P
  */
 export async function syncMyProfileTo(peerPubB64: string): Promise<void> {
   if (!peerPubB64) return;
+  // Исход здесь не читается намеренно: досылку зовут на каждое открытие
+  // переписки, и следующее открытие попробует снова само.
   await sendProfileTo(activeProfileId(), peerPubB64, false);
 }
 
@@ -523,27 +549,47 @@ export async function requestPeerProfile(peerPubB64: string): Promise<void> {
 }
 
 /**
- * Ответить на просьбу прислать профиль. Возвращает true, если конверт наш, —
- * тогда messaging не сохраняет его как обычное сообщение переписки.
+ * Ответить на просьбу прислать профиль.
  *
  * Отправитель проверен подписью на уровне приёма: отвечаем ему, а не тому, кто
  * назван в теле, — тела у просьбы нет именно поэтому.
+ *
+ * v4.32.798: отвечает словом, а не `true`. Прежний `boolean` значил «конверт
+ * наш» и вызывающим не читался, а исход отправки пропадал вовсе: карточку
+ * собеседнику не отправили, но кадр объявлен разобранным и окно на пять минут
+ * уже занято. Просящий при этом своё окно тоже занял — значит переспросит не
+ * раньше чем через те же пять минут, и всё это время у него кружок с буквой
+ * вместо карточки. Причина же была мимолётной: дороги не было секунду, служба
+ * не успела подняться, отправку отклонили. Теперь такой кадр откладывается и
+ * отметка снимается, чтобы повтору было чем ответить.
+ *
+ * Отказ по частоте отсрочкой не считается: он окончательный по замыслу, мы
+ * ответили только что, и повтор кадра его не изменит.
  */
 export async function handleIncomingProfileRequest(
   text: string,
   senderPubB64: string | undefined,
   ownerPid: number
-): Promise<boolean> {
-  if (!isProfileRequest(text)) return false;
-  if (!senderPubB64) return true;
-  if (!passThrottle(reqAnsweredAt, senderPubB64, Date.now())) return true;
+): Promise<EnvelopeIntake> {
+  if (!isProfileRequest(text)) return 'consumed';
+  if (!senderPubB64) return 'consumed';
+  if (!passThrottle(reqAnsweredAt, senderPubB64, Date.now())) return 'consumed';
   try {
-    await sendProfileTo(ownerPid, senderPubB64, true);
-    log.info('profile_request_answered', { to: senderPubB64.slice(0, 12) });
+    const outcome = await sendProfileTo(ownerPid, senderPubB64, true);
+    if (outcome === 'failed') {
+      // Окно держать не за что: ответа не было. Тот же довод, что и у
+      // requestPeerProfile выше (v4.32.715).
+      reqAnsweredAt.delete(senderPubB64);
+      log.warn('profile_request_answer_deferred', { to: senderPubB64.slice(0, 12) });
+      return 'deferred';
+    }
+    log.info('profile_request_answered', { to: senderPubB64.slice(0, 12), outcome });
   } catch (e) {
+    reqAnsweredAt.delete(senderPubB64);
     log.warn('profile_request_answer_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'deferred';
   }
-  return true;
+  return 'consumed';
 }
 
 /**

@@ -1509,12 +1509,13 @@ export class MessagingService {
     // v4.32.671: просьба прислать свой профиль. Пузыря не создаёт — это
     // служебный конверт, как и сам профиль. Ответ уходит тем же конвертом
     // профиля, с ограничением по частоте (см. profileSync).
+    // v4.32.798: ответ обработчика — наш ответ. Отправка карточки в ответ
+    // могла не состояться, а кадр всё равно объявлялся разобранным: собеседник
+    // оставался с пустой карточкой, и переспросить ему было нечем.
     if (textPayload.text?.startsWith(PROFILE_REQ_PREFIX)) {
-      if (inbound) {
-        const { handleIncomingProfileRequest } = await import('./profileSync');
-        await handleIncomingProfileRequest(textPayload.text, peerPubKeyB64, ownerPid);
-      }
-      return 'consumed';
+      if (!inbound) return 'consumed';
+      const { handleIncomingProfileRequest } = await import('./profileSync');
+      return await handleIncomingProfileRequest(textPayload.text, peerPubKeyB64, ownerPid);
     }
 
     // v4.32.568: номер строки живой геолокации — это номер сессии, а не номер

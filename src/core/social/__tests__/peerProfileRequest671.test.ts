@@ -175,7 +175,8 @@ describe('просьба уходит', () => {
 describe('ответ на просьбу', () => {
   it('отвечает конвертом профиля тому, кто прислал просьбу', async () => {
     const answered = await handleIncomingProfileRequest(encodeProfileRequest(), 'PEER_D', 7);
-    expect(answered).toBe(true);
+    // v4.32.798: обработчик отвечает словом кадра, а не «конверт наш».
+    expect(answered).toBe('consumed');
     expect(mockSend).toHaveBeenCalledTimes(1);
     const [to, text] = mockSend.mock.calls[0] as unknown as [string, string];
     expect(to).toBe('PEER_D');
@@ -205,13 +206,18 @@ describe('ответ на просьбу', () => {
   it('без подтверждённого отправителя ответа нет, но конверт считается своим', async () => {
     // Тела у просьбы нет намеренно: адресат ответа — проверенный подписью
     // отправитель, и назвать себя кем-то другим в просьбе нечем.
-    expect(await handleIncomingProfileRequest(encodeProfileRequest(), undefined, 7)).toBe(true);
+    expect(await handleIncomingProfileRequest(encodeProfileRequest(), undefined, 7)).toBe(
+      'consumed'
+    );
     expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('чужой текст не считается просьбой', async () => {
-    expect(await handleIncomingProfileRequest('привет', 'PEER_G', 7)).toBe(false);
-    expect(await handleIncomingProfileRequest(PROFILE_PREFIX + '{}', 'PEER_G', 7)).toBe(false);
+    // v4.32.798: «наш ли конверт» решает префикс на месте вызова (messaging), а
+    // обработчик отвечает словом кадра. Чужой текст он не трогает — и это видно
+    // по тому, что ответной карточки не ушло.
+    expect(await handleIncomingProfileRequest('привет', 'PEER_G', 7)).toBe('consumed');
+    expect(await handleIncomingProfileRequest(PROFILE_PREFIX + '{}', 'PEER_G', 7)).toBe('consumed');
     expect(mockSend).not.toHaveBeenCalled();
   });
 });
