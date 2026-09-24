@@ -123,10 +123,14 @@ describe('форма исходников', () => {
    * Начала цепочек, меняющих участника в базе, вместе с закрывающей строкой
    * `})…` на том же отступе: дом форматируется так, поэтому конец цепочки
    * находится однозначно и без разбора скобок.
+   *
+   * v4.32.851: исключение из группы зовётся через `kickGroupMemberLocally` —
+   * отметка об исключении и вычёркивание из состава стали одним вызовом. Имя
+   * добавлено сюда, а не заменено: `removeGroupMember` остался у блокировки.
    */
   const chains = () => {
     const lines = SCREEN.split('\n');
-    const start = /^(\s*)void (removeGroupMember|updateGroupMemberRole)\(/;
+    const start = /^(\s*)void (removeGroupMember|kickGroupMemberLocally|updateGroupMemberRole)\(/;
     const out: Array<{ line: number; name: string; close: string | null }> = [];
     lines.forEach((ln, i) => {
       const m = ln.match(start);

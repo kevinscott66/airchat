@@ -28,6 +28,7 @@
  * устройстве не должны делить чёрные списки, а при удалении профиля отметки
  * уезжают вместе с `p<id>:%`.
  */
+import { recountGroupMembers, removeGroupMember } from '../storage/local';
 import { scopedKvDeleteFor, scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { createMarkFallback } from './markFallback';
 import { log } from '../logger';
@@ -101,6 +102,41 @@ async function repairRemovalMark(
   } catch (e) {
     log.warn('group_removal_mark_failed', { err: e instanceof Error ? e.message : String(e) });
   }
+}
+
+/**
+ * Исключить участника у СЕБЯ — отметка и состав вместе (v4.32.851).
+ *
+ * Дыра, которую закрывает. Отметку писала одна ветка: разбор входящего
+ * конверта op:'kick'. У того, кто кик и затеял, её не писал никто — экран
+ * групп звал `removeGroupMember` напрямую, а свой собственный конверт назад не
+ * приходит. Получалось, что защита из groupRemovalMark.ts не работала ровно у
+ * администратора: исключённый пересылал себе старую ссылку, его op:'join'
+ * упирался в `wasRemovedFromGroup` у всех, кроме исключившего, — а у
+ * исключившего проходил как вступление незнакомца и возвращал человека в
+ * состав. Дальше администратор своим же конвертом op:'add' рассказывал об этом
+ * остальным, и `clearGroupRemoval` в ветке 'add' стирал отметку у всей группы.
+ * То есть чем выше права у обманутого, тем полнее возврат.
+ *
+ * Порядок тот же, что во входящей ветке: сначала отметка, потом состав. Обрыв
+ * между ними оставит отметку на ещё состоящем участнике — он пойдёт в заявки
+ * вместо прямого входа; обратный порядок оставил бы исключённого без отметки
+ * вовсе, а это и есть дыра.
+ *
+ * Отвечает словом, легла ли отметка на диск. Отказ базы исключение не отменяет
+ * — человек нажал кнопку, и оставлять его в группе было бы хуже, — но запас
+ * держит отметку лишь до закрытия приложения, и об этом стоит сказать вслух.
+ */
+export async function kickGroupMemberLocally(
+  groupId: string,
+  peerPubB64: string,
+  pid: number,
+  ts: number = Date.now()
+): Promise<boolean> {
+  const marked = await markGroupRemoval(groupId, peerPubB64, pid, ts);
+  await removeGroupMember(groupId, peerPubB64, pid);
+  await recountGroupMembers(groupId, pid);
+  return marked;
 }
 
 /** Снять отметку: администратор вернул человека в группу. */

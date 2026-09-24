@@ -65,7 +65,6 @@ import {
   listArchivedGroups,
   deleteGroup,
   upsertGroupMember,
-  removeGroupMember,
   recountGroupMembers,
   updateGroupMemberRole,
   updateGroupMeta,
@@ -155,6 +154,7 @@ import { readPlaceOnce } from '../../core/social/deviceLocation';
 import { locationFailureText } from '../../core/social/locationFailure';
 import { VoiceRecorderButton, VoicePlayer, type VoiceRecordingResult } from '../components/VoiceMessage';
 import { fanoutGroupMessage, sendGroupReadReceipt, fanoutGroupControl, sendGroupInvite, sendGroupControlTo, ensureGroupInviteToken, rotateGroupInviteToken } from '../../core/social/groupMessaging';
+import { kickGroupMemberLocally } from '../../core/social/groupRemovalMark';
 import { formatDisappearLabel } from '../../core/social/disappearEnvelope';
 import { CHAT_MAX_IMAGES, mergePickedImages, remainingImageSlots } from '../../core/social/mediaAttachPolicy';
 import { previewLabelForText, truncateReplyPreview } from '../../core/social/messagePreview';
@@ -2569,12 +2569,15 @@ function GroupChatScreen({
             text: 'Исключить',
             style: 'destructive',
             onPress: () => {
-              void removeGroupMember(group.id, target.peerPubB64, pid).then(async () => {
-                await recountGroupMembers(group.id, pid);
+              // v4.32.851: исключение у себя — отметка и состав вместе. Прежде
+              // экран звал только removeGroupMember, и защита от возврата по
+              // старой ссылке не работала ровно у того, кто исключал.
+              void kickGroupMemberLocally(group.id, target.peerPubB64, pid).then(async (marked) => {
                 await insertGroupSysMessage(group.id, pid, myPubB64, `${target.displayName ?? argName} исключён(а) из группы`);
                 announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'kick', target: target.peerPubB64, targetName: target.displayName ?? argName }, myDisplayName));
                 setAllMembers((prev) => prev.filter((m) => m.peerPubB64 !== target.peerPubB64));
-                showSuccess(`${target.displayName ?? argName} исключён`);
+                if (marked) showSuccess(`${target.displayName ?? argName} исключён`);
+                else showError(`${target.displayName ?? argName} исключён, но отметка об этом не сохранилась на устройстве: после перезапуска приложения он сможет вернуться по старой ссылке без вашего одобрения`);
               // v4.32.514: без .catch отказ базы оставлял экран немым —
               // участник на месте, ни строки, ни тоста, ни ошибки. Смена роли
               // об этом говорила с v4.32.257, исключение и бан — нет.
@@ -5288,11 +5291,14 @@ function GroupMembersScreen({
       {
         text: 'Исключить', style: 'destructive',
         onPress: () => {
-          void removeGroupMember(group.id, m.peerPubB64, pid).then(async () => {
-            await recountGroupMembers(group.id, pid);
+          // v4.32.851: та же пара, что и у /kick, — одним вызовом на оба места.
+          void kickGroupMemberLocally(group.id, m.peerPubB64, pid).then(async (marked) => {
             await insertGroupSysMessage(group.id, pid, myPubB64, `${m.displayName ?? 'Участник'} исключён(а) из группы`);
             announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'kick', target: m.peerPubB64, targetName: m.displayName ?? undefined }, myName));
             await loadMembers();
+            if (!marked) {
+              showError(`${m.displayName ?? 'Участник'} исключён, но отметка об этом не сохранилась на устройстве: после перезапуска приложения он сможет вернуться по старой ссылке без вашего одобрения`);
+            }
           }).catch(() => showError('Не удалось исключить участника'));
         },
       },
