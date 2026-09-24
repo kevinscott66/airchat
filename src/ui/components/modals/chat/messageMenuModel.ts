@@ -39,6 +39,16 @@ export interface MessageMenuFlags {
   isOut: boolean;
   /** Медиасообщение: текста нет, копировать и переводить нечего. */
   isMedia: boolean;
+  /**
+   * Машинное тело: опрос, документ, геометка, контакт, GIF, одноразовое,
+   * системная строка (v4.32.872).
+   *
+   * Отдельно от `isMedia`, потому что `isMedia` — это ровно `\x01` в начале
+   * строки, и из всей семьи под него попадали только вложение и голосовое.
+   * Опрос, документ и геометка меню считало обычным текстом: предлагало
+   * скопировать, перевести и отредактировать служебный конверт.
+   */
+  isMachineText: boolean;
   /** По переписке включён запрет копирования и пересылки (copyGuard). */
   copyBlocked: boolean;
   /** Свой опрос, ещё открытый. */
@@ -68,16 +78,18 @@ export const MESSAGE_MENU_PRIMARY_MAX = 6;
  * списке — хуже, чем видеть. Оно рисуется последним и отдельно от остальных.
  */
 export function messageMenu(f: MessageMenuFlags): MessageMenu {
-  const canCopy = !f.isMedia && !f.copyBlocked;
+  const canCopy = !f.isMedia && !f.isMachineText && !f.copyBlocked;
   const primary: MessageMenuAction[] = ['reply'];
   if (canCopy) primary.push('copy');
-  if (canCopy) primary.push('forward');
-  if (f.isOut && !f.isMedia) primary.push('edit');
+  // Пересылка машинного тела допустима и работает: конверт уезжает целиком,
+  // и у собеседника опрос остаётся опросом. В буфер же он уехал бы текстом.
+  if (!f.isMedia && !f.copyBlocked) primary.push('forward');
+  if (f.isOut && !f.isMedia && !f.isMachineText) primary.push('edit');
   primary.push('pin');
   primary.push('delete');
 
   const more: MessageMenuAction[] = [];
-  if (!f.isMedia) more.push('translate');
+  if (!f.isMedia && !f.isMachineText) more.push('translate');
   more.push('copyLink');
   more.push('star');
   more.push('remind');

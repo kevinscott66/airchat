@@ -6,6 +6,7 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { font, scrim, spacing } from '../../../theme';
+import { copyableBody } from '../../../../core/social/copyBody';
 import { COPY_ACTION, COPY_LINK_ACTION } from '../../../clipboardText';
 import { messageMenu, type MessageMenuAction } from './messageMenuModel';
 
@@ -77,15 +78,22 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
   useEffect(() => { if (!visible) setExpanded(false); }, [visible]);
 
   const isMedia = !!target && target.text.startsWith('\x01');
+  // v4.32.872: `isMedia` — это ровно один байт в начале строки, и опрос,
+  // документ, геометка, контакт, GIF и одноразовое под него не попадают.
+  // Меню предлагало для них «Копировать», «Перевести» и «Редактировать» —
+  // то есть выносило в буфер служебный конверт с путём к файлу или
+  // координатами, а в поле ввода подставляло его же.
+  const isMachineText = !!target && copyableBody(target) === null;
   const isOut = target?.direction === 'out';
   const starred = !!target?.starred;
 
   const menu = useMemo(() => messageMenu({
     isOut: !!isOut,
     isMedia,
+    isMachineText,
     copyBlocked: !!copyBlocked,
     canClosePoll: !!canClosePoll && !!onClosePoll,
-  }), [isOut, isMedia, copyBlocked, canClosePoll, onClosePoll]);
+  }), [isOut, isMedia, isMachineText, copyBlocked, canClosePoll, onClosePoll]);
 
   /** Значок, подпись и обработчик каждого пункта. */
   const spec = useMemo((): Record<MessageMenuAction, ActionSpec> => ({

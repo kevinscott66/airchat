@@ -10,13 +10,15 @@ import {
   type MessageMenuFlags,
 } from '../messageMenuModel';
 
-/** Все шестнадцать сочетаний флагов. */
+/** Все тридцать два сочетания флагов (v4.32.872: пятый — машинное тело). */
 const ALL_FLAGS: MessageMenuFlags[] = [];
 for (const isOut of [false, true]) {
   for (const isMedia of [false, true]) {
-    for (const copyBlocked of [false, true]) {
-      for (const canClosePoll of [false, true]) {
-        ALL_FLAGS.push({ isOut, isMedia, copyBlocked, canClosePoll });
+    for (const isMachineText of [false, true]) {
+      for (const copyBlocked of [false, true]) {
+        for (const canClosePoll of [false, true]) {
+          ALL_FLAGS.push({ isOut, isMedia, isMachineText, copyBlocked, canClosePoll });
+        }
       }
     }
   }
@@ -26,13 +28,20 @@ for (const isOut of [false, true]) {
  * Состав меню до правки — независимая копия условий из ChatQuickReactModal
  * версии 4.32.577. Специально записан отдельно, а не выведен из messageMenu:
  * иначе тест сверял бы функцию сама с собой.
+ *
+ * v4.32.872: сюда же перенесены три новых условия — копировать, переводить и
+ * править машинное тело меню больше не предлагает. Копия остаётся
+ * независимой: условия записаны своими словами, а не вызовом модели.
  */
 function legacyActions(f: MessageMenuFlags): MessageMenuAction[] {
-  const canCopy = !f.isMedia && !f.copyBlocked;
+  const canCopy = !f.isMedia && !f.isMachineText && !f.copyBlocked;
   const out: MessageMenuAction[] = ['reply'];
-  if (canCopy) out.push('copy', 'forward');
-  if (f.isOut && !f.isMedia) out.push('edit');
-  if (!f.isMedia) out.push('translate');
+  if (canCopy) out.push('copy');
+  // Пересылка машинного тела остаётся: конверт уезжает целиком, и опрос у
+  // собеседника остаётся опросом.
+  if (!f.isMedia && !f.copyBlocked) out.push('forward');
+  if (f.isOut && !f.isMedia && !f.isMachineText) out.push('edit');
+  if (!f.isMedia && !f.isMachineText) out.push('translate');
   out.push('copyLink', 'pin', 'star');
   if (!f.isOut) out.push('markUnread');
   out.push('info', 'remind', 'select');

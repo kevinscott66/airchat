@@ -319,6 +319,7 @@ import {
   isTrulyMissing,
   lookupValue,
 } from '../../core/utils/lookupResult';
+import { copyableBody, copySelection, copySelectionText, COPY_NOTHING_TEXT } from '../../core/social/copyBody';
 import { COPY_ACTION, COPY_LINK_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 export { ruPlural, membersLabel, subscribersLabel };
 
@@ -2483,7 +2484,14 @@ function GroupChatScreen({
     openSheet('Сообщение', item.text.length > 60 ? item.text.slice(0, 60) + '…' : parseGroupSysText(item.text), [
       ...(isSysMsg ? [] : REACTION_EMOJIS.map((emoji) => ({ text: emoji, onPress: () => void applyReaction(item, emoji) }))),
       isSysMsg ? null : { text: 'Ответить', onPress: () => setReplyTo(item) },
-      isTextMsg ? { text: COPY_ACTION, onPress: () => { Clipboard.setString(item.text); showSuccess(COPIED_TEXT); } } : null,
+      // v4.32.872: условие `isTextMsg` шире не стало, а вот копировался
+      // `item.text` — у пересылки это служебный байт конверта и имя автора
+      // перед текстом. В буфер идёт разобранное тело.
+      isTextMsg ? { text: COPY_ACTION, onPress: () => {
+        const body = copyableBody(item);
+        if (body === null) showError(COPY_NOTHING_TEXT);
+        else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+      } } : null,
       isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text)) } : null,
       canEdit ? { text: 'Редактировать', onPress: () => startEdit(item) } : null,
       canPin ? { text: grpPinnedList.some((p) => p.id === item.id) ? 'Открепить' : 'Закрепить', onPress: () => void pinMsg(item) } : null,
@@ -4185,7 +4193,13 @@ function GroupChatScreen({
         reactionEmojis={REACTION_EMOJIS}
         onOpenMore={() => { setGrpReactMoreVisible(true); }}
         onReply={() => { if (quickReact) { setReplyTo(quickReact); setQuickReact(null); } }}
-        onCopy={() => { if (quickReact) { Clipboard.setString(quickReact.text); showSuccess(COPIED_TEXT); setQuickReact(null); } }}
+        onCopy={() => {
+          if (!quickReact) return;
+          const body = copyableBody(quickReact);
+          if (body === null) showError(COPY_NOTHING_TEXT);
+          else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+          setQuickReact(null);
+        }}
         onForward={() => { if (quickReact) { setForwardText(makeForwardText(outwardName(quickReact.senderName, quickReact.senderUnreadable, shortIdentity(quickReact.senderPubB64)), quickReact.text)); setQuickReact(null); } }}
         onPin={() => { if (quickReact) { void pinMsg(quickReact); setQuickReact(null); } }}
         onEdit={() => { if (quickReact) { startEdit(quickReact); setQuickReact(null); } }}
@@ -4199,6 +4213,7 @@ function GroupChatScreen({
         }}
         isSys={!!quickReact && isGroupSysMessage(quickReact.text)}
         isTextLike={!!quickReact && !quickReact.text.startsWith(POLL_PREFIX) && !isVoiceMessage(quickReact.text) && !isGroupSysMessage(quickReact.text)}
+        canCopy={copyableBody(quickReact) !== null}
         canPin={canPin}
         isPinned={!!quickReact && grpPinnedList.some((p) => p.id === quickReact.id)}
         canEdit={!!quickReact && quickReact.senderPubB64 === myPubB64 && !quickReact.text.startsWith(POLL_PREFIX) && !isVoiceMessage(quickReact.text)}
@@ -4450,10 +4465,14 @@ function GroupChatScreen({
                 <AppPressable
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
+                    // v4.32.872: см. тот же пункт в переписке — сюда шёл
+                    // `m.text` как есть, вместе со служебными конвертами.
                     const ids = [...selectedGrpIds];
-                    const txt = messages.filter((m) => ids.includes(m.id)).map((m) => m.text).join('\n\n');
-                    Clipboard.setString(txt);
-                    showSuccess(COPIED_TEXT);
+                    const sel = copySelection(messages.filter((m) => ids.includes(m.id)));
+                    const note = copySelectionText(sel);
+                    if (sel.copied === 0) { showError(note ?? COPY_NOTHING_TEXT); return; }
+                    Clipboard.setString(sel.text);
+                    showSuccess(note ?? COPIED_TEXT);
                     setSelectedGrpIds(new Set());
                   }}
                 >

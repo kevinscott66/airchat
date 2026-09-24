@@ -25,6 +25,13 @@ export interface GroupQuickReactModalProps {
   onCopyLink: () => void;
   isSys: boolean;
   isTextLike: boolean;
+  /**
+   * Есть ли что класть в буфер (v4.32.872). `isTextLike` отсеивает только
+   * опросы, голосовые и системные строки; документ, геометка, контакт, GIF и
+   * одноразовое остаются — и «Копировать» уносило в буфер служебный конверт
+   * (`\x06doc:{…}`), которого человек не видит ни до вставки, ни после.
+   */
+  canCopy: boolean;
   canPin: boolean;
   isPinned: boolean;
   canEdit: boolean;
@@ -37,7 +44,7 @@ function GroupQuickReactModalImpl(props: GroupQuickReactModalProps) {
   const {
     msg, onClose, onReact, recentReactions, reactionEmojis,
     onOpenMore, onReply, onCopy, onForward, onPin, onEdit, onDelete, onCopyLink,
-    isSys, isTextLike, canPin, isPinned, canEdit, canDelete,
+    isSys, isTextLike, canCopy, canPin, isPinned, canEdit, canDelete,
   } = props;
   const visible = !!msg;
   const mounted = useDeferredMount(visible);
@@ -83,7 +90,7 @@ function GroupQuickReactModalImpl(props: GroupQuickReactModalProps) {
                   <Text style={[styles.actionLabel, { color: colors.text }]}>Ответить</Text>
                 </AppPressable>
               ) : null}
-              {isTextLike ? (
+              {isTextLike && canCopy ? (
                 <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onCopy}>
                   <Ionicons name="copy-outline" size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>{COPY_ACTION}</Text>

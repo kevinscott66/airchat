@@ -28,11 +28,11 @@ describe('запрет копирования закрывает и пересы
 
   it('состав меню не выдаёт «Переслать» и «Копировать» при запрете', () => {
     for (const isOut of [false, true]) {
-      const blocked = messageMenu({ isOut, isMedia: false, copyBlocked: true, canClosePoll: false });
+      const blocked = messageMenu({ isOut, isMedia: false, isMachineText: false, copyBlocked: true, canClosePoll: false });
       const all = [...blocked.primary, ...blocked.more];
       expect(all).not.toContain('copy');
       expect(all).not.toContain('forward');
-      const open = messageMenu({ isOut, isMedia: false, copyBlocked: false, canClosePoll: false });
+      const open = messageMenu({ isOut, isMedia: false, isMachineText: false, copyBlocked: false, canClosePoll: false });
       expect([...open.primary, ...open.more]).toEqual(expect.arrayContaining(['copy', 'forward']));
     }
   });

@@ -779,6 +779,7 @@ import { clockTime, fullDateTime } from '../../core/time/ruDateTime';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
+import { copyableBody, copySelection, copySelectionText, COPY_NOTHING_TEXT } from '../../core/social/copyBody';
 import { COPY_ACTION, COPIED_TEXT, COPIED_LINK } from '../clipboardText';
 import { buildDmLink } from '../../core/net/appLink';
 import { isCopyGuarded, subscribeCopyGuard } from '../../core/social/copyGuard';
@@ -4017,10 +4018,17 @@ function ChatThreadView({
               <AppPressable
                 style={s.selToolbarBtn}
                 onPress={() => {
+                  // v4.32.872: сюда шёл `m.text` как есть. Голосовое уезжало в
+                  // буфер строкой `\x01voice:{…}`, документ — путём к файлу,
+                  // геометка — координатами, и всё это под «Скопировано».
                   const ids = [...selectedIds];
-                  const text = lines.filter((m) => ids.includes(m.id)).map((m) => m.text).join('\n\n');
-                  Clipboard.setString(text);
-                  showSuccess(COPIED_TEXT);
+                  const sel = copySelection(lines.filter((m) => ids.includes(m.id)));
+                  const note = copySelectionText(sel);
+                  // Копировать нечего — выделение не снимаем: человек ещё
+                  // может добавить к нему реплику с текстом.
+                  if (sel.copied === 0) { showError(note ?? COPY_NOTHING_TEXT); return; }
+                  Clipboard.setString(sel.text);
+                  showSuccess(note ?? COPIED_TEXT);
                   setSelectedIds(new Set());
                 }}
               >
@@ -4348,7 +4356,15 @@ function ChatThreadView({
         onPickReaction={(emoji) => { if (quickReactMsg) applyReaction(quickReactMsg, emoji); setQuickReactMsg(null); }}
         onOpenMore={() => { setReactionsTarget(quickReactMsg); setQuickReactMsg(null); }}
         onReply={() => { if (quickReactMsg) setReplyTo(quickReactMsg); setQuickReactMsg(null); }}
-        onCopy={() => { if (quickReactMsg) { Clipboard.setString(quickReactMsg.text); showSuccess(COPIED_TEXT); } setQuickReactMsg(null); }}
+        onCopy={() => {
+          // Пункт показан только у копируемого тела (см. messageMenu), но
+          // проверку берём здесь же: правило одно, и второго списка условий
+          // рядом с ним быть не должно.
+          const body = quickReactMsg ? copyableBody(quickReactMsg) : null;
+          if (body === null) showError(COPY_NOTHING_TEXT);
+          else { Clipboard.setString(body); showSuccess(COPIED_TEXT); }
+          setQuickReactMsg(null);
+        }}
         copyBlocked={copyBlocked}
         onForward={() => { if (quickReactMsg) setForwardTarget(quickReactMsg); setQuickReactMsg(null); }}
         onEdit={() => { if (quickReactMsg) { setEditTarget(quickReactMsg); setMsg(quickReactMsg.text); } setQuickReactMsg(null); }}
