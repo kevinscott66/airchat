@@ -42,6 +42,9 @@ function stand(over: Partial<ViewOnceTapDeps> = {}) {
     open: jest.fn(),
     later: jest.fn((fn: () => void) => { pending.push(fn); }),
     remove: jest.fn(async () => true),
+    // v4.32.828: запись «показан, подлежит удалению» и её снятие.
+    note: jest.fn(async () => true),
+    forget: jest.fn(async () => undefined),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
     onRemoveFailed: jest.fn(),
@@ -192,8 +195,10 @@ describe('BEFORE — что делали разошедшиеся копии', (
 
   it('обе беды — про один и тот же вопрос, заданный не в том месте', () => {
     // Один раз «жив ли экран» спросили слишком поздно, другой — слишком рано;
-    // теперь он задан ровно дважды и в обоих нужных точках.
-    expect(MODULE.split('deps.alive()').length - 1).toBe(2);
+    // теперь он задан в обеих нужных точках. Третий вопрос добавила
+    // v4.32.828: между записью на полку и показом снимка есть await, и уход с
+    // экрана в эту щель обязан снять запись, а не стереть непоказанный снимок.
+    expect(MODULE.split('deps.alive()').length - 1).toBe(3);
   });
 });
 

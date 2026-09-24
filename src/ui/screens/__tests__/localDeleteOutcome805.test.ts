@@ -55,6 +55,9 @@ function stand(over: Partial<ViewOnceTapDeps> = {}) {
     open: jest.fn(),
     later: jest.fn((fn: () => void) => { pending.push(fn); }),
     remove: jest.fn(async () => true),
+    // v4.32.828: запись «показан, подлежит удалению» и её снятие.
+    note: jest.fn(async () => true),
+    forget: jest.fn(async () => undefined),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
     onRemoveFailed: jest.fn(),
@@ -162,7 +165,10 @@ describe('форма исходников: правка стоит там, гд�
 
   it('порядок ждёт булев, а не пустоту', () => {
     expect(TAP).toContain('remove: () => Promise<boolean>;');
-    expect(TAP).toContain('if (!gone) deps.onRemoveFailed();');
+    // v4.32.828: та же развилка, но удачное удаление теперь ещё и снимает
+    // запись с полки, так что «если не вышло» стало «иначе».
+    expect(TAP).toContain('if (gone) void deps.forget();');
+    expect(TAP).toContain('else deps.onRemoveFailed();');
   });
 
   it('оба экрана считают «строки нет» удачей, а отказ — нет', () => {

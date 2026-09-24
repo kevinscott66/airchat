@@ -179,6 +179,7 @@ import { EmojiPanel } from './chat-components/EmojiPanel';
 import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
 import { SendEffectOverlay, detectSendEffect } from './chat-components/SendEffectOverlay';
 import { runViewOnceTap, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
+import { forgetViewOnceShown, noteViewOnceShown } from '../../core/social/viewOncePending';
 import { getEmojiSuggestions, isBigEmoji } from './chat-utils/emoji';
 import {
   injectDateSeparators,
@@ -2743,6 +2744,11 @@ function ChatThreadView({
         alive: () => isMountedRef.current,
         open: (uris, opts) => openMedia(uris, 0, opts),
         later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
+        // v4.32.828: обещание «один показ» пишется на диск раньше показа —
+        // иначе снятие приложения из многозадачности в эти 0,8 секунды
+        // оставляет снимок читаемым навсегда.
+        note: () => noteViewOnceShown(activeProfileId, 'chat', row.id),
+        forget: async () => { await forgetViewOnceShown(activeProfileId, 'chat', row.id); },
         remove: async () => {
           const svc = getMessagingService();
           if (!svc) return false;
@@ -2756,7 +2762,7 @@ function ChatThreadView({
         onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке'),
       });
     },
-    [gateway, openMedia, appendNewMessages]
+    [gateway, openMedia, appendNewMessages, activeProfileId]
   );
 
   const toggleSelect = useCallback((row: ChatMessageRow) => {

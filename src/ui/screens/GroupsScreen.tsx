@@ -303,6 +303,7 @@ import { roleChangeNoopText, roleChangeSysText, roleLabel, roleTone, sortMembers
 import { createEditCommitGate } from '../../core/utils/editCommitGate';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
 import { runViewOnceTap, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
+import { forgetViewOnceShown, noteViewOnceShown } from '../../core/social/viewOncePending';
 import { shareTextExport } from '../../core/media/cacheFiles';
 import { getEmojiSuggestions } from './chat-utils/emoji';
 import { BubbleKindProvider } from '../BubbleKindContext';
@@ -1119,6 +1120,10 @@ function GroupChatScreen({
       alive: () => isMountedRef.current,
       open: (uris, opts) => grpMediaViewer.open(uris, 0, opts),
       later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
+      // v4.32.828: см. ChatScreen — обещание «один показ» пишется на диск
+      // раньше показа и переживает снятие приложения из многозадачности.
+      note: () => noteViewOnceShown(pid, 'group', item.id),
+      forget: async () => { await forgetViewOnceShown(pid, 'group', item.id); },
       remove: async () => (await deleteGroupMessageChecked(item.id, pid)) !== 'failed',
       reload: () => { void loadMessages(); },
       // Вложение живёт на relay около трёх часов — старое уже не достать.

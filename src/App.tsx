@@ -979,6 +979,13 @@ function MainTabs({
           purgeTimer = setInterval(() => void purgeDisappearedMessages(), 60_000);
           void import('./core/storage/local').then((m) => m.sweepOrphanSendingMessages());
           void import('./core/storage/local').then((m) => m.purgeControlEnvelopeMessages());
+          // v4.32.828: одноразовые снимки, показанные перед тем, как приложение
+          // сняли из многозадачности. Удаление отложено на 0,8 секунды, таймер
+          // живёт в памяти — дочищаем то, до чего он не дожил, иначе
+          // «одноразовое» фото открывается сколько угодно раз.
+          void import('./core/social/viewOncePending')
+            .then((m) => m.drainViewOncePendingNow(pid))
+            .catch(() => { /* best-effort */ });
         });
       } catch (e) {
         log.warn('identity_effect_setup_failed', {

@@ -52,6 +52,9 @@ function stand(over: Partial<ViewOnceTapDeps> = {}): ViewOnceTapDeps {
     open: jest.fn(),
     later: jest.fn(),
     remove: jest.fn(async () => true),
+    // v4.32.828: запись «показан, подлежит удалению» и её снятие.
+    note: jest.fn(async () => true),
+    forget: jest.fn(async () => undefined),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
     onRemoveFailed: jest.fn(),
