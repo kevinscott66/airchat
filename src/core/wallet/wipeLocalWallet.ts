@@ -159,6 +159,15 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   await step('ipfs_client', () => resetIpfsClient(), failed);
   await step('messaging_service', () => disposeMessagingService(), failed);
   await step('call_service', () => disposeCallService(), failed);
+  // v4.32.857: отложенные напоминания о сообщениях. Снимать их не умел никто —
+  // во всём проекте не было ни одного вызова отмены, — и поставленное «через
+  // неделю» срабатывало уже после сброса: на телефоне, где от этой личности не
+  // осталось ничего, всплывала строка с текстом её сообщения. Тем же заходом
+  // гасится и то, что уже висит в шторке.
+  await step('reminders', async () => {
+    const { cancelAllReminders } = await import('../../notifications/reminderNotifications');
+    await cancelAllReminders();
+  }, failed);
   // v4.32.314: если seed-фразу копировали только что, она ещё в буфере обмена
   // — а из неё восстанавливается ровно та личность, которую мы сейчас стираем.
   // v4.32.834: шаг переехал сюда с самого конца. Расписка об отложенной уборке

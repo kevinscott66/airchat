@@ -4,20 +4,16 @@
  * v4.32.257: раньше этот диалог был выписан в трёх местах целиком, вместе с
  * созданием канала уведомлений и обработкой ошибки. Варианты и тексты живут в
  * reminderSchedule (чистый модуль с тестами), а notifee — здесь.
+ *
+ * v4.32.857: сама постановка уехала в `reminderNotifications`. Здесь остался
+ * диалог — и только он. Напоминание надо не только поставить, но и снять
+ * (при удалении личности и при полном сбросе устройства), а звать ради этого
+ * модуль с `Alert` из слоя кошелька было бы неправильно.
  */
 
 import { Alert } from 'react-native';
-import notifee, { TriggerType } from '@notifee/react-native';
-import { REMINDER_CHOICES, reminderTimestamp, type ReminderKind } from '../../core/notifications/reminderSchedule';
-import { NOTIFICATION_SMALL_ICON } from '../../notifications/notificationIcon';
-
-async function scheduleReminderNotification(kind: ReminderKind, preview: string): Promise<void> {
-  const channelId = await notifee.createChannel({ id: 'reminders', name: 'Напоминания', importance: 4 });
-  await notifee.createTriggerNotification(
-    { title: 'AirChat — напоминание', body: preview, android: { channelId, smallIcon: NOTIFICATION_SMALL_ICON } },
-    { type: TriggerType.TIMESTAMP, timestamp: reminderTimestamp(kind, Date.now()) }
-  );
-}
+import { REMINDER_CHOICES } from '../../core/notifications/reminderSchedule';
+import { scheduleMessageReminder } from '../../notifications/reminderNotifications';
 
 /**
  * Показывает выбор срока. Подтверждение показывается только после того, как
@@ -33,7 +29,7 @@ export function promptMessageReminder(
     ...REMINDER_CHOICES.map((choice) => ({
       text: choice.label,
       onPress: () => {
-        void scheduleReminderNotification(choice.kind, preview)
+        void scheduleMessageReminder(choice.kind, preview)
           .then(() => onSuccess(choice.success))
           .catch(() => onError('Не удалось создать напоминание'));
       },

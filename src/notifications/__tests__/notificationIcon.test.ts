@@ -97,7 +97,12 @@ describe('литерал не возвращается в вызовы', () => {
 
 describe('каждое уведомление получает small icon', () => {
   it('вызовов notifee, показывающих уведомление, ровно столько же, сколько заданных small icon', () => {
-    const shown = countAll('displayNotification(') + countAll('createTriggerNotification(');
+    // v4.32.857: считаются именно вызовы — `notifee.` в начале не украшение.
+    // Голое имя ловило и объявление типа в reminderNotifications, где нужное
+    // notifee описано по требованию; показов от этого не прибавлялось, а число
+    // росло, и правило начинало сторожить само себя.
+    const shown =
+      countAll('notifee.displayNotification(') + countAll('notifee.createTriggerNotification(');
     // v4.32.573: седьмой показ — баннер входящего звонка при закрытом приложении.
     // v4.32.558: восьмой — «вам звонили» из журнала непринятых звонков.
     expect(shown).toBe(8);
@@ -113,14 +118,17 @@ describe('каждое уведомление получает small icon', () =
         'firebaseMessagingBackground.ts',
         path.join('notifications', 'notificationIcon.ts'),
         path.join('notifications', 'pushNotifications.ts'),
+        path.join('notifications', 'reminderNotifications.ts'),
         path.join('ui', 'screens', 'ChatScreen.tsx'),
-        path.join('ui', 'utils', 'messageReminder.ts'),
       ].sort(),
     );
   });
 
+  // v4.32.857: постановка напоминания переехала из диалога в отдельный модуль —
+  // диалогу понадобилось соседство с отменой, а не с notifee. Иконку проверяем
+  // там же, где теперь ставится уведомление.
   it('напоминания больше не ставятся без иконки', () => {
-    const reminder = fs.readFileSync(path.join(SRC, 'ui', 'utils', 'messageReminder.ts'), 'utf8');
+    const reminder = fs.readFileSync(path.join(SRC, 'notifications', 'reminderNotifications.ts'), 'utf8');
     expect(reminder).not.toContain('android: { channelId } }');
     expect(reminder).toContain('smallIcon: NOTIFICATION_SMALL_ICON');
   });
