@@ -13,6 +13,12 @@ jest.mock('../../storage/local', () => ({
   kvSet: jest.fn(async (k: string, v: string) => {
     mockKv[k] = v;
   }),
+  // v4.32.801: решение о мосте пишется проверяемой дверью — без неё здесь
+  // падает не тест, а сам setBridgeEnabled.
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    mockKv[k] = v;
+    return true;
+  }),
 }));
 
 const mockSecure: Record<string, string> = {};

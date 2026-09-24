@@ -46,7 +46,7 @@
  * правда, но не безусловная: лучше именно тогда, когда туннель включён.
  */
 import { log } from '../logger';
-import { kvGet, kvSet } from '../storage/local';
+import { kvGet, kvSetChecked } from '../storage/local';
 import { loadConfig } from '../config';
 import { DEFAULT_RELAY_BASE, DEFAULT_WS_BASE } from '../transport/internet/relayConfig';
 import {
@@ -79,8 +79,24 @@ export async function isBridgeEnabled(): Promise<boolean> {
   return (await kvGet(ENABLED_KEY)) === 'true';
 }
 
+/**
+ * Записать решение человека — и убедиться, что оно легло.
+ *
+ * v4.32.801: здесь стоял `kvSet`, который гасит отказ записи и отдаёт `void`.
+ * Выключение моста при этом «удавалось» всегда: рычажок вставал в «выкл»,
+ * `stopAgentBridge` рвал сокет — а на диске оставалось `true`, и при
+ * следующем запуске `startAgentBridgeIfEnabled` поднимал подписку заново. То
+ * есть отзыв доступа к управлению телефоном не состоялся, о чём человеку не
+ * сказали ничем: мост себя ни значком, ни уведомлением не показывает.
+ *
+ * Бросаем, а не возвращаем слово: на стороне экрана ловушка с возвратом
+ * рычажка уже написана — до этой правки она была недостижима, потому что
+ * бросать было нечему.
+ */
 export async function setBridgeEnabled(on: boolean): Promise<void> {
-  await kvSet(ENABLED_KEY, on ? 'true' : 'false');
+  if (!(await kvSetChecked(ENABLED_KEY, on ? 'true' : 'false'))) {
+    throw new Error('bridge_enabled_write_failed');
+  }
 }
 
 /**
