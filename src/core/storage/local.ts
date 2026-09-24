@@ -5466,7 +5466,21 @@ export async function markConversationUnread(
   }
 }
 
-/** Сохранить черновик сообщения (null = очистить). */
+/**
+ * Сохранить черновик сообщения (null = очистить).
+ *
+ * v4.32.838: вся семья флагов диалога — черновик, закрепление, архив,
+ * закреплённое сообщение, цветная метка — до сих пор глушила отказ записи в
+ * `log.warn` и возвращалась как ни в чём не бывало. Все семь нажатий в списке
+ * переписок устроены одинаково: `void setConversationX(…).then(loadData)` без
+ * `.catch`, то есть `loadData` перечитывал базу и после несостоявшейся записи —
+ * строка возвращалась в прежний вид, и человек читал это как «не нажалось».
+ * Он нажимал снова, и снова, потому что ничего ему не говорили.
+ *
+ * Теперь отказ доходит до вызывающего. Молчат ровно два места, и оба
+ * осознанно: черновик (пишется сам во время набора, никто его не просил) и
+ * зеркальная запись в `dmPinSync` (там источник правды — список в kv).
+ */
 export async function setConversationDraft(
   contactPubB64: string,
   ownerProfileId: number,
@@ -5495,6 +5509,7 @@ export async function setConversationDraft(
     emitChatWrites();
   } catch (e) {
     log.warn('conversation_draft_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -5517,6 +5532,7 @@ export async function setConversationPinned(
     emitChatWrites();
   } catch (e) {
     log.warn('conversation_pin_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -5536,6 +5552,7 @@ export async function setConversationArchived(
     emitChatWrites();
   } catch (e) {
     log.warn('conversation_archive_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -6253,6 +6270,7 @@ export async function setConversationPinnedMessage(
     emitChatWrites();
   } catch (e) {
     log.warn('conversation_pin_msg_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -6265,8 +6283,11 @@ export async function setConversationColorTag(
   // (chatFolders). Правило «что бывает меткой» одно и на запись, и на чтение:
   // разъехавшись, они дали бы метку, для которой папку не назвать.
   if (colorTag != null && !isColorTag(colorTag)) {
+    // v4.32.838: отказ, а не тихий выход. Палитра на экране закрытая, так что
+    // сюда попадают только чужие метки — и раньше такая метка выглядела как
+    // применённая: список перечитывался и показывал прежний цвет.
     log.warn('conversation_color_tag_rejected', { len: colorTag.length });
-    return;
+    throw new Error('Такой метки не бывает');
   }
   try {
     const d = await db();
@@ -6277,6 +6298,7 @@ export async function setConversationColorTag(
     emitChatWrites();
   } catch (e) {
     log.warn('conversation_color_tag_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 

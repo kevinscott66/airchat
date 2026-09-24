@@ -820,13 +820,30 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   );
   const handleConvSwipeArchive = useCallback(
     (item: ConversationItem) => {
-      void setConversationArchived(item.contactPubB64, activeProfileId(), !item.archived).then(loadData);
+      // v4.32.838: отказ записи теперь доходит до человека. До этого
+      // `loadData` перечитывал базу и возвращал строку в прежний вид —
+      // неотличимо от «нажатие не поймалось».
+      runGuardedOp(
+        async () => {
+          await setConversationArchived(item.contactPubB64, activeProfileId(), !item.archived);
+          await loadData();
+        },
+        item.archived ? 'Не удалось разархивировать' : 'Не удалось архивировать',
+        'chat_list_swipe_archive_failed',
+      );
     },
     [activeProfileId, loadData],
   );
   const handleConvSwipePin = useCallback(
     (item: ConversationItem) => {
-      void setConversationPinned(item.contactPubB64, activeProfileId(), !item.pinned).then(loadData);
+      runGuardedOp(
+        async () => {
+          await setConversationPinned(item.contactPubB64, activeProfileId(), !item.pinned);
+          await loadData();
+        },
+        item.pinned ? 'Не удалось открепить' : 'Не удалось закрепить',
+        'chat_list_swipe_pin_failed',
+      );
     },
     [activeProfileId, loadData],
   );
@@ -894,7 +911,14 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         {
           text: item.pinned ? 'Открепить' : 'Закрепить',
           onPress: () => {
-            void setConversationPinned(item.contactPubB64, pid, !item.pinned).then(loadData);
+            runGuardedOp(
+              async () => {
+                await setConversationPinned(item.contactPubB64, pid, !item.pinned);
+                await loadData();
+              },
+              item.pinned ? 'Не удалось открепить' : 'Не удалось закрепить',
+              'chat_list_menu_pin_failed',
+            );
           },
         },
         {
@@ -933,7 +957,14 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         {
           text: item.archived ? 'Разархивировать' : 'Архивировать',
           onPress: () => {
-            void setConversationArchived(item.contactPubB64, pid, !item.archived).then(loadData);
+            runGuardedOp(
+              async () => {
+                await setConversationArchived(item.contactPubB64, pid, !item.archived);
+                await loadData();
+              },
+              item.archived ? 'Не удалось разархивировать' : 'Не удалось архивировать',
+              'chat_list_menu_archive_failed',
+            );
           },
         },
         {
@@ -1032,7 +1063,15 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   onPress={() => {
                     if (colorPickerItem) {
                       const pid = activeProfileId();
-                      void setConversationColorTag(colorPickerItem.contactPubB64, pid, ct.value).then(loadData);
+                      const pub = colorPickerItem.contactPubB64;
+                      runGuardedOp(
+                        async () => {
+                          await setConversationColorTag(pub, pid, ct.value);
+                          await loadData();
+                        },
+                        'Не удалось поставить метку',
+                        'chat_list_color_tag_failed',
+                      );
                     }
                     setColorPickerItem(null);
                   }}
@@ -1089,7 +1128,15 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 onPress={() => {
                   if (colorPickerItem) {
                     const pid = activeProfileId();
-                    void setConversationColorTag(colorPickerItem.contactPubB64, pid, null).then(loadData);
+                    const pub = colorPickerItem.contactPubB64;
+                    runGuardedOp(
+                      async () => {
+                        await setConversationColorTag(pub, pid, null);
+                        await loadData();
+                      },
+                      'Не удалось убрать метку',
+                      'chat_list_color_tag_clear_failed',
+                    );
                   }
                   setColorPickerItem(null);
                 }}
@@ -1284,7 +1331,24 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                     { text: 'Архивировать', onPress: () => {
                       const pid = activeProfileId();
                       const readConvs = conversations.filter((c) => c.unreadCount === 0 && !c.pinned && !c.archived);
-                      void Promise.all(readConvs.map((c) => setConversationArchived(c.contactPubB64, pid, true))).then(() => void loadData());
+                      // v4.32.838: пачка — `allSettled`, а не `all`: одна
+                      // упавшая запись не должна отменять перечитывание, иначе
+                      // остальные переписки останутся показанными неархивными,
+                      // хотя в базе уже архивны. Считаем отказавшие и говорим
+                      // об этом числом — «ни одна» и «одна из сорока» это
+                      // разные новости.
+                      runGuardedOp(
+                        async () => {
+                          const res = await Promise.allSettled(
+                            readConvs.map((c) => setConversationArchived(c.contactPubB64, pid, true)),
+                          );
+                          await loadData();
+                          const failed = res.filter((r) => r.status === 'rejected').length;
+                          if (failed > 0) throw new Error(`Не удалось архивировать: ${failed} из ${readConvs.length}`);
+                        },
+                        'Не удалось архивировать прочитанные',
+                        'chat_list_archive_read_failed',
+                      );
                     }},
                   ]);
                 }}

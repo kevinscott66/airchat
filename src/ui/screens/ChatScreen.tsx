@@ -1688,7 +1688,13 @@ function ChatThreadView({
   const writeDraft = useCallback((next: string | null) => {
     if (!decideDraftWrite(next, draftUnreadableRef.current, draftRowUnknownRef.current).write) return;
     draftUnreadableRef.current = unreadableAfterWrite(next, draftUnreadableRef.current);
-    void setConversationDraft(peerB64, activeProfileId, next);
+    // v4.32.838: функция теперь бросает, и молчание тут — решение. Черновик
+    // пишется сам, пока человек набирает; всплывать поверх клавиатуры из-за
+    // неудавшегося автосохранения было бы хуже потери черновика. Следующее
+    // нажатие клавиши пробует записать снова.
+    void setConversationDraft(peerB64, activeProfileId, next).catch((e: unknown) => {
+      log.warn('chat_draft_write_failed', { err: rawErrorText(e) });
+    });
   }, [peerB64, activeProfileId]);
 
   // Save draft with debounce

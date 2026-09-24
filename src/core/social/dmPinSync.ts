@@ -200,7 +200,16 @@ async function applyLocalDmPinSerial(params: {
     return { ok: false, reason: 'write_failed' };
   }
   const entries = await resolveDmPinned(peerPubB64, ownerProfileId);
-  await setConversationPinnedMessage(peerPubB64, ownerProfileId, entries[0]?.id ?? null);
+  // v4.32.838: запись в `conversations` здесь — зеркало для строки списка
+  // переписок; источник правды уже записан выше, в kv. С этой версии она
+  // бросает при отказе, и молчание тут — решение: закрепление СОСТОЯЛОСЬ, и
+  // объявлять его несостоявшимся из-за неподновлённого превью значило бы
+  // врать в другую сторону. Превью сойдётся при следующем закреплении.
+  try {
+    await setConversationPinnedMessage(peerPubB64, ownerProfileId, entries[0]?.id ?? null);
+  } catch (e) {
+    log.warn('dm_pin_mirror_write_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
   return { ok: true, entries };
 }
 
@@ -216,7 +225,12 @@ export async function clearDmPinned(peerPubB64: string, ownerProfileId: number):
       log.warn('dm_pin_clear_write_failed', { pid: ownerProfileId });
       return false;
     }
-    await setConversationPinnedMessage(peerPubB64, ownerProfileId, null);
+    // Зеркало — см. пояснение в записи закрепления выше.
+    try {
+      await setConversationPinnedMessage(peerPubB64, ownerProfileId, null);
+    } catch (e) {
+      log.warn('dm_pin_mirror_clear_failed', { err: e instanceof Error ? e.message : String(e) });
+    }
     return true;
   });
 }
