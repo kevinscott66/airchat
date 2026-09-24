@@ -390,6 +390,16 @@ type Speed = 1 | 1.5 | 2;
 
 let activeVoicePlayer: { player: AudioPlayer; stop: () => void } | null = null;
 
+/**
+ * Единственная формулировка для голосового, которого нет (v4.32.861).
+ *
+ * Групповой пузырь рисовал эту строку сам, а личный на том же условии
+ * возвращал null — и недоступное голосовое в переписке было пустым местом:
+ * пузырь со временем отправки и без содержимого. Догадаться, что это была
+ * запись, было неоткуда. Текст здесь, чтобы обе половины говорили одно.
+ */
+export const VOICE_UNAVAILABLE_TEXT = '🎤 Голосовое сообщение недоступно';
+
 export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps): React.ReactElement {
   /**
    * v4.32.413: плеер лежит внутри пузыря, поэтому все его цвета выводятся из
@@ -429,7 +439,14 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
    * `error` — состояние, а не исчезновение: у него есть свой значок, подпись
    * и повтор по нажатию.
    */
-  const [phase, setPhase] = useState<'idle' | 'downloading' | 'opening' | 'error'>('idle');
+  /**
+   * v4.32.861: 'error' и 'gone' — разные исходы. Первый значит «сейчас не
+   * вышло»: вложение лежит на relay, сеть не ответила, повтор осмыслен.
+   * Второй значит «файла нет»: своя запись стёрта с устройства, скачивать
+   * нечего. Кнопка «повторить» во втором случае обещала невозможное —
+   * нажимать её можно было вечно.
+   */
+  const [phase, setPhase] = useState<'idle' | 'downloading' | 'opening' | 'error' | 'gone'>('idle');
   const [positionMs, setPositionMs] = useState(0);
   const [totalMs, setTotalMs] = useState(durationMs ?? 0);
   const [speed, setSpeed] = useState<Speed>(1);
@@ -532,7 +549,12 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         // Вложения на relay живут часами, а не вечно, и сеть бывает без ответа.
         // Оба случая одинаковы для человека: файла нет сейчас. Значит и сказать
         // надо ровно это, а не убрать крутилку и промолчать.
-        setPhase('error');
+        //
+        // v4.32.861: но «сейчас» бывает не у всех. Без blob скачивать нечего:
+        // это своя запись, и её file:// на устройстве не нашёлся — например,
+        // после «удалить данные на устройстве» или чистки кэша системой.
+        // Повтор тут ничего не изменит, поэтому и предлагать его нельзя.
+        setPhase(blob ? 'error' : 'gone');
         setPlaying(false);
         return;
       }
@@ -597,17 +619,20 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
   const progress = totalMs > 0 ? positionMs / totalMs : 0;
   const busy = phase === 'downloading' || phase === 'opening';
   const failed = phase === 'error';
+  /** Повторять нечего: см. фазу 'gone'. Кнопка перестаёт быть кнопкой. */
+  const gone = phase === 'gone';
 
   return (
     <View style={vpStyles.container}>
       <AppPressable
         onPress={() => void togglePlayback()}
         style={vpStyles.playBtn}
-        disabled={busy}
+        disabled={busy || gone}
         accessibilityRole="button"
         accessibilityLabel={
           busy
             ? phase === 'downloading' ? 'Голосовое загружается' : 'Голосовое открывается'
+            : gone ? 'Голосовое недоступно'
             : failed ? 'Повторить загрузку голосового'
             : playing ? 'Пауза' : 'Воспроизвести голосовое'
         }
@@ -617,10 +642,11 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         ) : (
           <Ionicons
             // После отказа кнопка — это «повторить», а не «играть»: значок
-            // называет то, что произойдёт по нажатию.
-            name={failed ? 'refresh' : playing ? 'pause' : 'play'}
+            // называет то, что произойдёт по нажатию. v4.32.861: а когда
+            // повторять нечего, значок не называет действия вовсе.
+            name={gone ? 'alert-circle-outline' : failed ? 'refresh' : playing ? 'pause' : 'play'}
             size={22}
-            color={failed ? bubble.ink.error : accentColor}
+            color={gone ? bubble.ink.muted : failed ? bubble.ink.error : accentColor}
           />
         )}
       </AppPressable>
@@ -645,12 +671,14 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
             не заводится: пузырь и так узкий, а лишняя строка меняет высоту
             сообщения задним числом и дёргает ленту. */}
         <Text
-          style={[vpStyles.duration, { color: failed ? bubble.ink.error : bubble.ink.secondary }]}
+          style={[vpStyles.duration, { color: failed ? bubble.ink.error : gone ? bubble.ink.muted : bubble.ink.secondary }]}
           numberOfLines={1}
         >
           {phase === 'downloading'
             ? 'Загрузка…'
-            : failed
+            : gone
+              ? 'Запись не найдена на устройстве'
+              : failed
               ? 'Не загрузилось — нажмите'
               : playing || positionMs > 0
                 ? formatClockDuration(positionMs)

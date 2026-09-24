@@ -152,7 +152,7 @@ import { useMediaViewer } from '../components/MediaViewer';
 import { isLiveLocMessage } from '../../core/social/liveLocationService';
 import { readPlaceOnce } from '../../core/social/deviceLocation';
 import { locationFailureText } from '../../core/social/locationFailure';
-import { VoiceRecorderButton, VoicePlayer, type VoiceRecordingResult } from '../components/VoiceMessage';
+import { VOICE_UNAVAILABLE_TEXT, VoiceRecorderButton, VoicePlayer, type VoiceRecordingResult } from '../components/VoiceMessage';
 import { fanoutGroupMessage, sendGroupReadReceipt, fanoutGroupControl, sendGroupInvite, sendGroupControlTo, ensureGroupInviteToken, rotateGroupInviteToken } from '../../core/social/groupMessaging';
 import { kickGroupMemberLocally } from '../../core/social/groupRemovalMark';
 import { formatDisappearLabel } from '../../core/social/disappearEnvelope';
@@ -3307,7 +3307,7 @@ function GroupChatScreen({
             if (!voiceUri && !meta.blob) {
               return (
                 <Text style={[gcStyles.bubbleText, { color: outgoing ? meInk.secondary : colors.textMuted, fontSize: msgFontSize }]}>
-                  🎤 Голосовое сообщение недоступно
+                  {VOICE_UNAVAILABLE_TEXT}
                 </Text>
               );
             }

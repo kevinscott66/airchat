@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { Image, Text, View, useWindowDimensions } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
-import { VoicePlayer } from '../../components/VoiceMessage';
+import { VOICE_UNAVAILABLE_TEXT, VoicePlayer } from '../../components/VoiceMessage';
 import { isVoiceMessage, parseVoiceMeta } from '../../../core/social/voiceEnvelope';
 import { isNbCid } from '../../../core/media/mediaBlob';
 import { parseMediaCidsColumn } from '../../../core/media/mediaCidPolicy';
 import { useResolvedMediaUrls } from './useResolvedMediaUrls';
 import { useAutoDownloadGate } from './useAutoDownloadGate';
 import { voicePlaybackUri } from '../../../core/social/voiceUriPolicy';
-import { mediaScrim, radius } from '../../theme';
+import { font, mediaScrim, radius } from '../../theme';
 import { useBubbleSurface } from '../../BubbleKindContext';
 
 export function MediaStrip({
@@ -62,7 +62,17 @@ export function MediaStrip({
     // peer's `file://` uri to the player (Round-20 #3: a peer could point it at a
     // local file); instead leave uri empty and let VoicePlayer download+decrypt
     // the blob. Own outgoing messages keep their valid local file uri.
-    if (!uri && !meta.blob) return null;
+    if (!uri && !meta.blob) {
+      // v4.32.861: здесь стоял `return null` — и пузырь оставался пустым.
+      // Сообщение при этом никуда не девалось: время, галочки, контекстное
+      // меню, место в ленте — всё на месте, а внутри ничего. Выглядело как
+      // сбой отрисовки, хотя на деле это единственный честный случай: адрес
+      // чужой (его не берут намеренно), вложения нет. Групповой пузырь
+      // говорил об этом словами, личный молчал.
+      return (
+        <Text style={{ fontSize: font.sm, color: bubble.ink.secondary }}>{VOICE_UNAVAILABLE_TEXT}</Text>
+      );
+    }
     return (
       <VoicePlayer uri={uri} durationMs={meta.durationMs} isOutgoing={isOutgoing} blob={meta.blob} />
     );
