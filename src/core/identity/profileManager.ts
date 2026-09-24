@@ -63,7 +63,7 @@ export type Profile = {
  * поэтому их отказ удаление уже не отменяет — но и молчать о нём нельзя: на
  * устройстве остаётся снимок лица и копии историй удалённого аккаунта.
  */
-export type ProfileLeftover = 'avatars' | 'albums';
+export type ProfileLeftover = 'avatars' | 'albums' | 'row';
 
 /**
  * Исход удаления профиля (v4.32.741). Прежний `boolean` сводил к одному `false`
@@ -74,7 +74,8 @@ export type ProfileLeftover = 'avatars' | 'albums';
 export type ProfileDeletion =
   | { removed: true; leftovers: ProfileLeftover[] }
   | { removed: false; reason: 'not_found' }
-  | { removed: false; reason: 'cleanup_failed'; err: string };
+  | { removed: false; reason: 'cleanup_failed'; err: string }
+  | { removed: false; reason: 'switch_failed'; err: string };
 
 /**
  * Исход переименования профиля (v4.32.743).
@@ -535,7 +536,28 @@ class ProfileManager {
     this.state.activeProfileId = profileId;
     row.lastUsed = Date.now();
     this.invalidateProfileCache();
-    await this.persistState();
+    try {
+      await this.persistState();
+    } catch (e) {
+      // v4.32.849: запись состояния отказывает тем же концом, что и запись
+      // ключа ниже, — и до v4.32.849 её звали без try. SecureStore на iOS
+      // отвечает отказом при заблокированном устройстве (фоновое
+      // переключение), на Android — при сорвавшемся keystore; место на диске
+      // кончается там и там. Исключение улетало вызывающему, а в памяти
+      // оставался НОВЫЙ профиль при СТАРОМ снимке на диске и старом ключе:
+      // getActiveIdentity отвечал новой личностью, подписывалось прежней, и
+      // всё написанное до перезапуска ложилось под чужим owner_profile_id и
+      // чужим префиксом `p<id>:` — то есть в переписку другого аккаунта.
+      // Откат тот же, что у ключа: вернуть номер и отвечать null.
+      log.warn('switch_profile_persist_failed', {
+        profileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
+      this.state.activeProfileId = prevActiveId;
+      row.lastUsed = prevLastUsed;
+      this.invalidateProfileCache();
+      return null;
+    }
     const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, row.derivationIndex);
     if (!isSame) {
       try {
@@ -625,7 +647,25 @@ class ProfileManager {
     const prevActiveId = this.state.activeProfileId;
     this.state.profiles.push(row);
     this.state.activeProfileId = id;
-    await this.persistState();
+    try {
+      await this.persistState();
+    } catch (e) {
+      // v4.32.849: без записи профиля нет — но до v4.32.849 он оставался в
+      // памяти и объявленным активным. Человеку показывали «Ошибка создания»,
+      // а приложение до перезапуска работало под номером, которого на диске
+      // не существует: записанное уходило в namespace `p<id>:` и под
+      // owner_profile_id несуществующего профиля, а уборка сирот
+      // (sweepOrphanedAvatars, sweepOrphanAlbumFiles) сносила его файлы как
+      // ничьи. Откат — тот же, что при отказе ключа ниже.
+      const at = this.state.profiles.indexOf(row);
+      if (at !== -1) this.state.profiles.splice(at, 1);
+      this.state.activeProfileId = prevActiveId;
+      this.invalidateProfileCache();
+      log.warn('add_profile_persist_failed', {
+        err: e instanceof Error ? e.message : String(e),
+      });
+      throw new Error('Не удалось сохранить список профилей');
+    }
     const pair = deriveKeyPairFromMnemonicForProfile(this.mnemonicCache, derivationIndex);
     try {
       await persistKeyPair(pair);
@@ -781,8 +821,23 @@ class ProfileManager {
     if (wasActive) {
       const next = this.state.profiles.find((p) => p.id !== profileId);
       if (!next) return { removed: false, reason: 'not_found' };
+      // v4.32.849: увод активности — единственный шаг удаления, который ещё
+      // можно отменить целиком: ниже не стёрто ничего. Раньше отказ записи
+      // улетал исключением, и человек читал «Не удалось удалить профиль»,
+      // оставаясь при этом ПОД ДРУГИМ аккаунтом: номер в памяти уже уехал, а
+      // invalidateProfileCache сюда даже не доходил. Дальше он продолжал
+      // переписку, не заметив подмены.
+      const prevActiveId = this.state.activeProfileId;
       this.state.activeProfileId = next.id;
-      await this.persistState();
+      try {
+        await this.persistState();
+      } catch (e) {
+        const err = e instanceof Error ? e.message : String(e);
+        log.warn('delete_profile_switch_failed', { profileId, err });
+        this.state.activeProfileId = prevActiveId;
+        this.invalidateProfileCache();
+        return { removed: false, reason: 'switch_failed', err };
+      }
     }
     const active = this.rowById(this.state.activeProfileId);
     if (active) {
@@ -853,13 +908,28 @@ class ProfileManager {
     // трогает, полагаться на старый номер в массиве незачем.
     const at = this.state.profiles.findIndex((p) => p.id === profileId);
     if (at !== -1) this.state.profiles.splice(at, 1);
-    await this.persistState();
+    const leftovers: ProfileLeftover[] = [];
+    try {
+      await this.persistState();
+    } catch (e) {
+      // v4.32.849: данных профиля на устройстве уже нет, и вернуть строку в
+      // список значило бы показать профиль, за которым пусто. Поэтому в
+      // памяти его не воскрешаем — но и молчать нельзя: запись на диске
+      // осталась прежней, и следующий запуск поднимет строку обратно. Человек
+      // увидит пустой профиль, который считал удалённым. Это такой же
+      // остаток, как неубранные файлы, и сообщается тем же путём.
+      log.warn('delete_profile_row_persist_failed', {
+        profileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
+      this.invalidateProfileCache();
+      leftovers.push('row');
+    }
 
     // Уборки «от живых»: собирают то, что принадлежит оставшимся профилям, и
     // сносят остальное. Работать до вычёркивания строки они не могут — файлы
     // удаляемого профиля выглядели бы нужными, — поэтому удаление уже не
     // отменяют. Об их отказе человеку говорится отдельно.
-    const leftovers: ProfileLeftover[] = [];
     if (!(await this.sweepOrphanedAvatars())) leftovers.push('avatars');
     // v4.32.576: копии историй из альбомов. Строки удалённого профиля ушли
     // вместе с базой, а файлы лежат в общем каталоге, и адресов их больше нет

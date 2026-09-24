@@ -162,8 +162,11 @@ describe('номер профиля и открытый ключ берутся 
 
 describe('вызывающие больше не собирают личность из двух источников', () => {
   it('сброс кеша идёт вплотную к записи номера, без await между ними', () => {
+    // v4.32.849: запись состояния уехала под try — откатывать её отказ иначе
+    // нечем. Проверяется то же самое: между записью номера и сбросом кеша
+    // нет ни одного await.
     expect(managerSrc).toContain(
-      'this.state.activeProfileId = profileId;\n    row.lastUsed = Date.now();\n    this.invalidateProfileCache();\n    await this.persistState();'
+      'this.state.activeProfileId = profileId;\n    row.lastUsed = Date.now();\n    this.invalidateProfileCache();\n    try {\n      await this.persistState();'
     );
   });
 

@@ -32,13 +32,20 @@ const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
 
 const styles = makeStyles(lightColors, (n) => n);
 
+/**
+ * Проверяется ОТСУТСТВИЕ свойства, а его в выведенном типе стиля нет вовсе —
+ * `styles.langBtn.flex` для tsc ошибка, а не `undefined`. Поэтому смотрим на
+ * стиль как на набор объявлений: спрашивать «есть ли flex» иначе нечем.
+ */
+const decls = (style: object): Record<string, unknown> => style as Record<string, unknown>;
+
 describe('язык перевода: плашка шириной со слово', () => {
   it('плашка языка не делит ширину строки', () => {
     // Ни `flex`, ни `flexBasis`: ширина берётся по содержимому. Именно эти два
     // объявления и ужимали плашку до буквы.
-    expect(styles.langBtn.flex).toBeUndefined();
-    expect(styles.langBtn.flexBasis).toBeUndefined();
-    expect(styles.langBtn.flexGrow).toBeUndefined();
+    expect(decls(styles.langBtn).flex).toBeUndefined();
+    expect(decls(styles.langBtn).flexBasis).toBeUndefined();
+    expect(decls(styles.langBtn).flexGrow).toBeUndefined();
   });
 
   it('у плашки есть боковые поля — иначе слово упирается в рамку', () => {

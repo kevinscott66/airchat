@@ -183,12 +183,12 @@ describe('уборка удалённого профиля не срываетс
   it('ПРОВЕРКА НЕ ПУСТАЯ: запись ключа в deleteProfile вообще есть', () => {
     const at = managerSrc.indexOf('async deleteProfile(');
     expect(at).toBeGreaterThan(0);
-    expect(managerSrc.slice(at, at + 3000)).toContain('await persistKeyPair(pair)');
+    expect(managerSrc.slice(at, at + 4200)).toContain('await persistKeyPair(pair)');
   });
 
   it('запись ключа обёрнута try, иначе уборка данных не состоится', () => {
     const at = managerSrc.indexOf('async deleteProfile(');
-    const body = stripComments(managerSrc.slice(at, at + 3000));
+    const body = stripComments(managerSrc.slice(at, at + 4200));
     const call = body.indexOf('await persistKeyPair(pair)');
     expect(call).toBeGreaterThan(0);
     // Между открытием ветки активного профиля и записью ключа стоит try.
