@@ -72,3 +72,46 @@ export function chooseUploadRoute(opts: RouteInput): UploadRoute {
 export function formatLimit(bytes: number): string {
   return formatByteSize(bytes, { roundDown: true });
 }
+
+/**
+ * Отказ по размеру — одними словами на всех экранах (v4.32.841).
+ *
+ * До этой версии одно и то же «не влезло» было написано пятью способами, и два
+ * из них называли машинерию: «Без IPFS-сервера видео передаётся вложением, а
+ * его предел — 8 МБ» и «Файл слишком большой: без IPFS-сервера предел — 8 МБ».
+ * IPFS на телефоне выключен наглухо с v4.32.19 (`isIpfsEnabled` возвращает
+ * `false` и на Android, и на iOS, настройки для него нет) — то есть эту ветку
+ * человек видит всегда, а вторую, «правильную», не увидит никогда.
+ *
+ * Цена. Названа причина, которой человек не понимает и изменить не может, и
+ * сказано неправду: будто где-то есть сервер, после которого предел вырастет.
+ * Про «обрежьте видео» — единственное, что тут вообще можно сделать, — в этой
+ * ветке не говорилось: совет достался как раз недостижимой.
+ *
+ * Заголовок и тело лежат парами: у отказа во всплывающем сообщении заголовка
+ * нет, и ему нужна та же мысль одной строкой.
+ */
+export const OVERSIZE_TITLE = {
+  file: 'Файл слишком большой',
+  video: 'Видео слишком большое',
+  photo: 'Снимок слишком большой',
+} as const;
+
+export type OversizeKind = keyof typeof OVERSIZE_TITLE;
+
+/** Чем себе помочь. Пусто там, где помочь нечем: файл не «ужать качеством». */
+const OVERSIZE_HINT: Record<OversizeKind, string> = {
+  file: '',
+  video: ' Обрежьте видео или уменьшите качество.',
+  photo: '',
+};
+
+/** Тело окна под OVERSIZE_TITLE: сколько можно и что делать. */
+export function oversizeAdvice(limitBytes: number, kind: OversizeKind = 'file'): string {
+  return `Предел — ${formatLimit(limitBytes)}.${OVERSIZE_HINT[kind]}`;
+}
+
+/** То же одной строкой — для всплывающего сообщения, у которого заголовка нет. */
+export function oversizeText(limitBytes: number, kind: OversizeKind = 'file'): string {
+  return `${OVERSIZE_TITLE[kind]}: предел — ${formatLimit(limitBytes)}.${OVERSIZE_HINT[kind]}`;
+}

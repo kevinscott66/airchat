@@ -1824,17 +1824,16 @@ function GroupChatScreen({
       // Раньше порог был один (25 МБ) — файл принимался, а отправка молча
       // падала на «Не удалось загрузить видео».
       const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, formatLimit, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+      const { uploadLimitBytes, formatLimit, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       const viaBlob = !isIpfsEnabled();
       const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
       const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
       if (tooLarge) {
-        Alert.alert(
-          'Видео слишком большое',
-          viaBlob
-            ? `Без IPFS-сервера видео передаётся вложением, а его предел — ${formatLimit(videoMaxBytes)}. Обрежьте видео или уменьшите качество.`
-            : `Максимальный размер видео — ${formatLimit(videoMaxBytes)}. Обрежьте его перед отправкой.`,
-        );
+        // v4.32.841: отказ больше не зависит от IPFS. Ветка `viaBlob` на
+        // телефоне единственно достижимая (kill switch с v4.32.19), и именно она
+        // называла человеку сервер, которого у него нет и завести нельзя, —
+        // вместо единственного, что тут можно сделать.
+        Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, 'video'));
         return;
       }
       // v4.32.245: проверки «есть ли IPFS» больше нет — без него видео уходит
@@ -1960,15 +1959,13 @@ function GroupChatScreen({
     // v4.32.245: без IPFS-сервера файл уходит вложением с пределом 8 МБ —
     // говорим об этом сразу, а не после неудачной отправки.
     const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-    const { uploadLimitBytes, formatLimit, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
+    const { uploadLimitBytes, oversizeText, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
     const ipfsOn = isIpfsEnabled();
     const docMaxBytes = uploadLimitBytes({ ipfsEnabled: ipfsOn, ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
     if (asset.size && asset.size > docMaxBytes) {
-      showError(
-        ipfsOn
-          ? `Файл слишком большой (макс ${formatLimit(docMaxBytes)})`
-          : `Файл слишком большой: без IPFS-сервера предел — ${formatLimit(docMaxBytes)}`,
-      );
+      // v4.32.841: одна фраза вместо двух. Ветку с IPFS на телефоне не
+      // достать, а достижимая называла сервер, а не предел.
+      showError(oversizeText(docMaxBytes));
       return;
     }
     setSending(true);
@@ -1984,7 +1981,7 @@ function GroupChatScreen({
       if (!up.ok) {
         showError(
           up.reason === 'oversize'
-            ? `Файл слишком большой: предел — ${formatLimit(up.limitBytes)}`
+            ? oversizeText(up.limitBytes)
             : 'Не удалось загрузить файл'
         );
         return;
@@ -5066,12 +5063,12 @@ function GroupMembersScreen({
       // то есть аватар группы поставить было нельзя в принципе. Запасной путь
       // тот же, что у фотографий: зашифрованное вложение.
       const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
-      const { formatLimit } = await import('../../core/media/uploadRoute');
+      const { oversizeText } = await import('../../core/media/uploadRoute');
       const up = await uploadMediaToCid(res.assets[0].uri, { mime: guessImageMime(res.assets[0].uri) });
       if (!up.ok) {
         showError(
           up.reason === 'oversize'
-            ? `Снимок слишком большой: предел — ${formatLimit(up.limitBytes)}`
+            ? oversizeText(up.limitBytes, 'photo')
             : 'Не удалось загрузить аватар'
         );
         return;

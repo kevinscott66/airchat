@@ -1786,17 +1786,16 @@ function ChatThreadView({
       // записан своим числом, а размер брался из галереи, которая сообщает его
       // не всегда: ролик без заявленного размера проходил проверку целиком.
       const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, formatLimit, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
+      const { uploadLimitBytes, formatLimit, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       const viaBlob = !isIpfsEnabled();
       const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
       const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
       if (tooLarge) {
-        Alert.alert(
-          'Видео слишком большое',
-          viaBlob
-            ? `Без IPFS-сервера видео передаётся вложением, а его предел — ${formatLimit(videoMaxBytes)}. Обрежьте видео или уменьшите качество.`
-            : `Максимальный размер видео — ${formatLimit(videoMaxBytes)}. Обрежьте его перед отправкой.`,
-        );
+        // v4.32.841: отказ больше не зависит от IPFS. Ветка `viaBlob` на
+        // телефоне единственно достижимая (kill switch с v4.32.19), и именно она
+        // называла человеку сервер, которого у него нет и завести нельзя, —
+        // вместо единственного, что тут можно сделать.
+        Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, 'video'));
         return;
       }
       const svc = getMessagingService();
@@ -2159,10 +2158,10 @@ function ChatThreadView({
     // v4.32.358: предел брался отсюда числом и не знал про IPFS-сборки, где он
     // выше; текст ошибки тоже был записан вручную.
     const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-    const { uploadLimitBytes, formatLimit, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
+    const { uploadLimitBytes, oversizeAdvice, oversizeText, OVERSIZE_TITLE, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
     const docMaxBytes = uploadLimitBytes({ ipfsEnabled: isIpfsEnabled(), ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
     if ((asset.size ?? 0) > docMaxBytes) {
-      Alert.alert('Файл слишком большой', `Максимальный размер файла — ${formatLimit(docMaxBytes)}.`);
+      Alert.alert(OVERSIZE_TITLE.file, oversizeAdvice(docMaxBytes));
       return;
     }
     const svc = getMessagingService();
@@ -2180,7 +2179,7 @@ function ChatThreadView({
       if (!up.ok) {
         showError(
           up.reason === 'oversize'
-            ? `Файл слишком большой: предел — ${formatLimit(up.limitBytes)}`
+            ? oversizeText(up.limitBytes)
             : 'Не удалось загрузить файл'
         );
         return;
