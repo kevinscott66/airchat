@@ -20,8 +20,28 @@
  * автора; квадратные скобки и говорят «это примечание выгрузки». Ничего о
  * нашем ключе строка не сообщает: причина не названа намеренно.
  *
- * Модуль чистый: ни хранилища, ни RN, ни времени.
+ * v4.32.806. Вырезание управляющих символов выглядело защитой, а работало
+ * наоборот: служебный байт конверта оно убирало, а тело конверта оставляло.
+ * В файл уходили `poll:{"q":…}` целиком, `contact:{…}` с номером телефона и
+ * ключом, `doc:{…}` с локальным путём к файлу, `loc:{…}` и `liveloc:{…}` с
+ * координатами, `fwd:Имя` чужой пересылки и `sys:` системной строки. Подпись
+ * одноразового сообщения не трогалась вовсе — её байт \x09 (табуляция) в
+ * список вырезаемых не входит и входить не может. То есть выгрузка была
+ * единственным местом, где подпись одноразового оседала постоянным текстом:
+ * во всём остальном коде её прячут намеренно — поиск вырезает её из индекса,
+ * подпись в списке подменяет, пересылка не выносит наружу.
+ *
+ * Список «какой префикс — какое слово» теперь один на подпись и на файл
+ * (`bodyKind` в messagePreview): вторая копия разошлась бы с первой так же,
+ * как разошлись четыре копии подписи до v4.32.238.
+ *
+ * Модуль чистый: ни хранилища, ни RN, ни времени. Импортируются только такие
+ * же чистые соседи — таблица типов, разбор конвертов и общая чистка чужого
+ * текста; ничего из этого не тянет за собой ни базу, ни рендер.
  */
+import { FORWARD_PREFIX, MAX_FORWARD_NAME } from './forwardEnvelope';
+import { bodyKind, isControlOnlyText } from './messagePreview';
+import { SYS_LINE_PREFIX, sanitizeBodyForRender, sanitizeDisplayName } from './sysLineGuard';
 
 /** Служебный префикс вложения в теле сообщения. */
 export const EXPORT_MEDIA_PREFIX = '\x01';
@@ -35,6 +55,20 @@ export const EXPORT_MEDIA_TEXT = '[Медиа]';
  * В скобках — как `[Медиа]`: примечание выгрузки, а не слова автора.
  */
 export const EXPORT_UNREADABLE_TEXT = '[Сообщение не удалось прочитать]';
+
+/** Чем в файле обозначен служебный конверт, которому в переписке места нет. */
+export const EXPORT_CONTROL_TEXT = '[Служебное сообщение]';
+
+/** Чем обозначена пересылка, от которой не осталось ни имени, ни текста. */
+export const EXPORT_FORWARD_TEXT = '[Пересланное сообщение]';
+
+/**
+ * Насколько глубоко разворачивается пересылка пересылки.
+ *
+ * Свои сборщики вложенность схлопывают, но строку собирает клиент
+ * собеседника, и ничто не мешает ему прислать её вложенной тысячу раз.
+ */
+const FORWARD_DEPTH_MAX = 8;
 
 /** Ровно то поле, которое проставляет слой чтения. */
 export interface MaybeUnreadableRow {
@@ -55,8 +89,42 @@ export interface MaybeUnreadableRow {
  */
 export function exportBody(row: MaybeUnreadableRow | null | undefined): string {
   if (row?.unreadable === true) return EXPORT_UNREADABLE_TEXT;
-  const text = typeof row?.text === 'string' ? row.text : '';
+  return exportText(typeof row?.text === 'string' ? row.text : '', 0);
+}
+
+/**
+ * Тело без признака «не открылось»: та же работа, но с глубиной пересылки.
+ *
+ * Значок из подписи здесь не берётся намеренно: файл читают глазами и
+ * переносят куда угодно, а слово в скобках — уже принятая в нём пометка.
+ */
+function exportText(text: string, depth: number): string {
+  if (!text) return '';
+  const kind = bodyKind(text);
+  if (kind) return `[${kind.label}]`;
+  // Голый \x01 — не конверт, а пометка вложения; проверяется после типов,
+  // иначе голосовое ('\x01voice:') снова стало бы безымянным «медиа».
   if (text.startsWith(EXPORT_MEDIA_PREFIX)) return EXPORT_MEDIA_TEXT;
-  // eslint-disable-next-line no-control-regex -- вырезание control-символов из недоверенного ввода и есть цель
-  return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  // Системную строку рисует само приложение — в файл идёт её человеческий
+  // текст, а не 'sys:' с остатком префикса.
+  if (text.startsWith(SYS_LINE_PREFIX)) return sanitizeBodyForRender(text.slice(SYS_LINE_PREFIX.length));
+  if (text.startsWith(FORWARD_PREFIX)) return exportForward(text, depth);
+  if (isControlOnlyText(text)) return EXPORT_CONTROL_TEXT;
+  return sanitizeBodyForRender(text);
+}
+
+/**
+ * Пересылка: «↪ Имя: тело».
+ *
+ * Имя чистится тем же правилом, что и в пузыре: оно пришло по сети, а в файле
+ * строка выглядит как «[время] Имя: текст» — перевод строки в чужом имени
+ * дописал бы в выгрузку строку, которой не было.
+ */
+function exportForward(text: string, depth: number): string {
+  if (depth >= FORWARD_DEPTH_MAX) return EXPORT_FORWARD_TEXT;
+  const rest = text.slice(FORWARD_PREFIX.length);
+  const nl = rest.indexOf('\n');
+  const name = nl < 0 ? '' : sanitizeDisplayName(rest.slice(0, nl), MAX_FORWARD_NAME) ?? '';
+  const body = exportText(nl < 0 ? rest : rest.slice(nl + 1), depth + 1) || EXPORT_FORWARD_TEXT;
+  return name ? `↪ ${name}: ${body}` : `↪ ${body}`;
 }

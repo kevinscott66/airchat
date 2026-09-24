@@ -39,6 +39,47 @@ export function isViewOnceText(text: string | null | undefined): boolean {
 }
 
 /**
+ * Тип сообщения, у которого вместо текста — машинное тело.
+ *
+ * Значок и слово разделены нарочно (v4.32.806). Подпись в списке диалогов
+ * рисует значок: строка там одна, и картинка читается быстрее слова. Выгрузка
+ * переписки в файл рисовать его не может — файл читают глазами и переносят
+ * куда попало, — и до этой версии она не рисовала вообще ничего: служебный
+ * байт вырезался как управляющий символ, а тело конверта уходило в файл как
+ * есть. Общий список нужен ровно затем, зачем и весь этот модуль: новый тип
+ * сообщения нельзя добавить в одном месте и забыть про второе.
+ */
+export interface BodyKind {
+  /** Значок для одной строки списка. */
+  readonly icon: string;
+  /** Слово без значка — для мест, где картинке не место. */
+  readonly label: string;
+}
+
+/**
+ * Префикс — тип. Порядок значения не имеет: префиксы не вложены друг в друга,
+ * кроме '\x01voice:' и голого '\x01' (последнее — не конверт, а пометка
+ * вложения, и разбирается она не здесь).
+ */
+const BODY_KINDS: ReadonlyArray<readonly [string, BodyKind]> = [
+  ['\x01voice:', { icon: '🎤', label: 'Голосовое сообщение' }],
+  ['\x04poll:', { icon: '📊', label: 'Опрос' }],
+  ['\x05contact:', { icon: '👤', label: 'Контакт' }],
+  ['\x06doc:', { icon: '📄', label: 'Документ' }],
+  ['\x07loc:', { icon: '📍', label: 'Геолокация' }],
+  [VIEW_ONCE_PREFIX, { icon: '🔥', label: 'Одноразовое сообщение' }],
+  ['\x0agif:', { icon: '🎞', label: 'GIF' }],
+  ['\x0cliveloc:', { icon: '📡', label: 'Живая геолокация' }],
+];
+
+/** Тип по служебному префиксу; null — обычный текст или другой конверт. */
+export function bodyKind(text: string | null | undefined): BodyKind | null {
+  if (typeof text !== 'string' || !text) return null;
+  const hit = BODY_KINDS.find(([prefix]) => text.startsWith(prefix));
+  return hit ? hit[1] : null;
+}
+
+/**
  * Управляющие конверты, которым в подписи не место вообще: сообщение группы,
  * отметка о прочтении, ctl-конверты, реакции, закрепление, таймер, presence,
  * сторис, профиль. Такая строка в превью означает утечку служебных данных
@@ -116,14 +157,8 @@ function previewLine(text: string): string {
  */
 export function previewLabelForText(text: string): string {
   if (!text) return text;
-  if (text.startsWith('\x01voice:')) return '🎤 Голосовое сообщение';
-  if (text.startsWith('\x04poll:')) return '📊 Опрос';
-  if (text.startsWith('\x05contact:')) return '👤 Контакт';
-  if (text.startsWith('\x06doc:')) return '📄 Документ';
-  if (text.startsWith('\x07loc:')) return '📍 Геолокация';
-  if (isViewOnceText(text)) return '🔥 Одноразовое сообщение';
-  if (text.startsWith('\x0agif:')) return '🎞 GIF';
-  if (text.startsWith('\x0cliveloc:')) return '📡 Живая геолокация';
+  const kind = bodyKind(text);
+  if (kind) return `${kind.icon} ${kind.label}`;
   if (text.startsWith(SYS)) return previewLine(text.slice(SYS.length));
   if (text.startsWith(FWD)) {
     // Имя отправителя в подпись не попадает — оно уже показано строкой выше.
