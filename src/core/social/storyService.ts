@@ -215,30 +215,76 @@ export async function publishStory(
 }
 
 /**
- * Скачать медиа сторис и вернуть локальный адрес для показа.
+ * Исход попытки достать медиа сторис (v4.32.820).
+ *
+ * Два отказа из трёх исходов, и путать их нельзя: «сейчас не достали» проходит
+ * само при следующей попытке, «не возьмём никогда» — не пройдёт ни с какого
+ * раза. Приёму конверта это и есть разница между «подождать» и «записать как
+ * есть»; см. applyIncomingStory.
+ */
+export type StoryMediaRead =
+  /** Адрес, готовый к показу. */
+  | { state: 'ready'; uri: string }
+  /** Не достали: оффлайн, relay молчит, вложение ещё не доехало. */
+  | { state: 'unavailable' }
+  /** Не возьмём: ссылка битая или медиа больше потолка. */
+  | { state: 'rejected' };
+
+/**
+ * Скачать медиа сторис и назвать исход словом.
  *
  * Два источника: зашифрованное вложение (`nb:`) — расшифровывается в файл
  * кэша; обычный CID — читается из IPFS и кладётся в data:-адрес.
+ *
+ * v4.32.820: раньше и то и другое отвечало `null`, и приём не мог отличить
+ * «связи нет» от «этого медиа не будет никогда».
  */
-export async function resolveStoryMedia(mediaCid: string, mediaType: 'image' | 'video'): Promise<string | null> {
+export async function resolveStoryMediaRead(
+  mediaCid: string,
+  mediaType: 'image' | 'video'
+): Promise<StoryMediaRead> {
   if (isNbCid(mediaCid)) {
     const ref = parseNbCid(mediaCid);
-    if (!ref) return null;
+    // Ссылка не разобралась — чинить нечего: она такой и приехала.
+    if (!ref) return { state: 'rejected' };
     // Файл кэша, а не data:-строка: видео сторис в base64 внутри SQLite —
     // десятки мегабайт в строке, на слабом устройстве это заметная пауза.
-    return resolveBlobToLocalFile(ref, mediaType === 'video' ? 'mp4' : 'jpg');
+    let uri: string | null = null;
+    try {
+      uri = await resolveBlobToLocalFile(ref, mediaType === 'video' ? 'mp4' : 'jpg');
+    } catch (e) {
+      log.warn('story_media_blob_failed', { err: e instanceof Error ? e.message : String(e) });
+    }
+    // Любой отказ скачивания собран там в `null`: и оффлайн, и промах по
+    // relay. Порода у них одна — «сейчас нет», — поэтому здесь они и не
+    // разделяются.
+    return uri ? { state: 'ready', uri } : { state: 'unavailable' };
   }
-  const bytes = await catFromIpfs(mediaCid);
-  if (!bytes) return null;
+  let bytes: Uint8Array | null = null;
+  try {
+    bytes = await catFromIpfs(mediaCid);
+  } catch (e) {
+    log.warn('story_media_ipfs_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+  if (!bytes) return { state: 'unavailable' };
   // Потолок распакованного медиа: контакт может выложить в IPFS сотни
   // мегабайт и прислать CID — base64 в SQLite подвесил бы JS-поток.
   const max = mediaType === 'video' ? 40 * 1024 * 1024 : 10 * 1024 * 1024;
   if (bytes.byteLength > max) {
     log.warn('story_media_oversize_drop', { cid: mediaCid.slice(0, 12), bytes: bytes.byteLength });
-    return null;
+    return { state: 'rejected' };
   }
   const b64 = Buffer.from(bytes).toString('base64');
-  return `data:${mediaType === 'video' ? 'video/mp4' : 'image/jpeg'};base64,${b64}`;
+  return { state: 'ready', uri: `data:${mediaType === 'video' ? 'video/mp4' : 'image/jpeg'};base64,${b64}` };
+}
+
+/**
+ * Тот же поход за медиа для показа на экране: там разницы между двумя
+ * отказами нет — плитку либо есть чем нарисовать, либо нет.
+ */
+export async function resolveStoryMedia(mediaCid: string, mediaType: 'image' | 'video'): Promise<string | null> {
+  const read = await resolveStoryMediaRead(mediaCid, mediaType);
+  return read.state === 'ready' ? read.uri : null;
 }
 
 /**
@@ -298,10 +344,39 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
   // Отложенная загрузка означала бы, что открытая вечером сторис пустая.
   let mediaUri: string | null = null;
   if (envelope.mediaCid) {
-    try {
-      mediaUri = await resolveStoryMedia(envelope.mediaCid, envelope.mediaType);
-    } catch {
-      // оффлайн — сторис покажется текстом
+    const read = await resolveStoryMediaRead(envelope.mediaCid, envelope.mediaType);
+    /**
+     * v4.32.820: не достали медиа — кадр откладывается, а не записывается
+     * текстом.
+     *
+     * Прежде любой отказ скачивания молча оставлял `mediaUri` пустым, и сторис
+     * записывалась НАВСЕГДА без снимка: строка есть, повтора у конверта нет,
+     * второй раз её не пришлют. Оффлайн в минуту приёма — обычное дело, а
+     * итог его был неотличим от «друг выложил пустую карточку». Ровно то, от
+     * чего уходили, когда скачивание сделали немедленным (см. выше).
+     *
+     * Ждать тут безопасно и недолго: кадр лежит на relay, а сама сторис живёт
+     * сутки — просроченный конверт decodeStoryEnvelope уже не принимает, и
+     * откладывание кончается вместе с ней, а не висит тридцать суток.
+     *
+     * 'rejected' откладывать нельзя: битая ссылка и медиа больше потолка
+     * такими и останутся, а каждая попытка — это повторное скачивание. Такую
+     * сторис записываем как есть: текст в ней может быть всем содержанием.
+     */
+    if (read.state === 'unavailable') {
+      log.warn('story_media_unavailable_defer', {
+        author: envelope.authorPubB64.slice(0, 8),
+        cid: envelope.mediaCid.slice(0, 12),
+      });
+      return 'deferred';
+    }
+    if (read.state === 'rejected') {
+      log.warn('story_media_rejected_text_only', {
+        author: envelope.authorPubB64.slice(0, 8),
+        cid: envelope.mediaCid.slice(0, 12),
+      });
+    } else {
+      mediaUri = read.uri;
     }
   }
 
@@ -354,6 +429,10 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
  * раз скачать вложение. Поэтому откладываем только занятую базу — мусор вместо
  * конверта, подставленный автор, незнакомец и упёршийся потолок годными не
  * станут ни с какого раза.
+ *
+ * v4.32.820: и не скачавшееся медиа. Дороговизна повтора тут ни при чём —
+ * скачать как раз и не вышло, а записанная без снимка сторис не чинится уже
+ * ничем.
  */
 export async function handleIncomingStory(
   text: string,
