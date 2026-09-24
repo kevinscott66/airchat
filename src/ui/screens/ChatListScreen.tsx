@@ -480,10 +480,16 @@ function AddContactModal({
   const { colors } = useTheme();
   const [keyInput, setKeyInput] = useState('');
   const [nameInput, setNameInput] = useState('');
-  const [profileCid, setProfileCid] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const reset = () => { setKeyInput(''); setNameInput(''); setProfileCid(''); };
+  // v4.32.891: третьим полем окно спрашивало идентификатор карточки в облаке
+  // и подсказывало его началом. Слова не из человеческого языка, а сделать
+  // оно не умело ничего: единственный читатель этого значения —
+  // syncDmHistoryFromProfile — берёт карточку через IPFS, выключенный на
+  // телефоне наглухо с v4.32.19, и ищет в ней conversationTips, которых с
+  // v4.32.291 туда никто не кладёт. Треть окна знакомства занимала просьба,
+  // которую нельзя ни понять, ни выполнить с пользой.
+  const reset = () => { setKeyInput(''); setNameInput(''); };
 
   const submit = async () => {
     const key = keyInput.trim();
@@ -535,7 +541,9 @@ function AddContactModal({
     setBusy(true);
     try {
       const name = nameInput.trim() || 'Новый контакт';
-      await addContact(pair, pk, name, profileCid.trim() || undefined);
+      // v4.32.891: четвёртым доводом сюда уезжал CID, который окно спрашивало
+      // у человека. Спрашивать его перестали — см. комментарий у полей ниже.
+      await addContact(pair, pk, name);
       await getMessagingService()?.refreshSubscriptions();
       await getMessagingService()?.syncHistoryFromPeer(pkB64, 100);
       showSuccess('Контакт добавлен');
@@ -585,16 +593,6 @@ function AddContactModal({
               onChangeText={setNameInput}
               placeholder="Как отображать имя"
               placeholderTextColor={colors.textMuted}
-            />
-            <Text style={[acStyles.label, { color: colors.textSecondary }]}>CID профиля в облаке (необязательно)</Text>
-            <TextInput
-              style={[acStyles.input, { color: colors.text, backgroundColor: colors.surfaceHigh, borderColor: colors.border }]}
-              value={profileCid}
-              onChangeText={setProfileCid}
-              placeholder="Qm… или baf…"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
             />
           </View>
         </View>
