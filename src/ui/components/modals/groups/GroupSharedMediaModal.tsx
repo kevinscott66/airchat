@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   View,
   Text,
   StyleSheet,
@@ -21,7 +22,9 @@ import {
 } from '../../../../core/storage/local';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
 import { isDocMessage, parseDocEnvelope } from '../../../../core/social/docEnvelope';
-import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolvedMediaUrls';
+import { useResolvedMediaSlots } from '../../../screens/chat-components/useResolvedMediaUrls';
+import { blobResolveText } from '../../../../core/media/blobResolveText';
+import { showError } from '../../userFeedback';
 import { mediaRowReadable, mediaRowViewOnce, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
 import { galleryFirstCids } from '../../../../core/media/galleryCids';
 import { openExternal } from '../../../utils/openExternal';
@@ -38,6 +41,9 @@ const GSM_READ_FAILED = 'Не удалось прочитать переписк
 
 /** Подпись плитки одноразового: галерея его не открывает (v4.32.803). */
 const GSM_VIEW_ONCE_HINT = 'Одноразовое сообщение — открывается один раз в переписке';
+
+/** Подпись плитки, которая не скачалась: нажатие назовёт причину (v4.32.876). */
+const GSM_TILE_FAILED_HINT = 'Снимок не загрузился — нажмите, чтобы узнать причину и повторить';
 
 export function GroupSharedMediaModal({
   visible,
@@ -82,7 +88,7 @@ export function GroupSharedMediaModal({
    * про него не знала.
    */
   const firstCids = useMemo(() => galleryFirstCids(mediaItems), [mediaItems]);
-  const thumbUris = useResolvedMediaUrls(firstCids, gateway);
+  const { slots: thumbSlots, retry: retryThumbs } = useResolvedMediaSlots(firstCids, gateway);
 
   useEffect(() => {
     if (!visible) return;
@@ -190,10 +196,41 @@ export function GroupSharedMediaModal({
                       </View>
                     );
                   }
-                  // Пока вложение не расшифровано, адреса нет — плитка появится
-                  // сама, когда файл окажется в кэше.
-                  const uri = thumbUris[index];
-                  if (!uri) return null;
+                  // Строка без единого вложения: показывать нечего и не было.
+                  if (!firstCids[index]) return null;
+                  const slot = thumbSlots[index];
+                  const uri = slot?.url ?? null;
+                  if (!uri) {
+                    /**
+                     * v4.32.876: здесь стоял `return null`, и плитка исчезала
+                     * из сетки — и пока качалась, и когда не скачалась. Сетка
+                     * трёхколоночная: пропавшая плитка сдвигала все следующие,
+                     * так что человек видел не «одного снимка нет», а другую
+                     * галерею.
+                     */
+                    const box = [gsmStyles.thumb, gsmStyles.thumbUnreadable, { backgroundColor: colors.surface, borderColor: colors.border }];
+                    if (slot?.phase !== 'failed') {
+                      return (
+                        <View style={box}>
+                          <ActivityIndicator size="small" color={colors.textMuted} />
+                        </View>
+                      );
+                    }
+                    return (
+                      <AppPressable
+                        onPress={() => {
+                          showError(blobResolveText(slot.reason ?? 'unknown', 'photo'));
+                          retryThumbs();
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={GSM_TILE_FAILED_HINT}
+                      >
+                        <View style={box}>
+                          <Ionicons name="cloud-offline-outline" size={22} color={colors.textMuted} />
+                        </View>
+                      </AppPressable>
+                    );
+                  }
                   return <Image source={{ uri }} style={gsmStyles.thumb} resizeMode="cover" />;
                 }}
                 contentContainerStyle={{ padding: 1 }}

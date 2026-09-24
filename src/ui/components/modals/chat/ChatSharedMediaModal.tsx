@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   View,
   Text,
   StyleSheet,
@@ -17,8 +18,9 @@ import { listConversationMedia, type SharedMediaRow } from '../../../../core/sto
 import { mediaRowReadable, mediaRowViewOnce, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
 import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
 import { galleryCids } from '../../../../core/media/galleryCids';
-import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolvedMediaUrls';
-import { showSuccess } from '../../userFeedback';
+import { useResolvedMediaSlots } from '../../../screens/chat-components/useResolvedMediaUrls';
+import { blobResolveText } from '../../../../core/media/blobResolveText';
+import { showError, showSuccess } from '../../userFeedback';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
 import { isDocMessage } from '../../../../core/social/docEnvelope';
 import { isVoiceMessage, parseVoiceMeta } from '../../../../core/social/voiceEnvelope';
@@ -52,6 +54,9 @@ const CSM_READ_FAILED = 'Не удалось прочитать переписк
 
 /** Подпись плитки одноразового: галерея его не открывает (v4.32.803). */
 const VIEW_ONCE_TILE_HINT = 'Одноразовое сообщение — открывается один раз в переписке';
+
+/** Подпись плитки, которая не скачалась: нажатие назовёт причину (v4.32.876). */
+const CSM_TILE_FAILED_HINT = 'Снимок не загрузился — нажмите, чтобы узнать причину и повторить';
 
 /**
  * SharedMediaPane — содержимое одной вкладки без окна вокруг (v4.32.577).
@@ -184,8 +189,11 @@ export function SharedMediaPane({
    * дважды, в двух разметках, и вторая копия про одноразовое не знала.
    */
   const allCids = useMemo(() => galleryCids(items), [items]);
-  const resolved = useResolvedMediaUrls(allCids, gateway);
-  const allUris = useMemo(() => resolved.filter((u): u is string => !!u), [resolved]);
+  const { slots, retry } = useResolvedMediaSlots(allCids, gateway);
+  const allUris = useMemo(
+    () => slots.map((s) => s.url).filter((u): u is string => !!u),
+    [slots],
+  );
 
   /** v4.32.584: сколько вложений не прочитано — молчать об этом нельзя. */
   const mediaNotice = useMemo(() => mediaSkippedNotice(items), [items]);
@@ -231,16 +239,55 @@ export function SharedMediaPane({
     }
     const first = parseMediaCidsColumn(item.mediaCids)[0]?.trim() ?? '';
     if (!first) return null;
-    // Вложение расшифровывается асинхронно: пока файла нет — плитки нет.
-    const uri = resolved[allCids.indexOf(first)] ?? null;
-    if (!uri) return null;
+    // Адреса нет в списке разбора вовсе — строка за потолком в 300 вложений
+    // (galleryCids). Её здесь и не обещали: плитки нет, счёт «Показать всё»
+    // говорит, сколько всего.
+    const at = allCids.indexOf(first);
+    if (at < 0) return null;
+    const slot = slots[at];
+    const uri = slot?.url ?? null;
+    if (!uri) {
+      /**
+       * v4.32.876: здесь стоял `return null` — и вложение пропадало из сетки
+       * целиком. Пропадало и пока качалось, и когда не скачалось: место в
+       * сетке занимала следующая фотография, ряды съезжали, а число под
+       * списком считало строки, которых не видно. Отличить одно от другого
+       * человек не мог никак — для него снимка просто не было.
+       */
+      const box = [
+        paneStyles.thumbUnreadable,
+        { width: tileSide, height: tileSide, backgroundColor: colors.surface, borderColor: colors.border },
+      ];
+      if (slot?.phase !== 'failed') {
+        return (
+          <View key={item.id} style={box}>
+            <ActivityIndicator size="small" color={colors.textMuted} />
+          </View>
+        );
+      }
+      return (
+        <AppPressable
+          key={item.id}
+          onPress={() => {
+            showError(blobResolveText(slot.reason ?? 'unknown', 'photo'));
+            retry();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={CSM_TILE_FAILED_HINT}
+        >
+          <View style={box}>
+            <Ionicons name="cloud-offline-outline" size={22} color={colors.textMuted} />
+          </View>
+        </AppPressable>
+      );
+    }
     const flatIdx = allUris.indexOf(uri);
     return (
       <AppPressable key={item.id} onPress={() => onImagePress(allUris, flatIdx >= 0 ? flatIdx : 0)}>
         <Image source={{ uri }} style={{ width: tileSide, height: tileSide }} resizeMode="cover" />
       </AppPressable>
     );
-  }, [resolved, allCids, allUris, onImagePress, colors, tileSide]);
+  }, [slots, allCids, allUris, onImagePress, colors, tileSide, retry]);
 
   /** «Показано не всё» — строкой под списком, а не молчанием. */
   const more = useCallback((shown: number, total: number) => (
