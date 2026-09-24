@@ -109,6 +109,7 @@ function SingleImageView({
   onNext,
   index,
   total,
+  allowShare,
 }: {
   uri: string;
   onClose: () => void;
@@ -117,6 +118,7 @@ function SingleImageView({
   onNext: () => void;
   index: number;
   total: number;
+  allowShare: boolean;
 }): React.ReactElement {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
@@ -269,13 +271,17 @@ function SingleImageView({
         ) : (
           <View />
         )}
-        <AppPressable style={siv.iconBtn} onPress={() => void share()} hitSlop={16} disabled={sharing}>
-          {sharing ? (
-            <ActivityIndicator color={mediaScrim.ink} size="small" />
-          ) : (
-            <Ionicons name="share-outline" size={24} color={mediaScrim.ink} />
-          )}
-        </AppPressable>
+        {allowShare ? (
+          <AppPressable style={siv.iconBtn} onPress={() => void share()} hitSlop={16} disabled={sharing}>
+            {sharing ? (
+              <ActivityIndicator color={mediaScrim.ink} size="small" />
+            ) : (
+              <Ionicons name="share-outline" size={24} color={mediaScrim.ink} />
+            )}
+          </AppPressable>
+        ) : (
+          <View style={siv.iconPlaceholder} />
+        )}
       </View>
 
       {/* Gallery navigation arrows */}
@@ -308,6 +314,8 @@ const siv = StyleSheet.create({
     backgroundColor: mediaScrim.bar,
   },
   iconBtn: { padding: 8 },
+  // Место снятой кнопки: без него счётчик кадров уезжает к краю.
+  iconPlaceholder: { padding: 8, width: 40 },
   counter: { color: mediaScrim.ink, fontSize: 14, fontWeight: '600' },
   navBtn: { position: 'absolute', top: '45%', padding: 10, borderRadius: 26, backgroundColor: mediaScrim.bar },
 });
@@ -321,9 +329,17 @@ type MediaViewerProps = {
   urls: string[];
   initialIndex?: number;
   onClose: () => void;
+  /**
+   * Можно ли отдать кадр наружу (v4.32.804).
+   *
+   * По умолчанию можно: обычный снимок человек вправе сохранить. Одноразовый —
+   * нет, и решает это не просмотрщик, а тот, кто его открывает: сам кадр
+   * ничем не отличается от любого другого.
+   */
+  allowShare?: boolean;
 };
 
-export function MediaViewer({ visible, urls, initialIndex = 0, onClose }: MediaViewerProps): React.ReactElement {
+export function MediaViewer({ visible, urls, initialIndex = 0, onClose, allowShare = true }: MediaViewerProps): React.ReactElement {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
   const goNext = useCallback(() => setCurrentIndex((i) => Math.min(i + 1, urls.length - 1)), [urls.length]);
@@ -347,6 +363,7 @@ export function MediaViewer({ visible, urls, initialIndex = 0, onClose }: MediaV
         onNext={goNext}
         index={currentIndex}
         total={urls.length}
+        allowShare={allowShare}
       />
     </Modal>
   );
@@ -357,12 +374,16 @@ export function MediaViewer({ visible, urls, initialIndex = 0, onClose }: MediaV
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useMediaViewer() {
-  const [state, setState] = useState<{ urls: string[]; index: number } | null>(null);
-  const open = useCallback((urls: string[], index = 0) => setState({ urls, index }), []);
+  const [state, setState] = useState<{ urls: string[]; index: number; allowShare: boolean } | null>(null);
+  const open = useCallback(
+    (urls: string[], index = 0, opts?: { allowShare?: boolean }) =>
+      setState({ urls, index, allowShare: opts?.allowShare !== false }),
+    []
+  );
   const close = useCallback(() => setState(null), []);
 
   const element = state ? (
-    <MediaViewer visible urls={state.urls} initialIndex={state.index} onClose={close} />
+    <MediaViewer visible urls={state.urls} initialIndex={state.index} onClose={close} allowShare={state.allowShare} />
   ) : null;
 
   return { open, close, element };

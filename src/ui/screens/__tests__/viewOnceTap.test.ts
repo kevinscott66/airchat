@@ -67,7 +67,7 @@ describe('показали — удаляем; не показали — не т
   it('удачное нажатие: открыли, потом отложенно удалили и перечитали список', async () => {
     const s = stand();
     await runViewOnceTap(s.deps);
-    expect(s.deps.open).toHaveBeenCalledWith(['file:///a.jpg']);
+    expect(s.deps.open).toHaveBeenCalledWith(['file:///a.jpg'], { allowShare: false });
     expect(s.deps.remove).not.toHaveBeenCalled();
     await s.elapse();
     expect(s.deps.remove).toHaveBeenCalledTimes(1);
@@ -101,7 +101,7 @@ describe('показали — удаляем; не показали — не т
     // Строка в базе держит единственную ссылку на нерасшифрованные снимки.
     const s = stand({ resolve: jest.fn(async () => ({ uris: ['file:///a.jpg'], missing: 1 })) });
     await runViewOnceTap(s.deps);
-    expect(s.deps.open).toHaveBeenCalledWith(['file:///a.jpg']);
+    expect(s.deps.open).toHaveBeenCalledWith(['file:///a.jpg'], { allowShare: false });
     expect(s.deps.later).not.toHaveBeenCalled();
     expect(s.deps.remove).not.toHaveBeenCalled();
   });

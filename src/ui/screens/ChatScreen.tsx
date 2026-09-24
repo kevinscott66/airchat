@@ -2740,7 +2740,7 @@ function ChatThreadView({
       void runViewOnceTap({
         resolve: () => resolveMediaCidsToUris(cids, gateway),
         alive: () => isMountedRef.current,
-        open: (uris) => openMedia(uris, 0),
+        open: (uris, opts) => openMedia(uris, 0, opts),
         later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
         remove: async () => {
           const svc = getMessagingService();

@@ -47,8 +47,17 @@ export interface ViewOnceTapDeps {
   resolve: () => Promise<{ uris: string[]; missing: number }>;
   /** Экран ещё жив? */
   alive: () => boolean;
-  /** Открыть просмотрщик. */
-  open: (uris: string[]) => void;
+  /**
+   * Открыть просмотрщик.
+   *
+   * `allowShare` приходит отсюда, а не из вызывающего экрана (v4.32.804): в
+   * просмотрщике есть «Поделиться», и для одноразового снимка это кнопка
+   * «сохранить навсегда» — кадр уходит в «Фото» или в файлы, откуда его уже
+   * ничем не достать. Запрет не может зависеть от того, вспомнил ли о нём
+   * автор очередного экрана: снимок ничем не отличается от обычного, и
+   * забывается такое молча.
+   */
+  open: (uris: string[], opts: { allowShare: boolean }) => void;
   /**
    * Отложить удаление на VIEW_ONCE_DELETE_DELAY_MS.
    *
@@ -76,7 +85,7 @@ export async function runViewOnceTap(deps: ViewOnceTapDeps): Promise<void> {
     deps.onUnavailable();
     return;
   }
-  deps.open(uris);
+  deps.open(uris, { allowShare: false });
   if (missing > 0) return;
   deps.later(() => {
     void deps

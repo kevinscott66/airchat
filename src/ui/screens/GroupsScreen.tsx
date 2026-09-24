@@ -1116,7 +1116,7 @@ function GroupChatScreen({
     void runViewOnceTap({
       resolve: () => resolveMediaCidsToUris(cids, gateway),
       alive: () => isMountedRef.current,
-      open: (uris) => grpMediaViewer.open(uris, 0),
+      open: (uris, opts) => grpMediaViewer.open(uris, 0, opts),
       later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
       remove: () => deleteGroupMessage(item.id, pid),
       reload: () => { void loadMessages(); },
