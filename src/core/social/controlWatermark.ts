@@ -28,6 +28,7 @@
  * удалении профиля и отличает «не читается база» от «ещё ничего не было».
  */
 import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
 import { log } from '../logger';
 
 export const WATERMARK_PREFIX = 'ctl_ts_v1:';
@@ -77,10 +78,10 @@ export function watermarkKey(kind: ControlKind, peerPubB64: string): string {
  * `em.timestamp` с тем же допуском), а принять её значило бы навсегда закрыть
  * приём — все последующие законные конверты оказались бы «старыми».
  *
- * Ошибка чтения или записи kv трактуется как «пропустить»: приложение без
- * доступа к базе не должно молча переставать применять настройки собеседника.
- * Отказ здесь стоил бы больше, чем окно для повтора, который и так требует
- * перехваченного кадра.
+ * Ошибка базы больше не означает «пропустить» (v4.32.791): применённое помнит
+ * зеркало в памяти процесса, и по нему повтор отбивается даже тогда, когда знак
+ * не лёг на диск или не прочитался обратно. Прежний мягкий ответ остался лишь
+ * там, где сказать нечего вовсе, — пустое зеркало и нечитаемая база разом.
  *
  * Пара к ней — {@link commitControlTs}, и порядок между ними обязателен:
  * проверить свежесть → применить → сдвинуть. Слитная форма «проверить и сразу
@@ -216,6 +217,91 @@ function groupKindLabel(slot: GroupControlSlot): string {
 }
 
 
+/**
+ * Зеркало отметок в памяти процесса (v4.32.791).
+ *
+ * Знак сторожит необратимое: состав группы, роли, баны, снятие пометки об
+ * исключении. А сам он до этой версии терялся дважды.
+ *
+ * Первое. `commitTs` о неудавшейся записи только писал в журнал: вызывающий об
+ * этом не узнавал, и знак оставался там, где стоял до операции. Дальше повтор
+ * перехваченного кадра проходил проверку свежести честно — по метке он и
+ * правда новее того, что записано. Так возвращались снятые права
+ * администратора и снимался бан: подписавший оригинал как был администратором,
+ * так и остался, и `canModerate` ему не мешает.
+ *
+ * Второе. Нечитаемая база отвечала «свежо» на что угодно, и в тридцатисуточное
+ * окно проходил любой сохранённый кадр состава.
+ *
+ * Отсюда зеркало. Оно держит наибольшую отметку, которую этот запуск успел
+ * применить, — независимо от того, легла она на диск или нет, — и читающая
+ * сторона судит по нему наравне с диском. Память процесса диск не заменяет:
+ * перезапуск её не переживёт. Но заминка базы длится секунды, а повтор
+ * приходит тогда, когда его пришлют, — чаще всего в ту же сессию. Тот же
+ * приём, что у пометок выхода и исключения (v4.32.787, markFallback);
+ * отдельная карта здесь потому, что здесь нужна не «не легло», а «наибольшее
+ * из применённого».
+ *
+ * Потолок задан: ключи приходят снаружи (слот на каждого участника каждой
+ * группы, на каждое правимое сообщение), считать их некому. Вытесняется самая
+ * давняя — для неё всё становится ровно так, как было до этой версии.
+ */
+const MIRROR_LIMIT = 4096;
+const mirror = new Map<string, number>();
+
+const mirrorId = (pid: number, key: string): string => `${pid}\u0000${key}`;
+
+/** Запомнить применённое. Отметка только растёт: откат её не двигает. */
+function mirrorRemember(pid: number, key: string, ts: number): void {
+  const id = mirrorId(pid, key);
+  const next = Math.max(mirror.get(id) ?? 0, Math.floor(ts));
+  // Переставляем в конец: порядок вставки — это и есть порядок вытеснения.
+  mirror.delete(id);
+  mirror.set(id, next);
+  while (mirror.size > MIRROR_LIMIT) {
+    const oldest = mirror.keys().next();
+    if (oldest.done) break;
+    mirror.delete(oldest.value);
+  }
+}
+
+/** Наибольшее применённое этим запуском, либо 0 — «не знаем». */
+function mirrorGet(pid: number, key: string): number {
+  return mirror.get(mirrorId(pid, key)) ?? 0;
+}
+
+/** Только для проверок: сколько слотов держится в памяти. */
+export function controlTsMirrorSize(): number {
+  return mirror.size;
+}
+
+/**
+ * Только для тестов: очистить зеркало.
+ *
+ * Зеркало живёт на уровне модуля, как и положено памяти процесса, — а набор
+ * проверок в одном файле делит один модуль. Без этой уборки применённое в
+ * одной проверке судило бы конверты следующей.
+ */
+export function resetControlTsMirrorForTests(): void {
+  mirror.clear();
+}
+
+/**
+ * Прочитать знак с повтором по занятой секунде (v4.32.791).
+ *
+ * Те же паузы, что у прочих чтений и у журнала звонков (v4.32.749). Повтор
+ * стоит дёшево — служебные конверты приходят поштучно, не потоком, — а платит
+ * за него тот единственный случай, когда база занята соседним запросом ровно в
+ * миг, когда решается судьба состава группы.
+ */
+async function readWatermark(pid: number, key: string): Promise<{ value: string | null } | null> {
+  for (let attempt = 0; ; attempt++) {
+    const got = await scopedKvTryGetFor(pid, key);
+    if (got !== null || attempt >= READ_RETRY_ATTEMPTS) return got;
+    await new Promise((r) => setTimeout(r, readRetryDelayMs(attempt + 1)));
+  }
+}
+
 async function freshTs(key: string, kind: string, pid: number, ts: number): Promise<boolean> {
   if (!Number.isFinite(ts) || ts <= 0) {
     log.warn('control_ts_malformed', { kind, ts });
@@ -225,17 +311,28 @@ async function freshTs(key: string, kind: string, pid: number, ts: number): Prom
     log.warn('control_ts_future', { kind, ts });
     return false;
   }
-  let prev = 0;
+  const remembered = mirrorGet(pid, key);
+  let prev = remembered;
+  let readOk = false;
   try {
-    const got = await scopedKvTryGetFor(pid, key);
+    const got = await readWatermark(pid, key);
     if (got === null) {
       log.warn('control_ts_read_failed', { kind });
-      return true;
+    } else {
+      readOk = true;
+      const n = got.value === null ? NaN : Number(got.value);
+      if (Number.isFinite(n) && n > prev) prev = n;
     }
-    const n = got.value === null ? NaN : Number(got.value);
-    if (Number.isFinite(n)) prev = n;
   } catch (e) {
     log.warn('control_ts_read_failed', { kind, err: e instanceof Error ? e.message : String(e) });
+  }
+  // Диск не прочитался, и в памяти о слоте ничего нет: судить не по чему.
+  // Здесь и только здесь остаётся прежний ответ «пропустить» (см. заголовок
+  // файла): приложение без доступа к базе не должно молча переставать
+  // применять решения собеседника. Окно это узкое — оно требует и перезапуска,
+  // и неработающей kv в ту же секунду.
+  if (!readOk && remembered === 0) {
+    log.warn('control_ts_unknown_pass', { kind });
     return true;
   }
   if (ts <= prev) {
@@ -251,13 +348,17 @@ async function freshTs(key: string, kind: string, pid: number, ts: number): Prom
  * Раньше здесь стоял scopedKvSetFor внутри try/catch. Та форма отдаёт void и
  * гасит отказ базы внутри, так что catch не срабатывал ни разу и строки
  * control_ts_write_failed не было в журнале никогда: неудавшийся сдвиг
- * выглядел точно как удавшийся. Само поведение остаётся прежним — пропустить,
- * а не отвергнуть (см. заголовок файла): без доступа к базе приложение не
- * должно переставать применять настройки собеседника. Меняется только то, что
- * причина теперь видна.
+ * выглядел точно как удавшийся. С v4.32.655 причина видна, а с v4.32.791
+ * не легший сдвиг ещё и перестал быть дорогой для повтора: зеркало помнит его
+ * и без диска.
  */
 async function commitTs(key: string, kind: string, pid: number, ts: number): Promise<void> {
-  if (!(await scopedKvSetCheckedFor(pid, key, String(Math.floor(ts))))) {
+  const at = Math.floor(ts);
+  // v4.32.791: зеркало ставится ДО записи и остаётся стоять, даже если запись
+  // не удалась. Именно на не легший сдвиг и рассчитан повтор: по диску кадр
+  // выглядит новее применённого, а по памяти — нет.
+  mirrorRemember(pid, key, at);
+  if (!(await scopedKvSetCheckedFor(pid, key, String(at)))) {
     log.warn('control_ts_write_failed', { kind });
   }
 }

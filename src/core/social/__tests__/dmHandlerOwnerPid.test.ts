@@ -58,6 +58,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { encodeDmPinEnvelope, handleIncomingDmPin } from '../dmPinSync';
 import { encodeDisappearEnvelope, handleIncomingDisappear } from '../disappearSync';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const OWNER = 3;
 const PEER = 'peerPub====';
@@ -67,6 +68,10 @@ function src(name: string): string {
 }
 
 beforeEach(() => {
+  // v4.32.791: зеркало водяного знака живёт на уровне модуля и переживает
+  // уборку базы — без этого применённое соседней проверкой судило бы конверты
+  // этой (метки здесь у всех одинаковые).
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockSetPinned.mockClear();
   mockSetTimer.mockClear();

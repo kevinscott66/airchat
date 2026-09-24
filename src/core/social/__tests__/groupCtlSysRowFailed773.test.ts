@@ -145,6 +145,7 @@ import { join } from 'path';
 import { encodeGroupCtlEnvelope } from '../groupControlEnvelope';
 import { handleIncomingGroupControl } from '../groupMessaging';
 import type { GroupRecipient } from '../groupRecipient';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const mockLog = (jest.requireMock('../../logger') as { log: { warn: jest.Mock } }).log;
 
@@ -200,6 +201,9 @@ const codeOnly = (src: string) =>
 const GRP = codeOnly(readFileSync(join(__dirname, '..', 'groupMessaging.ts'), 'utf8'));
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockGroups.length = 0;
   for (const k of Object.keys(mockMembers)) delete mockMembers[k];
   mockKv.clear();
@@ -298,6 +302,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обычные исходы ост
       mockGroups.length = 0;
       for (const k of Object.keys(mockMembers)) delete mockMembers[k];
       mockKv.clear();
+      // Зеркало знака чистится вместе с базой (v4.32.791): три захода идут одним
+      // и тем же кадром, и без уборки второй был бы отбит как повтор.
+      resetControlTsMirrorForTests();
       known();
       verdicts.push(await handleIncomingGroupControl(roleCtl(VICT, 'admin'), RCPT, ADMIN));
     }

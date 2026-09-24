@@ -162,6 +162,7 @@ import { join as pathJoin } from 'path';
 import { encodeGroupCtlEnvelope } from '../groupControlEnvelope';
 import { handleIncomingGroupControl } from '../groupMessaging';
 import type { GroupRecipient } from '../groupRecipient';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const RCPT = {
   pid: 1,
@@ -226,6 +227,9 @@ const codeOnly = (src: string) =>
 const GRP = codeOnly(readFileSync(pathJoin(__dirname, '..', 'groupMessaging.ts'), 'utf8'));
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockGroups.length = 0;
   for (const k of Object.keys(mockMembers)) delete mockMembers[k];
   mockKv.clear();

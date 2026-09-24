@@ -19,6 +19,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const mockKv = new Map<string, string>();
 const mockReadFail = new Set<string>();
@@ -59,6 +60,9 @@ const PID = 1;
 const NOW = Date.now();
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockReadFail.clear();
 });
@@ -97,12 +101,22 @@ describe('повтор правки сообщения группы', () => {
     expect(groupMessageWatermarkKey('x')).toBe(`${WATERMARK_PREFIX}grp:msg:x`);
   });
 
-  it('отказ чтения базы не запирает правку навсегда', async () => {
-    // Общее правило водяных знаков: читать не смогли — пропускаем. Иначе одна
-    // занятая база стоила бы человеку всех последующих правок в группе.
+  it('отказ чтения базы не запирает поток правок', async () => {
+    // Прежнее правило было «читать не смогли — пропускаем что угодно», и с
+    // v4.32.791 оно сужено: применённое помнит зеркало в памяти, и повтор по
+    // нему отбивается даже при молчащей базе. Смысл правила это сохраняет —
+    // занятая база не стоит человеку последующих правок, — но откат больше не
+    // проходит под видом «не знаем».
     await commitGroupMessageTs('m1', PID, NOW - 10_000);
     mockReadFail.add(`p${PID}:${groupMessageWatermarkKey('m1')}`);
-    expect(await groupMessageTsFresh('m1', PID, NOW - 60_000)).toBe(true);
+    expect(await groupMessageTsFresh('m1', PID, NOW - 60_000)).toBe(false);
+    expect(await groupMessageTsFresh('m1', PID, NOW - 1_000)).toBe(true);
+  });
+
+  it('отказ чтения на слоте, о котором ничего не применяли, пропускает', async () => {
+    // Остаток мягкости: зеркало пусто, база молчит — судить не по чему.
+    mockReadFail.add(`p${PID}:${groupMessageWatermarkKey('m9')}`);
+    expect(await groupMessageTsFresh('m9', PID, NOW - 60_000)).toBe(true);
   });
 });
 

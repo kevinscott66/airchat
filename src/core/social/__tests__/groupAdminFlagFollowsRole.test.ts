@@ -150,6 +150,7 @@ import { encodeGroupCtlEnvelope } from '../groupControlEnvelope';
 import { isAdminRole, ownGroupRole } from '../ownGroupRole';
 import { getGroup, listGroupMembers } from '../../storage/local';
 import type { GroupRecipient } from '../groupRecipient';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const GID = 'g-promoted-1';
 const ME = 'M'.repeat(43);
@@ -229,6 +230,9 @@ function opCtl(op: 'ban' | 'unban' | 'kick', target: string): string {
 }
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockGroups.length = 0;
   mockJoinRequests.length = 0;
@@ -316,7 +320,10 @@ describe('флаг группы догоняет собственную роль
     mockMembers[GID] = [];
     // Вторая половина — отдельный случай, и знак от первой её не касается:
     // обе метки берутся из одной миллисекунды (v4.32.655).
+    // Зеркало знака чистится вместе с базой (v4.32.791) — оно помнит
+    // применённое и поверх пустой базы.
     mockKv.clear();
+    resetControlTsMirrorForTests();
     group('admin', true);
     await handleIncomingGroupControl(opCtl('kick', ME), RCPT, OWNER);
     expect(mockMetaPatches).toEqual([{ isAdmin: false }]);

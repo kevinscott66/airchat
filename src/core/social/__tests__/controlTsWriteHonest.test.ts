@@ -6,17 +6,29 @@
  * разу: строки control_ts_write_failed в журнале не было никогда, а
  * acceptControlTs отвечал «принято» и на конверт, знак которого не лёг.
  *
- * Само поведение при отказе остаётся прежним — пропустить, а не отвергнуть
- * (см. заголовок controlWatermark.ts): приложение без доступа к базе не должно
- * переставать применять настройки собеседника. Меняется только то, что причина
- * теперь названа.
+ * Поведение при отказе с v4.32.791 другое, и два случая ниже переписаны.
+ * Прежде «знак не лёг» означало «пропустить»: тот же кадр, присланный второй
+ * раз, применялся снова. Довод был — приложение без доступа к базе не должно
+ * переставать применять настройки собеседника. Но по этой же дороге ходят
+ * права в группе, баны и снятие исключения, и повтор перехваченного кадра
+ * возвращал отнятое. Теперь применённое помнит зеркало в памяти процесса, и
+ * оно ставится ДО записи: отказ базы больше не открывает дорогу повтору.
+ *
+ * Мягкость никуда не делась, но сузилась до «перезапуск и нечитаемая база в
+ * одну секунду» — там зеркало пусто, сказать нечего, и кадр проходит с записью
+ * control_ts_unknown_pass в журнале. Честный более поздний кадр проходит
+ * всегда: отвергается только тот, чья метка не новее применённой.
  */
 const mockKv = new Map<string, string>();
 let mockWriteFails = false;
+let mockReadFails = false;
 const mockWarns: Array<{ msg: string; data: unknown }> = [];
 
 jest.mock('../../storage/profileScopedKv', () => ({
-  scopedKvTryGetFor: async (pid: number, k: string) => ({ value: mockKv.get(`p${pid}:${k}`) ?? null }),
+  // null — это «не смогли прочитать», а не «ничего не было»: profileScopedKv
+  // различает эти два случая, и правка v4.32.791 опирается ровно на разницу.
+  scopedKvTryGetFor: async (pid: number, k: string) =>
+    mockReadFails ? null : { value: mockKv.get(`p${pid}:${k}`) ?? null },
   scopedKvSetCheckedFor: async (pid: number, k: string, v: string) => {
     if (mockWriteFails) return false;
     mockKv.set(`p${pid}:${k}`, v);
@@ -36,7 +48,9 @@ jest.mock('../../logger', () => ({
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 import {
+  watermarkKey,
   commitControlTs,
   commitGroupControlTs,
   commitGroupMessageTs,
@@ -66,8 +80,12 @@ const PEER = 'сосед-открытый-ключ==';
 const PID = 1;
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockWriteFails = false;
+  mockReadFails = false;
   mockWarns.length = 0;
 });
 
@@ -110,13 +128,35 @@ describe('не легший сдвиг знака назван в журнале
 });
 
 describe('приём остаётся мягким — меняется только видимость причины', () => {
-  it('конверт применяется, даже когда знак не лёг', async () => {
+  it('конверт применяется, когда знак не лёг, — но второй раз уже нет', async () => {
     mockWriteFails = true;
     expect(await acceptControlTs('copyguard', PEER, PID, 2000)).toBe(true);
     expect(failures()).toBe(1);
-    // Знака нет, значит тот же конверт пройдёт снова: окно для повтора дешевле,
-    // чем переставшие применяться настройки собеседника.
+    // Строки в базе нет, но зеркало помнит применённое: повтор того же кадра
+    // отбивается (v4.32.791). Прежде он проходил — и вместе с настройками
+    // копирования той же дорогой возвращались отнятые права и снятые баны.
+    expect(await acceptControlTs('copyguard', PEER, PID, 2000)).toBe(false);
+  });
+
+  it('отказ записи не запирает поток: честный более поздний кадр проходит', async () => {
+    // Оборотная сторона зеркала. Оно хранит МАКСИМУМ применённого, а не запрет:
+    // собеседник, продолжающий слать новые метки, ничего не теряет даже при
+    // наглухо недоступной базе.
+    mockWriteFails = true;
     expect(await acceptControlTs('copyguard', PEER, PID, 2000)).toBe(true);
+    expect(await acceptControlTs('copyguard', PEER, PID, 2001)).toBe(true);
+    expect(await acceptControlTs('copyguard', PEER, PID, 3000)).toBe(true);
+    expect(await acceptControlTs('copyguard', PEER, PID, 3000)).toBe(false);
+  });
+
+  it('после перезапуска с нечитаемой базой кадр проходит — и это названо', async () => {
+    // Остаток мягкости: зеркало пусто, база молчит, судить не по чему. Раньше
+    // такое молчание ничем не отличалось от «знак прочитан, кадр новый».
+    resetControlTsMirrorForTests();
+    mockKv.clear();
+    mockReadFails = true;
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
+    expect(mockWarns.some((w) => w.msg === 'control_ts_unknown_pass')).toBe(true);
   });
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: как только запись легла, повтор отвергается', async () => {
@@ -129,10 +169,19 @@ describe('приём остаётся мягким — меняется толь
     expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
     mockWriteFails = true;
     await commitControlTs('copyguard', PEER, PID, 2000);
-    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(true);
+    // Сдвиг не лёг в базу, но был произнесён — и этого довольно (v4.32.791).
+    expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(false);
     mockWriteFails = false;
     await commitControlTs('copyguard', PEER, PID, 2000);
     expect(await controlTsFresh('copyguard', PEER, PID, 2000)).toBe(false);
+  });
+
+  it('зеркало не подменяет базу: прочитанное из базы старше — судит база', async () => {
+    // Слот мог быть сдвинут прошлым запуском приложения. Зеркало пусто, метка
+    // из базы читается и работает как прежде.
+    mockKv.set(`p${PID}:${watermarkKey('copyguard', PEER)}`, '5000');
+    expect(await controlTsFresh('copyguard', PEER, PID, 4000)).toBe(false);
+    expect(await controlTsFresh('copyguard', PEER, PID, 6000)).toBe(true);
   });
 
   it('слоты сообщений группы живут по тому же правилу', async () => {

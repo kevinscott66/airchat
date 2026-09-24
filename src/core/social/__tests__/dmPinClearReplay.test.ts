@@ -64,12 +64,16 @@ import {
   handleIncomingDmPin,
   loadDmPinnedIds,
 } from '../dmPinSync';
-import { watermarkKey } from '../controlWatermark';
+import {
+  resetControlTsMirrorForTests, watermarkKey } from '../controlWatermark';
 
 const PEER = 'peer-pub-b64-aaaa';
 const PID = 1;
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockPinnedIds.length = 0;
   mockNotifies = 0;

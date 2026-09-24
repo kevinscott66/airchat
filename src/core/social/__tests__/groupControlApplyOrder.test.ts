@@ -172,6 +172,7 @@ async function acceptGroupControlTs(
 
 import { acceptJoinRequest } from '../groupJoinPolicy';
 import type { GroupRecipient } from '../groupRecipient';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const GID = 'g-order-1';
 const ME = 'M'.repeat(43);
@@ -218,6 +219,9 @@ function metaEnv(name: string, ts: number): string {
 }
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockGroups.length = 0;
   mockUpserts.length = 0;
   mockMetaPatches.length = 0;
@@ -315,7 +319,11 @@ describe('G1: повторный «вступил» не возвращает у
     await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B);
     mockUpserts.length = 0;
     // Стереть отметку — это и есть прежнее состояние кода: её не писали вовсе.
+    // Вместе с базой чистится и зеркало знака (v4.32.791): оно помнит
+    // применённое даже тогда, когда строка в базе не легла, — иначе «прежнего
+    // состояния» тут не изобразить.
     mockKv.delete(`${PID}|${groupWatermarkKey(`m:${B}`, GID)}`);
+    resetControlTsMirrorForTests();
     await handleIncomingGroupControl(joinEnv(B, ts), RCPT, B);
     expect(mockUpserts.map((m) => m.peerPubB64)).toEqual([B]);
   });

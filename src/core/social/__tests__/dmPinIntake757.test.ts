@@ -82,6 +82,7 @@ jest.mock('../../logger', () => ({
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 import {
   clearDmPinnedAndSync,
@@ -114,6 +115,9 @@ function codeOnly(src: string): string {
 const read = (...p: string[]): string => readFileSync(join(__dirname, '..', ...p), 'utf8');
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockKv.set(LIST_KEY, JSON.stringify(['m1']));
   mockPinnedIds.length = 0;

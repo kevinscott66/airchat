@@ -138,12 +138,16 @@ import { handleIncomingDisappear, encodeDisappearEnvelope } from '../disappearSy
 import { handleIncomingCopyGuard, encodeCopyGuardEnvelope } from '../copyGuardSync';
 import { handleIncomingLastSeenPref } from '../presencePrefSync';
 import { encodePresencePrefEnvelope } from '../presenceEnvelope';
+import { resetControlTsMirrorForTests } from '../controlWatermark';
 
 const PEER = 'сосед-открытый-ключ==';
 const OTHER = 'другой-открытый-ключ==';
 const PID = 1;
 
 beforeEach(() => {
+  // v4.32.791: зеркало знака живёт на уровне модуля — убираем его, иначе
+  // применённое соседней проверкой судило бы конверты этой.
+  resetControlTsMirrorForTests();
   mockKv.clear();
   mockKvReadFails = false;
   mockTimers.length = 0;
