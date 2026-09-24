@@ -137,7 +137,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: постоянная причин�
     expect(await handleIncomingReaction(envelope(), SENDER, OWNER)).toBe('consumed');
   });
 
-  it.each<FailReason>(['missing', 'unreadable', 'limit', 'ownLimit'])(
+  // v4.32.821: 'missing' из этого списка ушёл. «Строки сообщения нет» — это
+  // гонка кадров в одной пачке, а не приговор; см. reactionTargetLate821.
+  it.each<FailReason>(['unreadable', 'limit', 'ownLimit'])(
     'причина %s повтором не лечится — разобрано',
     async (reason) => {
       mockWriteFail = reason;
@@ -188,9 +190,13 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(body).not.toContain('await lookupGroupActor(env.groupId');
   });
 
-  it('откладывается ровно одна причина записи из пяти', () => {
+  it('откладываются только проходящие сами причины записи', () => {
     const body = codeOnly(read('reactionSync.ts'));
-    expect(body).toContain("return res.reason === 'failed' ? 'deferred' : 'consumed';");
+    // v4.32.821: причин стало две — к упавшему запросу добавилось
+    // «сообщение ещё не записалось». Потолки и нечитаемый столбец постоянны.
+    expect(body).toContain(
+      "return res.reason === 'failed' || res.reason === 'missing' ? 'deferred' : 'consumed';"
+    );
     // Словарь причин по-прежнему живёт в reactionWrite, а не заведён тут заново.
     expect(codeOnly(read('reactionWrite.ts'))).toContain(
       "export type ReactionWriteFailure = 'missing' | 'unreadable' | 'limit' | 'ownLimit' | 'failed';"
