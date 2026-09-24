@@ -99,8 +99,14 @@ export const OVERSIZE_TITLE = {
 
 export type OversizeKind = keyof typeof OVERSIZE_TITLE;
 
-/** Чем себе помочь. Пусто там, где помочь нечем: файл не «ужать качеством». */
-const OVERSIZE_HINT: Record<OversizeKind, string> = {
+/**
+ * Чем себе помочь. Пусто там, где помочь нечем: файл не «ужать качеством».
+ *
+ * v4.32.871: подсказка вышла наружу. Пачку роликов разбирает `batchSendReport`,
+ * и до сих пор она называла один только предел: совет «обрежьте» доставался
+ * лишь тому, кто отправлял ролик поодиночке.
+ */
+export const OVERSIZE_HINT: Record<OversizeKind, string> = {
   file: '',
   video: ' Обрежьте видео или уменьшите качество.',
   photo: '',

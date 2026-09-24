@@ -156,8 +156,14 @@ describe('форма исходников', () => {
       // Ни один из трёх заголовков больше не записан на экране литералом.
       for (const title of Object.values(OVERSIZE_TITLE)) expect(src).not.toContain(title);
     }
-    expect(CHAT).toContain('Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, \'video\'));');
-    expect(GROUPS).toContain('Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, \'video\'));');
+    // v4.32.871: у роликов из галереи предварительной проверки больше нет —
+    // она отменяла всю пачку разом, включая снимки, и считала по `fileSize`,
+    // которого галерея может не дать. Слишком большие считаются поштучно, а
+    // совет несёт сам отчёт о пачке (`OVERSIZE_HINT` в batchSendReport).
+    for (const src of [CHAT, GROUPS]) {
+      expect(src).not.toContain('oversizeAdvice(videoMaxBytes');
+      expect(src).toContain("const { IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');");
+    }
     expect(CHAT).toContain('Alert.alert(OVERSIZE_TITLE.file, oversizeAdvice(docMaxBytes));');
     expect(GROUPS).toContain('showError(oversizeText(docMaxBytes));');
   });

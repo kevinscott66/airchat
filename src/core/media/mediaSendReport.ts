@@ -26,7 +26,7 @@
  * и выбор текста проверяются отдельно от них.
  */
 
-import { formatLimit } from './uploadRoute';
+import { formatLimit, OVERSIZE_HINT } from './uploadRoute';
 
 /** Почему одно вложение не загрузилось (см. MediaUploadResult). */
 export type MediaUploadFailure = 'oversize' | 'failed';
@@ -163,7 +163,10 @@ export function batchSendReport(
   if (t.total === 0 || lost <= 0) return null;
   const one = lost === 1;
   const why = batchCauses(t, one);
-  const tail = t.oversize > 0 && limitBytes !== null ? ` Предел — ${formatLimit(limitBytes)}.` : '';
+  const tail =
+    t.oversize > 0 && limitBytes !== null
+      ? ` Предел — ${formatLimit(limitBytes)}.${OVERSIZE_HINT[kind]}`
+      : '';
   if (t.sent === 0) {
     const verb = t.total === 1 ? 'не отправлено' : 'не отправлены';
     return `${BATCH_NOUN[kind]} ${verb}: ${why}.${tail}`;

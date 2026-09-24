@@ -1774,9 +1774,18 @@ function ChatThreadView({
       exif: false,
     });
     if (res.canceled || res.assets.length === 0) return;
-    // If all selected are videos, send them as documents
+    // v4.32.871: оба списка считаются сразу, и отправляются оба. Прежде ветка
+    // видео кончалась `return`, а `imageAssets` стоял ниже неё: выбрав в
+    // галерее фотографии и ролик разом — самое обычное дело, галерея их не
+    // разделяет, — человек отправлял ролик и терял фотографии без единого
+    // слова. Второй вход в ту же галерею (handleAcceptGalleryAssets) устроен
+    // правильно с самого начала; здесь теперь так же.
     const videoAssets = res.assets.filter((a) => a.type === 'video');
-    if (videoAssets.length > 0 && peerB64) {
+    const imageAssets = res.assets.filter((a) => a.type !== 'video');
+    // Вынесено в отдельную форму не ради красоты: `return` внутри уносил с
+    // собой и фотографии, а их отбор стоит уже за её пределами.
+    const sendPickedVideos = async (): Promise<void> => {
+      if (!peerB64) { showError(NOT_READY_TEXT); return; }
       // v4.32.48: video size guard. expo-image-picker не сжимает видео → если пропустить,
       // base64 raw bytes могут забить память (OOM) и транспорт (envelope лимит 2MB в feedTransport,
       // DM без жёсткого лимита но практически 5MB уже ломает LAN/WebRTC). Лимит 25MB = защита.
@@ -1786,21 +1795,16 @@ function ChatThreadView({
       // v4.32.358: предел один на всё приложение — uploadRoute. Здесь он был
       // записан своим числом, а размер брался из галереи, которая сообщает его
       // не всегда: ролик без заявленного размера проходил проверку целиком.
-      const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
-      const viaBlob = !isIpfsEnabled();
-      const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
-      const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
-      if (tooLarge) {
-        // v4.32.841: отказ больше не зависит от IPFS. Ветка `viaBlob` на
-        // телефоне единственно достижимая (kill switch с v4.32.19), и именно она
-        // называла человеку сервер, которого у него нет и завести нельзя, —
-        // вместо единственного, что тут можно сделать.
-        Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, 'video'));
-        return;
-      }
+      // v4.32.871: предварительная проверка размера отменяла всю пачку разом —
+      // и те ролики, что прошли бы, и фотографии рядом с ними. Считала она при
+      // этом по `fileSize` из галереи, а он там есть не всегда: ролик без
+      // заявленного размера мимо неё проходил и упирался в тот же предел
+      // внутри. Предел проверяется на каждом файле в `uploadMediaToCid`
+      // (v4.32.358), слишком большие считаются поштучно, а совет «обрежьте»
+      // теперь несёт сам отчёт о пачке.
+      const { IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       const svc = getMessagingService();
-      if (!svc) return;
+      if (!svc) { showError(NOT_READY_TEXT); return; }
       setSending(true);
       try {
         const { uploadMediaToCid } = await import('../../core/media/mediaUpload');
@@ -1858,12 +1862,12 @@ function ChatThreadView({
       } finally {
         setSending(false);
       }
-      return;
-    }
+    };
+    if (videoAssets.length > 0) await sendPickedVideos();
+    if (imageAssets.length === 0) return;
     // v4.32.226: image sending works WITHOUT IPFS now — uploadMediaFromUri
     // falls back to the E2E-encrypted ntfy attachment store (≤8MB/file), same
     // path as voice messages. The old v4.32.51 hard gate is gone.
-    const imageAssets = res.assets.filter((a) => a.type !== 'video');
     // v4.32.57: Show caption preview before sending images — накапливаем с уже
     // выбранными, truncate до лимита 10 (если picker проигнорировал selectionLimit).
     setImageCaption(msg.trim());

@@ -29,7 +29,7 @@
 
 import { batchSendReport } from '../mediaSendReport';
 import type { BatchTally } from '../mediaSendReport';
-import { formatLimit } from '../uploadRoute';
+import { formatLimit, OVERSIZE_HINT } from '../uploadRoute';
 
 import fs from 'fs';
 import path from 'path';
@@ -108,8 +108,12 @@ describe('о каждой потере говорят', () => {
   });
 
   it('не ушло ничего — про это говорят отдельно и называют предмет', () => {
+    // v4.32.871: к пределу добавлен совет — прежде он жил в предварительной
+    // проверке всей пачки, а та отменяла и снимки рядом с роликом, и считала
+    // по `fileSize`, которого галерея может не дать. Проверки не стало —
+    // совет переехал туда, где о слишком большом говорят и так.
     expect(batchSendReport(tally({ total: 1, sent: 0, oversize: 1 }), 'video', LIMIT)).toBe(
-      `Видео не отправлено: слишком большое. Предел — ${formatLimit(LIMIT)}.`,
+      `Видео не отправлено: слишком большое. Предел — ${formatLimit(LIMIT)}.${OVERSIZE_HINT.video}`,
     );
     expect(batchSendReport(tally({ total: 2, sent: 0, failed: 2 }), 'photo', LIMIT)).toBe(
       'Фото не отправлены: не загрузились.',
@@ -203,7 +207,7 @@ describe('форма исходников', () => {
     expect(rep).toContain('export function batchSendReport(');
     expect(rep).toContain('export function decideMediaSend(');
     // Подпись предела — одна на приложение, а не своя у отчёта.
-    expect(rep).toContain("import { formatLimit } from './uploadRoute';");
+    expect(rep).toContain("import { formatLimit, OVERSIZE_HINT } from './uploadRoute';");
     expect(rep).not.toContain('formatByteSize(');
   });
 });

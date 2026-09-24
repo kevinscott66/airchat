@@ -149,6 +149,8 @@ describe('форма модуля', () => {
     // модуль не тянет ничего: ни сети, ни файловой системы, ни шифрования —
     // иначе его нельзя будет проверить без стенда на пол-приложения.
     const imports = MODULE().match(/^import .*$/gm) ?? [];
-    expect(imports).toEqual(["import { formatLimit } from './uploadRoute';"]);
+    // v4.32.871: оттуда же приехал и совет «обрежьте» — тот же сосед, та же
+    // строка импорта. Правило прежнее: один импорт, и тот к текстам предела.
+    expect(imports).toEqual(["import { formatLimit, OVERSIZE_HINT } from './uploadRoute';"]);
   });
 });

@@ -1817,26 +1817,24 @@ function GroupChatScreen({
       videoMaxDuration: 120,
     });
     if (res.canceled || res.assets.length === 0) return;
-    // Send video assets as documents
+    // v4.32.871: оба списка считаются сразу, и отправляются оба — см. тот же
+    // разбор в ChatScreen.pickImage. Прежде ветка видео кончалась `return`, а
+    // отбор фотографий стоял ниже неё: выбрав в галерее снимки и ролик разом,
+    // человек отправлял в группу ролик и терял снимки без единого слова.
     const videoAssets = res.assets.filter((a) => a.type === 'video');
-    if (videoAssets.length > 0) {
+    const imageAssets = res.assets.filter((a) => a.type !== 'video');
+    // Отдельная форма нужна из-за `return` внутри: он уносил с собой снимки.
+    const sendPickedVideos = async (): Promise<void> => {
       // v4.32.48: video size guard (см. ChatScreen.pickImage для полного комментария).
       // v4.32.245: без IPFS-сервера видео уезжает вложением, а там потолок 8 МБ.
       // Раньше порог был один (25 МБ) — файл принимался, а отправка молча
       // падала на «Не удалось загрузить видео».
-      const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      const { uploadLimitBytes, oversizeAdvice, OVERSIZE_TITLE, IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
-      const viaBlob = !isIpfsEnabled();
-      const videoMaxBytes = uploadLimitBytes({ ipfsEnabled: !viaBlob, ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES });
-      const tooLarge = videoAssets.find((va) => (va.fileSize ?? 0) > videoMaxBytes);
-      if (tooLarge) {
-        // v4.32.841: отказ больше не зависит от IPFS. Ветка `viaBlob` на
-        // телефоне единственно достижимая (kill switch с v4.32.19), и именно она
-        // называла человеку сервер, которого у него нет и завести нельзя, —
-        // вместо единственного, что тут можно сделать.
-        Alert.alert(OVERSIZE_TITLE.video, oversizeAdvice(videoMaxBytes, 'video'));
-        return;
-      }
+      // v4.32.871: предварительная проверка размера отменяла всю пачку разом —
+      // и те ролики, что прошли бы, и снимки рядом с ними, — а считала по
+      // `fileSize` из галереи, которого там может не быть вовсе. Предел
+      // проверяется на каждом файле в `uploadMediaToCid` (v4.32.358), слишком
+      // большие считаются поштучно, а совет «обрежьте» несёт сам отчёт.
+      const { IPFS_VIDEO_MAX_BYTES } = await import('../../core/media/uploadRoute');
       // v4.32.245: проверки «есть ли IPFS» больше нет — без него видео уходит
       // зашифрованным вложением, как в личных чатах. Раньше на телефоне видео
       // в группу отправить было нельзя вообще.
@@ -1899,13 +1897,13 @@ function GroupChatScreen({
       } finally {
         setSending(false);
       }
-      return;
-    }
+    };
+    if (videoAssets.length > 0) await sendPickedVideos();
+    if (imageAssets.length === 0) return;
     // v4.32.244: проверки «есть ли IPFS» больше нет — при его отсутствии
     // sendGroupImages кладёт снимок в зашифрованное вложение, как в личных
     // чатах. Раньше здесь стоял алерт «Фото недоступно», и на телефоне
     // отправить фото в группу было нельзя вообще.
-    const imageAssets = res.assets.filter((a) => a.type !== 'video');
     // v4.32.57: накапливаем с уже выбранными, truncate до лимита 10.
     setGrpImageCaption(text.trim());
     // v4.32.323: повторно отмеченная фотография больше не уходит в группу
