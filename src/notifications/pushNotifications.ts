@@ -215,8 +215,20 @@ export class PushNotificationService {
    * Незаконченная запись адреса доставки (v4.32.734). См. pushRegisterRetry.
    * Держим сам «токен», а не только флаг: к сроку повтора он может смениться
    * в onTokenRefresh, и писать надо тот, который сейчас у устройства.
+   *
+   * v4.32.859: и чей это адрес. Повтор брал личность из `currentPeerId` —
+   * «ту, что сейчас», — а токен из своей записи, «тот, что был». Пара из
+   * разных времён и есть дефект: см. registerTokenTracked.
    */
-  private pendingRegistration: { token: string; attempt: number } | null = null;
+  private pendingRegistration: { peerId: string; token: string; attempt: number } | null = null;
+  /**
+   * Токен, который устройство считает своим прямо сейчас (v4.32.859).
+   *
+   * Нужен, чтобы отличить ответ на нашу попытку от ответа на позапрошлую:
+   * обращение к ретранслятору длится до десяти секунд, и за это время токен
+   * успевает смениться (onTokenRefresh), а личность — уйти (dispose).
+   */
+  private currentToken: string | null = null;
   private registerRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubRegisterAppState: (() => void) | null = null;
   /**
@@ -532,6 +544,10 @@ export class PushNotificationService {
     this.unsubGroupNotify = null;
     this.unsubDmNotify = null;
     this.currentPeerId = null;
+    // v4.32.859: токен выше удалён на самом устройстве — считать его своим
+    // больше нельзя. Ответ на попытку, начатую до этой строки, теперь придёт
+    // в пустоту, а не в новую личность.
+    this.currentToken = null;
     this.initialized = false;
   }
 
@@ -650,7 +666,20 @@ export class PushNotificationService {
    * повтор различаются только этим.
    */
   private async registerTokenTracked(peerId: string, token: string, event: string): Promise<void> {
+    this.currentToken = token;
     const reg = await this.registerTokenWithSignaling(peerId, token);
+    // v4.32.859: пока мы ходили к ретранслятору, устройство могло сменить и
+    // личность, и токен. Тогда этот ответ — про то, чего уже нет, и трогать по
+    // нему общее состояние повторов нельзя ни в одну сторону: успех снял бы
+    // чужой незаконченный повтор, а отказ поставил бы повтор с мёртвым токеном.
+    // У ретранслятора на каждую личность ровно одна запись, и побеждает
+    // последняя по времени (signaling-server/push.js, registry.set), поэтому
+    // такой повтор не «лишний», а разрушительный: он затирает верную запись
+    // новой личности мёртвым токеном старой, и уведомления пропадают молча.
+    if (this.currentPeerId !== peerId || this.currentToken !== token) {
+      log.info('push_register_answer_stale', { reg });
+      return;
+    }
     if (reg === 'registered') {
       this.clearRegisterRetry();
       return;
@@ -661,13 +690,14 @@ export class PushNotificationService {
       this.clearRegisterRetry();
       return;
     }
-    this.armRegisterRetry(token);
+    this.armRegisterRetry(peerId, token);
   }
 
   /** Поставить следующий срок повтора и подписаться на возвращение в приложение. */
-  private armRegisterRetry(token: string): void {
-    const attempt = this.pendingRegistration?.token === token ? this.pendingRegistration.attempt + 1 : 0;
-    this.pendingRegistration = { token, attempt };
+  private armRegisterRetry(peerId: string, token: string): void {
+    const prev = this.pendingRegistration;
+    const attempt = prev && prev.peerId === peerId && prev.token === token ? prev.attempt + 1 : 0;
+    this.pendingRegistration = { peerId, token, attempt };
     if (this.registerRetryTimer) clearTimeout(this.registerRetryTimer);
     this.registerRetryTimer = null;
     const delay = nextRetryDelayMs(attempt);
@@ -680,12 +710,26 @@ export class PushNotificationService {
     this.watchForegroundForRegister();
   }
 
-  /** Попробовать ещё раз тем токеном, который ждёт записи. */
+  /**
+   * Попробовать ещё раз тем токеном, который ждёт записи.
+   *
+   * v4.32.859: и ровно для той личности, для которой он записывался. Раньше
+   * личность бралась «свежая» — та, что в приложении сейчас, — а токен «свой»,
+   * оставшийся от прошлой. Достаточно было сорвавшейся попытки, которая
+   * закончилась уже после смены личности: она ставила повтор заново, и он
+   * записывал ретранслятору мёртвый токен на нового человека поверх его
+   * верного адреса. Уведомления после этого не приходили вовсе, и заметить это
+   * можно было только по их отсутствию.
+   */
   private async runRegisterRetry(event: string): Promise<void> {
     const pending = this.pendingRegistration;
-    const peerId = this.currentPeerId;
-    if (!pending || !peerId) return;
-    await this.registerTokenTracked(peerId, pending.token, event);
+    if (!pending) return;
+    if (this.currentPeerId !== pending.peerId) {
+      log.info('push_register_retry_abandoned', {});
+      this.clearRegisterRetry();
+      return;
+    }
+    await this.registerTokenTracked(pending.peerId, pending.token, event);
   }
 
   /**
@@ -699,8 +743,9 @@ export class PushNotificationService {
   private watchForegroundForRegister(): void {
     if (this.unsubRegisterAppState) return;
     const sub = AppState.addEventListener('change', (state: string) => {
-      if (state !== 'active' || !this.pendingRegistration) return;
-      this.pendingRegistration = { token: this.pendingRegistration.token, attempt: -1 };
+      const pending = this.pendingRegistration;
+      if (state !== 'active' || !pending) return;
+      this.pendingRegistration = { ...pending, attempt: -1 };
       void this.runRegisterRetry('push_register_retry_failed');
     });
     this.unsubRegisterAppState = () => sub?.remove?.();
