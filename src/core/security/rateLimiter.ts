@@ -1,5 +1,4 @@
-import { publicKeyHash4 } from '../crypto/keyManager';
-import { isPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
+import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import {
   kvDelete,
   kvGetSecretCell,
@@ -80,8 +79,6 @@ const MESSAGE_LIMIT = 50;
  * на одно сообщение.
  */
 const CONTROL_LIMIT = 500;
-const INVITE_WINDOW_MS = 60 * 1000;
-const INVITE_LIMIT = 10;
 
 /** Отметки внутри окна: будущие (часы перевели) отбрасываются. */
 function withinWindow(timestamps: number[], windowMs: number, now: number): number[] {
@@ -90,7 +87,6 @@ function withinWindow(timestamps: number[], windowMs: number, now: number): numb
 
 /** In-memory windows + persisted block list (contact public key base64). */
 export class RateLimiter {
-  private readonly inviteCounts = new Map<string, number[]>();
   private readonly messageCounts = new Map<string, number[]>();
   /** Окно служебных конвертов: то же по времени, отдельное по счёту. */
   private readonly controlCounts = new Map<string, number[]>();
@@ -305,7 +301,6 @@ export class RateLimiter {
     this.blocked = new Set();
     // v4.32.498: повтор от прошлой личности до новой не относится.
     this.reloading = null;
-    this.inviteCounts.clear();
     this.messageCounts.clear();
     // v4.32.497: окно служебных конвертов забывали. Общий с прошлым аккаунтом
     // контакт начинал в новом уже с израсходованным запасом — квитанции о
@@ -342,18 +337,6 @@ export class RateLimiter {
     return this.blocked.has(peerPubKeyB64);
   }
 
-  private isBlockedInviteHash(senderHashHex: string): boolean {
-    for (const pubB64 of this.blocked) {
-      // v4.32.427: try/catch был мёртвым — Buffer.from не бросает. Отсев
-      // негодных строк даёт проверка длины и алфавита, а не отсутствие
-      // исключения: хэш от 31 байта совпал бы с хэшем от 31 байта.
-      const pub = publicKeyFromB64(pubB64);
-      if (!pub) continue;
-      if (Buffer.from(publicKeyHash4(pub)).toString('hex') === senderHashHex) return true;
-    }
-    return false;
-  }
-
   /**
    * Заблокировать контакт. Возвращает, легла ли запись на диск (v4.32.617).
    *
@@ -374,7 +357,6 @@ export class RateLimiter {
       return false;
     }
     this.blocked.add(peerPubKeyB64);
-    this.inviteCounts.delete(peerPubKeyB64);
     this.messageCounts.delete(peerPubKeyB64);
     const pid = await this.currentPid();
     const saved = await this.persistBlocked(pid);
@@ -434,19 +416,6 @@ export class RateLimiter {
     // повтор с v4.32.498 запускается именно на этом признаке.
     await this.whenReady();
     return [...this.blocked];
-  }
-
-  canSendInvite(senderHashHex: string): boolean {
-    if (this.isBlockedInviteHash(senderHashHex)) return false;
-    RateLimiter.evictStale(this.inviteCounts, INVITE_WINDOW_MS, INVITE_LIMIT);
-    const now = Date.now();
-    const recent = withinWindow(this.inviteCounts.get(senderHashHex) ?? [], INVITE_WINDOW_MS, now);
-    if (recent.length >= INVITE_LIMIT) {
-      return false;
-    }
-    recent.push(now);
-    this.inviteCounts.set(senderHashHex, recent);
-    return true;
   }
 
   canSendMessage(contactPubB64: string): boolean {

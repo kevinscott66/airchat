@@ -1,4 +1,3 @@
-import { bytesEqualConstTime } from '../crypto/bytesEqual';
 import { ecdhSharedSecret } from '../crypto/keyManager';
 import { deriveSymmetricKey } from '../crypto/encrypt';
 import { isEd25519PublicKey, isPubKeyB64, publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
@@ -22,7 +21,6 @@ import { profileScopedKey } from '../storage/kvKeys';
 import { cellTextOrNull, mayOverwrite, type AtRestCell } from '../storage/atRestCell';
 import { isPlainCid } from '../cid';
 import { log } from '../logger';
-import { publicKeyHash4 } from '../crypto/keyManager';
 import { profileManager } from '../identity/profileManager';
 import { parseDidKey } from '../identity/did';
 import { parseAppLink } from '../net/appLink';
@@ -701,37 +699,6 @@ async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string):
     notifyChatStorageChanged();
   } catch (e) {
     log.warn('contacts_index_failed', { err: e instanceof Error ? e.message : String(e) });
-  }
-}
-
-/** Returns true if a new contact row was created from a BLE invite. */
-export async function handleIncomingInvite(
-  pair: KeyPairBytes,
-  peerPublicKey: Uint8Array
-): Promise<boolean> {
-  if (bytesEqualConstTime(peerPublicKey, pair.publicKey)) return false;
-  const pid = activeProfileId();
-  const b64 = Buffer.from(peerPublicKey).toString('base64');
-  const row = await contactRowGet(pid, b64);
-  if (row) return false;
-  await addContact(pair, peerPublicKey, 'Nearby');
-  return true;
-}
-
-/** Match BLE manufacturer hash (first 4 bytes of sha256(pub)) to a stored contact. */
-export async function findContactPubKeyByHash(hash: Uint8Array): Promise<string | null> {
-  try {
-    const contacts = await listContacts();
-    for (const c of contacts) {
-      const pk = publicKeyFromB64(c.peerPublicKey);
-      if (!pk) continue;
-      const h = publicKeyHash4(pk);
-      if (Buffer.from(h).equals(Buffer.from(hash))) return c.peerPublicKey;
-    }
-    return null;
-  } catch (e) {
-    log.warn('contact_find_hash_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
   }
 }
 

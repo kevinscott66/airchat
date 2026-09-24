@@ -65,16 +65,13 @@ import {
   BAD_PUBLIC_KEY_MESSAGE,
   clearSymKeyCache,
   listContacts,
-  handleIncomingInvite,
   getSymmetricKeyForPeer,
-  findContactPubKeyByHash,
   invalidateContactsList,
   parseContactId,
   rememberContactId,
   setPeerProfile,
 } from '../contacts';
 import { buildContactLink, buildDmLink } from '../../net/appLink';
-import { publicKeyHash4 } from '../../crypto/keyManager';
 
 // We need real ECDH — mock only at the storage layer, leave crypto real.
 // ecdhSharedSecret uses x25519 internally. Mock it at the module level if needed,
@@ -263,55 +260,6 @@ describe('contacts — потолок кэша симметричных ключ
   });
 });
 
-// ── handleIncomingInvite ──────────────────────────────────────────────────────
-
-describe('contacts — handleIncomingInvite', () => {
-  beforeEach(clearKv);
-
-  test('creates a new contact row and returns true', async () => {
-    const alice = makeKeyPair();
-    const bob = makeKeyPair();
-    const added = await handleIncomingInvite(alice, bob.publicKey);
-    expect(added).toBe(true);
-    const list = await listContacts();
-    expect(list).toHaveLength(1);
-  });
-
-  test('returns false if contact already exists (no duplicate)', async () => {
-    const alice = makeKeyPair();
-    const bob = makeKeyPair();
-    await handleIncomingInvite(alice, bob.publicKey); // first time
-    const second = await handleIncomingInvite(alice, bob.publicKey); // dupe
-    expect(second).toBe(false);
-    expect(await listContacts()).toHaveLength(1);
-  });
-
-  test('returns false when peer public key equals own key (self-invite)', async () => {
-    const alice = makeKeyPair();
-    const result = await handleIncomingInvite(alice, alice.publicKey);
-    expect(result).toBe(false);
-  });
-});
-
-// ── findContactPubKeyByHash ───────────────────────────────────────────────────
-
-describe('contacts — findContactPubKeyByHash', () => {
-  beforeEach(clearKv);
-
-  test('finds a contact by 4-byte public key hash', async () => {
-    const alice = makeKeyPair();
-    const bob = makeKeyPair();
-    await addContact(alice, bob.publicKey, 'Bob');
-    const hash = publicKeyHash4(bob.publicKey);
-    const found = await findContactPubKeyByHash(hash);
-    expect(found).toBe(Buffer.from(bob.publicKey).toString('base64'));
-  });
-
-  test('returns null for unknown hash', async () => {
-    expect(await findContactPubKeyByHash(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))).toBeNull();
-  });
-});
-
 // ── addContact: проверка ключа в единственной точке ───────────────────────────
 
 describe('contacts — негодный открытый ключ отвергается до кривой (v4.32.427)', () => {
@@ -357,9 +305,11 @@ describe('contacts — негодный открытый ключ отверга
     expect((await listContacts()).map((c) => c.displayName)).toEqual(['Боб']);
   });
 
-  test('handleIncomingInvite с негодным ключом не создаёт контакт', async () => {
+  test('негодный ключ не создаёт контакт даже наполовину', async () => {
+    // v4.32.829: проверка была на handleIncomingInvite — его больше нет, а
+    // сама проверка про addContact и осталась к нему.
     const alice = makeKeyPair();
-    await expect(handleIncomingInvite(alice, new Uint8Array(16))).rejects.toThrow(
+    await expect(addContact(alice, new Uint8Array(16), 'Ктото')).rejects.toThrow(
       BAD_PUBLIC_KEY_MESSAGE
     );
     expect(await listContacts()).toEqual([]);

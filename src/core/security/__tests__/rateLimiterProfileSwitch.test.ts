@@ -53,8 +53,6 @@ import { RateLimiter } from '../rateLimiter';
 const PEER = 'A'.repeat(43);
 const CONTROL_LIMIT = 500;
 const MESSAGE_LIMIT = 50;
-const INVITE_LIMIT = 10;
-const HASH = '01020304';
 
 async function loaded(): Promise<RateLimiter> {
   const rl = new RateLimiter();
@@ -81,13 +79,6 @@ describe('окна ограничений не переезжают в друг�
     drain(() => rl.canSendMessage(PEER), MESSAGE_LIMIT);
     await rl.resetForProfileSwitch();
     expect(rl.canSendMessage(PEER)).toBe(true);
-  });
-
-  it('приглашения: запас возвращается после переключения', async () => {
-    const rl = await loaded();
-    drain(() => rl.canSendInvite(HASH), INVITE_LIMIT);
-    await rl.resetForProfileSwitch();
-    expect(rl.canSendInvite(HASH)).toBe(true);
   });
 
   it('без переключения запас по-прежнему кончается', async () => {
@@ -123,11 +114,13 @@ describe('форма исходника', () => {
   /** Все окна класса — по объявлению полей, а не по памяти автора теста. */
   const windows = [...source.matchAll(/private (?:readonly )?(\w+) = new Map</g)].map((m) => m[1]);
 
-  it('окон в классе ровно три и они найдены', () => {
-    expect(windows.sort()).toEqual(['controlCounts', 'inviteCounts', 'messageCounts']);
+  it('окон в классе ровно два и они найдены', () => {
+    // v4.32.829: окно приглашений ушло вместе с самими приглашениями — по BLE
+    // их давно никто не рассылает, и считать было нечего.
+    expect(windows.sort()).toEqual(['controlCounts', 'messageCounts']);
   });
 
-  it.each(['inviteCounts', 'messageCounts', 'controlCounts'])(
+  it.each(['messageCounts', 'controlCounts'])(
     'окно %s чистится при переключении',
     (name) => {
       expect(windows).toContain(name);
