@@ -577,6 +577,20 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
       const startMs = pendingSeekMsRef.current;
       pendingSeekMsRef.current = 0;
       if (startMs > 0) await snd.seekTo(startMs / 1000).catch(() => {});
+      // v4.32.862: проверка перед созданием (620-я) закрывала окно между
+      // скачиванием и плеером. Перемотка «куда нажали до первого играть»
+      // (722-я) открыла второе окно — уже ПОСЛЕ создания: между `await
+      // seekTo` и укладкой в состояние экран успевает закрыться. `setSound`
+      // после размонтирования не делает ничего, уборка завязана на [sound] и
+      // этого плеера не видит никогда — он начинает играть с закрытого
+      // экрана, занимает activeVoicePlayer (и следующее голосовое
+      // «останавливает» покойника вместо него) и не освобождается вовсе.
+      // Каждое ожидание здесь обязано кончаться этой проверкой.
+      if (!mountedRef.current) {
+        if (subRef.current) { subRef.current.remove(); subRef.current = null; }
+        snd.remove();
+        return;
+      }
       setSound(snd);
       activeVoicePlayer = { player: snd, stop: () => setPlaying(false) };
       setPlaying(true);
