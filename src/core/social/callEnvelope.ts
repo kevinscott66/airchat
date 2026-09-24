@@ -38,7 +38,7 @@
  * их помнить.
  */
 import { signJson, verifySignedJson } from '../crypto/signature';
-import { isPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
+import { canonPubKeyB64, publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import type { KeyPairBytes } from '../crypto/keyManager';
 
 export const CALL_ENVELOPE_VERSION = 1;
@@ -137,8 +137,14 @@ export async function openCallEnvelope(
   expect: OpenExpectation
 ): Promise<CallEnvelopeBody | null> {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_SDP_LEN) return null;
-  if (!isPubKeyB64(expect.from) || !isPubKeyB64(expect.to)) return null;
-  const senderKey = publicKeyFromB64(expect.from);
+  // v4.32.830: и ожидание, и содержимое конверта приводятся к одной записи
+  // ключа. Сравнивать строками нельзя: у одних и тех же тридцати двух байт
+  // записей четыре — с выравниванием и без, обычная и url-safe, — и всякое
+  // `===` между разными записями отвечает «это разные люди».
+  const fromCanon = canonPubKeyB64(expect.from);
+  const toCanon = canonPubKeyB64(expect.to);
+  if (!fromCanon || !toCanon) return null;
+  const senderKey = publicKeyFromB64(fromCanon);
   if (!senderKey) return null;
 
   let outer: unknown;
@@ -153,8 +159,8 @@ export async function openCallEnvelope(
   if (body.v !== CALL_ENVELOPE_VERSION) return null;
   if (body.kind !== expect.kind) return null;
   // Подписал именно тот, кем событие представилось, и адресовано именно мне.
-  if (body.from !== expect.from) return null;
-  if (body.to !== expect.to) return null;
+  if (canonPubKeyB64(body.from) !== fromCanon) return null;
+  if (canonPubKeyB64(body.to) !== toCanon) return null;
   if (!isValidCallId(body.callId)) return null;
   if (expect.callId !== undefined && body.callId !== expect.callId) return null;
 
@@ -171,7 +177,7 @@ export async function openCallEnvelope(
     if (control !== 'busy' && control !== 'declined') return null;
     if (body.sdp !== undefined) return null;
     return {
-      kind: 'answer', from: body.from as string, to: body.to as string,
+      kind: 'answer', from: fromCanon, to: toCanon,
       callId: body.callId as string, control, ts,
     };
   }
@@ -183,7 +189,7 @@ export async function openCallEnvelope(
     // стороне.
     if (body.sdp !== undefined || body.isVideo !== undefined) return null;
     return {
-      kind: expect.kind, from: body.from as string, to: body.to as string,
+      kind: expect.kind, from: fromCanon, to: toCanon,
       callId: body.callId as string, ts,
     };
   }
@@ -195,8 +201,8 @@ export async function openCallEnvelope(
 
   return {
     kind: expect.kind,
-    from: body.from as string,
-    to: body.to as string,
+    from: fromCanon,
+    to: toCanon,
     callId: body.callId as string,
     sdp: body.sdp,
     ...(isVideo !== undefined ? { isVideo } : {}),

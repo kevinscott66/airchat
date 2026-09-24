@@ -19,7 +19,7 @@ import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
 import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
-import { isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
+import { canonPubKeyB64, isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sealCallEnvelope, openCallEnvelope, MISSED_RECEIPT_MAX_AGE_MS } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
 import { dismissCallBanner } from '../../notifications/callBanner';
@@ -275,38 +275,43 @@ export async function recordMissedCalls(
 ): Promise<MissedCallsIntake> {
   let added = 0;
   for (const call of calls) {
-    if (!isPubKeyB64(call.fromPeerId)) continue;
+    // v4.32.830: не «похоже на ключ», а «тот самый ключ». Сервер отдаёт
+    // строку в том виде, в каком звонивший ею представился, и без приведения
+    // к канону запрет ниже промахивался мимо собственного списка: `…I1c` и
+    // `…I1c=` — один человек и две разные строки.
+    const fromPeerId = canonPubKeyB64(call.fromPeerId);
+    if (!fromPeerId) continue;
     // v4.32.615: блокировка действует и здесь. Сервер про блок-лист не знает
     // и знать не должен — он придерживает несостоявшийся звонок для всякого,
     // кто не ответил. Без этой проверки заблокированный человек, позвонив в
     // закрытое приложение, всё равно оставлял «вам звонили» в журнале и
     // поднимал уведомление о пропущенных: третий канал мимо решения
     // v4.32.318, после живого сокета (onOffer) и фонового баннера.
-    if (rateLimiter.isBlocked(call.fromPeerId)) continue;
+    if (rateLimiter.isBlocked(fromPeerId)) continue;
     // Расписку сервер держит до суток — обычное окно свежести конверта её бы
     // не пропустило.
     const receipt = await openCallEnvelope(call.e, {
       kind: 'missed',
-      from: call.fromPeerId,
+      from: fromPeerId,
       to: myPub,
       maxAgeMs: MISSED_RECEIPT_MAX_AGE_MS,
     });
     if (!receipt) {
-      log.warn('call_missed_unverified', { from: call.fromPeerId.slice(0, 8) });
+      log.warn('call_missed_unverified', { from: fromPeerId.slice(0, 8) });
       continue;
     }
     const at = Math.min(receipt.ts, Date.now());
     // Разговор с этим человеком идёт прямо сейчас — «вам звонили» о нём было
     // бы неправдой.
-    if (currentCall && currentCall.peerPubB64 === call.fromPeerId
+    if (currentCall && currentCall.peerPubB64 === fromPeerId
       && currentCall.state !== 'idle' && currentCall.state !== 'ended') continue;
     // Сервер стирает запись при доставке, но повторная доставка не должна
     // раздваивать звонок в истории.
-    if (callLog.some((e) => e.peerPubB64 === call.fromPeerId && e.startedAt === at)) continue;
+    if (callLog.some((e) => e.peerPubB64 === fromPeerId && e.startedAt === at)) continue;
     const entry: CallLogEntry = {
       id: `${at}_${Math.random().toString(36).slice(2, 10)}`,
-      peerPubB64: call.fromPeerId,
-      peerName: call.fromPeerId.slice(0, 12),
+      peerPubB64: fromPeerId,
+      peerName: fromPeerId.slice(0, 12),
       isVideo: false,
       direction: 'incoming',
       outcome: 'missed',
@@ -928,12 +933,17 @@ function isValidSdp(s: unknown): s is string {
  * разговор, а ответ без отправителя ещё и уезжал в `setRemoteDescription`.
  */
 function isFromPeer(fromPeerId: unknown, peer: string | undefined): boolean {
-  return !!peer && isValidPeerId(fromPeerId) && fromPeerId === peer;
+  // v4.32.830: сравниваются ключи, а не записи. Собеседник в разговоре записан
+  // каноном, и строка с провода обязана свестись к нему же.
+  return !!peer && canonPubKeyB64(fromPeerId) === peer;
 }
 
 function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
   sig.onOffer(async (msg) => {
-    if (!isValidPeerId(msg.fromPeerId) || msg.fromPeerId === myPub) return;
+    // v4.32.830: канон, а не строка сервера. Иначе запрет ниже искал в своём
+    // списке ту запись ключа, которую выбрал звонящий, — а выбирает он её сам.
+    const fromPubB64 = canonPubKeyB64(msg.fromPeerId);
+    if (!fromPubB64 || fromPubB64 === myPub) return;
     if (!isValidSdp(msg.sdp)) return;
     // v4.32.318: заблокированный контакт до сих пор мог звонить. Сообщения от
     // него не доходили, «печатает…» не показывалось, отметки о прочтении не
@@ -944,8 +954,8 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // устройство на связи и приложение работает; звонящему полагается видеть
     // ровно то же, что и при выключенном телефоне.
     await rateLimiter.whenReady();
-    if (rateLimiter.isBlocked(msg.fromPeerId)) {
-      log.info('call_blocked_drop', { from: msg.fromPeerId.slice(0, 8) });
+    if (rateLimiter.isBlocked(fromPubB64)) {
+      log.info('call_blocked_drop', { from: fromPubB64.slice(0, 8) });
       return;
     }
     // v4.32.585: подпись — первое, что проверяется у содержимого. Пока
@@ -956,7 +966,6 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // постороннему, что телефон на связи.
     const pair = mySigningPair;
     if (!pair) return;
-    const fromPubB64 = msg.fromPeerId;
     const offerEnvelope = await openCallEnvelope(msg.sdp, {
       kind: 'offer',
       from: fromPubB64,
@@ -1076,7 +1085,9 @@ function _setupIncomingHandlers(sig: WebRTCSignaling, myPub: string): void {
     // предложение. Номер звонка в конверте отсекает ответ от прошлого звонка.
     const answerEnvelope = await openCallEnvelope(msg.sdp, {
       kind: 'answer',
-      from: msg.fromPeerId as string,
+      // v4.32.830: канон разговора, а не строка сервера; isFromPeer выше уже
+      // подтвердил, что это один и тот же ключ.
+      from: currentCall.peerPubB64,
       to: myPub,
       ...(activeCallId ? { callId: activeCallId } : {}),
     });
