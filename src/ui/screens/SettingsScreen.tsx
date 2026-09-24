@@ -579,6 +579,21 @@ function SettingsScreenImpl({
   );
 
   /**
+   * Выбрать автоудаление по умолчанию для новых разговоров (v4.32.811).
+   *
+   * Пять кнопок писали значение через `void setDefaultDisappearMs(...)`, а та
+   * — мимо ответа базы и с кэшем, поставленным до записи. Это единственная
+   * настройка, по которой переписка удаляется, и врать о ней нельзя ни в одну
+   * сторону: обещанное удаление, которого нет, и отменённое удаление, которое
+   * продолжается, одинаково узнаются слишком поздно.
+   */
+  const chooseDefaultAutoDelete = useCallback((ms: number | null): void => {
+    const prev = defaultAutoDeleteMs;
+    setDefaultAutoDeleteMs(ms);
+    void applyPref(() => setDefaultDisappearMs(ms), () => setDefaultAutoDeleteMs(prev));
+  }, [applyPref, defaultAutoDeleteMs]);
+
+  /**
    * v4.32.253: шаблоны быстрых ответов читались и создавались с зашитым
    * профилем 1, а показывает их в переписке AttachSheet по АКТИВНОМУ профилю.
    * На втором профиле это значило: список в настройках — чужой, а всё
@@ -1662,11 +1677,11 @@ function SettingsScreenImpl({
         android_ripple={{ color: colors.ripple }}
         onPress={() => {
           Alert.alert('Автоудаление по умолчанию', `Текущее: ${autoDeleteLabel(defaultAutoDeleteMs)}`, [
-            { text: 'Выкл', onPress: () => { setDefaultAutoDeleteMs(null); void setDefaultDisappearMs(null); } },
-            { text: '1 мин', onPress: () => { setDefaultAutoDeleteMs(60_000); void setDefaultDisappearMs(60_000); } },
-            { text: '1 час', onPress: () => { setDefaultAutoDeleteMs(3_600_000); void setDefaultDisappearMs(3_600_000); } },
-            { text: '1 день', onPress: () => { setDefaultAutoDeleteMs(86_400_000); void setDefaultDisappearMs(86_400_000); } },
-            { text: '7 дней', onPress: () => { setDefaultAutoDeleteMs(7 * 86_400_000); void setDefaultDisappearMs(7 * 86_400_000); } },
+            { text: 'Выкл', onPress: () => chooseDefaultAutoDelete(null) },
+            { text: '1 мин', onPress: () => chooseDefaultAutoDelete(60_000) },
+            { text: '1 час', onPress: () => chooseDefaultAutoDelete(3_600_000) },
+            { text: '1 день', onPress: () => chooseDefaultAutoDelete(86_400_000) },
+            { text: '7 дней', onPress: () => chooseDefaultAutoDelete(7 * 86_400_000) },
             { text: 'Отмена', style: 'cancel' },
           ]);
         }}

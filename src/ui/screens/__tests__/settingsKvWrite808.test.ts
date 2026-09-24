@@ -119,8 +119,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежнее правило це
     // applyKvPref для них не годится: они лежат в namespace профиля, а не
     // общим ключом, и часть из них после записи ещё и рассылается.
     // Восьмой и девятый — сами applyKvPref и applyScopedPref (v4.32.809):
-    // они и есть «поверх того же правила».
-    expect((SETTINGS.match(/void applyPref\(/g) ?? []).length).toBe(9);
+    // они и есть «поверх того же правила». Десятое — выбор автоудаления по
+    // умолчанию (v4.32.811): у него своя запись, но откат тот же.
+    expect((SETTINGS.match(/void applyPref\(/g) ?? []).length).toBe(10);
     expect((SETTINGS.match(/void applyPref\(\(\) => privacyPrefSet/g) ?? []).length).toBe(4);
     expect(SETTINGS).toContain(').then((ok) => { if (ok) return broadcastLastSeenPref(); });');
   });

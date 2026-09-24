@@ -18,7 +18,7 @@
  * Тогда же значение переехало из local.ts сюда: кэш и разбор границ — не
  * дело модуля, который открывает базу, а проверить их без SQLite нужно.
  */
-import { scopedKvSetFor, scopedKvTryGetFor } from './profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from './profileScopedKv';
 import { DEFAULT_AUTO_DELETE_KEY, parseAutoDeleteMs } from './autoDeletePolicy';
 import { profileManager } from '../identity/profileManager';
 
@@ -50,18 +50,38 @@ export async function getDefaultDisappearMs(): Promise<number | null> {
   return getDefaultDisappearMsFor(activeProfileId());
 }
 
-/** Пишет значение названному профилю и обновляет его кэш. */
+/**
+ * Пишет значение названному профилю и обновляет его кэш.
+ *
+ * v4.32.811. Кэш ставился ПЕРЕД записью, а сама запись шла через
+ * `scopedKvSetFor` — `Promise<void>` поверх проверяемой, то есть ответ базы
+ * терялся дважды. Пока приложение не перезапускали, всё выглядело сделанным:
+ * кэш отвечал новым значением на каждое `touchConversation`. После перезапуска
+ * кэш собирался заново с диска, а там лежало прежнее.
+ *
+ * Это единственная настройка, по которой переписка УДАЛЯЕТСЯ, и опасны обе
+ * стороны. Поставил «1 день», запись не легла — новые разговоры живут вечно, а
+ * человек уверен, что они исчезают, и пишет соответственно. Поставил «Выкл»,
+ * запись не легла — новые разговоры продолжают удаляться, и узнают об этом,
+ * когда искать удалённое уже негде.
+ *
+ * Поэтому кэш теперь ставится ПОСЛЕ удачной записи, а при отказе сбрасывается:
+ * ответ в памяти обязан совпадать с тем, что лежит на диске, даже ценой лишнего
+ * чтения. Ответ `false` уходит вызывающему — экран возвращает выбор на место.
+ */
 export async function setDefaultDisappearMsFor(
   profileId: number,
   ms: number | null
-): Promise<void> {
-  cache.set(profileId, ms != null && ms > 0 ? ms : null);
-  await scopedKvSetFor(profileId, DEFAULT_AUTO_DELETE_KEY, String(ms ?? 0));
+): Promise<boolean> {
+  const written = await scopedKvSetCheckedFor(profileId, DEFAULT_AUTO_DELETE_KEY, String(ms ?? 0));
+  if (written) cache.set(profileId, ms != null && ms > 0 ? ms : null);
+  else cache.delete(profileId);
+  return written;
 }
 
 /** То же у активного профиля. */
-export async function setDefaultDisappearMs(ms: number | null): Promise<void> {
-  await setDefaultDisappearMsFor(activeProfileId(), ms);
+export async function setDefaultDisappearMs(ms: number | null): Promise<boolean> {
+  return setDefaultDisappearMsFor(activeProfileId(), ms);
 }
 
 /**
