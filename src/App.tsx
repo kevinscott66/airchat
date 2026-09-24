@@ -32,7 +32,6 @@ import {
   setFirstLaunchDone,
 } from './core/backup/seedPhrase';
 import { loadConfig } from './core/config';
-import * as FileSystem from 'expo-file-system/legacy';
 import { log } from './core/logger';
 import { createTimerScope, type TimerScope } from './core/lifecycle/timerScope';
 import { EducationalCommunicationRouter } from './core/transport/educational';
@@ -1755,18 +1754,22 @@ function MainScreen({
   onIdentityChange: (kp: KeyPairBytes) => void;
   onWalletLogout: () => Promise<void>;
 }): React.ReactElement {
+  /**
+   * v4.32.802: здесь стоял костыль для прогона с двух устройств — на каждом
+   * монтировании экрана DID и публичный ключ уходили в `log.info`, а DID ещё
+   * и в файл `adb_test_identity_did.txt` в кэше.
+   *
+   * Обе половины доживали до боевой сборки. Имя сообщения стояло в списке
+   * тех, что logger.ts выпускает в консоль релиза (os_log / logcat), то есть
+   * постоянный идентификатор человека ложился в системный журнал при каждом
+   * запуске. А файл не подходил ни под один префикс в cacheFiles.ts: его не
+   * стирали ни «Очистить кэш», ни полный сброс, — то есть он переживал то,
+   * что задумано как «после меня ничего не осталось».
+   *
+   * Замены нет намеренно: запускать два устройства и сверять DID можно и из
+   * отладочной сборки, где журнал пишется целиком.
+   */
   const did = publicKeyToDidKey(pair.publicKey);
-  useEffect(() => {
-    log.debug('[BOOT] MainScreen mounted → auto_test_identity next');
-    const peerB64 = Buffer.from(pair.publicKey).toString('base64');
-    log.info('auto_test_identity', { did, peerB64 });
-    const path = `${FileSystem.cacheDirectory ?? ''}adb_test_identity_did.txt`;
-    void FileSystem.writeAsStringAsync(path, did, {
-      encoding: FileSystem.EncodingType.UTF8,
-    }).catch(() => {
-      /* adb run-as чтение на устройствах без ReactNativeJS в logcat */
-    });
-  }, [did, pair]);
   return (
     <MainTabs
       key={did}

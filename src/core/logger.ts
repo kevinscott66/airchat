@@ -1,3 +1,5 @@
+import { scrubTelemetryContext } from './errorScrub';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const ORDER: Record<LogLevel, number> = {
@@ -26,7 +28,6 @@ function shouldLog(level: LogLevel): boolean {
 function mirrorJsonToConsoleInRelease(msg: string, level: LogLevel): boolean {
   if (level !== 'info' && level !== 'warn') return false;
   if (
-    msg === 'auto_test_identity' ||
     msg === 'dm_incoming_saved' ||
     msg === 'transport_success' ||
     msg === 'perf_slow' ||
@@ -82,7 +83,17 @@ function write(level: LogLevel, msg: string, meta?: Record<string, unknown>): vo
       __airchatOrigConsoleLog?: (s: string) => void;
     };
     const emit = g.__airchatOrigConsoleLog;
-    if (typeof emit === 'function') emit(serialize(level, msg, meta));
+    // v4.32.802: `meta` уходит отсюда в системный журнал устройства, а список
+    // выше пропускает целые семейства сообщений по префиксу — то есть решение
+    // «что можно показать» принимается за автора нового поля, и принимается
+    // один раз, при заведении префикса. Так в журнал попадали и полный
+    // идентификатор сообщения, и кусок DID собеседника.
+    //
+    // Правило записано тем же способом, что и для отчётов в Sentry, и одной
+    // функцией с ними: скрывается то, что связывает журнал с человеком, —
+    // DID, длинный base64, длинный hex, поле с «key»/«did»/«pub» в имени.
+    // Числа, слова и коды ошибок остаются, а ради них журнал и читают.
+    if (typeof emit === 'function') emit(serialize(level, msg, scrubTelemetryContext(meta)));
     return;
   }
   const line = serialize(level, msg, meta);
