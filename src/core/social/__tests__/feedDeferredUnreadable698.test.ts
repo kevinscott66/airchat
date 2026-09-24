@@ -76,6 +76,16 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
+  // v4.32.815: три полки ленты легли под шифр. Подмена повторяет настоящую
+  // пару в точности: kvGetSecretCell — это kvTryGet плюс расшифровка,
+  // kvSetSecret — kvSetChecked плюс шифрование, так что здешние отказы
+  // базы остаются ровно там, где были.
+  kvGetSecretCell: jest.fn(async (k: string) => {
+    if (k === mockDeferKey && mockFailDeferRead) return { state: 'unreadable' };
+    const raw = mockKv.get(k);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  }),
+  kvSetSecret: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
@@ -249,8 +259,11 @@ describe('исходник: чтение полки объявлено двой�
 
   test('loadDeferred отличает «полки нет» от «не прочиталась»', () => {
     expect(SRC).toContain('async function loadDeferred(pid: number): Promise<DeferredStore | null> {');
-    expect(SRC).toContain('  const read = await kvTryGet(`${DEFERRED_KEY_PREFIX}${pid}`);');
-    expect(SRC).toContain('  return read === null ? null : parseDeferredStore(read.value);');
+    // v4.32.815: полка легла под шифр — «не открылось» встало рядом с
+    // «не прочиталось», обе дают тот же null, что и прежде.
+    expect(SRC).toContain('  const cell = await kvGetSecretCell(`${DEFERRED_KEY_PREFIX}${pid}`);');
+    expect(SRC).toContain("  if (cell.state === 'unreadable') return null;");
+    expect(SRC).toContain("  return parseDeferredStore(cell.state === 'plain' ? cell.text : null);");
     expect(SRC).not.toContain('parseDeferredStore(await kvGet(');
   });
 

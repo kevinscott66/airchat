@@ -99,6 +99,15 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
+  // v4.32.815: три полки ленты легли под шифр. Подмена повторяет настоящую
+  // пару в точности: kvGetSecretCell — это kvTryGet плюс расшифровка,
+  // kvSetSecret — kvSetChecked плюс шифрование, так что здешние отказы
+  // базы остаются ровно там, где были.
+  kvGetSecretCell: jest.fn(async (k: string) => {
+    const raw = mockKv.get(k);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  }),
+  kvSetSecret: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),

@@ -77,6 +77,25 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
+  // v4.32.815: три полки ленты легли под шифр. Подмена повторяет настоящую
+  // пару в точности: kvGetSecretCell — это kvTryGet плюс расшифровка,
+  // kvSetSecret — kvSetChecked плюс шифрование, так что здешние отказы
+  // базы остаются ровно там, где были.
+  kvGetSecretCell: jest.fn(async (k: string) => {
+    if (k === mockQueueKey) {
+      mockQueueReads += 1;
+      if (mockFailQueueReadFrom > 0 && mockQueueReads >= mockFailQueueReadFrom) {
+        return { state: 'unreadable' };
+      }
+    }
+    const raw = mockKv.get(k);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  }),
+  kvSetSecret: jest.fn(async (k: string, v: string) => {
+    if (k === mockQueueKey && mockFailQueueWrite) return false;
+    mockKv.set(k, v);
+    return true;
+  }),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
@@ -247,14 +266,19 @@ describe('форма источника: отказ очереди виден в
 
   test('очередь читают через kvTryGet, а не через kvGet', () => {
     expect(CODE).not.toContain('await kvGet(FEED_QUEUE_KEY)');
-    expect(CODE).toContain('const read = await kvTryGet(FEED_QUEUE_KEY);');
+    // v4.32.815: очередь легла под шифр, и различение осталось тем же —
+    // `unreadable` покрывает и молчание базы, и не открывшийся столбец.
+    expect(CODE).toContain('const cell = await kvGetSecretCell(FEED_QUEUE_KEY);');
+    expect(CODE).toContain("    log.warn('feed_queue_read_failed', {});");
     expect(CODE).toContain('async function loadPublishQueue(): Promise<QueuedFeedItem[] | null> {');
   });
 
   test('очередь пишут проверенной записью', () => {
     expect(CODE).not.toContain('await kvSet(FEED_QUEUE_KEY');
     expect(CODE).toContain('async function savePublishQueue(q: QueuedFeedItem[]): Promise<boolean> {');
-    expect(CODE).toContain('if (!(await kvSetChecked(FEED_QUEUE_KEY, JSON.stringify(q))))');
+    // v4.32.815: kvSetSecret — это kvSetChecked плюс шифрование, так что
+    // отчёт о неудавшейся записи никуда не делся.
+    expect(CODE).toContain('if (!(await kvSetSecret(FEED_QUEUE_KEY, JSON.stringify(q))))');
   });
 
   test('updateQueue не применяет изменение при любом из двух отказов', () => {

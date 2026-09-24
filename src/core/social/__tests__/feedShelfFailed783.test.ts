@@ -70,6 +70,19 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
+  // v4.32.815: три полки ленты легли под шифр. Подмена повторяет настоящую
+  // пару в точности: kvGetSecretCell — это kvTryGet плюс расшифровка,
+  // kvSetSecret — kvSetChecked плюс шифрование, так что здешние отказы
+  // базы остаются ровно там, где были.
+  kvGetSecretCell: jest.fn(async (k: string) => {
+    const raw = mockKv.get(k);
+    return raw === undefined ? { state: 'absent' } : { state: 'plain', text: raw };
+  }),
+  kvSetSecret: jest.fn(async (k: string, v: string) => {
+    if (k === mockDeferKey && mockFailDeferWrite) return false;
+    mockKv.set(k, v);
+    return true;
+  }),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
@@ -242,7 +255,9 @@ describe('исходник: исходы объявлены и читаются'
     );
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain('await kvDeleteChecked(key);');
-    expect(body).toContain('if (await kvSetChecked(key, JSON.stringify(store))) return \'shelved\';');
+    // v4.32.815: полка легла под шифр; kvSetSecret отчитывается так же, как
+    // kvSetChecked, — он им и записывает.
+    expect(body).toContain('if (await kvSetSecret(key, JSON.stringify(store))) return \'shelved\';');
     expect(body).not.toContain('await kvSet(');
     expect(body).not.toContain('await kvDelete(');
   });

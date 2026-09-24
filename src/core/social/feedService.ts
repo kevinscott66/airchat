@@ -39,7 +39,7 @@ import {
   type DeferredEvent,
   type DeferredStore,
 } from './feedDeferred';
-import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvDeleteChecked, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
+import { kvGet, kvSet, kvSetChecked, kvTryGet, kvDelete, kvDeleteChecked, kvGetSecretCell, kvSetSecret, kvGetInlineAttachment, kvTryGetInlineAttachment, kvSetInlineAttachment, kvDeleteByPrefix, kvTryListKeysByPrefix, setPollVote, deletePollVote, parsePollText, POLL_PREFIX } from '../storage/local';
 import {
   INLINE_MEDIA_PREFIX,
   INLINE_DOC_PREFIX,
@@ -122,6 +122,29 @@ import {
 } from './feedQueueCommit';
 
 /** Ключ очереди v2 — v1 использовал IPFS, формат несовместим. v1-items игнорируются. */
+/**
+ * Три полки ленты лежат под тем же шифром, что и сама лента (v4.32.815).
+ *
+ * Опубликованный пост хранится зашифрованным столбцом: `savePost` пропускает
+ * через ключ данных и текст, и имя автора. А до публикации тот же текст ждал
+ * своей очереди в kv открытой строкой — столбец значений kv шифрует только
+ * `kvSetSecret`, и ни одна из трёх полок им не пользовалась:
+ *
+ *   • `feed_publish_queue_v2` — свои посты, ещё не ушедшие в сеть. Черновик
+ *     висит здесь, пока нет связи, и TTL у очереди — две недели;
+ *   • `feed_comment_outbox_v1` — свои комментарии и реакции в том же ожидании;
+ *   • `feed_deferred_v1:p<pid>` — чужие конверты, для которых публикация ещё
+ *     не пришла: комментарии и реакции собеседников с их именами.
+ *
+ * То есть у попавшего в чужие руки файла базы лента читалась не вся, но самое
+ * свежее — то, что человек написал последним и что ему только что написали, —
+ * читалось глазами. Шифрование столбцов и заводилось ровно от этого случая.
+ *
+ * Перенос не нужен: `tryDecryptAtRest` отдаёт строку без метки `enc2:` как
+ * есть, поэтому прежние полки читаются по-старому и становятся шифртекстом
+ * при первой же записи. Счёт очереди (FEED_QUEUE_LEN_KEY) остаётся открытым
+ * намеренно: в нём лежат свои же DID и числа, а не то, что написано.
+ */
 const FEED_QUEUE_KEY = 'feed_publish_queue_v2';
 /** v4.32.xx: отдельный маленький ключ со счётчиком очереди. Используется
  *  getFeedPublishQueueLength() чтобы не читать MB-сайз JSON из kvStore на каждом
@@ -775,12 +798,14 @@ function emitFeedNotify(ev: FeedNotifyEvent): void {
  * JSON вовсе, отправлять оттуда нечего и держаться за неё незачем.
  */
 async function loadPublishQueue(): Promise<QueuedFeedItem[] | null> {
-  const read = await kvTryGet(FEED_QUEUE_KEY);
-  if (read === null) {
+  // v4.32.815: «не открылось» приравнено к «не прочиталось». Оба ответа
+  // означают одно: что лежало на полке — неизвестно, а кладётся она целиком.
+  const cell = await kvGetSecretCell(FEED_QUEUE_KEY);
+  if (cell.state === 'unreadable') {
     log.warn('feed_queue_read_failed', {});
     return null;
   }
-  const raw = read.value;
+  const raw = cell.state === 'plain' ? cell.text : null;
   if (!raw) return [];
   try {
     const p = JSON.parse(raw) as unknown;
@@ -847,7 +872,7 @@ async function savePublishQueue(q: QueuedFeedItem[]): Promise<boolean> {
   // v4.32.645: kvSet гасит свой отказ и возвращает void, а вызывающий на этом
   // строил «поставлено в очередь». Пост не ложился никуда, человек видел его в
   // своей ленте и ждал доставки, которой не будет.
-  if (!(await kvSetChecked(FEED_QUEUE_KEY, JSON.stringify(q)))) {
+  if (!(await kvSetSecret(FEED_QUEUE_KEY, JSON.stringify(q)))) {
     log.warn('feed_queue_write_failed', { count: q.length });
     return false;
   }
@@ -2729,8 +2754,11 @@ type FeedApply = 'applied' | 'unknown' | 'deferred';
  * повторно их никто не пришлёт.
  */
 async function loadDeferred(pid: number): Promise<DeferredStore | null> {
-  const read = await kvTryGet(`${DEFERRED_KEY_PREFIX}${pid}`);
-  return read === null ? null : parseDeferredStore(read.value);
+  // v4.32.815: не открывшийся шифртекст — такое же «неизвестно», как и
+  // молчание базы, и по той же причине: полка кладётся обратно целиком.
+  const cell = await kvGetSecretCell(`${DEFERRED_KEY_PREFIX}${pid}`);
+  if (cell.state === 'unreadable') return null;
+  return parseDeferredStore(cell.state === 'plain' ? cell.text : null);
 }
 
 /**
@@ -2749,7 +2777,7 @@ async function saveDeferred(pid: number, store: DeferredStore): Promise<DeferWri
       await kvDeleteChecked(key);
       return 'shelved';
     }
-    if (await kvSetChecked(key, JSON.stringify(store))) return 'shelved';
+    if (await kvSetSecret(key, JSON.stringify(store))) return 'shelved';
     log.warn('feed_deferred_save_failed', { pid, reason: 'kv_write_failed' });
     return 'failed';
   } catch (e) {
@@ -4142,12 +4170,14 @@ function clearCommentOutboxTimer(): void {
  * JSON вовсе, отправлять оттуда нечего и держаться за неё незачем.
  */
 async function loadCommentOutbox(): Promise<CommentOutboxItem[] | null> {
-  const read = await kvTryGet(COMMENT_OUTBOX_KEY);
-  if (read === null) {
+  // v4.32.815: см. loadPublishQueue — «не открылось» здесь значит то же самое,
+  // что «не прочиталось», и очередь точно так же кладётся целиком.
+  const cell = await kvGetSecretCell(COMMENT_OUTBOX_KEY);
+  if (cell.state === 'unreadable') {
     log.warn('comment_outbox_read_failed', {});
     return null;
   }
-  const raw = read.value;
+  const raw = cell.state === 'plain' ? cell.text : null;
   if (!raw) return [];
   let dropped = 0;
   try {
@@ -4190,7 +4220,7 @@ async function saveCommentOutbox(q: CommentOutboxItem[]): Promise<boolean> {
   // v4.32.647: kvSet гасит свой отказ и возвращает void. Комментарий, который
   // на диск не лёг, выглядел ровно так же, как отложенный на повтор.
   try {
-    if (await kvSetChecked(COMMENT_OUTBOX_KEY, JSON.stringify(q))) return true;
+    if (await kvSetSecret(COMMENT_OUTBOX_KEY, JSON.stringify(q))) return true;
     log.warn('comment_outbox_save_failed', { count: q.length });
     return false;
   } catch (e) {
