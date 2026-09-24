@@ -329,8 +329,10 @@ describe('форма исходников: пятый род на полке и 
   const CODE = SERVICE.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
   test('реакция на комментарий откладывается и у неё своя ячейка', () => {
-    expect(SRC).toContain("  | 'feed_comment_reaction';");
-    expect(SRC).toContain("  'feed_comment_reaction',\n];");
+    // v4.32.825: следом за реакцией на полку лёг шестой род — удаление
+    // комментария, — так что реакция перестала быть последней в перечислении.
+    expect(SRC).toContain("  | 'feed_comment_reaction'\n");
+    expect(SRC).toContain("  'feed_comment_reaction',\n");
     expect(SRC).toContain("return `cr|${String(d.commentId ?? '')}|${e.authorDid}|${String(d.emoji ?? '')}`;");
   });
 

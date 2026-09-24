@@ -53,6 +53,10 @@ export const DEFERRED_MAX_PER_POST = 24;
 export const DEFERRED_MAX_BYTES = 192 * 1024;
 
 /**
+ * v4.32.825: сюда добавилось и удаление комментария — по той же причине и с той
+ * же оговоркой: разрешение на него проверяется не на полке, а при применении,
+ * когда комментарий уже есть и его автор известен.
+ *
  * v4.32.824: сюда добавилась реакция на комментарий. Она ждёт не публикацию, а
  * комментарий под ней, но полка у неё та же и номер тот же — номер публикации:
  * комментарий и сам кладётся на неё, а применяется раньше реакции, потому что
@@ -63,7 +67,8 @@ export type DeferredType =
   | 'feed_edit'
   | 'feed_poll_vote'
   | 'feed_comment'
-  | 'feed_comment_reaction';
+  | 'feed_comment_reaction'
+  | 'feed_comment_delete';
 
 export const DEFERRABLE: readonly DeferredType[] = [
   'feed_reaction',
@@ -71,6 +76,7 @@ export const DEFERRABLE: readonly DeferredType[] = [
   'feed_poll_vote',
   'feed_comment',
   'feed_comment_reaction',
+  'feed_comment_delete',
 ];
 
 export type DeferredEvent = {
@@ -132,6 +138,14 @@ export function deferredSlot(e: DeferredEvent): string {
   // и на полке из них должно остаться последнее по времени.
   if (e.type === 'feed_comment_reaction') {
     return `cr|${String(d.commentId ?? '')}|${e.authorDid}|${String(d.emoji ?? '')}`;
+  }
+  // v4.32.825: у удаления в ячейке стоит и отправитель. Удалить комментарий
+  // вправе двое — его автор и автор публикации, — и повторы каждого из них
+  // схлопываются в одну запись. Общая на двоих ячейка была бы дырой: кто угодно
+  // из контактов подписал бы удаление чужого комментария временем чуть вперёд,
+  // занял бы её, вытеснил настоящее и сам отсеялся при применении.
+  if (e.type === 'feed_comment_delete') {
+    return `cd|${String(d.commentId ?? '')}|${e.authorDid}`;
   }
   return `v|${e.authorDid}|${String(d.optionIndex ?? '')}`;
 }

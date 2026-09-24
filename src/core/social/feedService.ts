@@ -2860,9 +2860,10 @@ async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promi
   if ((await saveDeferred(pid, taken.store)) === 'failed') {
     // Очистка не легла: события применятся, но с полки не пропадут и придут
     // сюда снова при следующем приходе публикации. Повтор безвреден — все
-    // пять откладываемых родов идут по своему ключу (реакция и голос по
+    // шесть откладываемых родов идут по своему ключу (реакция и голос по
     // автору, комментарий и правка по своему id, реакция на комментарий — по
-    // комментарию с автором и значком) и второй раз ничего не удваивают. Не
+    // комментарию с автором и значком, удаление — по комментарию с автором)
+    // и второй раз ничего не удваивают. Не
     // применить их сейчас было бы хуже: полка живёт сутки.
     log.warn('feed_deferred_clear_failed', { postId: postId.slice(0, 24), n: taken.events.length });
   }
@@ -3215,12 +3216,34 @@ async function applyFeedEnvelope(
         // Never let an arbitrary peer plant a tombstone for a future comment.
         const post = await s.getPost(payload.postId);
         const isPostAuthor = !!post && post.authorDid === payload.authorDid;
-        if (!isPostAuthor) break;
-        await s.addCommentTombstone(d.commentId, payload.postId);
-        log.info('feed_comment_delete_tombstone_preemptive', {
+        if (isPostAuthor) {
+          await s.addCommentTombstone(d.commentId, payload.postId);
+          log.info('feed_comment_delete_tombstone_preemptive', {
+            commentId: d.commentId.slice(0, 24),
+            postId: payload.postId.slice(0, 16),
+            sender: payload.authorDid.slice(0, 24),
+          });
+          break;
+        }
+        // v4.32.825: отправитель — не автор публикации, и сказать о нём больше
+        // нечего: автора комментария знает только сам комментарий, а его ещё
+        // нет. Надгробие по такому конверту ставить нельзя — им кто угодно из
+        // контактов заранее запретил бы чужой комментарий. Но и выбрасывать
+        // конверт нельзя: чаще всего это автор комментария, стёрший своё
+        // раньше, чем комментарий доехал до третьего лица, — пути у них разные
+        // (комментарий идёт по цепочке пересылок, удаление напрямую). Повтора
+        // у удаления нет вовсе, так что выброшенное пропадало навсегда, и
+        // стёртый комментарий жил у соседа вечно.
+        //
+        // Поэтому удаление ложится на полку и ждёт свой комментарий — там же,
+        // где его ждёт реакция на него (v4.32.824). Разрешение проверяется при
+        // применении, когда автор комментария уже известен, так что полка прав
+        // никому не даёт: чужое удаление отсеется ровно так же, как отсеялось
+        // бы сейчас, — только после того, как станет с чем сравнивать.
+        if ((await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
+        log.info('feed_comment_delete_deferred', {
           commentId: d.commentId.slice(0, 24),
           postId: payload.postId.slice(0, 16),
-          sender: payload.authorDid.slice(0, 24),
         });
         break;
       }
