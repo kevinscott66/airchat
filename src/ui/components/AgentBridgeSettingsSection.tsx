@@ -18,7 +18,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 
 import { AppSwitch } from './AppSwitch';
 import { BrandedQr } from './BrandedQr';
@@ -27,7 +26,8 @@ import { useThemedStyles } from '../ThemeContext';
 import { showConfirm, showError, showSuccess } from './userFeedback';
 import { rawErrorText, userErrorText } from './userErrorText';
 import { log } from '../../core/logger';
-import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../clipboardText';
+import { COPIED_WITH_SWEEP, COPY_ACTION, COPY_FAILED } from '../clipboardText';
+import { copySecretToClipboard } from '../../core/security/clipboardSecret';
 import { loadConfig } from '../../core/config';
 import { DEFAULT_RELAY_BASE } from '../../core/transport/internet/relayConfig';
 import {
@@ -135,12 +135,21 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
 
   const copyKey = useCallback(async () => {
     if (!accessKey) return;
+    // v4.32.839: копия с истечением, а не простая. Ключ моста — предъявительский
+    // мандат: `airchat-bridge://…` содержит и секрет, и адрес, и кто его
+    // прочитал, тот управляет телефоном. Оставлять такое в буфере навсегда —
+    // ровно то, от чего написан `clipboardSecret` (v4.32.314, уборка переживает
+    // снятие приложения с v4.32.834), и до сих пор им пользовалась одна
+    // seed-фраза. Предупреждение рядом просило человека убрать за собой
+    // вручную — «сразу после вставки скопируйте что-нибудь другое», — то есть
+    // перекладывало на него работу, которую приложение умеет делать само.
+    //
     // v4.32.837: отказ буфера больше не пропадает. Зовут отсюда `void
     // copyKey()` без `.catch`, и отказ уходил в неперехваченное отклонение:
     // человек соглашался на предупреждение, ничего не происходило, и он шёл
     // вставлять агенту то, что лежало в буфере до этого.
     try {
-      await Clipboard.setStringAsync(accessKey);
+      await copySecretToClipboard(accessKey);
     } catch (e) {
       log.warn('agent_bridge_key_copy_failed', { err: rawErrorText(e) });
       showError(COPY_FAILED);
@@ -148,7 +157,9 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
     }
     // Текст подтверждения — из общего словаря (ui/clipboardText): у копирования
     // в приложении одно слово на всех, и заводить здесь своё значит разойтись.
-    showSuccess(COPIED_TEXT);
+    // Про срок говорят прямо: буфер, который чистится сам, приятная
+    // неожиданность только в одну сторону.
+    showSuccess(COPIED_WITH_SWEEP);
   }, [accessKey]);
 
   // Буфер обмена общий на всё устройство, а на Apple — ещё и общий между
@@ -164,7 +175,7 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
       // уже расходились, и `clipboardText.test` это ловит.
       title: `${COPY_ACTION} ключ?`,
       message:
-        'Ключ уйдёт в буфер обмена: его прочитает любое приложение, которое вы откроете следом, а на iPhone и Mac с одним Apple ID он появится на всех устройствах сразу. Надёжнее показать агенту код на экране. Сразу после вставки скопируйте что-нибудь другое.',
+        'Ключ уйдёт в буфер обмена: его прочитает любое приложение, которое вы откроете следом, а на iPhone и Mac с одним Apple ID он появится на всех устройствах сразу. Через минуту буфер очистится сам, но прочитанное за эту минуту уже не отозвать. Надёжнее показать агенту код на экране.',
       actions: [
         {
           label: `Всё равно ${COPY_ACTION.toLowerCase()}`,

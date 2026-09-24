@@ -124,7 +124,7 @@ import { formatByteSize } from '../../core/media/byteSize';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
 import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
-import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../clipboardText';
+import { COPIED_WITH_SWEEP, COPY_ACTION, COPY_FAILED } from '../clipboardText';
 import { log } from '../../core/logger';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
 
@@ -3003,7 +3003,7 @@ function SettingsScreenImpl({
                       копирований отказ показан (см. COPY_FAILED). */}
                   <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 12 }]} onPress={() => runGuardedOp(async () => {
                     await copySecretToClipboard(seedPhrase);
-                    showSuccess(`${COPIED_TEXT} — буфер очистится через минуту`);
+                    showSuccess(COPIED_WITH_SWEEP);
                   }, COPY_FAILED, 'settings_seed_copy_failed')}>
                     <Text style={styles.pwdPrimaryBtnText}>{COPY_ACTION}</Text>
                   </AppPressable>

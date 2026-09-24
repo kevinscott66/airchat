@@ -137,7 +137,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('ключ моста — предъявительский, и об этом сказано на экране', () => {
     const sec = src('components', 'AgentBridgeSettingsSection.tsx');
     expect(sec).toContain('Ключ уйдёт в буфер обмена');
-    expect(codeOnly(sec)).toContain('await Clipboard.setStringAsync(accessKey);');
+    // v4.32.839: запись идёт через копию с истечением, но запись есть, и
+    // предупреждение перед ней — тоже.
+    expect(codeOnly(sec)).toContain('await copySecretToClipboard(accessKey);');
   });
 });
 
@@ -186,10 +188,13 @@ describe('форма исходников', () => {
 
   it('мост агента: отказ показывают и в журнал кладут, успех — только после записи', () => {
     const sec = codeOnly(src('components', 'AgentBridgeSettingsSection.tsx'));
-    const body = bodyAt(sec, 'const copyKey = useCallback(async () => {', 700);
-    const write = body.indexOf('await Clipboard.setStringAsync(accessKey);');
+    const body = bodyAt(sec, 'const copyKey = useCallback(async () => {', 900);
+    // v4.32.839: писать стали через `copySecretToClipboard` — порядок «запись,
+    // отказ, успех» от этого не меняется, а подтверждение теперь говорит и про
+    // срок жизни копии.
+    const write = body.indexOf('await copySecretToClipboard(accessKey);');
     const fail = body.indexOf('showError(COPY_FAILED);');
-    const ok = body.indexOf('showSuccess(COPIED_TEXT);');
+    const ok = body.indexOf('showSuccess(COPIED_WITH_SWEEP);');
     expect(write).toBeGreaterThan(0);
     expect(fail).toBeGreaterThan(write);
     expect(ok).toBeGreaterThan(fail);
