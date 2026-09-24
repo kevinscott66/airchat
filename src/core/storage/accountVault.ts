@@ -395,6 +395,30 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
     const dbDir = `${base}SQLite/`;
     await FileSystem.makeDirectoryAsync(dbDir, { intermediates: true });
 
+    // v4.32.847: сначала убедиться, что снимок цел, и только потом трогать
+    // рабочие файлы.
+    //
+    // Прежде проверки не было вовсе: файл, названный в манифесте, но пропавший
+    // с диска, тихо пропускался (`if (await exists(...))`). А рабочие файлы к
+    // этому времени уже уведены в отложенный каталог, и он на успехе
+    // удаляется. То есть восстановление из щербатого снимка стирало рабочую
+    // базу и НЕ клало на её место ничего — и возвращало `true`, то есть
+    // «восстановлено».
+    const dbNames = manifest.dbFiles.filter(
+      (value) => typeof value === 'string' && DB_FILE_RE.test(value),
+    );
+    const avatarNames = manifest.avatarFiles.filter(
+      (value) => typeof value === 'string' && AVATAR_FILE_RE.test(value),
+    );
+    const absentDb: string[] = [];
+    for (const name of dbNames) {
+      if (!(await exists(`${dir}SQLite/${name}`))) absentDb.push(name);
+    }
+    if (absentDb.length > 0) {
+      log.error('account_vault_restore_incomplete', { accountId, names: absentDb });
+      return false;
+    }
+
     // Прежний список профилей тоже надо уметь вернуть: без него база
     // восстановлена, а видно только первый профиль.
     const previousProfileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);
@@ -403,13 +427,23 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
       { dir: base, pattern: AVATAR_FILE_RE },
     ]);
     try {
-      for (const name of manifest.dbFiles.filter((value) => typeof value === 'string' && DB_FILE_RE.test(value))) {
-        const destination = `${dbDir}${name}`;
-        if (await exists(`${dir}SQLite/${name}`)) await replaceFile(`${dir}SQLite/${name}`, destination);
+      for (const name of dbNames) {
+        await replaceFile(`${dir}SQLite/${name}`, `${dbDir}${name}`);
       }
-      for (const name of manifest.avatarFiles.filter((value) => typeof value === 'string' && AVATAR_FILE_RE.test(value))) {
-        const destination = `${base}${name}`;
-        if (await exists(`${dir}avatars/${name}`)) await replaceFile(`${dir}avatars/${name}`, destination);
+      // Картинка — не переписка: из-за пропавшего аватара отменять возврат
+      // базы незачем. Но и молчать нельзя: этот аватар сейчас пропадёт с
+      // устройства вместе с отложенным каталогом.
+      let absentAvatars = 0;
+      for (const name of avatarNames) {
+        const source = `${dir}avatars/${name}`;
+        if (!(await exists(source))) {
+          absentAvatars += 1;
+          continue;
+        }
+        await replaceFile(source, `${base}${name}`);
+      }
+      if (absentAvatars > 0) {
+        log.warn('account_vault_restore_avatars_absent', { accountId, count: absentAvatars });
       }
       if (profileState) await SecureStore.setItemAsync(PROFILE_STATE_KEY, profileState);
       else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
@@ -443,6 +477,27 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
 }
 
 /**
+ * Базы, которые манифест архива обещает, а сам архив не везёт (v4.32.847).
+ *
+ * Проверка того же направления, которого не хватало и в облаке:
+ * `validateArchiveFileList` сверяла только `files ⊆ manifest`, то есть ловила
+ * лишний файл и пропускала недостающий. Архив без базы переписки проходил как
+ * исправный — и «восстанавливался», стирая ту базу, что была.
+ */
+export function missingArchiveDbFiles(archive: AccountVaultArchive): string[] {
+  const manifest = archive?.manifest;
+  if (!manifest || !Array.isArray(manifest.dbFiles)) return [];
+  const carried = new Set(
+    (Array.isArray(archive.files) ? archive.files : [])
+      .filter((file) => file && typeof file.name === 'string' && typeof file.dataB64 === 'string')
+      .map((file) => file.name),
+  );
+  return manifest.dbFiles.filter(
+    (name) => typeof name === 'string' && DB_FILE_RE.test(name) && !carried.has(name),
+  );
+}
+
+/**
  * Read the local seed-bound snapshot as a transport-neutral archive. The
  * caller encrypts this object before it leaves the device.
  */
@@ -463,16 +518,51 @@ export async function readAccountVaultArchive(mnemonic: string): Promise<Account
     ) return null;
 
     const files: AccountVaultFile[] = [];
+    const absentDb: string[] = [];
+    const absentAvatars: string[] = [];
     for (const name of [...manifest.dbFiles, ...manifest.avatarFiles]) {
-      if (typeof name !== 'string' || !isSafeVaultFile(name)) continue;
+      if (typeof name !== 'string' || !isSafeVaultFile(name)) {
+        // Манифест перечисляет то, чего в снимке быть не может. Чего в такой
+        // копии не хватает ещё — неизвестно, и отдавать её наружу нельзя.
+        log.error('account_vault_archive_manifest_bad_name', { accountId });
+        return null;
+      }
       const uri = DB_FILE_RE.test(name) ? `${dir}SQLite/${name}` : `${dir}avatars/${name}`;
-      if (!(await exists(uri))) continue;
+      if (!(await exists(uri))) {
+        (DB_FILE_RE.test(name) ? absentDb : absentAvatars).push(name);
+        continue;
+      }
       files.push({
         name,
         dataB64: await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 }),
       });
     }
-    return { v: 1, accountId, savedAt: manifest.savedAt, manifest, files };
+    // v4.32.847: пропущенный файл больше не уезжает в облако молча.
+    //
+    // Прежде отсутствие файла на диске было просто `continue`: архив уходил
+    // короче манифеста, сервер отвечал «принято», а человеку говорили
+    // «Зашифрованная копия отправлена в облако». Возвращать такую копию
+    // некуда — восстановление стирает рабочую базу и не кладёт на её место
+    // ничего.
+    if (absentDb.length > 0) {
+      log.error('account_vault_archive_db_absent', { accountId, names: absentDb });
+      return null;
+    }
+    if (absentAvatars.length === 0) {
+      return { v: 1, accountId, savedAt: manifest.savedAt, manifest, files };
+    }
+    // Аватара нет — переписку из-за этого не отдавать глупо. Но манифест
+    // обязан описывать ровно то, что внутри: иначе при возврате копии её
+    // сочтут неполной и откажут по-настоящему.
+    log.warn('account_vault_archive_avatars_absent', { accountId, count: absentAvatars.length });
+    const lost = new Set(absentAvatars);
+    return {
+      v: 1,
+      accountId,
+      savedAt: manifest.savedAt,
+      manifest: { ...manifest, avatarFiles: manifest.avatarFiles.filter((name) => !lost.has(name)) },
+      files,
+    };
   } catch (e) {
     log.warn('account_vault_archive_read_failed', {
       accountId,
@@ -510,6 +600,13 @@ export async function restoreAccountVaultArchive(
     const manifestDbFiles = Array.isArray(archive.manifest.dbFiles) ? archive.manifest.dbFiles : [];
     const manifestAvatarFiles = Array.isArray(archive.manifest.avatarFiles) ? archive.manifest.avatarFiles : [];
     const manifestFiles = new Set([...manifestDbFiles, ...manifestAvatarFiles]);
+    // v4.32.847: щербатый архив отвергается ДО того, как рабочие файлы уведены
+    // в сторону, — иначе отказ сам по себе и есть потеря переписки.
+    const absentDb = missingArchiveDbFiles(archive);
+    if (absentDb.length > 0) {
+      log.error('account_vault_archive_incomplete', { accountId, names: absentDb });
+      return false;
+    }
     // v4.32.617: как и восстановление из копии на устройстве, разбор архива
     // сначала уводит текущие файлы в сторону. Оборвётся на середине — вернём.
     const previousProfileState = await SecureStore.getItemAsync(PROFILE_STATE_KEY);

@@ -16,6 +16,7 @@ import { getConfigSync } from '../config';
 import {
   accountIdFromPublicKey,
   accountVaultIdFromMnemonic,
+  missingArchiveDbFiles,
   readAccountVaultArchive,
   restoreAccountVaultArchive,
   snapshotAccountVault,
@@ -382,6 +383,20 @@ export async function restoreCloudVault(
   if (!envelope) return 'not_found';
   const archive = decryptCloudVaultArchive(mnemonic, password, envelope);
   if (!archive) throw new Error('Неверный облачный пароль или повреждённая копия.');
+  // v4.32.847: копию без базы переписки возвращать нельзя, и сказать об этом
+  // надо своими словами. Прежде такую копию принимали за исправную: сверка
+  // смотрела только «нет ли в архиве лишнего», а «всё ли обещанное на месте»
+  // не спрашивала. Возврат стирал рабочую базу и не клал на её место ничего.
+  const absentDb = missingArchiveDbFiles(archive);
+  if (absentDb.length > 0) {
+    log.error('cloud_vault_archive_incomplete', {
+      accountId: envelope.accountId,
+      count: absentDb.length,
+    });
+    throw new Error(
+      'Облачная копия неполна: в ней нет базы переписки. Возврат отменён — иначе он стёр бы то, что есть на устройстве.',
+    );
+  }
   const { closeFeedStorage } = await import('../social/feedService');
   const { closeLocalDatabase } = await import('../storage/local');
   await closeFeedStorage();
