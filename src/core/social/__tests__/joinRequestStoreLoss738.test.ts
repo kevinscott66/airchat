@@ -127,10 +127,12 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
     expect(HANDLER.length).toBeGreaterThan(2000);
     expect(HANDLER).toContain('if (!grp) return');
     expect(HANDLER).toContain("log.info('group_join_request_filtered'");
-    // Соседняя дорога той же заявки (управляющий конверт 'join') читала ответ
-    // записи с самого начала — образец, по которому переписан приём.
+    // Соседняя дорога той же заявки — управляющий конверт 'join' — кладёт её
+    // тем же вызовом. Правки v4.32.738 она не касалась и касаться не должна.
+    // (В v4.32.818 там переставили порядок: ответ записи больше не читают,
+    // «первая ли заявка» спрашивают чтением до неё. Сам вызов на месте.)
     expect(GRP).toContain(
-      'const queued = await insertGroupJoinRequest(env.groupId, senderPubB64, displayNameOrNull(env.targetName), null, pid);'
+      'await insertGroupJoinRequest(env.groupId, senderPubB64, displayNameOrNull(env.targetName), null, pid);'
     );
   });
 });

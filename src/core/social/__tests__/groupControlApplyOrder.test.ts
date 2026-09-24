@@ -103,6 +103,9 @@ jest.mock('../../storage/local', () => ({
     mockJoinRequests.push(a);
     return { created: true };
   }),
+  // v4.32.818: «первая ли это заявка» спрашивается чтением — рассказ заявителю
+  // идёт до записи. Пустой список значит «первая».
+  listGroupJoinRequests: jest.fn(async () => []),
   profileKvGet: jest.fn(async () => null),
   kvDeleteScoped: jest.fn(async () => {}),
   createGroup: jest.fn(async () => {}),
@@ -133,7 +136,7 @@ jest.mock('../messaging', () => ({
 }));
 jest.mock('../controlFanout', () => ({
   activeRecipients: async () => [],
-  fanoutControlEnvelope: async () => ({ sent: 0, failed: 0, skipped: 0 }),
+  fanoutControlEnvelope: async () => ({ sent: true, recipients: 1 }),
 }));
 jest.mock('../contacts', () => ({ listContactsFor: async () => mockContacts() }));
 jest.mock('../../settings/privacyPrefs', () => ({

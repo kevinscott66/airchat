@@ -30,6 +30,7 @@ import {
   deleteGroupMessageChecked,
   markGroupMessageSeenChecked,
   insertGroupJoinRequest,
+  listGroupJoinRequests,
   createGroupWithRoster,
   upsertGroupMember,
   updateGroupMemberRole,
@@ -1038,9 +1039,9 @@ export async function handleIncomingGroupJoinRequest(text: string, rcpt: GroupRe
       return 'consumed';
     }
     // v4.32.738: ответ записи читается — как у соседней заявки по конверту
-    // 'join' (см. `const queued = await insertGroupJoinRequest` ниже). `created`
-    // здесь только для журнала: повторное открытие ссылки обновляет ту же
-    // строку, и это не беда, а нормальный ход.
+    // 'join' (см. ветку `verdict === 'queue'` ниже). `created` здесь только
+    // для журнала: повторное открытие ссылки обновляет ту же строку, и это не
+    // беда, а нормальный ход.
     const queued = await insertGroupJoinRequest(env.groupId, env.requesterPubB64, env.requesterName, env.message ?? null, pid);
     log.info('group_join_request_received', {
       groupId: env.groupId.slice(0, 8),
@@ -1684,12 +1685,31 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
           const myPubRv = rcpt.myPub;
           if (myPubRv) {
             const myNameRv = (await getOwnDisplayNameFor(pid)) ?? undefined;
-            void sendGroupControlTo(
+            /**
+             * v4.32.818: исход отправки прочитан, а не выброшен.
+             *
+             * Объяснение и есть всё событие этой ветки: ничего не пишется, не
+             * меняется состав, не двигается знак времени. Отброшенный `void`
+             * означал, что отсутствие сети превращает «вам отказано по
+             * отозванной ссылке» в ту самую немоту, ради ухода от которой
+             * ответ и заводили. Откладывать безопасно ровно потому, что
+             * сделано ещё ничего не было: повтор кадра пройдёт тот же путь и
+             * скажет то же самое.
+             */
+            const toldRv = await sendGroupControlTo(
               [senderPubB64],
               env.groupId,
               { op: 'joinres', target: senderPubB64, status: 'revoked', targetName: env.targetName },
               myNameRv
             );
+            if (!toldRv.sent) {
+              log.warn('group_ctl_joinres_revoked_undelivered', {
+                gid: env.groupId.slice(0, 8),
+                to: senderPubB64.slice(0, 12),
+                reason: toldRv.reason,
+              });
+              return 'deferred';
+            }
           }
         }
         log.info('group_ctl_join_revoked_drop', {
@@ -1724,13 +1744,6 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     }
     if (verdict === 'ignore') return 'consumed';
     if (verdict === 'queue') {
-      // Дедуп по (group_id, requester, pending): повторное открытие ссылки не
-      // наплодит заявок.
-      // v4.32.372: имя в заявке задаёт тот, кто просится, и пустым оно быть
-      // может. `?? null` его пропускал, а список заявок рисует первую букву
-      // как `(requesterName ?? '?')[0]` — у пустой строки это undefined, и
-      // экран заявок у администратора не открывался вовсе.
-      const queued = await insertGroupJoinRequest(env.groupId, senderPubB64, displayNameOrNull(env.targetName), null, pid);
       /**
        * v4.32.266: и сразу отвечаем заявителю — но только на первую заявку,
        * иначе каждое повторное открытие ссылки дописывало бы ему ещё одну
@@ -1739,17 +1752,50 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
        * добавлены». Без ответа он пишет в группу, а его сообщения выбрасывает
        * анти-спуф-фильтр на каждом устройстве — молча и без единого признака,
        * что дело в неодобренной заявке.
+       *
+       * v4.32.818: рассказ идёт ПЕРЕД записью заявки, а его отказ откладывает
+       * кадр.
+       *
+       * «Только на первую заявку» решалось по ответу самой записи
+       * (`queued.created`), а отправка шла через `void`. Значит, пропавший
+       * ответ был окончательным: заявка уже лежит, повтор кадра вернёт
+       * `created: false`, и заявитель не узнает о своём положении никогда —
+       * ровно та немота, от которой ответ и придуман. Отложить после записи
+       * нечем помочь по той же причине.
+       *
+       * Поэтому «первая ли это заявка» спрашивается чтением, а запись идёт
+       * после удачного рассказа. Цена честная: пока рассказ не ушёл,
+       * администратор заявки не видит — но и одобрять ему пока нечего,
+       * заявитель всё равно ждёт ответа. Повторное открытие ссылки лишней
+       * строки по-прежнему не даёт: заявка уже числится ждущей.
        */
-      const myPubQ = queued.created ? rcpt.myPub : '';
+      const pendingHere = await listGroupJoinRequests(env.groupId, pid, 'pending');
+      const firstAsk = !pendingHere.some((r) => r.requesterPubB64 === senderPubB64);
+      const myPubQ = firstAsk ? rcpt.myPub : '';
       if (myPubQ) {
         const myNameQ = (await getOwnDisplayNameFor(pid)) ?? undefined;
-        void sendGroupControlTo(
+        const toldQ = await sendGroupControlTo(
           [senderPubB64],
           env.groupId,
           { op: 'joinres', target: senderPubB64, status: 'pending', targetName: env.targetName },
           myNameQ
         );
+        if (!toldQ.sent) {
+          log.warn('group_ctl_joinres_pending_undelivered', {
+            gid: env.groupId.slice(0, 8),
+            to: senderPubB64.slice(0, 12),
+            reason: toldQ.reason,
+          });
+          return 'deferred';
+        }
       }
+      // Дедуп по (group_id, requester, pending): повторное открытие ссылки не
+      // наплодит заявок.
+      // v4.32.372: имя в заявке задаёт тот, кто просится, и пустым оно быть
+      // может. `?? null` его пропускал, а список заявок рисует первую букву
+      // как `(requesterName ?? '?')[0]` — у пустой строки это undefined, и
+      // экран заявок у администратора не открывался вовсе.
+      await insertGroupJoinRequest(env.groupId, senderPubB64, displayNameOrNull(env.targetName), null, pid);
       log.info('group_ctl_join_queued', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }

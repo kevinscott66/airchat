@@ -140,7 +140,7 @@ jest.mock('../messaging', () => ({
 }));
 jest.mock('../controlFanout', () => ({
   activeRecipients: async () => [],
-  fanoutControlEnvelope: async () => ({ sent: 0, failed: 0, skipped: 0 }),
+  fanoutControlEnvelope: async () => ({ sent: true, recipients: 1 }),
 }));
 jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
 jest.mock('../../security/rateLimiter', () => ({
