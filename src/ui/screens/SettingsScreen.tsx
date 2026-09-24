@@ -2217,37 +2217,50 @@ function SettingsScreenImpl({
         </AppPressable>
       ) : null}
 
-      <Text style={styles.sectionTitle}>Автоблокировка</Text>
-      <View style={styles.card}>
-        <View style={styles.switchRow}>
-          <View style={styles.rowBody}>
-            <Text style={styles.label}>Блокировать при выходе</Text>
-            <Text style={styles.desc}>Требовать пароль при следующем открытии</Text>
-          </View>
-          <AppSwitch value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); applyKvPref('auto_lock_on_exit', String(v), () => setAutoLockEnabled(!v)); }} />
-        </View>
-        {autoLockEnabled ? (
-          <View style={[styles.switchRow, styles.switchRowLast]}>
+      {/*
+        v4.32.867: раздел виден только при заданном пароле — как биометрия и
+        привязка к Apple ID выше. Прежде переключатель стоял здесь всегда,
+        включался, переживал перезапуск, и человек считал, что переписка
+        закрыта при сворачивании. На деле оба потребителя настройки выходят
+        раньше, чем до неё доходят: и автоблокировка в App.tsx, и скрытие
+        текста в баннерах спрашивают `hasPassword()` первым делом. Запирать
+        нечем — замка без ключа не бывает.
+      */}
+      {hasAppPassword ? (
+        <>
+        <Text style={styles.sectionTitle}>Автоблокировка</Text>
+        <View style={styles.card}>
+          <View style={styles.switchRow}>
             <View style={styles.rowBody}>
-              <Text style={styles.label}>Задержка блокировки</Text>
+              <Text style={styles.label}>Блокировать при выходе</Text>
+              <Text style={styles.desc}>Требовать пароль при следующем открытии</Text>
             </View>
-            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {([0, 60_000, 300_000, 1_800_000] as const).map((ms) => {
-                const label = ms === 0 ? 'Сразу' : ms === 60_000 ? '1 мин' : ms === 300_000 ? '5 мин' : '30 мин';
-                const active = autoLockDelayMs === ms;
-                return (
-                  <AppPressable key={ms}
-                    onPress={() => { const prev = autoLockDelayMs; setAutoLockDelayMs(ms); applyKvPref('auto_lock_delay_ms', String(ms), () => setAutoLockDelayMs(prev)); }}
-                    style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.lg, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
-                  >
-                    <Text style={{ color: active ? primaryOn : colors.text, fontSize: scaleFont(12), fontWeight: '600' }}>{label}</Text>
-                  </AppPressable>
-                );
-              })}
-            </View>
+            <AppSwitch value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); applyKvPref('auto_lock_on_exit', String(v), () => setAutoLockEnabled(!v)); }} />
           </View>
-        ) : null}
-      </View>
+          {autoLockEnabled ? (
+            <View style={[styles.switchRow, styles.switchRowLast]}>
+              <View style={styles.rowBody}>
+                <Text style={styles.label}>Задержка блокировки</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {([0, 60_000, 300_000, 1_800_000] as const).map((ms) => {
+                  const label = ms === 0 ? 'Сразу' : ms === 60_000 ? '1 мин' : ms === 300_000 ? '5 мин' : '30 мин';
+                  const active = autoLockDelayMs === ms;
+                  return (
+                    <AppPressable key={ms}
+                      onPress={() => { const prev = autoLockDelayMs; setAutoLockDelayMs(ms); applyKvPref('auto_lock_delay_ms', String(ms), () => setAutoLockDelayMs(prev)); }}
+                      style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.lg, backgroundColor: active ? colors.primary : colors.background, borderWidth: 1, borderColor: active ? colors.primary : colors.border }}
+                    >
+                      <Text style={{ color: active ? primaryOn : colors.text, fontSize: scaleFont(12), fontWeight: '600' }}>{label}</Text>
+                    </AppPressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+        </View>
+        </>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Активные сессии</Text>
       <AppPressable
