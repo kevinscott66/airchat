@@ -7,6 +7,7 @@
  * непроверяемы просто из-за соседства: чтобы добраться до них, тест поднимал
  * бы весь экран с его двумя десятками эффектов.
  */
+import { formatByteSize } from '../../../core/media/byteSize';
 import type { SyncDevice } from '../../../core/sync/syncApi';
 
 /**
@@ -107,6 +108,26 @@ export function sessionSystemLine(device: SyncDevice): string {
       : [platform, os].filter(Boolean).join(' · ');
   const app = (device.appVersion ?? '').trim();
   return [head, app ? `AirChat ${app}` : ''].filter(Boolean).join(' · ');
+}
+
+/**
+ * Размер кэша словами (v4.32.880).
+ *
+ * Раньше состояний было два — число и `null`, — а положений три: считаем,
+ * посчитали, посчитать не вышло. Отказ чтения папки клал тот же `null`, что и
+ * до начала подсчёта, и строка «Вычисляется…» оставалась на экране навсегда.
+ * Человек ждал числа, которого не будет, и не знал, стоит ли жать «Очистить»;
+ * после очистки поверх этого «Вычисляется…» ещё и говорили «Кэш очищен».
+ */
+export type CacheSizePhase = 'loading' | 'ready' | 'unknown';
+
+export const CACHE_SIZE_LOADING_TEXT = 'Вычисляется…';
+export const CACHE_SIZE_UNKNOWN_TEXT = 'Размер посчитать не удалось';
+
+export function cacheSizeLabel(phase: CacheSizePhase, bytes: number | null): string {
+  if (phase === 'loading') return CACHE_SIZE_LOADING_TEXT;
+  if (phase === 'ready' && bytes !== null) return formatByteSize(bytes);
+  return CACHE_SIZE_UNKNOWN_TEXT;
 }
 
 /**

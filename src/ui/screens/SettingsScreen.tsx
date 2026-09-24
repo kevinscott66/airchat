@@ -58,7 +58,7 @@ import { EMBEDDED_VPN_AVAILABLE, LOCAL_RADIO_TRANSPORTS_AVAILABLE, OPENFLUX_AVAI
 import { settingsVisibility } from './settingsVisibility';
 import { makeStyles } from './settings/settingsStyles';
 import { createSettingsChrome } from './settings/settingsChrome';
-import { autoDeleteLabel, sessionDeviceName, sessionLocation, sessionSystemLine } from './settings/settingsLabels';
+import { autoDeleteLabel, cacheSizeLabel as cacheSizeText, sessionDeviceName, sessionLocation, sessionSystemLine, type CacheSizePhase } from './settings/settingsLabels';
 import { HourStepper } from './settings/HourStepper';
 import { RelaySettingsSection } from '../components/RelaySettingsSection';
 import { SafeScreen } from '../components/SafeScreen';
@@ -127,7 +127,6 @@ import { KEEPALIVE_KEY, setBackgroundKeepaliveEnabled } from '../../core/social/
 import { getLanTransportSingleton } from '../../core/transport/lan/lanTransport';
 import { listMuted, unmute, type MuteEntry } from '../../core/notifications/muteStore';
 import { pushNotificationService } from '../../notifications/pushNotifications';
-import { formatByteSize } from '../../core/media/byteSize';
 import { pluralRu } from '../../core/storage/ruPlural';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
@@ -383,6 +382,8 @@ function SettingsScreenImpl({
   // (см. useAutoDownloadGate). Показываем то, что происходит на самом деле.
   const [autoDownload, setAutoDownload] = useState<'always' | 'wifi' | 'never'>('always');
   const [cacheSize, setCacheSize] = useState<number | null>(null);
+  // v4.32.880: «считаем» и «не вышло» были одним и тем же null.
+  const [cacheSizePhase, setCacheSizePhase] = useState<CacheSizePhase>('loading');
   const [cacheBusy, setCacheBusy] = useState(false);
   const [lanPeerCount, setLanPeerCount] = useState(0);
   const [ipfsOnline, setIpfsOnline] = useState<boolean | null>(null);
@@ -1231,7 +1232,8 @@ function SettingsScreenImpl({
   const loadCacheSize = useCallback(async () => {
     try {
       const dir = FileSystem.cacheDirectory;
-      if (!dir) return;
+      // Папки кэша нет вовсе: считать нечего и ждать нечего.
+      if (!dir) { setCacheSize(null); setCacheSizePhase('unknown'); return; }
       const entries = await FileSystem.readDirectoryAsync(dir);
       const sizes = await runWithConcurrency(entries, 8, async (name) => {
         try {
@@ -1240,7 +1242,8 @@ function SettingsScreenImpl({
         } catch { return 0; }
       });
       setCacheSize(sizes.reduce((total, size) => total + size, 0));
-    } catch { setCacheSize(null); }
+      setCacheSizePhase('ready');
+    } catch { setCacheSize(null); setCacheSizePhase('unknown'); }
   }, []);
 
   const clearCache = useCallback(async () => {
@@ -1324,7 +1327,7 @@ function SettingsScreenImpl({
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  const cacheSizeLabel = cacheSize !== null ? formatByteSize(cacheSize) : 'Вычисляется…';
+  const cacheSizeLabel = cacheSizeText(cacheSizePhase, cacheSize);
 
   /**
    * Шапка, строка меню и плашка — стабильные между рендерами, см.
