@@ -505,6 +505,24 @@ const REQ_TRACKED_MAX = 500;
 const reqSentAt = new Map<string, number>();
 const reqAnsweredAt = new Map<string, number>();
 
+/**
+ * Ключ окна: номер профиля и собеседник (v4.32.826).
+ *
+ * Раньше здесь стоял один собеседник, и окно было общим на все мои профили.
+ * Карты живут на уровне модуля и смену профиля переживают, а окно у просьбы о
+ * карточке — пять минут: после переключения профиля тот же собеседник попадал
+ * в чужое окно. Просьбу от нового профиля не отправляли вовсе, и его карточка
+ * оставалась кружком с буквой; ответ на просьбу — не отправляли тоже, и кадр
+ * при этом объявлялся разобранным. Просящий своё окно уже занял, так что
+ * переспрашивал не раньше чем через те же пять минут.
+ *
+ * Профили для того и заведены, чтобы не путаться между собой: окно одного из
+ * них не вправе молчать за другой.
+ */
+function throttleKey(pid: number, peerPubB64: string): string {
+  return `${pid}|${peerPubB64}`;
+}
+
 function passThrottle(map: Map<string, number>, key: string, now: number): boolean {
   const at = map.get(key);
   if (at !== undefined && now - at < REQ_COOLDOWN_MS) return false;
@@ -526,11 +544,12 @@ export async function requestPeerProfile(peerPubB64: string): Promise<void> {
   if (!peerPubB64) return;
   const svc = getMessagingService();
   if (!svc) return;
-  if (!passThrottle(reqSentAt, peerPubB64, Date.now())) return;
+  const reqKey = throttleKey(activeProfileId(), peerPubB64);
+  if (!passThrottle(reqSentAt, reqKey, Date.now())) return;
   if (!(await canReachPeer(peerPubB64))) {
     // Не отправляли — и отметку не держим: следующее открытие карточки должно
     // попробовать снова, а не ждать пять минут после несостоявшейся отправки.
-    reqSentAt.delete(peerPubB64);
+    reqSentAt.delete(reqKey);
     return;
   }
   try {
@@ -538,9 +557,9 @@ export async function requestPeerProfile(peerPubB64: string): Promise<void> {
     // окно на пять минут — это пять минут пустой карточки на ровном месте.
     // Тот же довод, что и у ветки «не дойдёт» выше.
     const cid = await svc.sendMessage(peerPubB64, encodeProfileRequest());
-    if (!cid) reqSentAt.delete(peerPubB64);
+    if (!cid) reqSentAt.delete(reqKey);
   } catch (e) {
-    reqSentAt.delete(peerPubB64);
+    reqSentAt.delete(reqKey);
     log.debug('profile_request_failed', {
       to: peerPubB64.slice(0, 12),
       err: e instanceof Error ? e.message : String(e),
@@ -573,19 +592,20 @@ export async function handleIncomingProfileRequest(
 ): Promise<EnvelopeIntake> {
   if (!isProfileRequest(text)) return 'consumed';
   if (!senderPubB64) return 'consumed';
-  if (!passThrottle(reqAnsweredAt, senderPubB64, Date.now())) return 'consumed';
+  const ansKey = throttleKey(ownerPid, senderPubB64);
+  if (!passThrottle(reqAnsweredAt, ansKey, Date.now())) return 'consumed';
   try {
     const outcome = await sendProfileTo(ownerPid, senderPubB64, true);
     if (outcome === 'failed') {
       // Окно держать не за что: ответа не было. Тот же довод, что и у
       // requestPeerProfile выше (v4.32.715).
-      reqAnsweredAt.delete(senderPubB64);
+      reqAnsweredAt.delete(ansKey);
       log.warn('profile_request_answer_deferred', { to: senderPubB64.slice(0, 12) });
       return 'deferred';
     }
     log.info('profile_request_answered', { to: senderPubB64.slice(0, 12), outcome });
   } catch (e) {
-    reqAnsweredAt.delete(senderPubB64);
+    reqAnsweredAt.delete(ansKey);
     log.warn('profile_request_answer_failed', { err: e instanceof Error ? e.message : String(e) });
     return 'deferred';
   }

@@ -216,7 +216,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const body = codeOnly(read('core/social/profileSync.ts'));
     // Окно одно на обе стороны: и на просьбу, и на ответ.
     expect(body).toContain('const REQ_COOLDOWN_MS = 5 * 60_000;');
-    expect(body).toContain('if (!passThrottle(reqSentAt, peerPubB64, Date.now())) return;');
+    // v4.32.826: в ключе окна появился номер профиля — сам ключ и длина окна
+    // от этого не изменились, а вот строка вызова изменилась.
+    expect(body).toContain('if (!passThrottle(reqSentAt, reqKey, Date.now())) return;');
   });
 
   it('другого пути ответить на просьбу нет', () => {
@@ -241,7 +243,7 @@ describe('форма исходников: правка стоит там, гд�
     expect(at).toBeGreaterThan(0);
     const tail = body.slice(at);
     expect(tail).toContain("if (outcome === 'failed') {");
-    expect(tail).toContain('reqAnsweredAt.delete(senderPubB64);');
+    expect(tail).toContain('reqAnsweredAt.delete(ansKey);'); // v4.32.826: ключ с профилем
     expect(tail).toContain("return 'deferred';");
   });
 

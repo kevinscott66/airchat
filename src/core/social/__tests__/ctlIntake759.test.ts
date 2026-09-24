@@ -214,7 +214,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const at = body.indexOf('export async function handleIncomingProfileRequest(');
     expect(at).toBeGreaterThan(0);
     const tail = body.slice(at);
-    expect(tail).toContain('reqAnsweredAt.delete(senderPubB64);');
+    // v4.32.826: ключ окна стал составным — профиль плюс собеседник.
+    expect(tail).toContain('reqAnsweredAt.delete(ansKey);');
     expect(tail).toContain("if (outcome === 'failed') {");
   });
 });
