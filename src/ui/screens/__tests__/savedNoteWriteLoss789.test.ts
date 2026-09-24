@@ -64,8 +64,12 @@ const GIF = between(CHAT, "void touchConversation(peerB64, activeProfileId, '�
 describe('единственная копия заметки пишется проверяемой формой', () => {
   it('текст: отказ возвращает набранное в поле и говорит об этом', () => {
     expect(TEXT).toContain("if ((await upsertChatMessageChecked(row)) === 'failed') {");
-    expect(TEXT).toContain('setMsg(text);');
-    expect(TEXT).toContain('msgRef.current = text;');
+    // v4.32.873: поле и черновик за ним ставятся одной формой. Прежние две
+    // строки писали `setMsg` и `msgRef`, но не черновик: текст возвращался на
+    // экран, а в базе за ним ничего не стояло — выход из переписки его уносил.
+    expect(TEXT).toContain('putComposer(text);');
+    expect(CHAT).toContain('const putComposer = useCallback((next: string) => {\n    msgRef.current = next;');
+    expect(CHAT).toContain('    saveDraft(next);\n  }, [saveDraft]);');
     expect(TEXT).toContain('setReplyTo(replyRef ?? null);');
     expect(TEXT).toContain("showError('Заметка не сохранилась. Попробуйте ещё раз');");
     expect(TEXT).toContain("log.error('saved_note_row_failed'");

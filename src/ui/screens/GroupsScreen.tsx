@@ -1399,6 +1399,50 @@ function GroupChatScreen({
     writeGroupDraft(null);
   }, [writeGroupDraft]);
 
+  /** Отложенная запись черновика — та же, что была вшита в `handleTextChange`. */
+  const saveGroupDraft = useCallback((next: string) => {
+    if (draftSaveRef.current) clearTimeout(draftSaveRef.current);
+    pendingGroupDraftRef.current = next;
+    draftSaveRef.current = setTimeout(() => {
+      draftSaveRef.current = null;
+      const pending = pendingGroupDraftRef.current ?? '';
+      pendingGroupDraftRef.current = null;
+      writeGroupDraft(pending.trim() || null);
+    }, 600);
+  }, [writeGroupDraft]);
+
+  /**
+   * Положить текст в поле ввода не с клавиатуры — так, чтобы черновик не
+   * отстал (v4.32.873).
+   *
+   * Черновик группы писало ровно одно место — `handleTextChange`. Всё
+   * остальное, что попадает в поле, шло мимо него: смайл из панели, разметка
+   * из полоски, быстрый ответ, подставленная команда и — самое дорогое —
+   * текст, возвращённый в поле после отказа отправки. Поле при этом выглядит
+   * заполненным, а в базе черновика нет: достаточно выйти из группы, и
+   * написанное пропадает совсем. У возврата после отказа получалось хуже
+   * всего: отправка уже сняла черновик, человек видит свой текст на экране и
+   * уходит за подсказкой — вернувшись, не находит ничего.
+   */
+  const putGroupText = useCallback((next: string) => {
+    textRef.current = next;
+    setText(next);
+    saveGroupDraft(next);
+  }, [saveGroupDraft]);
+
+  /**
+   * Поле опустело потому, что написанное ушло: черновик снимается вместе — и
+   * вместе с отложенной записью (v4.32.324, v4.32.530). Без этого `setText('')`
+   * оставлял таймер жить, и через 600 мс уже отправленный текст ложился в
+   * черновик группы: при следующем входе поле было заполнено тем, что человек
+   * только что отправил.
+   */
+  const takeGroupText = useCallback(() => {
+    textRef.current = '';
+    setText('');
+    clearGroupDraft();
+  }, [clearGroupDraft]);
+
   // Уход из группы (и переход в другую) дописывает черновик.
   useEffect(() => {
     return () => { flushGroupDraft(); };
@@ -1407,15 +1451,7 @@ function GroupChatScreen({
   const handleTextChange = useCallback((t: string) => {
     textRef.current = t;
     setText(t);
-    // Persist draft with debounce
-    if (draftSaveRef.current) clearTimeout(draftSaveRef.current);
-    pendingGroupDraftRef.current = t;
-    draftSaveRef.current = setTimeout(() => {
-      draftSaveRef.current = null;
-      const pending = pendingGroupDraftRef.current ?? '';
-      pendingGroupDraftRef.current = null;
-      writeGroupDraft(pending.trim() || null);
-    }, 600);
+    saveGroupDraft(t);
     // Send typing indicator to group members (debounced)
     if (t.trim()) {
       if (!typingDebounceRef.current) {
@@ -1468,7 +1504,7 @@ function GroupChatScreen({
         setGrpComposeLinkDismissed(null);
       }
     }, 600);
-  }, [allMembers, myPubB64, grpComposeLinkDismissed, writeGroupDraft]);
+  }, [allMembers, myPubB64, grpComposeLinkDismissed, saveGroupDraft]);
 
   /** Псевдо-участник для упоминания всех (@все) */
   const everyoneSuggestion: GroupMemberRow | null = useMemo(() => {
@@ -1533,9 +1569,9 @@ function GroupChatScreen({
     const name = canonical ?? member.displayName ?? shortIdentity(member.peerPubB64);
     const lastAt = text.lastIndexOf('@');
     const newText = text.slice(0, lastAt) + `@${name} `;
-    setText(newText);
+    putGroupText(newText);
     setMentionFilter(null);
-  }, [text, memberUsernames]);
+  }, [text, memberUsernames, putGroupText]);
 
   // ─── Hashtag suggestions ─────────────────────────────────────────────────────
   const grpHashtagSuggestions = useMemo(() => {
@@ -1552,9 +1588,9 @@ function GroupChatScreen({
 
   const insertHashtag = useCallback((tag: string) => {
     const newText = text.replace(/#([a-zа-яё0-9_]*)$/i, tag + ' ');
-    setText(newText);
+    putGroupText(newText);
     setHashtagFilter(null);
-  }, [text]);
+  }, [text, putGroupText]);
 
   // ─── Slash command suggestions ───────────────────────────────────────────────
   type CmdDef = { cmd: string; desc: string; adminOnly: boolean };
@@ -1915,6 +1951,11 @@ function GroupChatScreen({
   }, [text, group.id, myPubB64, myDisplayName, pid, pendingGrpImageUris, flushGroupDraft, loadMessages]);
 
   const sendGroupImages = useCallback(async (uris: string[], caption: string, viewOnce = false) => {
+    // v4.32.873: подпись к снимкам — это текст из поля ввода (его переносит
+    // сюда `setGrpImageCaption(text.trim())`). Поле очищалось, а черновик нет:
+    // отправленная подпись возвращалась в поле при следующем открытии группы,
+    // и человек отправлял её вторым сообщением.
+    takeGroupText();
     setSending(true);
     try {
       // v4.32.244: без IPFS кладём снимок в зашифрованное вложение — ключ
@@ -1957,7 +1998,13 @@ function GroupChatScreen({
         oversizeLimit,
       );
       if (warn) showError(warn);
-      if (cids.length === 0) return;
+      if (cids.length === 0) {
+        // v4.32.873: не ушёл ни один снимок — подпись возвращается туда,
+        // откуда её взяли. Иначе написанное пропадает вместе с отправкой: в
+        // поле пусто, в черновике пусто, а сообщения в группе нет.
+        if (caption.trim()) putGroupText(caption);
+        return;
+      }
       const baseText = caption.trim() || ' ';
       const msgText = viewOnce ? makeViewOnceText(baseText) : baseText;
       const row: GroupMessageRow = {
@@ -1987,7 +2034,7 @@ function GroupChatScreen({
     } finally {
       setSending(false);
     }
-  }, [group.id, myPubB64, myDisplayName, pid, loadMessages]);
+  }, [group.id, myPubB64, myDisplayName, pid, loadMessages, putGroupText, takeGroupText]);
 
   const pickGroupDoc = useCallback(async () => {
     const DocumentPicker = await import('expo-document-picker');
@@ -2205,8 +2252,8 @@ function GroupChatScreen({
   }, [group.id, myPubB64, myDisplayName, pid, loadMessages]);
 
   const handleGroupPickQuickReply = useCallback((qrText: string) => {
-    setText((t) => t + qrText);
-  }, []);
+    putGroupText(textRef.current + qrText);
+  }, [putGroupText]);
 
   const sendGroupGif = useCallback(async (gifText: string) => {
     setSending(true);
@@ -2510,21 +2557,17 @@ function GroupChatScreen({
       const result = Math.floor(Math.random() * 6) + 1;
       const faces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
       t = `🎲 Кубик: ${faces[result - 1]} (${result})`;
-      textRef.current = t;
-      setText(t);
+      putGroupText(t);
     } else if (t === '/coin' || t === '/монета') {
       t = `🪙 Монета: ${Math.random() < 0.5 ? 'Орёл' : 'Решка'}`;
-      textRef.current = t;
-      setText(t);
+      putGroupText(t);
     } else if (t === '/magic' || t === '/шар') {
       const answers = ['Несомненно', 'Это точно', 'Без сомнений', 'Да', 'Скорее да', 'Непредсказуемо', 'Не уверен', 'Сомнительно', 'Нет', 'Определённо нет'];
       t = `🔮 Магический шар: ${answers[Math.floor(Math.random() * answers.length)]}`;
-      textRef.current = t;
-      setText(t);
+      putGroupText(t);
     } else if (t === '/random' || t === '/рандом') {
       t = `🎰 Случайное число: ${Math.floor(Math.random() * 100)}`;
-      textRef.current = t;
-      setText(t);
+      putGroupText(t);
     }
     // ─── Admin slash commands ────────────────────────────────────────────
     if (amAdmin && t.startsWith('/')) {
@@ -2597,7 +2640,7 @@ function GroupChatScreen({
         }).catch(() => showError('Не удалось изменить роль'));
       };
       if (cmd === '/help' || cmd === '/команды') {
-        setText('');
+        takeGroupText();
         Alert.alert(
           'Команды администратора',
           '/kick @имя — исключить участника (сможет вернуться)\n/ban @имя — заблокировать участника\n/unban @имя — снять блокировку\n/promote @имя — назначить администратором\n/demote @имя — снять администратора\n/mute @имя — запретить писать (останется в группе и будет читать)\n/unmute @имя — снять ограничение\n/slowmode <сек> — установить медленный режим\n/pin — закрепить последнее сообщение\n/unpin — открепить\n/readonly — писать могут только администраторы\n/open — вернуть право писать всем\n\nИмена участники задают себе сами и могут совпадать. Если совпало несколько, укажите вместо имени последние 8 символов ключа — они видны в карточке участника.'
@@ -2605,7 +2648,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/kick' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers, `Участник «${argName}» не найден`, 'Нельзя исключить себя');
         if (!target) return;
         Alert.alert(`Исключить ${target.displayName ?? argName}?`, 'Сможет вернуться по приглашению.', [
@@ -2642,7 +2685,7 @@ function GroupChatScreen({
        * чёрный список группы.
        */
       if (cmd === '/ban' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers, `Участник «${argName}» не найден`, 'Нельзя заблокировать себя');
         if (!target) return;
         Alert.alert(`Заблокировать ${target.displayName ?? argName}?`, 'Не сможет читать и писать в группу, вернуть — /unban.', [
@@ -2664,7 +2707,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/unban' && argName) {
-        setText('');
+        takeGroupText();
         // Забаненных нет в allMembers (они отфильтрованы), поэтому ищем в БД.
         void (async () => {
           // v4.32.762: отказ базы отвечал «такого заблокированного нет» —
@@ -2697,7 +2740,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/promote' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers, `Участник «${argName}» не найден`);
         if (!target) return;
         // v4.32.514: раньше вопрос «а есть ли что менять» задавал только
@@ -2720,7 +2763,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/demote' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers, `Участник «${argName}» не найден`);
         if (!target) return;
         // v4.32.514: /demote на обычном участнике объявлял снятие должности,
@@ -2731,7 +2774,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/mute' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers, `Участник «${argName}» не найден`, 'Нельзя ограничить себя');
         if (!target) return;
         // v4.32.514: та же проверка, что у /promote и /demote. Здесь она
@@ -2743,14 +2786,14 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/unmute' && argName) {
-        setText('');
+        takeGroupText();
         const target = pickTarget(allMembers.filter((m) => m.role === 'restricted'), `Ограниченный участник «${argName}» не найден`);
         if (!target) return;
         applyRoleChange(target, 'member');
         return;
       }
       if (cmd === '/slowmode') {
-        setText('');
+        takeGroupText();
         const secs = parseInt(parts[1] ?? '0', 10);
         if (isNaN(secs) || secs < 0) { Alert.alert('AirChat', 'Укажите количество секунд: /slowmode 30'); return; }
         if (secs > MAX_SLOWMODE_SECONDS) { Alert.alert('AirChat', 'Максимальная задержка — 86400 секунд (сутки).'); return; }
@@ -2761,7 +2804,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/pin') {
-        setText('');
+        takeGroupText();
         const lastMsg = messages[0];
         if (!lastMsg) return;
         void pinMsg(lastMsg)
@@ -2770,7 +2813,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/unpin') {
-        setText('');
+        takeGroupText();
         // Открепляем верхнее: /unpin без аргумента снимает то, что показано в баннере.
         const top = grpPinnedList[0];
         if (!top) { setPinnedMsgId(null); setPinnedMsgText(null); return; }
@@ -2780,7 +2823,7 @@ function GroupChatScreen({
         return;
       }
       if (cmd === '/readonly' || cmd === '/open') {
-        setText('');
+        takeGroupText();
         const onlyAdmins = cmd === '/readonly';
         // v4.32.257: обе команды не записывали системную строку, хотя тот же
         // переключатель в меню группы её пишет, а получатели её получают. У
@@ -2825,14 +2868,8 @@ function GroupChatScreen({
     // Edit existing message
     if (editingMsg) {
       const orig = editingMsg;
-      setText('');
-      textRef.current = '';
+      takeGroupText();
       setEditingMsg(null);
-      // v4.32.530: черновик снимался только на обычной отправке. Правка
-      // оставляла отложенную запись висеть, и через 600 мс уже отправленный
-      // текст ложился в черновик группы — при следующем входе поле ввода было
-      // заполнено тем, что человек только что сохранил.
-      clearGroupDraft();
       setSending(true);
       void (async () => {
         try {
@@ -2843,8 +2880,7 @@ function GroupChatScreen({
           const applied = await updateGroupMessageText(orig.id, t, pid);
           if (!applied) {
             showError('Не удалось сохранить правку');
-            setText(t);
-            textRef.current = t;
+            putGroupText(t);
             setEditingMsg(orig);
             return;
           }
@@ -2863,12 +2899,8 @@ function GroupChatScreen({
     Vibration.vibrate(8);
     const effectParticles = detectSendEffect(t);
     if (effectParticles) setSendEffectParticles(effectParticles);
-    setText('');
-    textRef.current = '';
+    takeGroupText();
     setCmdFilter(null);
-    // Отложенный текст снимается вместе с таймером: иначе flushGroupDraft
-    // вернул бы уже отправленное сообщение обратно в поле ввода.
-    clearGroupDraft();
     if (grpComposeLinkTimerRef.current) clearTimeout(grpComposeLinkTimerRef.current);
     setGrpComposeLinkUrl(null);
     setGrpComposeLinkDismissed(null);
@@ -2912,13 +2944,13 @@ function GroupChatScreen({
         }
       } catch (e) {
         showError(userErrorText(e, 'Не удалось отправить сообщение'));
-        setText(t);
+        putGroupText(t);
         setReplyTo(replyRef);
       } finally {
         setSending(false);
       }
     })();
-  }, [sending, editingMsg, replyTo, group.id, myPubB64, pid, loadMessages, myDisplayName, slowModeSeconds, amAdmin, allMembers, messages, pinMsg, grpPinnedList, myRole, sendVerdict, applySlowMode, slowKey, startSlowCooldown, clearGroupDraft, adminOnlyPosting, toggleGroupFlag, setPinnedMsgText]);
+  }, [sending, editingMsg, replyTo, group.id, myPubB64, pid, loadMessages, myDisplayName, slowModeSeconds, amAdmin, allMembers, messages, pinMsg, grpPinnedList, myRole, sendVerdict, applySlowMode, slowKey, startSlowCooldown, putGroupText, takeGroupText, adminOnlyPosting, toggleGroupFlag, setPinnedMsgText]);
 
   const displayGroupMessages = useMemo((): GrpListItem[] => {
     if (searchResults) return searchResults;
@@ -4248,7 +4280,7 @@ function GroupChatScreen({
                   <AppPressable
                     key={c.cmd}
                     style={gcStyles.mentionItem}
-                    onPress={() => { setText(c.cmd + ' '); }}
+                    onPress={() => { putGroupText(c.cmd + ' '); }}
                   >
                     <Text style={[gcStyles.mentionName, { color: colors.accent }]}>{c.cmd}</Text>
                     <Text style={{ fontSize: 12, color: colors.textMuted, marginLeft: 8 }}>{c.hint}</Text>
@@ -4263,7 +4295,7 @@ function GroupChatScreen({
                 <AppPressable
                   key={c.cmd}
                   style={[gcStyles.mentionItem, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}
-                  onPress={() => { setText(c.cmd + ' '); setCmdFilter(null); }}
+                  onPress={() => { putGroupText(c.cmd + ' '); setCmdFilter(null); }}
                 >
                   <Text style={[gcStyles.mentionName, { color: colors.accent }]}>{c.cmd}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 12, flex: 1, marginLeft: 8 }} numberOfLines={1}>{c.desc}</Text>
@@ -4502,7 +4534,7 @@ function GroupChatScreen({
                   style={{ alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginHorizontal: 2 }}
                   onPress={() => {
                     const replaced = text.replace(/:([a-z0-9_]{2,})$/, emoji);
-                    setText(replaced);
+                    putGroupText(replaced);
                   }}
                 >
                   <Text style={{ fontSize: 20 }}>{emoji}</Text>
@@ -4529,11 +4561,11 @@ function GroupChatScreen({
                       const before = text.slice(0, sel.start);
                       const selected = text.slice(sel.start, sel.end);
                       const after = text.slice(sel.end);
-                      setText(`${before}${marker}${selected}${marker}${after}`);
+                      putGroupText(`${before}${marker}${selected}${marker}${after}`);
                     } else {
                       const before = text.slice(0, sel.start);
                       const after = text.slice(sel.start);
-                      setText(`${before}${marker}${marker}${after}`);
+                      putGroupText(`${before}${marker}${marker}${after}`);
                     }
                   }}
                 >
@@ -4693,7 +4725,7 @@ function GroupChatScreen({
           </View>
           {grpEmojiPanelVisible ? (
             <EmojiPanel
-              onEmoji={(emoji) => { setText((t) => t + emoji); }}
+              onEmoji={(emoji) => { putGroupText(textRef.current + emoji); }}
               colors={colors}
               bottomInset={tabInset}
             />
@@ -4777,7 +4809,7 @@ function GroupChatScreen({
       <GroupQuickRepliesModal
         visible={grpQuickRepliesVisible}
         onClose={() => setGrpQuickRepliesVisible(false)}
-        onPick={(qr) => setText((prev) => prev + (prev ? ' ' : '') + qr)}
+        onPick={(qr) => putGroupText(textRef.current + (textRef.current ? ' ' : '') + qr)}
         groupId={group.id}
       />
 
@@ -4831,11 +4863,7 @@ function GroupChatScreen({
             showError(userErrorText(e, 'Не удалось запланировать отправку'));
             return;
           }
-          setText('');
-          // v4.32.324: раньше отложенная запись оставалась жить — черновик
-          // возвращался в поле через 600 мс после того, как сообщение уже
-          // запланировано.
-          clearGroupDraft();
+          takeGroupText();
           await reloadGrpScheduled();
           showSuccess('Сообщение запланировано');
         })()}
@@ -4913,7 +4941,6 @@ function GroupChatScreen({
           setPendingGrpImageUris([]);
           setGrpImageCaption('');
           setGrpImageViewOnce(false);
-          if (caption) setText('');
           void sendGroupImages(uris, caption, vo);
         }}
       />

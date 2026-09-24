@@ -139,8 +139,9 @@ describe('экран переписки возвращает набранное'
     const b = slice(chat(), "measurePerformance('chat_send_text'", 'void appendNewMessages();');
     expect(b).toContain('svc.sendMessageResult(');
     expect(b).toContain("if (res.outcome === 'refused') {");
-    expect(b).toContain('setMsg(text);');
-    expect(b).toContain('msgRef.current = text;');
+    // v4.32.873: возврат текста в поле — одна форма `putComposer`: она пишет
+    // и `msgRef`, и черновик, которого прежним двум строкам не хватало.
+    expect(b).toContain('putComposer(text);');
     expect(b).toContain('setReplyTo(replyRef);');
     expect(b).toContain('setOptimisticOutgoing(null);');
     expect(b).toContain(
@@ -152,7 +153,7 @@ describe('экран переписки возвращает набранное'
     const b = slice(chat(), "measurePerformance('chat_send_media'", 'void appendNewMessages();');
     expect(b).toContain('svc.sendMessageResult(');
     expect(b).toContain("if (res.outcome === 'refused') {");
-    expect(b).toContain('setMsg(text);');
+    expect(b).toContain('putComposer(text);');
     expect(b).toContain('setOptimisticOutgoing(null);');
   });
 
@@ -197,10 +198,17 @@ describe('экран переписки возвращает набранное'
 describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('поле ввода по-прежнему очищается до отправки, а не после', () => {
     const c = codeOnly(CHAT());
-    const clear = c.indexOf("    setMsg('');\n    msgRef.current = '';\n    setReplyTo(null);");
+    // v4.32.873: очистка поля перед отправкой — `takeComposer()`; она же
+    // снимает черновик. Берём последнюю такую перед самой отправкой текста.
     const send = c.indexOf("measurePerformance('chat_send_text'");
+    expect(send).toBeGreaterThan(0);
+    const clear = c.indexOf(
+      "    takeComposer();\n    setReplyTo(null);\n    setOptimisticOutgoing(optimistic);",
+    );
     expect(clear).toBeGreaterThan(0);
     expect(send).toBeGreaterThan(clear);
+    expect(c).toContain("const takeComposer = useCallback(() => {\n    msgRef.current = '';");
+    expect(c).toContain('    clearDraft();\n  }, [clearDraft]);');
   });
 
   it('прежняя подпись sendMessage сохранена — по одному null отказ не отличить', () => {

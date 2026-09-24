@@ -64,7 +64,10 @@ function within(src: string, head: string, span: number, pred: (l: string) => bo
 
 describe('U1: сбой правки возвращает набранное', () => {
   const restores = (src: string): boolean =>
-    within(src, "log.error('chat_edit_failed'", 8, (l) => l.trim() === 'setMsg(newText);')
+    // v4.32.873: возврат в поле идёт одной формой `putComposer` — она пишет
+    // и `msgRef`, и черновик; прежний голый `setMsg` оставлял текст на экране
+    // без черновика за ним.
+    within(src, "log.error('chat_edit_failed'", 8, (l) => l.trim() === 'putComposer(newText);')
     && within(src, "log.error('chat_edit_failed'", 8, (l) => l.trim() === 'setEditTarget(target);')
     && within(src, "log.error('chat_edit_failed'", 8, (l) => l.includes('showError(userErrorText(e,'));
 

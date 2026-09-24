@@ -1747,6 +1747,32 @@ function ChatThreadView({
     writeDraft(null);
   }, [writeDraft]);
 
+  /**
+   * Положить текст в поле ввода не с клавиатуры — так, чтобы черновик не
+   * отстал (v4.32.873).
+   *
+   * Черновик пишет ровно одно место — `onChangeText`. Всё остальное, что
+   * попадает в поле, мимо него: смайл из панели, разметка из полоски, быстрый
+   * ответ, подставленная команда, восстановленный «недавно удалённый» текст и
+   * — самое дорогое — текст, возвращённый в поле после отказа отправки. Поле
+   * при этом выглядит заполненным, а в базе черновика нет: достаточно выйти
+   * из переписки, и написанное пропадает совсем. У возврата после отказа
+   * получалось хуже всего: отправка уже сняла черновик, человек видит свой
+   * текст на экране и уходит за подсказкой — вернувшись, не находит ничего.
+   */
+  const putComposer = useCallback((next: string) => {
+    msgRef.current = next;
+    setMsg(next);
+    saveDraft(next);
+  }, [saveDraft]);
+
+  /** Поле опустело потому, что написанное ушло: черновик снимается вместе. */
+  const takeComposer = useCallback(() => {
+    msgRef.current = '';
+    setMsg('');
+    clearDraft();
+  }, [clearDraft]);
+
   const pickImage = useCallback(async () => {
     // v4.32.322: предел считается один раз и честно. Прежнее
     // `Math.max(1, 10 - выбрано)` при десяти уже выбранных просило у picker'а
@@ -2058,14 +2084,16 @@ function ChatThreadView({
   }, [peerB64, appendNewMessages]);
 
   const handlePickQuickReply = useCallback((text: string) => {
-    setMsg((prev) => (prev ? prev + ' ' + text : text));
+    const prev = msgRef.current;
+    putComposer(prev ? prev + ' ' + text : text);
     setTimeout(() => msgInputRef.current?.focus(), 50);
-  }, []);
+  }, [putComposer]);
 
   const closeQuickReplies = useCallback(() => setQuickRepliesVisible(false), []);
   const pickQuickReplyFromModal = useCallback((text: string) => {
-    setMsg((prev) => prev + (prev ? ' ' : '') + text);
-  }, []);
+    const prev = msgRef.current;
+    putComposer(prev + (prev ? ' ' : '') + text);
+  }, [putComposer]);
 
   const closePinnedList = useCallback(() => setPinnedListVisible(false), []);
   const closeScheduledList = useCallback(() => setScheduledListVisible(false), []);
@@ -2090,10 +2118,10 @@ function ChatThreadView({
   }, [appendNewMessages]);
   const closeRecentlyDeleted = useCallback(() => setRecentlyDeletedVisible(false), []);
   const restoreRecentlyDeleted = useCallback((text: string) => {
-    setMsg(text);
+    putComposer(text);
     setRecentlyDeletedVisible(false);
     showSuccess('Текст восстановлен в поле ввода');
-  }, []);
+  }, [putComposer]);
   const closeReactionsMore = useCallback(() => {
     setReactionsMoreVisible(false);
     setReactionsTarget(null);
@@ -2250,21 +2278,24 @@ function ChatThreadView({
       createdAt: Date.now(),
       ownerProfileId: activeProfileId,
     };
-    setMsg('');
+    // v4.32.873: подпись к снимкам — это текст из поля ввода (его переносит
+    // сюда `setImageCaption(msg.trim())`). Поле очищалось, а черновик нет:
+    // отправленная подпись возвращалась в поле при следующем открытии
+    // переписки, и человек отправлял её вторым сообщением.
+    takeComposer();
     setOptimisticOutgoing(optimistic);
     setSending(true);
     requestAnimationFrame(() => {
       void (async () => {
         try {
           const svc = getMessagingService();
-          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
+          if (!svc) { putComposer(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
           const res = await measurePerformance('chat_send_media', () => svc.sendMessageResult(peerB64, text, uris));
           // v4.32.726: то же, что и у текста ниже, — отказ отправки не бросает.
           // Здесь вместе с подписью пропадали и уже загруженные вложения:
           // ссылок на них не оставалось нигде.
           if (res.outcome === 'refused') {
-            setMsg(text);
-            msgRef.current = text;
+            putComposer(text);
             setOptimisticOutgoing(null);
             log.warn('chat_send_media_refused', { explained: res.explained === true });
             reportSendRefusal(res, 'Отправить не удалось. Попробуйте ещё раз');
@@ -2272,7 +2303,7 @@ function ChatThreadView({
           }
           void appendNewMessages();
         } catch (e) {
-          setMsg(text);
+          putComposer(text);
           setOptimisticOutgoing(null);
           // v4.32.569: отказ отправки был виден только в журнале. Подпись
           // возвращалась в поле ввода, пузырь исчезал — и ни слова о том,
@@ -2468,11 +2499,9 @@ function ChatThreadView({
       const newText = msgRef.current.trim();
       if (!newText || sending) return;
       const target = editTarget;
-      setMsg('');
-      msgRef.current = '';
+      takeComposer();
       setEditTarget(null);
       setSending(true);
-      clearDraft();
       void (async () => {
         try {
           const svc = getMessagingService();
@@ -2490,8 +2519,7 @@ function ChatThreadView({
            * Набранное пропадало без следа и без единого слова о том, что
            * правка не ушла.
            */
-          setMsg(newText);
-          msgRef.current = newText;
+          putComposer(newText);
           setEditTarget(target);
           showError(userErrorText(e, 'Правку не удалось отправить'));
         } finally {
@@ -2541,10 +2569,8 @@ function ChatThreadView({
         replyToId: replyRef?.id ?? null,
         replyToPreview: truncateReplyPreview(replyRef?.text),
       };
-      setMsg('');
-      msgRef.current = '';
+      takeComposer();
       setReplyTo(null);
-      clearDraft();
       Vibration.vibrate(30);
       scrollToNewest();
       void (async () => {
@@ -2557,8 +2583,7 @@ function ChatThreadView({
         if ((await upsertChatMessageChecked(row)) === 'failed') {
           // Возвращаем набранное в поле, как это делает `'refused'` на обычном
           // пути: база отпускает через секунду, и человек повторит сам.
-          setMsg(text);
-          msgRef.current = text;
+          putComposer(text);
           setReplyTo(replyRef ?? null);
           log.error('saved_note_row_failed', { profileId: activeProfileId });
           showError('Заметка не сохранилась. Попробуйте ещё раз');
@@ -2585,19 +2610,17 @@ function ChatThreadView({
     };
     const effectPs = detectSendEffect(text);
     if (effectPs) setSendEffectParticles(effectPs);
-    setMsg('');
-    msgRef.current = '';
+    takeComposer();
     setReplyTo(null);
     setOptimisticOutgoing(optimistic);
     setSending(true);
-    clearDraft();
     Vibration.vibrate(30);
     scrollToNewest();
     requestAnimationFrame(() => {
       void (async () => {
         try {
           const svc = getMessagingService();
-          if (!svc) { setMsg(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
+          if (!svc) { putComposer(text); setOptimisticOutgoing(null); showError(NOT_READY_TEXT); return; }
           const res = await measurePerformance('chat_send_text', () =>
             svc.sendMessageResult(peerB64, text, undefined, replyRef?.id, truncateReplyPreview(replyRef?.text) ?? undefined)
           );
@@ -2614,8 +2637,7 @@ function ChatThreadView({
            * переписке, с пометкой «не отправлено» и кнопкой «Повторить».
            */
           if (res.outcome === 'refused') {
-            setMsg(text);
-            msgRef.current = text;
+            putComposer(text);
             setReplyTo(replyRef);
             setOptimisticOutgoing(null);
             log.warn('chat_send_refused', { explained: res.explained === true });
@@ -2625,7 +2647,7 @@ function ChatThreadView({
           void appendNewMessages();
         } catch (e) {
           const errMsg = rawErrorText(e);
-          setMsg(text);
+          putComposer(text);
           setOptimisticOutgoing(null);
           log.error('chat_send_failed', { err: errMsg });
           showError(errMsg);
@@ -2634,7 +2656,7 @@ function ChatThreadView({
         }
       })();
     });
-  }, [peerB64, sending, isBlocked, isSavedMessages, replyTo, appendNewMessages, editTarget, activeProfileId, clearDraft, scrollToNewest]);
+  }, [peerB64, sending, isBlocked, isSavedMessages, replyTo, appendNewMessages, editTarget, activeProfileId, putComposer, takeComposer, scrollToNewest]);
 
   // v4.32.428: раньше здесь не было catch, а вызов уходил как
   // `void doSchedule(sendAt)`. scheduleMessage бросает на выбранном времени
@@ -2653,8 +2675,7 @@ function ChatThreadView({
       showError(userErrorText(e, 'Не удалось запланировать отправку'));
       return;
     }
-    setMsg('');
-    clearDraft();
+    takeComposer();
     // v4.32.625: список отложенных перечитывается здесь. Он загружался ровно
     // один раз — эффектом по [peerB64, activeProfileId], — поэтому только что
     // запланированное сообщение не появлялось нигде: ни плашки над полем ввода
@@ -2670,7 +2691,7 @@ function ChatThreadView({
       log.warn('schedule_dm_reload_failed', { err: rawErrorText(e) });
     }
     showSuccess(`Запланировано на ${fullDateTime(sendAt)}`);
-  }, [msg, peerB64, clearDraft, reloadScheduled]);
+  }, [msg, peerB64, takeComposer, reloadScheduled]);
 
   const retryFailedMessage = useCallback((row: ChatMessageRow) => {
     if (!peerB64 || row.status !== 'failed') return;
@@ -4082,8 +4103,7 @@ function ChatThreadView({
                 key={key}
                 style={[s.emojiSuggestBtn, { borderColor: colors.border }]}
                 onPress={() => {
-                  const replaced = msg.replace(/:([a-z0-9_]{2,})$/, emoji);
-                  setMsg(replaced);
+                  putComposer(msg.replace(/:([a-z0-9_]{2,})$/, emoji));
                 }}
               >
                 <Text style={s.emojiSuggestEmoji}>{emoji}</Text>
@@ -4099,7 +4119,7 @@ function ChatThreadView({
               <AppPressable
                 key={c.cmd}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}
-                onPress={() => { setMsg(c.cmd + ' '); setChatCmdFilter(null); }}
+                onPress={() => { putComposer(c.cmd + ' '); setChatCmdFilter(null); }}
               >
                 <Text style={{ color: colors.accent, fontWeight: '600', fontSize: 14, minWidth: 80 }}>{c.cmd}</Text>
                 <Text style={{ color: colors.textMuted, fontSize: 13, flex: 1 }} numberOfLines={1}>{c.desc}</Text>
@@ -4125,11 +4145,11 @@ function ChatThreadView({
                     const before = msg.slice(0, sel.start);
                     const selected = msg.slice(sel.start, sel.end);
                     const after = msg.slice(sel.end);
-                    setMsg(`${before}${marker}${selected}${marker}${after}`);
+                    putComposer(`${before}${marker}${selected}${marker}${after}`);
                   } else {
                     const before = msg.slice(0, sel.start);
                     const after = msg.slice(sel.start);
-                    setMsg(`${before}${marker}${marker}${after}`);
+                    putComposer(`${before}${marker}${marker}${after}`);
                   }
                 }}
               >
@@ -4307,7 +4327,7 @@ function ChatThreadView({
               const sel = msgSelRef.current;
               const before = msg.slice(0, sel.end);
               const after = msg.slice(sel.end);
-              setMsg(`${before}${emoji}${after}`);
+              putComposer(`${before}${emoji}${after}`);
             }}
             colors={colors}
             bottomInset={tabInset}
@@ -4604,7 +4624,6 @@ function ChatThreadView({
           setPendingImageUris([]);
           setImageCaption('');
           setViewOncePending(false);
-          if (caption) setMsg('');
           void sendWithMedia(uris, caption);
         }}
       />

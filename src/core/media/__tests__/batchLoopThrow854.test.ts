@@ -186,6 +186,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const photo = mediaLoops(GROUPS).find((l) => l.body.includes('guessImageMime('));
     expect(photo).toBeDefined();
     expect((photo as Loop).body).not.toContain('insertGroupMessage(');
-    expect(GROUPS).toContain('if (cids.length === 0) return;');
+    // v4.32.873: проверка та же, выход тот же — перед ним лишь возвращается
+    // подпись, которая иначе пропадала вместе с неудавшейся пачкой.
+    expect(GROUPS).toContain('if (cids.length === 0) {');
+    expect(GROUPS).toContain('if (caption.trim()) putGroupText(caption);');
   });
 });

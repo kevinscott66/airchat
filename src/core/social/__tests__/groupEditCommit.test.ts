@@ -80,7 +80,11 @@ describe('исходники: запись отвечает, а рассылка
 
   it('правка снимает черновик так же, как обычная отправка', () => {
     const editAt = SCREEN.indexOf('const applied = await updateGroupMessageText(orig.id, t, pid);');
-    const draftAt = SCREEN.lastIndexOf('clearGroupDraft();', editAt);
+    // v4.32.873: поле и черновик снимаются одной формой `takeGroupText` —
+    // она же зовёт `clearGroupDraft`, поэтому правило не ослабло.
+    expect(SCREEN).toContain("const takeGroupText = useCallback(() => {\n    textRef.current = '';");
+    expect(SCREEN).toContain('    clearGroupDraft();\n  }, [clearGroupDraft]);');
+    const draftAt = SCREEN.lastIndexOf('takeGroupText();', editAt);
     expect(draftAt).toBeGreaterThan(-1);
     // между снятием черновика и правкой не должно быть ветки обычной отправки
     expect(SCREEN.slice(draftAt, editAt)).not.toContain('Vibration.vibrate');
