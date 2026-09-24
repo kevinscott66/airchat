@@ -31,7 +31,12 @@ import { profileManager } from '../identity/profileManager';
 import { fanoutControlEnvelope } from './controlFanout';
 import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import { log } from '../logger';
-import { commitControlTs, controlTsFresh } from './controlWatermark';
+import {
+  commitControlTs,
+  commitDmPinTs,
+  controlTsFresh,
+  dmPinTsFresh,
+} from './controlWatermark';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import type { DmPinOp, DmPinOutcome } from './dmPinOutcome';
 import {
@@ -343,6 +348,17 @@ export async function handleIncomingDmPin(
     log.info('dm_pin_cleared_remote', { from: senderPubB64.slice(0, 12) });
     return 'consumed';
   }
+  // v4.32.793: знак свежести на пару «собеседник + сообщение». До него
+  // закрепление в личке было беззащитно ровно так же, как закрепление в группе
+  // до v4.32.792: положение названо в самом кадре, значит повтор перехваченного
+  // конверта его переключает — сохранённое «закрепить» возвращает в шапку
+  // снятый баннер, сохранённое «открепить» снимает нынешний. Строки в переписке
+  // закрепление не создаёт, поэтому подмены не видно ни в момент, ни после.
+  // Проверка стоит ДО применения: повтор не должен стоить даже чтения списка.
+  if (!(await dmPinTsFresh(senderPubB64, env.msgId, pid, env.ts))) {
+    log.info('dm_pin_stale_drop', { from: senderPubB64.slice(0, 12) });
+    return 'consumed';
+  }
   const write = await applyLocalDmPin({
     peerPubB64: senderPubB64,
     ownerProfileId: pid,
@@ -358,6 +374,9 @@ export async function handleIncomingDmPin(
     log.warn('dm_pin_not_applied', { from: senderPubB64.slice(0, 12), reason: write.reason });
     return 'deferred';
   }
+  // v4.32.793: знак сдвигается только теперь — иначе он похоронил бы тот самый
+  // перезапрос, ради которого строкой выше сказано 'deferred'.
+  await commitDmPinTs(senderPubB64, env.msgId, pid, env.ts);
   notifyChatStorageChanged();
   log.info('dm_pin_applied', {
     from: senderPubB64.slice(0, 12),
