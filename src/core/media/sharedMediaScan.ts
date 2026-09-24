@@ -27,7 +27,21 @@ import { pluralRu } from '../storage/ruPlural';
 export type SharedMediaLike = {
   mediaCids: string;
   unreadable?: boolean;
+  /** Одноразовое сообщение: вложение живёт один показ (v4.32.803). */
+  viewOnce?: boolean;
 };
+
+/**
+ * Одноразовая ли строка — спрашивается ДО расшифровки вложения (v4.32.803).
+ *
+ * Отдельный вопрос от `mediaRowReadable`, потому что и ответ на экране разный.
+ * Непрочитанная строка — «не удалось прочитать»: вложение есть, ключа нет.
+ * Одноразовая — «показывается один раз, в переписке»: ключ есть, а показывать
+ * нельзя. Свести их в один значок значило бы сказать неправду про обе.
+ */
+export function mediaRowViewOnce(row: SharedMediaLike | null | undefined): boolean {
+  return !!row && row.viewOnce === true;
+}
 
 /** Есть ли у строки CID'ы, из которых можно построить плитку. */
 export function mediaRowReadable(row: SharedMediaLike | null | undefined): boolean {

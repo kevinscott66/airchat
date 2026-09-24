@@ -14,8 +14,9 @@ import { SafeScreen } from '../../SafeScreen';
 import { useTheme } from '../../../ThemeContext';
 import { badgeTint, font, radius, spacing } from '../../../theme';
 import { listConversationMedia, type SharedMediaRow } from '../../../../core/storage/local';
-import { mediaRowReadable, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
+import { mediaRowReadable, mediaRowViewOnce, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
 import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
+import { galleryCids } from '../../../../core/media/galleryCids';
 import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolvedMediaUrls';
 import { showSuccess } from '../../userFeedback';
 import { shouldApplyRows } from '../../../../core/storage/readResult';
@@ -48,6 +49,9 @@ const TILE_COLUMNS = 3;
 
 /** Что показать вместо «ничего нет», когда прочитать не удалось (v4.32.640). */
 const CSM_READ_FAILED = 'Не удалось прочитать переписку';
+
+/** Подпись плитки одноразового: галерея его не открывает (v4.32.803). */
+const VIEW_ONCE_TILE_HINT = 'Одноразовое сообщение — открывается один раз в переписке';
 
 /**
  * SharedMediaPane — содержимое одной вкладки без окна вокруг (v4.32.577).
@@ -175,22 +179,11 @@ export function SharedMediaPane({
    * (useResolvedMediaUrls): вложение расшифровывается в файл кэша, обычный
    * CID по-прежнему собирается адресом шлюза.
    *
-   * Потолок в 300 адресов — не косметика: каждое незакэшированное вложение
-   * это загрузка до 8 МБ, и в переписке на тысячу фотографий открытие
-   * вкладки означало бы тысячу загрузок. Очередь на них общая
-   * (см. useResolvedMediaUrls).
+   * v4.32.803: выбор адресов переехал в core/media/galleryCids — вместе с
+   * потолком загрузок и с отказом расшифровывать одноразовое. Здесь он стоял
+   * дважды, в двух разметках, и вторая копия про одноразовое не знала.
    */
-  const allCids = useMemo(() => {
-    const out: string[] = [];
-    for (const it of items) {
-      for (const cid of parseMediaCidsColumn(it.mediaCids)) {
-        const c = cid.trim();
-        if (c) out.push(c);
-      }
-      if (out.length >= 300) break;
-    }
-    return out.slice(0, 300);
-  }, [items]);
+  const allCids = useMemo(() => galleryCids(items), [items]);
   const resolved = useResolvedMediaUrls(allCids, gateway);
   const allUris = useMemo(() => resolved.filter((u): u is string => !!u), [resolved]);
 
@@ -203,6 +196,24 @@ export function SharedMediaPane({
     : 0;
 
   const renderTile = useCallback((item: SharedMediaRow) => {
+    // v4.32.803: одноразовое занимает место в сетке, но не открывается. Прежде
+    // оно стояло здесь обычной плиткой: снимок было видно ещё до того, как его
+    // «открыли», и открыть его можно было сколько угодно раз — ни один из этих
+    // показов не сжигал сообщение. Значок объясняет, где смотреть.
+    if (mediaRowViewOnce(item)) {
+      return (
+        <View
+          key={item.id}
+          style={[
+            paneStyles.thumbUnreadable,
+            { width: tileSide, height: tileSide, backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+          accessibilityLabel={VIEW_ONCE_TILE_HINT}
+        >
+          <Ionicons name="flame-outline" size={22} color={colors.accent} />
+        </View>
+      );
+    }
     // v4.32.584: строку, которую не открыл ключ, показываем местом в сетке —
     // иначе вложение исчезает бесследно.
     if (!mediaRowReadable(item)) {

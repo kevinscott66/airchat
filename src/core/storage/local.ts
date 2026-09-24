@@ -95,7 +95,7 @@ import {
 import { clearTracesSql } from './purgeResidue';
 // Модули без импортов — цикла storage → social → storage не возникает.
 import { clampJoinedAt } from '../social/envelopeTime';
-import { isControlOnlyText, previewLabelForText } from '../social/messagePreview';
+import { isControlOnlyText, isViewOnceText, previewLabelForText } from '../social/messagePreview';
 import { matchesSearch } from '../social/searchableText';
 import { countMembers } from '../social/groupRolePolicy';
 import { nameOrNull } from '../social/contactLabel';
@@ -9072,7 +9072,30 @@ export type SharedMediaRow = {
   mediaCids: string;
   createdAt: number;
   unreadable?: boolean;
+  /**
+   * Одноразовое сообщение (v4.32.803).
+   *
+   * Признак вычисляется здесь, а не у показывающего: подпись сообщения лежит
+   * в столбце `text` зашифрованной, и ключ данных есть только у этого слоя.
+   * Сам текст наружу не отдаётся — подпись одноразового не должна покидать
+   * переписку, — наружу идёт только «да/нет».
+   */
+  viewOnce?: boolean;
 };
+
+/**
+ * Одноразовая ли строка по её столбцу `text` (v4.32.803).
+ *
+ * Непрочитанный столбец считается одноразовым. Это не осторожность ради
+ * осторожности: ошибиться можно в две стороны, и цена разная. Спрятать из
+ * галереи обычный снимок — потерять плитку, которая всё равно рядом, в самой
+ * переписке. Показать одноразовый — отменить единственное обещание, ради
+ * которого его и посылали.
+ */
+function viewOnceFromTextCell(cell: AtRestCell): boolean {
+  if (cell.state === 'unreadable') return true;
+  return isViewOnceText(cellTextOrNull(cell));
+}
 
 /**
  * Медиа переписки либо `null` — прочитать не удалось (v4.32.640).
@@ -9089,8 +9112,11 @@ export async function listConversationMedia(
 ): Promise<DbRead<SharedMediaRow>> {
   try {
     const d = await db();
-    const rows = await d.getAllAsync<{ id: string; media_cids: string; created_at: number }>(
-      `SELECT id, media_cids, created_at FROM chat_messages
+    // v4.32.803: `text` читается ради одного бита — одноразовое сообщение или
+    // нет. Без него выборка не отличала одноразовый снимок от обычного, и
+    // галерея расшифровывала его в файл кэша и открывала сколько угодно раз.
+    const rows = await d.getAllAsync<{ id: string; media_cids: string; created_at: number; text: string | null }>(
+      `SELECT id, media_cids, created_at, text FROM chat_messages
        WHERE contact_pub_b64 = ? AND owner_profile_id = ? AND media_cids IS NOT NULL AND media_cids != ''
        ORDER BY created_at DESC LIMIT ?`,
       [contactPubB64, ownerProfileId, limit]
@@ -9111,6 +9137,7 @@ export async function listConversationMedia(
           mediaCids: cellTextOrNull(cell) ?? '',
           createdAt: r.created_at,
           unreadable: unreadableFromCellState(cell.state),
+          viewOnce: viewOnceFromTextCell(readAtRestCell(r.text, dek)),
         };
       })
       .filter((r) => r.unreadable === true || r.mediaCids !== '');
@@ -9133,8 +9160,10 @@ export async function listGroupConversationMedia(
 ): Promise<DbRead<SharedMediaRow>> {
   try {
     const d = await db();
-    const rows = await d.getAllAsync<{ id: string; media_cids: string; created_at: number }>(
-      `SELECT id, media_cids, created_at FROM group_messages
+    // v4.32.803: то же, что в listConversationMedia — `text` нужен ради
+    // признака одноразового.
+    const rows = await d.getAllAsync<{ id: string; media_cids: string; created_at: number; text: string | null }>(
+      `SELECT id, media_cids, created_at, text FROM group_messages
        WHERE group_id = ? AND owner_profile_id = ? AND media_cids IS NOT NULL AND media_cids != ''
        ORDER BY created_at DESC LIMIT ?`,
       [groupId, ownerProfileId, limit]
@@ -9151,6 +9180,7 @@ export async function listGroupConversationMedia(
           mediaCids: cellTextOrNull(cell) ?? '',
           createdAt: r.created_at,
           unreadable: unreadableFromCellState(cell.state),
+          viewOnce: viewOnceFromTextCell(readAtRestCell(r.text, dek)),
         };
       })
       .filter((r) => r.unreadable === true || r.mediaCids !== '');

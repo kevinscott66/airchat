@@ -24,6 +24,21 @@ const SYS = SYS_LINE_PREFIX;
 const FWD = '\x08fwd:';
 
 /**
+ * Одноразовое: '\x09vo:подпись'. Вложение такой строки живёт один показ.
+ *
+ * v4.32.803: признак вынесен из литерала наружу, потому что спрашивать его
+ * стало не только подписи. Галерея «Медиа и файлы» обязана отличить такую
+ * строку от обычной ДО того, как возьмётся расшифровывать вложение: иначе
+ * снимок ложится в кэш файлом и открывается сколько угодно раз.
+ */
+export const VIEW_ONCE_PREFIX = '\x09vo:';
+
+/** Одноразовое ли сообщение. Пустой и отсутствующий текст — нет. */
+export function isViewOnceText(text: string | null | undefined): boolean {
+  return typeof text === 'string' && text.startsWith(VIEW_ONCE_PREFIX);
+}
+
+/**
  * Управляющие конверты, которым в подписи не место вообще: сообщение группы,
  * отметка о прочтении, ctl-конверты, реакции, закрепление, таймер, presence,
  * сторис, профиль. Такая строка в превью означает утечку служебных данных
@@ -106,7 +121,7 @@ export function previewLabelForText(text: string): string {
   if (text.startsWith('\x05contact:')) return '👤 Контакт';
   if (text.startsWith('\x06doc:')) return '📄 Документ';
   if (text.startsWith('\x07loc:')) return '📍 Геолокация';
-  if (text.startsWith('\x09vo:')) return '🔥 Одноразовое сообщение';
+  if (isViewOnceText(text)) return '🔥 Одноразовое сообщение';
   if (text.startsWith('\x0agif:')) return '🎞 GIF';
   if (text.startsWith('\x0cliveloc:')) return '📡 Живая геолокация';
   if (text.startsWith(SYS)) return previewLine(text.slice(SYS.length));

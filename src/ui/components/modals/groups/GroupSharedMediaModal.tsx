@@ -22,8 +22,8 @@ import {
 import { shouldApplyRows } from '../../../../core/storage/readResult';
 import { isDocMessage, parseDocEnvelope } from '../../../../core/social/docEnvelope';
 import { useResolvedMediaUrls } from '../../../screens/chat-components/useResolvedMediaUrls';
-import { mediaRowReadable, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
-import { parseMediaCidsColumn } from '../../../../core/media/mediaCidPolicy';
+import { mediaRowReadable, mediaRowViewOnce, mediaSkippedNotice } from '../../../../core/media/sharedMediaScan';
+import { galleryFirstCids } from '../../../../core/media/galleryCids';
 import { openExternal } from '../../../utils/openExternal';
 import { formatByteSize } from '../../../../core/media/byteSize';
 import { numericDate } from '../../../../core/time/ruDateTime';
@@ -35,6 +35,9 @@ const GRP_THUMB_SIZE = Math.floor(Dimensions.get('window').width / 3) - 2;
 // Причина у всех трёх вкладок одна, поэтому и текст один: разные формулировки
 // про «ссылки» и «файлы» намекали бы, что не прочиталось что-то одно.
 const GSM_READ_FAILED = 'Не удалось прочитать переписку';
+
+/** Подпись плитки одноразового: галерея его не открывает (v4.32.803). */
+const GSM_VIEW_ONCE_HINT = 'Одноразовое сообщение — открывается один раз в переписке';
 
 export function GroupSharedMediaModal({
   visible,
@@ -73,10 +76,12 @@ export function GroupSharedMediaModal({
   const mediaItems = useMemo(() => items.slice(0, 300), [items]);
   /** v4.32.584: сколько вложений не прочитано — молчать об этом нельзя. */
   const mediaNotice = useMemo(() => mediaSkippedNotice(mediaItems), [mediaItems]);
-  const firstCids = useMemo(
-    () => mediaItems.map((it) => parseMediaCidsColumn(it.mediaCids)[0]?.trim() ?? ''),
-    [mediaItems]
-  );
+  /**
+   * v4.32.803: выбор адресов — общий с полосой переписки (galleryCids). Там
+   * же и отказ расшифровывать одноразовое: копия этого выбора, жившая здесь,
+   * про него не знала.
+   */
+  const firstCids = useMemo(() => galleryFirstCids(mediaItems), [mediaItems]);
   const thumbUris = useResolvedMediaUrls(firstCids, gateway);
 
   useEffect(() => {
@@ -162,6 +167,20 @@ export function GroupSharedMediaModal({
                 keyExtractor={(i) => i.id}
                 numColumns={3}
                 renderItem={({ item, index }) => {
+                  // v4.32.803: одноразовое занимает место в сетке, но не
+                  // открывается. Прежде оно стояло обычной плиткой: снимок был
+                  // виден ещё до «показа» и открывался сколько угодно раз, ни
+                  // разу себя не сжигая.
+                  if (mediaRowViewOnce(item)) {
+                    return (
+                      <View
+                        style={[gsmStyles.thumb, gsmStyles.thumbUnreadable, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                        accessibilityLabel={GSM_VIEW_ONCE_HINT}
+                      >
+                        <Ionicons name="flame-outline" size={22} color={colors.accent} />
+                      </View>
+                    );
+                  }
                   // v4.32.584: строку, которую не открыл ключ, показываем
                   // местом в сетке — иначе вложение исчезает бесследно.
                   if (!mediaRowReadable(item)) {
