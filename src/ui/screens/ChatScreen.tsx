@@ -1815,24 +1815,36 @@ function ChatThreadView({
         let failedCount = 0;
         let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
-          const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
-          const up = await uploadMediaToCid(va.uri, {
-            mime: va.mimeType ?? 'video/mp4',
-            targetDid: peerDid,
-            ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
-          });
-          if (!up.ok) {
-            if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
-            else failedCount++;
-            continue;
+          // v4.32.854: бросок на одном ролике больше не отменяет отчёт обо
+          // всех. Прежде он улетал во внешний `catch`, и человек получал
+          // «Не удалось отправить видео» после того, как два ролика из трёх
+          // уже ушли в переписку: ни одного числа, ни слова о том, что часть
+          // дошла. Отправлял заново все три — и два приходили собеседнику
+          // дважды. Тот же `catch` на элемент стоит во втором таком цикле
+          // (лист вложений) с v4.32.842; здесь его не было.
+          try {
+            const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
+            const up = await uploadMediaToCid(va.uri, {
+              mime: va.mimeType ?? 'video/mp4',
+              targetDid: peerDid,
+              ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
+            });
+            if (!up.ok) {
+              if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
+              else failedCount++;
+              continue;
+            }
+            const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, up.cid);
+            // v4.32.726: `sentAny` ставилось независимо от ответа, а отказ
+            // отправки не бросает. Загруженное видео не попадало ни в переписку,
+            // ни в единственный баннер о неудаче — молчание было полным.
+            const res = await svc.sendMessageResult(peerB64, docText);
+            if (res.outcome === 'refused') { refusedCount++; continue; }
+            sentCount++;
+          } catch (e) {
+            failedCount++;
+            log.warn('pick_video_send_failed', { err: rawErrorText(e) });
           }
-          const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, up.cid);
-          // v4.32.726: `sentAny` ставилось независимо от ответа, а отказ
-          // отправки не бросает. Загруженное видео не попадало ни в переписку,
-          // ни в единственный баннер о неудаче — молчание было полным.
-          const res = await svc.sendMessageResult(peerB64, docText);
-          if (res.outcome === 'refused') { refusedCount++; continue; }
-          sentCount++;
         }
         const warn = batchSendReport(
           { total: videoAssets.length, sent: sentCount, oversize: skippedTooLarge, failed: failedCount, refused: refusedCount },

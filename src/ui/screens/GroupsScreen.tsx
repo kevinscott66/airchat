@@ -1858,23 +1858,34 @@ function GroupChatScreen({
         let failedCount = 0;
         let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
-          const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
-          const up = await uploadMediaToCid(va.uri, {
-            mime: va.mimeType ?? 'video/mp4',
-            ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
-          });
-          if (!up.ok) {
-            if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
-            else failedCount++;
-            continue;
+          // v4.32.854: бросок на одном ролике больше не отменяет отчёт обо
+          // всех. Прежде он улетал во внешний `catch`, и человек получал
+          // «Не удалось отправить видео» после того, как два ролика из трёх
+          // уже легли в переписку и ушли участникам: ни одного числа, ни
+          // слова о том, что часть дошла. Отправлял заново все три — и два
+          // приходили в группу дважды.
+          try {
+            const name = va.fileName ?? va.uri.split('/').pop() ?? 'video.mp4';
+            const up = await uploadMediaToCid(va.uri, {
+              mime: va.mimeType ?? 'video/mp4',
+              ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
+            });
+            if (!up.ok) {
+              if (up.reason === 'oversize') { skippedTooLarge++; oversizeLimit = up.limitBytes; }
+              else failedCount++;
+              continue;
+            }
+            const cid = up.cid;
+            const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, cid);
+            const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
+            await insertGroupMessage(row);
+            await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
+            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
+            sentCount++;
+          } catch (e) {
+            failedCount++;
+            log.warn('group_pick_video_send_failed', { err: rawErrorText(e) });
           }
-          const cid = up.cid;
-          const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, cid);
-          const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
-          await insertGroupMessage(row);
-          await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
-          announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
-          sentCount++;
         }
         const warn = batchSendReport(
           { total: videoAssets.length, sent: sentCount, oversize: skippedTooLarge, failed: failedCount, refused: 0 },
@@ -1922,10 +1933,22 @@ function GroupChatScreen({
       let failed = 0;
       let oversizeLimit: number | null = null;
       for (const uri of uris) {
-        const up = await uploadMediaToCid(uri, { mime: guessImageMime(uri) });
-        if (up.ok) { cids.push(up.cid); continue; }
-        if (up.reason === 'oversize') { oversize += 1; oversizeLimit = up.limitBytes; }
-        else failed += 1;
+        // v4.32.854: страховка границы, а не живой отказ. uploadMediaToCid
+        // обещает не бросать и всё ловит сама — но это её обещание, а не
+        // свойство места вызова, и цена нарушения здесь выше, чем у видео:
+        // сообщение собирается ПОСЛЕ цикла, поэтому один бросок унёс бы все
+        // выбранные снимки разом, а человек увидел бы «Не удалось отправить»
+        // без единого числа. Счёт потери ведётся тем же счётчиком, что и
+        // обычный отказ, — отчёт получится тот же.
+        try {
+          const up = await uploadMediaToCid(uri, { mime: guessImageMime(uri) });
+          if (up.ok) { cids.push(up.cid); continue; }
+          if (up.reason === 'oversize') { oversize += 1; oversizeLimit = up.limitBytes; }
+          else failed += 1;
+        } catch (e) {
+          failed += 1;
+          log.warn('group_photo_upload_failed', { err: rawErrorText(e) });
+        }
       }
       // v4.32.245: молчать о выпавших снимках нельзя — человек видит в чате
       // меньше фотографий, чем выбрал, и не понимает почему.
@@ -2111,25 +2134,32 @@ function GroupChatScreen({
         let failedCount = 0;
         let oversizeLimit: number | null = null;
         for (const va of videoAssets) {
-          const name = va.uri.split('/').pop() ?? 'video.mp4';
-          const up = await uploadMediaToCid(va.uri, {
-            mime: 'video/mp4',
-            ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
-          });
-          if (!up.ok) {
-            if (up.reason === 'oversize') { tooLarge++; oversizeLimit = up.limitBytes; }
-            else failedCount++;
-            continue;
+          // v4.32.854: см. тот же цикл выше — бросок на одном ролике считается
+          // как потеря и не отменяет отчёт об остальных.
+          try {
+            const name = va.uri.split('/').pop() ?? 'video.mp4';
+            const up = await uploadMediaToCid(va.uri, {
+              mime: 'video/mp4',
+              ipfsMaxBytes: IPFS_VIDEO_MAX_BYTES,
+            });
+            if (!up.ok) {
+              if (up.reason === 'oversize') { tooLarge++; oversizeLimit = up.limitBytes; }
+              else failedCount++;
+              continue;
+            }
+            const cid = up.cid;
+            // v4.32.358: размер писался нулём — в списке файлов группы ролик
+            // показывался как «0 Б», хотя он уже загружен и открывается.
+            const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? 0, cid);
+            const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
+            await insertGroupMessage(row);
+            await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
+            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
+            sentCount++;
+          } catch (e) {
+            failedCount++;
+            log.warn('group_attachsheet_video_send_failed', { err: rawErrorText(e) });
           }
-          const cid = up.cid;
-          // v4.32.358: размер писался нулём — в списке файлов группы ролик
-          // показывался как «0 Б», хотя он уже загружен и открывается.
-          const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? 0, cid);
-          const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
-          await insertGroupMessage(row);
-          await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
-          announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
-          sentCount++;
         }
         const warn = batchSendReport(
           { total: videoAssets.length, sent: sentCount, oversize: tooLarge, failed: failedCount, refused: 0 },
