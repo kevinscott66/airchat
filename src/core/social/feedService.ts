@@ -618,11 +618,39 @@ function feedSeenMarkOrHas(key: string): boolean {
  * уже помечен, автор шлёт повтор — и повтор молча выбрасывается как дубль.
  * Пост исчезал навсегда, притом что автор видел его доставленным.
  *
- * Плата за это — при осечке повтор может уйти соседям по ретрансляции второй
- * раз. Счётчик прыжков её ограничивает, а потеря записи ничем не ограничена.
+ * Платой за это была вторая пересылка соседям при каждой осечке: отметка
+ * снята, повтор идёт с самого начала и снова доходит до ретрансляции.
+ * v4.32.799 эту плату убрала — см. feedRelayMarkOrHas.
  */
 function feedSeenForget(key: string): void {
   feedSeenKeys.delete(key);
+}
+
+/**
+ * Что уже уходило соседям по ретрансляции (v4.32.799).
+ *
+ * Отметка «видели» снимается на каждой осечке разбора — иначе конверт терялся
+ * бы навсегда (см. feedSeenForget). Но ретрансляция стоит ВЫШЕ разбора и
+ * потому проходила заново на каждом повторе: одно занятое мгновение у базы —
+ * и весь список контактов получал ту же запись второй раз. Соседи её отбросят
+ * по своей же отметке «видели», то есть уходил чистый холостой трафик, и
+ * уходил он ровно тогда, когда устройству и так плохо.
+ *
+ * Поэтому отметок две. Эта говорит «уже переслали» и осечкой разбора не
+ * снимается: пересылать второй раз незачем в любом случае — у соседей конверт
+ * уже есть. Границы и вычистка — те же, что у feedSeenKeys, и чистятся обе
+ * вместе при смене профиля: иначе чужая отметка молчаливо запретила бы
+ * пересылку в новом аккаунте.
+ */
+const feedRelayedKeys = new Set<string>();
+function feedRelayMarkOrHas(key: string): boolean {
+  if (feedRelayedKeys.has(key)) return true;
+  if (feedRelayedKeys.size >= FEED_SEEN_MAX) {
+    const first = feedRelayedKeys.values().next().value as string | undefined;
+    if (first) feedRelayedKeys.delete(first);
+  }
+  feedRelayedKeys.add(key);
+  return false;
 }
 
 /**
@@ -3485,7 +3513,17 @@ export async function receiveFeedEnvelope(
   // high-volume / low-value (a popular post gets thousands) and multi-hop
   // relay would flood the mesh. Views still reach the author via direct
   // broadcast; mesh bridging is reserved for posts/comments/reactions/edits.
-  if (opts?.gossip !== false && incomingHops < FEED_RELAY_MAX_HOPS && payload.type !== 'feed_view') {
+  //
+  // v4.32.799: и ровно один раз на конверт. Отметка «уже переслали» отдельная
+  // от «видели» и осечкой разбора не снимается — см. feedRelayMarkOrHas.
+  // Проверка стоит последней: отмечать то, что мы и не собирались пересылать,
+  // значило бы запретить пересылку самим себе на будущее.
+  if (
+    opts?.gossip !== false &&
+    incomingHops < FEED_RELAY_MAX_HOPS &&
+    payload.type !== 'feed_view' &&
+    !feedRelayMarkOrHas(dedupKey)
+  ) {
     void feedGossipRelay(innerFrame, incomingHops + 1, senderDid, payload.authorDid);
   }
   // v4.32.133: recheck — a rebind can have run to completion during the
@@ -3567,6 +3605,9 @@ export function stopFeedInboxListener(): void {
   // profile unbind prevents cross-profile suppression (profile A's seen
   // envelope silently dropped when profile B re-subscribes).
   feedSeenKeys.clear();
+  // v4.32.799: по тому же доводу — иначе отметка «уже переслали» из прошлого
+  // аккаунта молча запрещала бы пересылку в новом.
+  feedRelayedKeys.clear();
   try {
     inboxUnsub?.();
   } finally {
@@ -3581,6 +3622,7 @@ export async function rebindFeedToProfile(profileId: number): Promise<void> {
   feedProfileGen++;
   // v4.32.213 (Audit-42 H1): see stopFeedInboxListener — same rationale.
   feedSeenKeys.clear();
+  feedRelayedKeys.clear();
   try {
     await setFeedProfileContext(profileId);
   } finally {
