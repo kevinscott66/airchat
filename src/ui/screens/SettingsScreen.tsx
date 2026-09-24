@@ -124,6 +124,7 @@ import { getLanTransportSingleton } from '../../core/transport/lan/lanTransport'
 import { listMuted, unmute, type MuteEntry } from '../../core/notifications/muteStore';
 import { pushNotificationService } from '../../notifications/pushNotifications';
 import { formatByteSize } from '../../core/media/byteSize';
+import { pluralRu } from '../../core/storage/ruPlural';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
 import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
@@ -1437,7 +1438,15 @@ function SettingsScreenImpl({
           iconName="flash-outline"
           hue="cyan"
           label="Быстрые ответы"
-          badge={quickReplies.length > 0 ? `${quickReplies.length} шаблон${quickReplies.length === 1 ? '' : quickReplies.length < 5 ? 'а' : 'ов'}` : undefined}
+          badge={
+            // v4.32.864: окончание считалось по «n < 5» — сокращённой записью
+            // правила, которая совпадает с ним на 1–4 и врёт дальше: двадцать
+            // один шаблон подписывался «21 шаблонов». Форму выбирает общее
+            // правило, оно знает и про 11–14, и про второй десяток.
+            quickReplies.length > 0
+              ? `${quickReplies.length} ${pluralRu(quickReplies.length, 'шаблон', 'шаблона', 'шаблонов')}`
+              : undefined
+          }
           onPress={() => setSubScreen('quick_replies')}
         />
         <View style={styles.menuDivider} />
@@ -2251,7 +2260,8 @@ function SettingsScreenImpl({
           <Text style={styles.label}>Активные сессии</Text>
           <Text style={styles.desc}>
             {syncDevices.length > 0
-              ? `${syncDevices.length} ${syncDevices.length === 1 ? 'устройство' : syncDevices.length < 5 ? 'устройства' : 'устройств'}`
+              ? // v4.32.864: та же сокращённая запись — «22 устройств».
+                `${syncDevices.length} ${pluralRu(syncDevices.length, 'устройство', 'устройства', 'устройств')}`
               : 'Авторизованные устройства аккаунта'}
           </Text>
         </View>
