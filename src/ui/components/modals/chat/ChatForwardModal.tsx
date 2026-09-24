@@ -28,7 +28,9 @@ import { showError, showSuccess } from '../../userFeedback';
 import { ruPlural } from '../../../utils/plural';
 import { contactLabel, nameInitial } from '../../../../core/social/contactLabel';
 import { shortIdentity } from '../../../identity/shortId';
-import { userErrorText } from '../../userErrorText';
+import { rawErrorText, userErrorText } from '../../userErrorText';
+import { log } from '../../../../core/logger';
+import { forwardEmptyKind, forwardEmptyText, type ForwardLoad } from './forwardListState';
 
 // ─── Forward Message Modal ────────────────────────────────────────────────────
 export function ForwardModal({
@@ -51,6 +53,13 @@ export function ForwardModal({
   const [fwdSearch, setFwdSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fwdComment, setFwdComment] = useState('');
+  /**
+   * v4.32.879: чтение списка раньше уходило в никуда — оба `then` без `catch`.
+   * Отказ базы оставлял списки пустыми, и окно говорило «Нет контактов»:
+   * человек видел не сбой, а приговор «переслать некому».
+   */
+  const [load, setLoad] = useState<ForwardLoad>('loading');
+  const [attempt, setAttempt] = useState(0);
   const pid = profileManager.getActiveProfile()?.id ?? 1;
 
   useEffect(() => {
@@ -58,9 +67,28 @@ export function ForwardModal({
     setFwdSearch('');
     setSelected(new Set());
     setFwdComment('');
-    void listContacts().then(setContacts);
-    void listGroups(pid).then(setGroups);
-  }, [visible, pid]);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    setLoad('loading');
+    void Promise.all([listContacts(), listGroups(pid)])
+      .then(([cs, gs]) => {
+        if (!alive) return;
+        setContacts(cs);
+        setGroups(gs);
+        setLoad('ready');
+      })
+      .catch((e) => {
+        if (!alive) return;
+        // Причину называем в списке, а не тостом: окно только что открылось,
+        // и надпись стоит ровно там, где человек ищет глазами свои чаты.
+        log.warn('forward_list_failed', { err: rawErrorText(e) });
+        setLoad('failed');
+      });
+    return () => { alive = false; };
+  }, [visible, pid, attempt]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -224,7 +252,14 @@ export function ForwardModal({
             );
           }}
           ListEmptyComponent={
-            <Text style={[fwdStyles.empty, { color: colors.textMuted }]}>Нет контактов</Text>
+            (() => {
+              const kind = forwardEmptyKind(load, contacts.length + groups.length > 0, fwdSearch);
+              const label = (
+                <Text style={[fwdStyles.empty, { color: colors.textMuted }]}>{forwardEmptyText(kind)}</Text>
+              );
+              if (kind !== 'failed') return label;
+              return <AppPressable onPress={() => setAttempt((n) => n + 1)}>{label}</AppPressable>;
+            })()
           }
         />
         {selected.size > 0 ? (
