@@ -34,6 +34,8 @@ import { deleteCachedFileUris, resolveBlobToLocalFile, type BlobRef } from '../.
 import { formatClockDuration } from '../time/durationLabel';
 import { failed, IDLE_GATE, pressIn, pressOut, ready, type RecorderGate } from './recorderGate';
 import { showError } from './userFeedback';
+import { rawErrorText } from './userErrorText';
+import { log } from '../../core/logger';
 import { shouldAutoStopVoice, voiceCountdownSeconds, VOICE_MIN_MS } from './voiceLimit';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -459,6 +461,12 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
    */
   const pendingSeekMsRef = useRef(0);
   /**
+   * v4.32.889: последнее место, о котором отчитался сам проигрыватель. Нужен
+   * на случай отказа перемотки: дорожку к тому времени уже передвинули туда,
+   * куда нажали, и вернуть её надо не к нулю, а туда, где звук.
+   */
+  const playedMsRef = useRef(0);
+  /**
    * v4.32.620: между скачиванием вложения и созданием проигрывателя стоит сеть,
    * и за это время экран успевает закрыться. Уборка ниже завязана на [sound] и
    * снимает только тот проигрыватель, что уже лежит в состоянии, — созданный
@@ -490,13 +498,17 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
     subRef.current = snd.addListener('playbackStatusUpdate', (status) => {
       if (!status.isLoaded) return;
       setPositionMs(status.currentTime * 1000);
+      playedMsRef.current = status.currentTime * 1000;
       if (status.duration) setTotalMs(status.duration * 1000);
       if (status.didJustFinish) {
         setPlaying(false);
         setPositionMs(0);
+        playedMsRef.current = 0;
         // Проигрыватель остаётся стоять в конце, и следующее «играть» не
         // давало ни звука, ни движения времени. Возвращаем его к началу.
-        void snd.seekTo(0).catch(() => {});
+        // v4.32.889: отказ этой перемотки — ровно тот случай, который тут и
+        // чинили, и узнать о нём было неоткуда: «играть» молча не играло.
+        void snd.seekTo(0).catch((e) => log.warn('voice_rewind_failed', { err: rawErrorText(e) }));
         if (activeVoicePlayer?.player === snd) activeVoicePlayer = null;
       }
     });
@@ -576,7 +588,13 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
       }
       const startMs = pendingSeekMsRef.current;
       pendingSeekMsRef.current = 0;
-      if (startMs > 0) await snd.seekTo(startMs / 1000).catch(() => {});
+      // v4.32.889: третий путь той же перемотки — и такой же немой. Отказ
+      // здесь означает, что звук пойдёт с начала, а время показано то, куда
+      // нажали до первого «играть»; поправит его только первое событие
+      // статуса, если играть вообще началось.
+      if (startMs > 0) {
+        await snd.seekTo(startMs / 1000).catch((e) => log.warn('voice_start_seek_failed', { err: rawErrorText(e) }));
+      }
       // v4.32.862: проверка перед созданием (620-я) закрывала окно между
       // скачиванием и плеером. Перемотка «куда нажали до первого играть»
       // (722-я) открыла второе окно — уже ПОСЛЕ создания: между `await
@@ -614,7 +632,18 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
     const seekMs = Math.round(ratio * totalMs);
     setPositionMs(seekMs);
     if (sound) {
-      await sound.seekTo(seekMs / 1000).catch(() => {});
+      try {
+        await sound.seekTo(seekMs / 1000);
+        playedMsRef.current = seekMs;
+      } catch (e) {
+        // v4.32.889: отказ гасился пустым `.catch(() => {})`, а дорожку к тому
+        // времени уже передвинули. На паузе статус не приходит, поправить её
+        // некому — и полоса с часами показывают место, где звука нет. Следующее
+        // «играть» продолжает совсем с другого: человек видит, что нажатие
+        // сработало, а слышит обратное.
+        setPositionMs(playedMsRef.current);
+        log.warn('voice_seek_failed', { err: rawErrorText(e) });
+      }
     } else {
       pendingSeekMsRef.current = seekMs;
     }
