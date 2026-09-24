@@ -40,6 +40,13 @@ jest.mock('../../storage/local', () => ({
   getGroupRead: jest.fn(async () => mockGroupRead),
   listGroupMembers: jest.fn(async () => mockMembers ?? []),
   listGroupMembersRead: jest.fn(async () => mockMembers),
+  // v4.32.796: у реакции появился водяной знак, а он живёт в kv профиля.
+  // Предмет этого набора другой, поэтому ячейка здесь пустая и запись
+  // удаётся — ни один кадр не отвергается по свежести.
+  kvTryGet: jest.fn(async () => ({ value: null })),
+  kvSetChecked: jest.fn(async () => true),
+  kvSet: jest.fn(async () => {}),
+  kvDelete: jest.fn(async () => {}),
 }));
 // Приём конверта в сеть не ходит; воронка подменена, чтобы не тянуть службу
 // переписки со всем её деревом зависимостей.

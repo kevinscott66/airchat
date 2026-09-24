@@ -20,6 +20,7 @@ import {
   undeliveredText,
 } from './controlFanout';
 import { canInteractInGroup } from './groupSendPolicy';
+import { commitReactionTs, reactionTsFresh } from './controlWatermark';
 import { lookupGroupActorRead, roleOf } from './groupActor';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { log } from '../logger';
@@ -228,6 +229,17 @@ export async function handleIncomingReaction(
   const scope: ReactionScope = env.groupId
     ? { group: true, groupId: env.groupId, ownerProfileId: pid }
     : { group: false, contactPubB64: senderPubB64, ownerProfileId: pid };
+  // v4.32.796: положение реакции названо в кадре, а не вычисляется здесь, —
+  // значит перехваченный кадр, поданный снова, возвращает снятую реакцию или
+  // убирает поставленную. Знак на тройку «автор + эмодзи + сообщение» ставится
+  // ДО записи и сдвигается после неё: обе причины отложить кадр (состав группы
+  // не прочитался, запрос упал) проходят сами, и знак не должен хоронить
+  // перезапрос, ради которого сказано `deferred`.
+  if (!(await reactionTsFresh(senderPubB64, env.emoji, env.msgId, pid, env.ts))) {
+    log.info('reaction_stale_drop', { from: senderPubB64.slice(0, 12), group: !!env.groupId });
+    return 'consumed';
+  }
+
   const res = await toggleReaction(env.msgId, env.emoji, senderPubB64, env.on, scope);
   if (!res.ok) {
     // Чужую реакцию ронять молча можно — отвечать отправителю нечем. Но в
@@ -243,6 +255,7 @@ export async function handleIncomingReaction(
     // изменит, а приёмник даёт ровно одну.
     return res.reason === 'failed' ? 'deferred' : 'consumed';
   }
+  await commitReactionTs(senderPubB64, env.emoji, env.msgId, pid, env.ts);
   log.info('reaction_applied', { group: !!env.groupId, on: env.on });
   return 'consumed';
 }
