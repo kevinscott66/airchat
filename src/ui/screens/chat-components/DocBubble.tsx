@@ -5,7 +5,11 @@ import { VideoView, useVideoPlayer } from 'expo-video';
 import { AppPressable } from '../../components/AppPressable';
 import { isVideoDoc } from '../chat-utils/media';
 import { parseDocMeta } from '../../../core/social/docMeta';
-import { fileExt, parseNbCid, resolveBlobToLocalFile } from '../../../core/media/mediaBlob';
+import { fileExt, parseNbCid, resolveBlobToLocalFileResult } from '../../../core/media/mediaBlob';
+import { blobResolveText } from '../../../core/media/blobResolveText';
+import { showError } from '../../components/userFeedback';
+import { rawErrorText } from '../../components/userErrorText';
+import { log } from '../../../core/logger';
 import { gatewayUrl } from '../../../core/media/gatewayUrl';
 import { useBubbleSurface } from '../../BubbleKindContext';
 import { openExternal } from '../../utils/openExternal';
@@ -80,11 +84,21 @@ export function DocBubble({
     if (blobVideoUri) { setVideoPlaying(true); return; }
     setOpening(true);
     try {
-      const local = await resolveBlobToLocalFile(blobRef, fileExt(meta.name));
-      if (!local) return;
-      setBlobVideoUri(local);
+      // v4.32.874: отказ называется вслух. Прежде здесь стоял голый
+      // `if (!local) return;`, и нажатие на ролик, который не скачался,
+      // не делало ровно ничего: крутилка гасла, карточка оставалась, и
+      // человек жал ещё и ещё.
+      const res = await resolveBlobToLocalFileResult(blobRef, fileExt(meta.name));
+      if (!res.ok) {
+        showError(blobResolveText(res.reason, 'video'));
+        return;
+      }
+      setBlobVideoUri(res.uri);
       setVideoPlaying(true);
-    } catch { /* не открылось — остаётся карточка файла */ } finally {
+    } catch (e) {
+      log.warn('doc_bubble_video_failed', { err: rawErrorText(e) });
+      showError(blobResolveText('unknown', 'video'));
+    } finally {
       setOpening(false);
     }
   };
@@ -93,13 +107,23 @@ export function DocBubble({
     if (!blobRef || opening) return;
     setOpening(true);
     try {
-      const local = await resolveBlobToLocalFile(blobRef, fileExt(meta.name));
-      if (!local) return;
-      const sharing = await import('expo-sharing');
-      if (await sharing.isAvailableAsync()) {
-        await sharing.shareAsync(local);
+      const res = await resolveBlobToLocalFileResult(blobRef, fileExt(meta.name));
+      if (!res.ok) {
+        showError(blobResolveText(res.reason, 'file'));
+        return;
       }
-    } catch { /* user-visible failure is just "nothing opened" */ } finally {
+      const sharing = await import('expo-sharing');
+      // Отдать файл наружу умеет не всякая сборка: без этого он расшифрован и
+      // лежит в кэше, но открыть его человеку нечем — и это тоже надо сказать.
+      if (!(await sharing.isAvailableAsync())) {
+        showError('На этом устройстве нечем открыть файл');
+        return;
+      }
+      await sharing.shareAsync(res.uri);
+    } catch (e) {
+      log.warn('doc_bubble_open_failed', { err: rawErrorText(e) });
+      showError(blobResolveText('unknown', 'file'));
+    } finally {
       setOpening(false);
     }
   };

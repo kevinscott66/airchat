@@ -402,16 +402,64 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
 }
 
 /**
+ * Почему вложение не открылось (v4.32.874).
+ *
+ * Прежде разбор отвечал одним `null` на всё сразу: чужой хост, ушедший с релея
+ * файл, молчащая сеть, испорченный шифротекст и нехватка места были для
+ * вызывающего одним и тем же «не получилось». Экран из такого ответа не мог
+ * сказать ни слова — и не говорил.
+ *
+ * Различаются ровно те причины, которые разбор и правда знает, и каждая
+ * отвечает на единственный вопрос человека: повторять или просить прислать
+ * заново.
+ */
+export type BlobResolveFailure =
+  /** Дескриптор не разобран: открывать нечего, повтор не поможет. */
+  | 'unsupported'
+  /** Ключ в конверте не того размера — расшифровать нечем. */
+  | 'bad-key'
+  /** Адрес не из наших релеев: ходить туда нельзя (см. isAllowedBlobUrl). */
+  | 'blocked-host'
+  /** Источник не ответил — дело может быть в сети, и повтор осмыслен. */
+  | 'offline'
+  /** Источники ответили, файла у них нет: вложение на релее живёт часами. */
+  | 'gone'
+  /** Байты пришли, но расшифровка их не приняла — повтор ничего не изменит. */
+  | 'corrupt'
+  /** Кэш недоступен или расшифрованный файл не записался. */
+  | 'storage'
+  /** Неожиданный сбой: честнее признаться, чем выдумать причину. */
+  | 'unknown';
+
+export type BlobResolveResult =
+  | { ok: true; uri: string }
+  | { ok: false; reason: BlobResolveFailure };
+
+/**
+ * Порядок разбора причин, когда источников было несколько.
+ *
+ * Сначала то, что повторять бессмысленно (`corrupt`, `blocked-host`), затем
+ * `offline`: если хотя бы один источник не ответил, «файла больше нет» —
+ * утверждение, которого мы не проверили. `gone` говорится только там, где
+ * релей ответил прямо (404/410). Не сказал ничего никто — остаётся `unknown`:
+ * выдумывать причину нельзя, а облачная копия своих отказов не различает
+ * (см. downloadSyncMedia — там любой сбой тоже `null`).
+ */
+const FAILURE_PRIORITY: readonly BlobResolveFailure[] = ['corrupt', 'blocked-host', 'offline', 'gone'];
+
+/**
  * Download + decrypt a blob to a cached local file and return its file:// URI.
  * Idempotent: the cache path is derived from the URL so repeat plays reuse the
  * already-decrypted file. Returns null on failure.
  */
-const blobResolveFlights = new Map<string, Promise<string | null>>();
+const blobResolveFlights = new Map<string, Promise<BlobResolveResult>>();
 
-export function resolveBlobToLocalFile(ref: BlobRef, ext = 'bin'): Promise<string | null> {
+/** То же самое, но с причиной отказа — для экранов, которые о ней говорят. */
+export function resolveBlobToLocalFileResult(ref: BlobRef, ext = 'bin'): Promise<BlobResolveResult> {
   const cacheDir = FileSystem.cacheDirectory ?? '';
   const name = isBlobRef(ref) ? blobCacheName(ref, ext) : null;
-  if (!cacheDir || !name) return Promise.resolve(null);
+  if (!cacheDir) return Promise.resolve({ ok: false, reason: 'storage' });
+  if (!name) return Promise.resolve({ ok: false, reason: 'unsupported' });
   const key = `${cacheDir}${name}`;
   const existing = blobResolveFlights.get(key);
   if (existing) return existing;
@@ -422,11 +470,20 @@ export function resolveBlobToLocalFile(ref: BlobRef, ext = 'bin'): Promise<strin
   return flight;
 }
 
-async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<string | null> {
+export function resolveBlobToLocalFile(ref: BlobRef, ext = 'bin'): Promise<string | null> {
+  return resolveBlobToLocalFileResult(ref, ext).then((r) => (r.ok ? r.uri : null));
+}
+
+async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<BlobResolveResult> {
+  const fails: BlobResolveFailure[] = [];
+  const noted = (reason: BlobResolveFailure): null => {
+    fails.push(reason);
+    return null;
+  };
   try {
-    if (!isBlobRef(ref)) return null;
+    if (!isBlobRef(ref)) return { ok: false, reason: 'unsupported' };
     const cacheDir = FileSystem.cacheDirectory ?? '';
-    if (!cacheDir) return null;
+    if (!cacheDir) return { ok: false, reason: 'storage' };
     // Stable filename: blob id when present, else derived from the URL, плюс
     // отпечаток ключа.
     // v4.32.272: правило вывода id переехало в blobRef — по нему же ищется
@@ -437,14 +494,14 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
     // имя своим содержимым, и вложение соседа рисовалось его картинкой
     // (см. blobRef.blobKeyFingerprint).
     const dest = `${cacheDir}${blobCacheName(ref, ext) ?? ''}`;
-    if (dest === cacheDir) return null;
+    if (dest === cacheDir) return { ok: false, reason: 'unsupported' };
     const existing = await FileSystem.getInfoAsync(dest);
-    if (existing.exists && (existing.size ?? 0) > 0) return dest;
+    if (existing.exists && (existing.size ?? 0) > 0) return { ok: true, uri: dest };
 
     const key = new Uint8Array(Buffer.from(ref.k, 'base64'));
     if (key.length !== SYMMETRIC_KEY_BYTES) {
       log.warn('blob_download_bad_key');
-      return null;
+      return { ok: false, reason: 'bad-key' };
     }
 
     const blobId = ref.i;
@@ -463,7 +520,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
       // ввод, и ограничен он был только свободным местом на диске.
       if (cb64.length === 0 || cb64.length > MAX_DOWNLOAD_B64_CHARS) {
         log.warn('blob_lan_cache_bad_size', { chars: cb64.length });
-        return null;
+        return noted('corrupt');
       }
       const bytes = new Uint8Array(Buffer.from(cb64, 'base64'));
       log.info('blob_resolve_lan_cache', { id: blobId.slice(0, 8), bytes: bytes.length });
@@ -478,7 +535,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
       // отправитель узнаёт IP получателя и минуту открытия переписки.
       if (!isAllowedBlobUrl(relayUrl, allowedRelayBases())) {
         log.warn('blob_download_foreign_host', { url: relayUrl.slice(0, 64) });
-        return null;
+        return noted('blocked-host');
       }
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -486,24 +543,26 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
         const res = await fetch(relayUrl, { signal: controller.signal });
         if (!res.ok) {
           log.warn('blob_download_http_err', { status: res.status });
-          return null;
+          // 404/410 — вложение с релея ушло по сроку: просить прислать заново.
+          // Прочие коды — сервер отвечает, но не тем: это повторимо.
+          return noted(res.status === 404 || res.status === 410 ? 'gone' : 'offline');
         }
         // v4.32.354: потолок стоял только после чтения тела. Проверяем
         // content-length до res.text(), затем оставляем проверку строки.
         const declared = parseInt(res.headers?.get?.('content-length') ?? '', 10);
         if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_B64_CHARS) {
           log.warn('blob_download_too_large', { declared });
-          return null;
+          return noted('corrupt');
         }
         const b64 = await res.text();
         if (b64.length === 0 || b64.length > MAX_DOWNLOAD_B64_CHARS) {
           log.warn('blob_download_bad_size', { chars: b64.length });
-          return null;
+          return noted('corrupt');
         }
         return new Uint8Array(Buffer.from(b64, 'base64'));
       } catch (e) {
         log.warn('blob_download_relay_unreachable', { err: e instanceof Error ? e.message : String(e) });
-        return null;
+        return noted('offline');
       } finally {
         clearTimeout(timeout);
       }
@@ -556,6 +615,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
         cipher = await source.load();
       } catch (e) {
         log.warn('blob_source_failed', { src: source.name, err: e instanceof Error ? e.message : String(e) });
+        fails.push('offline');
       }
       if (!cipher) continue;
       const attempt = decryptSymmetric(key, cipher);
@@ -564,6 +624,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
         break;
       }
       log.warn('blob_source_decrypt_failed', { src: source.name, bytes: cipher.length });
+      fails.push('corrupt');
       if (source.name === 'lan' && blobId) {
         const { lanBlobCacheDelete } = await import('../transport/lan/lanBlob');
         await lanBlobCacheDelete(blobId);
@@ -571,7 +632,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
     }
     if (!plain) {
       log.warn('blob_download_decrypt_failed');
-      return null;
+      return { ok: false, reason: FAILURE_PRIORITY.find((r) => fails.includes(r)) ?? 'unknown' };
     }
     const temporary = `${dest}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await FileSystem.writeAsStringAsync(temporary, Buffer.from(plain).toString('base64'), {
@@ -584,9 +645,9 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<st
       await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => {});
     }
     log.info('blob_download_ok', { bytes: plain.length });
-    return dest;
+    return { ok: true, uri: dest };
   } catch (e) {
     log.warn('blob_download_failed', { err: e instanceof Error ? e.message : String(e) });
-    return null;
+    return { ok: false, reason: 'unknown' };
   }
 }
