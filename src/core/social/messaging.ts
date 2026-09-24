@@ -14,6 +14,7 @@ import {
   chatMessageExists,
   deleteChatMessage,
   deleteChatMessageChecked,
+  type ChatDeleteWrite,
   getChatMessageAuthorRead,
   getChatMessageTexts,
   listChatMessages,
@@ -2395,12 +2396,22 @@ export class MessagingService {
     return contactPubB64 === publicKeyToB64(this.pair.publicKey);
   }
 
-  async deleteMessageLocalOnly(messageId: string): Promise<void> {
-    await deleteChatMessage(messageId, await this.ownerProfileId());
+  /**
+   * Удалить сообщение только в своей базе.
+   *
+   * v4.32.805: исход доходит до вызывающего. Прежняя форма отвечала `void`, и
+   * это был единственный путь удаления, у которого ответа не было вовсе —
+   * `deleteChatMessage` свой булев отдавал с v4.32.555, а `…Checked` три слова
+   * с v4.32.771, и оба выбрасывались здесь. Экран после такого вызова говорил
+   * «Сообщение удалено» не глядя, а одноразовый снимок считался сожжённым,
+   * хотя занятая база оставляла строку на месте.
+   */
+  async deleteMessageLocalOnly(messageId: string): Promise<ChatDeleteWrite> {
+    return deleteChatMessageChecked(messageId, await this.ownerProfileId());
   }
 
   /** Удалить сообщение только в локальной SQLite (синоним для UI). */
-  deleteMessageLocally(messageId: string): Promise<void> {
+  deleteMessageLocally(messageId: string): Promise<ChatDeleteWrite> {
     return this.deleteMessageLocalOnly(messageId);
   }
 

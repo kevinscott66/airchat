@@ -71,6 +71,7 @@ import {
   updateGroupMeta,
   updateGroupMessageText,
   deleteGroupMessage,
+  deleteGroupMessageChecked,
   clearGroupMessages,
   searchGroupMessages,
   makePollText,
@@ -1118,11 +1119,11 @@ function GroupChatScreen({
       alive: () => isMountedRef.current,
       open: (uris, opts) => grpMediaViewer.open(uris, 0, opts),
       later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
-      remove: () => deleteGroupMessage(item.id, pid),
+      remove: async () => (await deleteGroupMessageChecked(item.id, pid)) !== 'failed',
       reload: () => { void loadMessages(); },
       // Вложение живёт на relay около трёх часов — старое уже не достать.
       onUnavailable: () => showError('Снимок больше недоступен'),
-      onRemoveFailed: () => showError('Не удалось удалить одноразовый снимок'),
+      onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке'),
     });
   }, [gateway, grpMediaViewer, pid, loadMessages]);
 

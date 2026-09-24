@@ -94,6 +94,7 @@ import { VoiceRecorderButton, type VoiceRecordingResult } from '../components/Vo
 import { voiceUploadRefusal } from '../components/voiceLimit';
 import { fileSizeBytes } from '../../core/media/fileSize';
 import { useMediaViewer } from '../components/MediaViewer';
+import { pluralRu } from '../../core/storage/ruPlural';
 import { log, measurePerformance } from '../../core/logger';
 import { toggleAndSyncReaction } from '../../core/social/reactionSync';
 import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
@@ -2744,13 +2745,15 @@ function ChatThreadView({
         later: (fn) => { setTimeout(fn, VIEW_ONCE_DELETE_DELAY_MS); },
         remove: async () => {
           const svc = getMessagingService();
-          if (svc) await svc.deleteMessageLocally(row.id);
+          if (!svc) return false;
+          // 'missing' — строки уже нет, и это ровно то, чего мы добивались.
+          return (await svc.deleteMessageLocally(row.id)) !== 'failed';
         },
         reload: () => { void appendNewMessages(); },
         // Вложение живёт на relay около трёх часов; в группе про это говорили,
         // в личном чате молчали (v4.32.359).
         onUnavailable: () => showError('Снимок больше недоступен'),
-        onRemoveFailed: () => showError('Не удалось удалить одноразовый снимок'),
+        onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке'),
       });
     },
     [gateway, openMedia, appendNewMessages]
@@ -3858,10 +3861,20 @@ function ChatThreadView({
                         for (const m of msgs) {
                           if (!(await saveRecentlyDeleted(m))) allKept = false;
                         }
-                        await Promise.all(ids.map((id) => svc.deleteMessageLocally(id)));
+                        // v4.32.805: исход считается. «Удалить» на пачке
+                        // сообщало об успехе, даже когда база не отдала ни
+                        // одной строки: отметка выбора снималась, список
+                        // перечитывался, и сообщения возвращались на место без
+                        // единого слова.
+                        const outcomes = await Promise.all(ids.map((id) => svc.deleteMessageLocally(id)));
+                        const stuck = outcomes.filter((o) => o === 'failed').length;
                         setSelectedIds(new Set());
                         void appendNewMessages();
-                        if (!allKept) showError('Часть сообщений удалена без копии в «Недавно удалённые»');
+                        if (stuck > 0) {
+                          showError(`${stuck} ${pluralRu(stuck, 'сообщение осталось', 'сообщения остались', 'сообщений остались')} в переписке — удалить не получилось`);
+                        } else if (!allKept) {
+                          showError('Часть сообщений удалена без копии в «Недавно удалённые»');
+                        }
                       }, 'Не удалось удалить сообщения', 'ui_chat_delete_selected_failed');
                     }},
                   ]);
@@ -4266,9 +4279,11 @@ function ChatThreadView({
             actions: [
               { label: 'Удалить у себя', destructive: true, onPress: () => runGuardedOp(async () => {
                 const kept = await saveRecentlyDeleted(q);
-                await svc2.deleteMessageLocally(q.id);
+                const outcome = await svc2.deleteMessageLocally(q.id);
                 await appendNewMessages();
-                if (kept) showSuccess('Сообщение удалено');
+                // v4.32.805: «Сообщение удалено» говорилось не глядя.
+                if (outcome === 'failed') showError('Не удалось удалить — сообщение осталось в переписке');
+                else if (kept) showSuccess('Сообщение удалено');
                 else showError('Сообщение удалено. Копия в «Недавно удалённые» не сохранилась');
               }, 'Не удалось удалить сообщение', 'ui_chat_delete_local_failed') },
               ...(isOut2 ? [{ label: 'Удалить у всех', destructive: true, onPress: () => runGuardedOp(async () => {

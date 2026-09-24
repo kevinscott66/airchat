@@ -41,7 +41,7 @@ function stand(over: Partial<ViewOnceTapDeps> = {}) {
     alive: jest.fn(() => living),
     open: jest.fn(),
     later: jest.fn((fn: () => void) => { pending.push(fn); }),
-    remove: jest.fn(async () => {}),
+    remove: jest.fn(async () => true),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
     onRemoveFailed: jest.fn(),
@@ -226,7 +226,9 @@ describe('форма исходников', () => {
 
   it('оба экрана говорят про сорвавшееся удаление одними словами', () => {
     for (const screen of [CHAT, GROUPS]) {
-      expect(screen).toContain("onRemoveFailed: () => showError('Не удалось удалить одноразовый снимок')");
+      expect(screen).toContain(
+        "onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке')"
+      );
       expect(screen).toContain("onUnavailable: () => showError('Снимок больше недоступен')");
     }
   });

@@ -51,7 +51,7 @@ function stand(over: Partial<ViewOnceTapDeps> = {}): ViewOnceTapDeps {
     alive: jest.fn(() => true),
     open: jest.fn(),
     later: jest.fn(),
-    remove: jest.fn(async () => {}),
+    remove: jest.fn(async () => true),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
     onRemoveFailed: jest.fn(),
