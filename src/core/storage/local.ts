@@ -5380,7 +5380,30 @@ export async function touchConversation(
   }
 }
 
-/** Сбросить счётчик непрочитанных для диалога (открыли чат). */
+/**
+ * Сбросить счётчик непрочитанных для диалога (открыли чат).
+ *
+ * v4.32.836: отказ отдаётся наверх — как у групповой тройки в v4.32.833.
+ *
+ * Дефект. Журнальная строка тут есть, а наружу отказ не шёл. В ChatListScreen
+ * все три вызова записаны как `void mark…(…).then(loadData)` без `.catch`:
+ * `loadData` при отказе не наступает, список остаётся со старым счётчиком, и
+ * человек видит ровно то же, что до нажатия. Пункт меню «Отметить
+ * прочитанным» выглядел кнопкой, которая иногда просто не работает. Хуже
+ * всего `markConversationUnread` в ChatScreen: там за ним шёл `onBack()`, то
+ * есть уход с экрана обещал, что пометка легла, — и уводил одинаково, легла
+ * она или нет. Человек возвращался в список, не находил там жирной строки и
+ * не знал, что пометки нет вовсе. Соседи по тем же меню (`setConversationPinned`,
+ * `setConversationArchived`) молчат так же, но у них результат виден сразу;
+ * здесь же «ничего не изменилось» и есть нормальный исход успешной пометки,
+ * когда счётчик и так был нулевым, — отличить одно от другого нельзя.
+ *
+ * Правка. Все три бросают, а вызывающие обёрнуты `runGuardedOp` с готовым
+ * текстом. Единственное сознательное молчание осталось в ChatScreen на
+ * открытии чата: там снятие непрочитанных — фоновая работа, о которой никто
+ * не просил, и всплывающее окно поверх только что открытой переписки было бы
+ * хуже самой потери; отказ там уходит в журнал.
+ */
 export async function markConversationRead(
   contactPubB64: string,
   ownerProfileId: number
@@ -5397,6 +5420,7 @@ export async function markConversationRead(
     if (anyChanged(res)) emitChatWrites();
   } catch (e) {
     log.warn('conversation_mark_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -5417,6 +5441,7 @@ export async function markAllConversationsRead(ownerProfileId: number): Promise<
     if (anyChanged(convs, grps)) emitChatWrites();
   } catch (e) {
     log.warn('mark_all_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -5437,6 +5462,7 @@ export async function markConversationUnread(
     if (anyChanged(res)) emitChatWrites();
   } catch (e) {
     log.warn('conversation_mark_unread_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 

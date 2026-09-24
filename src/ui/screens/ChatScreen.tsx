@@ -1593,7 +1593,13 @@ function ChatThreadView({
   useEffect(() => {
     if (!peerB64) return;
     if (tabRef.current === 'chat') {
-      void markConversationRead(peerB64, activeProfileId);
+      // v4.32.836: функция теперь бросает, и молчание тут — решение, а не
+      // недосмотр. Снятия непрочитанных на открытии чата никто не просил;
+      // окно с ошибкой поверх только что открытой переписки мешало бы больше,
+      // чем сам промах, а счётчик снимется следующим тиком опроса.
+      void markConversationRead(peerB64, activeProfileId).catch((e: unknown) => {
+        log.warn('chat_open_mark_read_failed', { err: rawErrorText(e) });
+      });
       // Send read receipts for unread incoming messages (best-effort, fire-and-forget)
       void (async () => {
         try {
@@ -4289,7 +4295,16 @@ function ChatThreadView({
           }
           setQuickReactMsg(null);
         }}
-        onMarkUnread={() => { void import('../../core/storage/local').then((m) => m.markConversationUnread(peerB64, activeProfileId)).then(onBack); setQuickReactMsg(null); }}
+        onMarkUnread={() => {
+          // v4.32.836: `onBack` теперь внутри — уход с экрана и был обещанием,
+          // что пометка легла, а уводило одинаково при любом исходе.
+          runGuardedOp(async () => {
+            const m = await import('../../core/storage/local');
+            await m.markConversationUnread(peerB64, activeProfileId);
+            onBack();
+          }, 'Не удалось отметить непрочитанным', 'chat_mark_unread_failed');
+          setQuickReactMsg(null);
+        }}
         onShowInfo={() => { if (quickReactMsg) setMsgInfoTarget(quickReactMsg); setQuickReactMsg(null); }}
         onTranslate={() => { const q = quickReactMsg; setQuickReactMsg(null); if (q) translateRow(q.text ?? ''); }}
         onCopyLink={() => { const q = quickReactMsg; setQuickReactMsg(null); if (q) copyRowLink(q.id); }}

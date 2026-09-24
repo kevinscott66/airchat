@@ -73,6 +73,7 @@ import {
 // v4.32.168: зеркалим mute в muteStore (источник правды для FCM gate).
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { showError, showSuccess } from '../components/userFeedback';
+import { runGuardedOp } from '../components/runGuardedOp';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { StoriesRow } from '../components/StoriesRow';
@@ -831,13 +832,20 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   );
   const handleConvSwipeRead = useCallback(
     (item: ConversationItem) => {
-      if (item.unreadCount > 0) {
-        void markConversationRead(item.contactPubB64, activeProfileId()).then(loadData);
-      } else {
-        void import('../../core/storage/local')
-          .then((m) => m.markConversationUnread(item.contactPubB64, activeProfileId()))
-          .then(loadData);
-      }
+      // v4.32.836: отказ пометки теперь доходит до человека. До этого он
+      // уходил в неперехваченное отклонение: `loadData` не наступал, строка
+      // оставалась в прежнем виде, и свайп выглядел не сработавшим жестом.
+      const unread = item.unreadCount > 0;
+      runGuardedOp(
+        async () => {
+          const pid = activeProfileId();
+          if (unread) await markConversationRead(item.contactPubB64, pid);
+          else await markConversationUnread(item.contactPubB64, pid);
+          await loadData();
+        },
+        unread ? 'Не удалось отметить прочитанным' : 'Не удалось отметить непрочитанным',
+        'chat_list_swipe_read_failed',
+      );
     },
     [activeProfileId, loadData],
   );
@@ -931,11 +939,16 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         {
           text: item.unreadCount > 0 ? 'Отметить прочитанным' : 'Отметить непрочитанным',
           onPress: () => {
-            if (item.unreadCount > 0) {
-              void markConversationRead(item.contactPubB64, pid).then(loadData);
-            } else {
-              void markConversationUnread(item.contactPubB64, pid).then(loadData);
-            }
+            const unread = item.unreadCount > 0;
+            runGuardedOp(
+              async () => {
+                if (unread) await markConversationRead(item.contactPubB64, pid);
+                else await markConversationUnread(item.contactPubB64, pid);
+                await loadData();
+              },
+              unread ? 'Не удалось отметить прочитанным' : 'Не удалось отметить непрочитанным',
+              'chat_list_menu_read_failed',
+            );
           },
         },
         {
@@ -1256,7 +1269,14 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 style={s.headerBtn}
                 onPress={() => {
                   const pid = activeProfileId();
-                  void markAllConversationsRead(pid).then(loadData);
+                  runGuardedOp(
+                    async () => {
+                      await markAllConversationsRead(pid);
+                      await loadData();
+                    },
+                    'Не удалось отметить всё прочитанным',
+                    'chat_list_mark_all_read_failed',
+                  );
                 }}
                 onLongPress={() => {
                   Alert.alert('Архивировать прочитанные?', 'Все переписки без непрочитанных сообщений будут архивированы.', [
