@@ -2475,7 +2475,15 @@ function SettingsScreenImpl({
           <AppPressable onPress={() => { setEditingQR(qr); setEditingQRText(qr.text); }} style={{ padding: 6 }}>
             <Ionicons name="pencil-outline" size={18} color={colors.textMuted} />
           </AppPressable>
-          <AppPressable onPress={() => { void deleteQuickReply(qr.id).then(loadQuickReplies); }} style={{ padding: 6 }}>
+          <AppPressable onPress={() => {
+            // v4.32.812: список перечитывается в любом случае — он и покажет
+            // оставшийся шаблон. Но молчать об этом нельзя: удаляют шаблон
+            // тогда, когда в нём написано лишнее, а открыт он в каждом чате.
+            void deleteQuickReply(qr.id).then((ok) => {
+              loadQuickReplies();
+              if (!ok) showError('Шаблон не удалился: хранилище занято. Попробуйте ещё раз.');
+            });
+          }} style={{ padding: 6 }}>
             <Ionicons name="trash-outline" size={18} color={colors.error} />
           </AppPressable>
         </View>
@@ -2494,7 +2502,12 @@ function SettingsScreenImpl({
         <AppPressable
           onPress={() => {
             if (!quickReplyInput.trim()) return;
-            void addQuickReply(profileManager.getActiveProfile()?.id ?? 1, quickReplyInput).then(() => { setQuickReplyInput(''); loadQuickReplies(); });
+            const text = quickReplyInput;
+            void addQuickReply(profileManager.getActiveProfile()?.id ?? 1, text).then((ok) => {
+              if (!ok) { showError('Шаблон не сохранился: хранилище занято. Текст остался в поле — попробуйте ещё раз.'); return; }
+              setQuickReplyInput('');
+              loadQuickReplies();
+            });
           }}
           style={{ backgroundColor: colors.primary, borderRadius: radius.md, padding: 10 }}
         >
@@ -2683,7 +2696,15 @@ function SettingsScreenImpl({
               <TextInput style={[styles.pwdInput, { height: 80, textAlignVertical: 'top' }]} value={editingQRText} onChangeText={setEditingQRText} multiline maxLength={200} autoFocus />
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => {
                 if (editingQR && editingQRText.trim()) {
-                  void updateQuickReply(editingQR.id, editingQRText).then(() => { setEditingQR(null); loadQuickReplies(); });
+                  // Окно закрывается только после удачной записи: шаблон
+                  // уходит в сообщение одним нажатием и перед отправкой не
+                  // перечитывается — закрыть окно над неисправленным текстом
+                  // значит отправить именно его.
+                  void updateQuickReply(editingQR.id, editingQRText).then((ok) => {
+                    if (!ok) { showError('Шаблон не изменился: хранилище занято. Правка перед вами — попробуйте сохранить ещё раз.'); return; }
+                    setEditingQR(null);
+                    loadQuickReplies();
+                  });
                 }
               }}>
                 <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>

@@ -900,9 +900,16 @@ function ProfileScreenImpl({
                     >{isUnreadableMessage(entry.message) ? UNREADABLE_MESSAGE_TEXT : entry.message.text}</Text>
                     <AppPressable
                       onPress={() => {
+                        // v4.32.812: обе записи бросают, а `.catch` тут не было —
+                        // отказ базы уходил в необработанный промис, строка
+                        // оставалась в списке, и почему она осталась, человек не
+                        // узнавал. Избранное он чистит ровно затем, чтобы эта
+                        // переписка не лежала на виду в отдельном окне.
                         const id = entry.message.id;
                         const unstar = entry.kind === 'chat' ? setMessageStarred(id, false) : setGroupMessageStarred(id, false);
-                        void unstar.then(() => setStarredEntries((prev) => prev.filter((e) => e.message.id !== id)));
+                        void unstar
+                          .then(() => setStarredEntries((prev) => prev.filter((e) => e.message.id !== id)))
+                          .catch(() => Alert.alert('Избранное', 'Не удалось убрать: хранилище занято. Попробуйте ещё раз.'));
                       }}
                       style={{ marginTop: 6 }}
                     >

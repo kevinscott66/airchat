@@ -9532,7 +9532,20 @@ export async function listQuickReplies(ownerProfileId: number): Promise<QuickRep
   }
 }
 
-export async function addQuickReply(ownerProfileId: number, text: string): Promise<void> {
+/**
+ * Три записи шаблонов отвечают, легла ли работа (v4.32.812).
+ *
+ * Прежде все три отдавали `void`, гася отказ базы в лог, а экран настроек
+ * считал разрешившийся промис успехом: добавление чистило поле ввода,
+ * правка закрывала окно, удаление просто перечитывало список. Шаблон
+ * вставляется в поле сообщения одним нажатием и перед отправкой не
+ * перечитывается — поэтому неудавшаяся правка опаснее всего: человек
+ * исправил в шаблоне адрес или номер, окно закрылось, а уходить одним
+ * нажатием продолжает прежний текст. Неудавшееся удаление оставляет в
+ * списке ровно тот текст, от которого человек избавлялся, и список этот
+ * открыт в каждом чате.
+ */
+export async function addQuickReply(ownerProfileId: number, text: string): Promise<boolean> {
   try {
     const { v4: uuidv4 } = await import('uuid');
     const id = uuidv4();
@@ -9542,27 +9555,35 @@ export async function addQuickReply(ownerProfileId: number, text: string): Promi
       'INSERT INTO quick_replies (id, text, owner_profile_id, created_at) VALUES (?, ?, ?, ?)',
       [id, encryptAtRestString(text.trim(), dek), ownerProfileId, Date.now()]
     );
+    return true;
   } catch (e) {
     log.warn('add_quick_reply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 
-export async function updateQuickReply(id: string, text: string): Promise<void> {
+export async function updateQuickReply(id: string, text: string): Promise<boolean> {
   try {
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
-    await d.runAsync('UPDATE quick_replies SET text = ? WHERE id = ?', [encryptAtRestString(text.trim(), dek), id]);
+    const res = await d.runAsync('UPDATE quick_replies SET text = ? WHERE id = ?', [encryptAtRestString(text.trim(), dek), id]);
+    // Ноль строк — шаблона по этому ключу нет: окно правки открыто над тем,
+    // чего в базе уже не осталось, и «сохранено» было бы неправдой.
+    return res.changes > 0;
   } catch (e) {
     log.warn('update_quick_reply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 
-export async function deleteQuickReply(id: string): Promise<void> {
+export async function deleteQuickReply(id: string): Promise<boolean> {
   try {
     const d = await db();
     await d.runAsync('DELETE FROM quick_replies WHERE id = ?', [id]);
+    return true;
   } catch (e) {
     log.warn('delete_quick_reply_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
   }
 }
 
