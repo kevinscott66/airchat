@@ -1070,6 +1070,12 @@ export async function notifyFeedEvent(opts: {
     const notifee = require('@notifee/react-native').default;
     // v4.32.169: respect notify_feed global toggle (Ещё → Уведомления → «Лента»).
     if ((await kvGet('notify_feed')) === 'false') return;
+    // v4.32.863: «Не беспокоить» спрашивали только сообщения — личные и
+    // групповые. Публикация и комментарий будили телефон в три часа ночи при
+    // включённом окне тишины, то есть настройка не работала ровно там, где её
+    // включают. Событие ленты не срочнее сообщения: прячем целиком, как их,
+    // — оно никуда не денется, лента покажет его при открытии.
+    if (await isDndActive()) return;
     const vibrate = (await kvGet('notify_vibrate')) !== 'false';
     const sound = (await kvGet('notify_sound')) !== 'false';
     // v4.32.239: «Показывать содержимое» глушило текст только у сообщений, а
@@ -1117,8 +1123,14 @@ export async function notifyMissedCall(opts: { count: number }): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const notifee = require('@notifee/react-native').default;
     if ((await kvGet('notify_calls')) === 'false') return;
-    const vibrate = (await kvGet('notify_vibrate')) !== 'false';
-    const sound = (await kvGet('notify_sound')) !== 'false';
+    // v4.32.863: «Не беспокоить» этот баннер не прячет, а обеззвучивает — то
+    // же решение, что у входящего звонка (см. readBackgroundCallPrefs).
+    // Спрятать его значило бы съесть звонок молча: сервер отдаёт непринятые
+    // звонки один раз, при входе, и показать их потом будет нечем — человек
+    // просто не узнает, что ему звонили. Баннер придёт беззвучно.
+    const quiet = await isDndActive();
+    const vibrate = !quiet && (await kvGet('notify_vibrate')) !== 'false';
+    const sound = !quiet && (await kvGet('notify_sound')) !== 'false';
     await notifee.displayNotification({
       id: 'airchat_missed_calls',
       title: 'AirChat',
