@@ -94,7 +94,9 @@ describe('храповик: экран настроек помечает при�
   test('успешная смена пароля зовёт пометку', () => {
     const body = bodyOf(SCREEN_CODE, 'const submitChangePassword =');
     expect(body).toContain('authGuard.changePassword(');
-    expect(body).toContain('markAppleBindingStaleAfterPasswordChange()');
+    // v4.32.869: пометок две — привязка и копия в облаке, — и зовутся они
+    // одним адресом, чтобы третья не была забыта.
+    expect(body).toContain('markCopiesStaleAfterPasswordChange()');
   });
 
   test('пометка решает через чистый модуль, а не сравнением строк на месте', () => {
@@ -103,8 +105,8 @@ describe('храповик: экран настроек помечает при�
     // Change` и отвечает исходом. Смысл храповика тот же: решение принимает
     // правило, а не сравнение строк, написанное здесь заново. Так его стало
     // видно обоим путям смены пароля, а не одному.
-    const body = bodyOf(SCREEN_CODE, 'const markAppleBindingStaleAfterPasswordChange =');
-    expect(body).toContain('await markAppleBindingStale();');
+    const body = bodyOf(SCREEN_CODE, 'const markCopiesStaleAfterPasswordChange =');
+    expect(body).toContain('await markPasswordBoundCopiesStale();');
     expect(body).not.toContain('APPLE_BINDING_STORED[');
     expect(body).toContain('setAppleBindStale(true)');
     const core = fs.readFileSync(

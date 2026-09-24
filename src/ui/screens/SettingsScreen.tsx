@@ -27,11 +27,11 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { authGuard } from '../../core/security/authGuard';
 import { APPLE_BINDING_STORED, parseAppleBindingHint } from '../../core/security/appleBindingHint';
 import type { AppleBindingHint } from '../../core/security/appleBindingHint';
+import { APPLE_BINDING_HINT_KEY } from '../../core/security/appleBindingStale';
 import {
-  APPLE_BINDING_HINT_KEY,
-  APPLE_BINDING_STALE_TEXT,
-  markAppleBindingStale,
-} from '../../core/security/appleBindingStale';
+  markPasswordBoundCopiesStale,
+  passwordChangeAftermathText,
+} from '../../core/security/passwordChangeAftermath';
 import {
   SENSITIVE_NO_PASSWORD_TEXT,
   sensitiveAccessGate,
@@ -103,6 +103,8 @@ import {
   hasSeedBackupPending,
 } from '../../core/backup/seedPhrase';
 import { isCloudVaultConfigured, uploadCloudVault } from '../../core/backup/cloudVault';
+import { readCloudVaultCopy, storeCloudVaultCopy } from '../../core/backup/cloudVaultCopy';
+import type { CloudVaultCopyHint } from '../../core/backup/cloudVaultCopy';
 // v4.32.595: привязка секретных слов к Apple ID — второй путь домой, когда
 // слова потеряны. Сервер хранит только шифртекст, ключ выводится из пароля
 // приложения, а Apple отвечает лишь на вопрос «кто пришёл» (см. seedBinding).
@@ -320,6 +322,12 @@ function SettingsScreenImpl({
   const [cloudPasswordModal, setCloudPasswordModal] = useState(false);
   const [cloudPasswordInput, setCloudPasswordInput] = useState('');
   const [cloudBusy, setCloudBusy] = useState(false);
+  /**
+   * v4.32.869: отправляли ли отсюда копию в облако и открывается ли она ещё
+   * нынешним паролем. `null` — подсказку не прочитали: тогда экран не обещает
+   * ни того, ни другого.
+   */
+  const [cloudCopy, setCloudCopy] = useState<CloudVaultCopyHint | null>(null);
 
   // ── Privacy state ──────────────────────────────────────────────────────────
   const [lastSeenVisibility, setLastSeenVisibility] = useState<'everybody' | 'contacts' | 'nobody'>('everybody');
@@ -418,6 +426,8 @@ function SettingsScreenImpl({
   useEffect(() => {
     void hasSeedBackupPending().then(setSeedBackupPendingState).catch(() => setSeedBackupPendingState(false));
   }, []);
+  // v4.32.869: отказ чтения оставляет `null` — молчание, а не «копии нет».
+  useEffect(() => { void readCloudVaultCopy().then(setCloudCopy); }, []);
 
   useEffect(() => {
     /**
@@ -786,7 +796,7 @@ function SettingsScreenImpl({
       setNewPwd('');
       setNewPwd2('');
       refreshPasswordFlag();
-      await markAppleBindingStaleAfterPasswordChange();
+      await markCopiesStaleAfterPasswordChange();
     } finally { setPwdBusy(false); }
   };
 
@@ -822,20 +832,28 @@ function SettingsScreenImpl({
    * чего при броске как раз не случалось. Не помечено было ничего, и человек
    * даже предупреждения не видел.
    */
-  const markAppleBindingStaleAfterPasswordChange = async (): Promise<void> => {
+  const markCopiesStaleAfterPasswordChange = async (): Promise<void> => {
     // v4.32.868: чтение, решение и запись переехали в ядро — тот же вызов
     // делает теперь и сброс пароля по словам, который раньше проходил мимо.
-    let outcome = await markAppleBindingStale();
-    if (outcome === 'unknown') {
-      // Прочитать не вышло — судим по тому, что стоит на экране: это последнее,
-      // что человек видел про привязку, и другого свидетеля здесь нет.
-      if (!appleBound) return;
-      outcome = (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';
-    }
-    if (outcome === 'not_bound') return;
-    setAppleBound(false);
-    setAppleBindStale(true);
-    showError(APPLE_BINDING_STALE_TEXT[outcome]);
+    // v4.32.869: копий там две. Архив в облаке заперт тем же паролем, и о нём
+    // не говорили вовсе — отметки «копия отправлена» не существовало.
+    const report = await markPasswordBoundCopiesStale();
+    // «Не прочиталось» судим по тому, что стоит на экране: это последнее, что
+    // человек видел про копии, и другого свидетеля здесь нет.
+    const apple = report.apple !== 'unknown'
+      ? report.apple
+      : !appleBound
+        ? 'not_bound'
+        : (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';
+    const cloud = report.cloud !== 'unknown'
+      ? report.cloud
+      : cloudCopy !== 'uploaded'
+        ? 'not_bound'
+        : (await storeCloudVaultCopy('stale')) ? 'marked' : 'unwritten';
+    if (apple !== 'not_bound') { setAppleBound(false); setAppleBindStale(true); }
+    if (cloud !== 'not_bound') setCloudCopy('stale');
+    const text = passwordChangeAftermathText({ apple, cloud });
+    if (text) showError(text);
   };
 
   /**
@@ -1146,7 +1164,13 @@ function SettingsScreenImpl({
       await uploadCloudVault(mnemonic, cloudPasswordInput);
       setCloudPasswordModal(false);
       setCloudPasswordInput('');
-      showSuccess('Зашифрованная копия отправлена в облако');
+      // v4.32.869: копию надо запомнить — иначе смене пароля не о чем
+      // предупреждать. Отметка на экране стоит независимо от записи, а про
+      // незаписанную сказано прямо: молчание тут значит потерянную копию.
+      setCloudCopy('uploaded');
+      const remembered = await storeCloudVaultCopy('uploaded');
+      if (remembered) showSuccess('Зашифрованная копия отправлена в облако');
+      else showError('Копия отправлена, но отметить её не удалось: при смене пароля приложение не сможет предупредить, что копия перестала открываться.');
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить облачную копию'));
     } finally {
@@ -2448,7 +2472,22 @@ function SettingsScreenImpl({
         {cloudBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="cloud-upload-outline" size={22} color={isCloudVaultConfigured() ? colors.text : colors.textMuted} />}
         <View style={styles.rowBody}>
           <Text style={[styles.label, !isCloudVaultConfigured() && { color: colors.textMuted }]}>Сохранить в облако</Text>
-          <Text style={styles.desc}>{isCloudVaultConfigured() ? 'Зашифровать паролем приложения и отправить' : 'Сервер облачных копий не настроен'}</Text>
+          {/*
+            v4.32.869: строка говорит и о том, что с прежней копией. «Устарела»
+            — это пароль сменили после отправки: ключ копии выведен из пароля,
+            и прежняя уже не откроется. Молчать об этом нельзя: проверяется
+            копия один раз, на новом телефоне, где исправить уже нечем.
+            `null` — подсказку не прочитали, и обещать по ней нечего.
+          */}
+          <Text style={styles.desc}>
+            {!isCloudVaultConfigured()
+              ? 'Сервер облачных копий не настроен'
+              : cloudCopy === 'stale'
+                ? 'Прежняя копия не откроется нынешним паролем — отправьте заново'
+                : cloudCopy === 'uploaded'
+                  ? 'Копия отправлена. Новая заменит её, паролем приложения'
+                  : 'Зашифровать паролем приложения и отправить'}
+          </Text>
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </AppPressable>

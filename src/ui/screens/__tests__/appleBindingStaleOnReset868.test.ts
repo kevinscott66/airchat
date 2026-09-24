@@ -152,6 +152,8 @@ describe('за каждой сменой пароля стоит пометка'
     // пароль у живого аккаунта — значит, запирают конверт. `setPassword`
     // правилом не покрыт: он ставит первый пароль, а без пароля привязки и
     // быть не может (кнопка привязки закрыта `hasAppPassword`).
+    // v4.32.869: адрес у пометки один на все копии, запертые паролем, — их уже
+    // две, и спрашивать с каждого пути по списку копий значит однажды забыть.
     const CHANGERS = /authGuard\.(changePassword|resetPasswordWithVerifiedSeed)\(/g;
     let seen = 0;
     for (const file of sources(SRC)) {
@@ -159,7 +161,11 @@ describe('за каждой сменой пароля стоит пометка'
       for (const m of src.matchAll(CHANGERS)) {
         seen += 1;
         const at = m.index ?? 0;
-        expect([file, src.slice(at, at + 900).includes('markAppleBindingStale')]).toEqual([file, true]);
+        const near = src.slice(at, at + 900);
+        expect([file, /markPasswordBoundCopiesStale|markCopiesStaleAfterPasswordChange/.test(near)]).toEqual([
+          file,
+          true,
+        ]);
       }
     }
     expect(seen).toBe(2);
@@ -169,7 +175,8 @@ describe('за каждой сменой пароля стоит пометка'
     const body = SETTINGS().slice(SETTINGS().indexOf('const submitSetPassword'), SETTINGS().indexOf('const submitChangePassword'));
     expect(body).toContain('already = await authGuard.hasPassword();');
     expect(body).toContain("if (already) {");
-    expect(body).not.toContain('markAppleBindingStale');
+    expect(body).not.toContain('markPasswordBoundCopiesStale');
+    expect(body).not.toContain('markCopiesStaleAfterPasswordChange');
   });
 });
 
@@ -177,7 +184,8 @@ describe('сброс по словам говорит человеку прав�
   it('пометка стоит после удачного сброса и до выхода с экрана', () => {
     const forgot = FORGOT();
     const reset = forgot.indexOf('const ok = await authGuard.resetPasswordWithVerifiedSeed(m, newPassword);');
-    const mark = forgot.indexOf('const stale = await markAppleBindingStale();');
+    // v4.32.869: зовётся общий адрес — копий, запертых паролем, две.
+    const mark = forgot.indexOf('await markPasswordBoundCopiesStale()');
     const leave = forgot.indexOf('onSuccess();');
     expect(reset).toBeGreaterThan(0);
     expect(mark).toBeGreaterThan(reset);
@@ -188,17 +196,19 @@ describe('сброс по словам говорит человеку прав�
 
   it('текст берётся общий, свой на экране не заведён', () => {
     for (const src of [FORGOT(), SETTINGS()]) {
-      expect(src).toContain('APPLE_BINDING_STALE_TEXT[');
+      expect(src).toContain('passwordChangeAftermathText(');
       expect(src).not.toContain('Привязка к Apple ID больше не откроется');
+      expect(src).not.toContain('Копия в облаке больше не откроется');
     }
   });
 
   it('«неизвестно» на этом экране молчит: свидетеля тут нет', () => {
     const forgot = FORGOT();
     expect(forgot).toContain(
-      "if (stale === 'marked' || stale === 'unwritten') showError(APPLE_BINDING_STALE_TEXT[stale]);",
+      'const text = passwordChangeAftermathText(await markPasswordBoundCopiesStale());',
     );
-    expect(forgot).not.toContain("stale === 'unknown'");
+    expect(forgot).toContain('if (text) showError(text);');
+    expect(forgot).not.toContain("'unknown'");
   });
 
   it('ключ подсказки один на приложение — переехал, а не размножился', () => {

@@ -81,18 +81,22 @@ describe('подсказка о привязке пишется проверяе
     // v4.32.868. Прежде это проверялось буквально по порядку строк: обе
     // отметки стояли ДО `await storeAppleBindingHint(next)`. Теперь чтение,
     // решение и запись ушли в ядро, а оно не бросает вовсе — отвечает словом.
-    // Смысл закрепа тот же: ни один исход записи не уносит с собой пометку.
-    const at = SETTINGS.indexOf('const markAppleBindingStaleAfterPasswordChange');
+    // v4.32.869: копий две, и обработчик метит обе. Смысл закрепа тот же: ни
+    // один исход записи не уносит с собой пометку в интерфейсе, и выход мимо
+    // неё ровно один — «метить нечего».
+    const at = SETTINGS.indexOf('const markCopiesStaleAfterPasswordChange');
     expect(at).toBeGreaterThan(0);
-    const body = SETTINGS.slice(at, at + 900);
-    expect(body).toContain('let outcome = await markAppleBindingStale();');
-    const bound = body.indexOf('setAppleBound(false);');
-    expect(bound).toBeGreaterThan(0);
-    expect(body).toContain('setAppleBindStale(true);');
-    // Мимо отметок ведут ровно два выхода, и оба означают «метить нечего».
-    expect([...body.slice(0, bound).matchAll(/\breturn;/g)]).toHaveLength(2);
-    expect(body.slice(0, bound)).toContain("if (outcome === 'not_bound') return;");
-    expect(body.slice(0, bound)).toContain('if (!appleBound) return;');
+    // Ровно тело обработчика, до его закрывающей скобки: окном «столько-то
+    // символов» проверка досрочных выходов цепляла соседа.
+    const end = SETTINGS.indexOf('\n  };', at);
+    expect(end).toBeGreaterThan(at);
+    const body = SETTINGS.slice(at, end);
+    expect(body).toContain('const report = await markPasswordBoundCopiesStale();');
+    expect(body).toContain("if (apple !== 'not_bound') { setAppleBound(false); setAppleBindStale(true); }");
+    expect(body).toContain("if (cloud !== 'not_bound') setCloudCopy('stale');");
+    // Досрочных выходов нет вовсе: раньше их было два, и каждый уносил с собой
+    // всё, что стояло ниже.
+    expect([...body.matchAll(/\breturn;/g)]).toHaveLength(0);
     // А ядро на любой отказ отвечает словом: бросить оно не может.
     expect(STALE).toContain("return 'unknown';");
     expect(STALE).toContain("return ok ? 'marked' : 'unwritten';");
@@ -109,7 +113,9 @@ describe('подсказка о привязке пишется проверяе
     expect(STALE).toContain(
       "    'Привязка к Apple ID больше не откроется новым паролем, а пометить её не удалось: после перезапуска настройки снова покажут «привязаны». Привяжите слова заново сейчас.',",
     );
-    expect(SETTINGS).toContain('showError(APPLE_BINDING_STALE_TEXT[outcome]);');
+    // v4.32.869: строку собирает общий разбор — копий, запертых паролем, две.
+    expect(SETTINGS).toContain('const text = passwordChangeAftermathText({ apple, cloud });');
+    expect(SETTINGS).toContain('if (text) showError(text);');
   });
 
   it('нечитаемая подсказка решается по тому, что показывает экран', () => {
@@ -117,10 +123,11 @@ describe('подсказка о привязке пишется проверяе
     // там, где привязка на экране стоит как живая.
     // v4.32.868: ядро на нечитаемой подсказке отвечает `unknown` и ничего не
     // решает за вызывающего — свидетеля ищет тот, у кого он есть.
-    expect(SETTINGS).toContain("if (outcome === 'unknown') {");
-    expect(SETTINGS).toContain(
-      "outcome = (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';",
-    );
+    // v4.32.869: свидетелей на этом экране теперь два, по одному на копию.
+    expect(SETTINGS).toContain("const apple = report.apple !== 'unknown'");
+    expect(SETTINGS).toContain("(await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';");
+    expect(SETTINGS).toContain("const cloud = report.cloud !== 'unknown'");
+    expect(SETTINGS).toContain("(await storeCloudVaultCopy('stale')) ? 'marked' : 'unwritten';");
   });
 
   it('привязка и отвязка тоже отвечают за пометку', () => {

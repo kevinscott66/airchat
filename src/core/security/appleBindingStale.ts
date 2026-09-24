@@ -18,6 +18,7 @@
  * экран из них строит разный текст.
  */
 import { log } from '../logger';
+import type { StaleMark } from './staleMark';
 import {
   APPLE_BINDING_STORED,
   hintAfterPasswordChange,
@@ -38,13 +39,10 @@ export const APPLE_BINDING_HINT_KEY = 'apple_seed_binding_v1';
 /**
  * Что вышло из попытки пометить привязку устаревшей.
  *
- * - `not_bound` — метить нечего: привязки не было или её уже пометили;
- * - `marked` — пометка легла, после перезапуска настройки скажут правду;
- * - `unwritten` — пометить не вышло, и настройки снова покажут «привязаны»;
- * - `unknown` — прочитать подсказку не вышло, и была ли привязка, отсюда не
- *   видно; свидетеля ищет вызывающий.
+ * v4.32.869: слово общее с копией в облаке — исход у обеих один и тот же, см.
+ * `staleMark`. Имя оставлено прежним: оно уже названо в вызовах.
  */
-export type AppleBindingStaleOutcome = 'not_bound' | 'marked' | 'unwritten' | 'unknown';
+export type AppleBindingStaleOutcome = StaleMark;
 
 /**
  * Пометить привязку к Apple ID устаревшей после смены пароля приложения.

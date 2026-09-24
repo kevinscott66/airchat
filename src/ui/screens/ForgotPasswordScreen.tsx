@@ -10,9 +10,9 @@ import {
 import { AppPressable } from '../components/AppPressable';
 import { authGuard } from '../../core/security/authGuard';
 import {
-  APPLE_BINDING_STALE_TEXT,
-  markAppleBindingStale,
-} from '../../core/security/appleBindingStale';
+  markPasswordBoundCopiesStale,
+  passwordChangeAftermathText,
+} from '../../core/security/passwordChangeAftermath';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/passwordPolicy';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { SafeScreen } from '../components/SafeScreen';
@@ -137,18 +137,17 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
         return;
       }
       showSuccess('Новый пароль сохранён');
-      // v4.32.868: конверт со словами на сервере зашифрован ключом, выведенным
-      // из СТАРОГО пароля, — новым он не откроется. Штатная смена пароля это
-      // учитывает с v4.32.615, а этот путь проходил мимо: настройки продолжали
-      // обещать запасной путь, и узнать правду можно было только на новом
-      // телефоне, когда слов на руках уже нет.
-      const stale = await markAppleBindingStale();
-      if (stale === 'marked' || stale === 'unwritten') showError(APPLE_BINDING_STALE_TEXT[stale]);
-      // `unknown` — подсказка не прочиталась, и была ли привязка, отсюда не
-      // видно: на этом экране свидетеля нет, в отличие от настроек. Пугать
-      // человека привязкой, которой могло не быть, в момент, когда он только
-      // что вернул себе доступ, — хуже, чем промолчать: настройки покажут
-      // состояние сами, как только откроются.
+      // v4.32.868: копии секретных слов на сервере — конверт у Apple ID и архив
+      // в облаке — зашифрованы ключом, выведенным из СТАРОГО пароля, и новым не
+      // откроются. Штатная смена пароля это учитывает, а этот путь проходил
+      // мимо: настройки продолжали обещать запасной путь, и узнать правду можно
+      // было только на новом телефоне, когда слов на руках уже нет.
+      const text = passwordChangeAftermathText(await markPasswordBoundCopiesStale());
+      if (text) showError(text);
+      // Нечитаемая подсказка (`unknown`) молчит: была ли копия, отсюда не видно
+      // — на этом экране свидетеля нет, в отличие от настроек. Пугать человека
+      // копией, которой могло не быть, в минуту, когда он только что вернул
+      // себе доступ, хуже, чем промолчать: настройки покажут состояние сами.
       onSuccess();
     } catch (e: unknown) {
       // v4.32.626: обе проверки выше ходят в защищённое хранилище и умеют
