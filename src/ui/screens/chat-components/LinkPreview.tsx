@@ -13,7 +13,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { openExternal } from '../../utils/openExternal';
-import { kvGet } from '../../../core/storage/local';
+import { privacyPrefGet } from '../../../core/settings/privacyPrefs';
 import { useTheme } from '../../ThemeContext';
 import { font, inkOn, nestedFill, radius } from '../../theme';
 import { useBubbleSurface } from '../../BubbleKindContext';
@@ -79,7 +79,7 @@ export function LinkPreview({ url, isOutgoing, fromPeer }: { url: string; isOutg
     const to = setTimeout(() => ctrl.abort(), 6000);
     void (async () => {
       try {
-        if (fromPeer && !shouldLoadLinkPreview(true, parseIncomingLinkPreviewPref(await kvGet(LINK_PREVIEW_INCOMING_KEY)))) {
+        if (fromPeer && !shouldLoadLinkPreview(true, parseIncomingLinkPreviewPref(await privacyPrefGet(LINK_PREVIEW_INCOMING_KEY)))) {
           // Ничего не запрашиваем и ничего не кэшируем: настройку могут
           // включить, не перезапуская приложение.
           if (!cancelled) setPreview(null);

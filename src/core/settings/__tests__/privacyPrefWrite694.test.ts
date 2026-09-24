@@ -140,10 +140,13 @@ describe('экран настроек: переключатель возвращ
     expect(s).toContain("        showError('Настройка не сохранилась. Попробуйте ещё раз.');");
   });
 
-  it('все шесть переключателей идут через него', () => {
+  it('все семь переключателей идут через него', () => {
     const s = screen();
-    expect((s.match(/applyPrivacyPref\(/g) ?? []).length).toBe(6);
+    // Седьмой — предпросмотр входящих ссылок (v4.32.807). Он писался через
+    // kvSet, то есть мимо и общего правила, и namespace аккаунта.
+    expect((s.match(/applyPrivacyPref\(/g) ?? []).length).toBe(7);
     for (const gone of [
+      'void kvSet(LINK_PREVIEW_INCOMING_KEY, String(v)); }',
       "void privacyPrefSet('privacy_only_contacts_msg', String(v)); }",
       "void privacyPrefSet('privacy_only_contacts_group', String(v)); }",
       "void privacyPrefSet('privacy_disable_read_receipts', String(v)); }",

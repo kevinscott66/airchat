@@ -456,7 +456,7 @@ function SettingsScreenImpl({
       // v4.32.483: через общий геттер — запись живёт в namespace профиля, и
       // разбор значения (границы, мусор) один на всё приложение.
       getDefaultDisappearMs(),
-      kvGet(LINK_PREVIEW_INCOMING_KEY),
+      privacyPrefGet(LINK_PREVIEW_INCOMING_KEY),
       kvGet('notify_calls'),
       kvGet(KEEPALIVE_KEY),
     ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls, keepAlive]) => {
@@ -1555,7 +1555,7 @@ function SettingsScreenImpl({
             */}
             <Text style={styles.desc}>Включено: приложение само открывает чужую ссылку, чтобы показать заголовок и картинку, — и хозяин ссылки узнаёт ваш IP-адрес. Выключено: не открывает. Свои ссылки в поле ввода показываются всегда</Text>
           </View>
-          <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void kvSet(LINK_PREVIEW_INCOMING_KEY, String(v)); }} />
+          <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void applyPrivacyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
