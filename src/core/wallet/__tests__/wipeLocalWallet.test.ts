@@ -381,7 +381,10 @@ describe('performLocalWalletWipe', () => {
     const res = await performLocalWalletWipe();
 
     expect(res.ok).toBe(true);
-    expect(res.failedSteps).toEqual(['media_cache', 'avatars', 'clipboard']);
+    // v4.32.834: буфер обмена ушёл в начало — расписку об отложенной уборке
+    // надо успеть прочитать, пока местная база открыта. Порядок здесь и
+    // проверяется: шаг обязан стоять до `local_db`, иначе читать будет нечего.
+    expect(res.failedSteps).toEqual(['clipboard', 'media_cache', 'avatars']);
   });
 
   it('итог попадает в журнал целиком', async () => {

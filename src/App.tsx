@@ -986,6 +986,14 @@ function MainTabs({
           void import('./core/social/viewOncePending')
             .then((m) => m.drainViewOncePendingNow(pid))
             .catch(() => { /* best-effort */ });
+          // v4.32.834: та же беда у буфера обмена. Seed-фразу копируют, чтобы
+          // унести её в менеджер паролей, — то есть уходят из приложения ровно
+          // тогда, когда таймер уборки ещё тикает, и именно тогда его и
+          // сносит выгрузкой. Расписка на диске переживает снятие; чужого
+          // буфера уборка не тронет, см. clipboardSecret.
+          void import('./core/security/clipboardSecret')
+            .then((m) => m.resumeSecretClipboardSweep())
+            .catch(() => { /* best-effort */ });
         });
       } catch (e) {
         log.warn('identity_effect_setup_failed', {

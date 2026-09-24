@@ -110,7 +110,7 @@ import {
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { rawErrorText, userErrorText } from './userErrorText';
-import { COPY_ACTION, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
+import { COPY_ACTION, COPY_FAILED, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
 // v4.32.540: чужой профиль — обложка из набора обоев и постоянный
 // идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
@@ -567,7 +567,7 @@ export function UserProfilePeek({
       await Clipboard.setStringAsync(buildContactLink(resolved.did).web);
       showSuccess(COPIED_LINK);
     } catch {
-      showError('Не удалось скопировать');
+      showError(COPY_FAILED);
     }
   }, [resolved]);
 

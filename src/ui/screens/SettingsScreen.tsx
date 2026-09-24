@@ -70,6 +70,7 @@ import { scopedKvGet, scopedKvSetChecked } from '../../core/storage/profileScope
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
 import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
+import { runGuardedOp } from '../components/runGuardedOp';
 import { ACCENT_SWATCHES, avatarShape, colorsForScheme, contrastingInk, font, radius, TOUCH_TARGET_MIN } from '../theme';
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
@@ -123,7 +124,7 @@ import { formatByteSize } from '../../core/media/byteSize';
 import { shortIdentity } from '../identity/shortId';
 import { fullDateTime } from '../../core/time/ruDateTime';
 import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
-import { COPIED_TEXT, COPY_ACTION } from '../clipboardText';
+import { COPIED_TEXT, COPY_ACTION, COPY_FAILED } from '../clipboardText';
 import { log } from '../../core/logger';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
 
@@ -2995,7 +2996,15 @@ function SettingsScreenImpl({
                   {/* v4.32.314: копия с истечением — буфер обмена читают клавиатура,
                       системный менеджер буфера и связка с компьютером, а из этих слов
                       восстанавливается личность целиком. Подробности в clipboardSecret. */}
-                  <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 12 }]} onPress={() => { void copySecretToClipboard(seedPhrase).then(() => showSuccess(`${COPIED_TEXT} — буфер очистится через минуту`)); }}>
+                  {/* v4.32.834: у отказа записи в буфер не было ни ловушки, ни
+                      текста. `.then` просто не исполнялся: человек видел
+                      нажатую кнопку и тишину, уходил вставлять фразу — и
+                      вставлял то, что лежало в буфере до неё. У остальных
+                      копирований отказ показан (см. COPY_FAILED). */}
+                  <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 12 }]} onPress={() => runGuardedOp(async () => {
+                    await copySecretToClipboard(seedPhrase);
+                    showSuccess(`${COPIED_TEXT} — буфер очистится через минуту`);
+                  }, COPY_FAILED, 'settings_seed_copy_failed')}>
                     <Text style={styles.pwdPrimaryBtnText}>{COPY_ACTION}</Text>
                   </AppPressable>
                   {seedBackupPending ? (

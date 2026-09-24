@@ -159,6 +159,14 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   await step('ipfs_client', () => resetIpfsClient(), failed);
   await step('messaging_service', () => disposeMessagingService(), failed);
   await step('call_service', () => disposeCallService(), failed);
+  // v4.32.314: если seed-фразу копировали только что, она ещё в буфере обмена
+  // — а из неё восстанавливается ровно та личность, которую мы сейчас стираем.
+  // v4.32.834: шаг переехал сюда с самого конца. Расписка об отложенной уборке
+  // лежит в kv, и читать её надо, пока местная база открыта: после
+  // `wipeLocalDatabase` читать было бы нечего, а сам вызов поднял бы стёртую
+  // базу заново. В памяти расписка обычно тоже есть — но ровно её отсутствие
+  // после перезапуска и есть тот случай, ради которого всё это писалось.
+  await step('clipboard', () => clearSecretClipboardNow(), failed);
   await step('close_databases', async () => {
     await closeFeedStorage();
     await closeLocalDatabase();
@@ -208,9 +216,6 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // Пустой список «оставить»: живых профилей после сброса не осталось ни
   // одного, значит ни один файл аватара больше никому не принадлежит.
   await step('avatars', () => sweepAvatarFiles([]), failed);
-  // v4.32.314: если seed-фразу копировали только что, она ещё в буфере обмена
-  // — а из неё восстанавливается ровно та личность, которую мы сейчас стёрли.
-  await step('clipboard', () => clearSecretClipboardNow(), failed);
 
   // Проверка и одна повторная попытка. Разовый сбой SecureStore (устройство
   // заблокировано, keystore занят) со второго раза проходит; если не прошёл —
