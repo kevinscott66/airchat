@@ -30,6 +30,21 @@ import { parseVlessUrl } from '../../core/vpn/parseVlessUrl';
 
 type VpnConfig = NonNullable<AppConfig['vpn']>;
 
+/**
+ * Подписи обязательных полей (v4.32.840).
+ *
+ * Отдельно, потому что их два читателя: подпись под полем и текст отказа при
+ * пустом поле. Разойтись им нельзя — до этой версии отказ звал заполнить
+ * «publicKey и shortId», а на экране те же поля подписаны «Public key (pbk)» и
+ * «Short ID (sid)»: человека посылали искать то, чего там не написано.
+ */
+const REQUIRED_LABELS = {
+  address: 'Адрес сервера',
+  uuid: 'UUID',
+  publicKey: 'Public key (pbk)',
+  shortId: 'Short ID (sid)',
+} as const;
+
 const STATUS_LABEL: Record<AirChatVpnUiStatus, string> = {
   off: 'Отключён',
   starting: 'Подключение…',
@@ -113,8 +128,22 @@ export function VpnSettingsSection(): React.ReactElement {
       const pbk = publicKey.trim();
       const sid = shortId.trim();
       const portNum = Number(port.trim());
-      if (!addr || !id || !pbk || !sid) {
-        showError('Заполните адрес, UUID, publicKey и shortId');
+      const missing: string[] = [
+        [addr, REQUIRED_LABELS.address],
+        [id, REQUIRED_LABELS.uuid],
+        [pbk, REQUIRED_LABELS.publicKey],
+        [sid, REQUIRED_LABELS.shortId],
+      ]
+        .filter(([v]) => !v)
+        .map(([, label]) => label);
+      if (missing.length > 0) {
+        // Названы ровно пустые поля: список всех четырёх заставлял человека
+        // сверять их глазами, а ссылка vless:// чаще всего недодаёт одно.
+        showError(
+          missing.length === 1
+            ? `Заполните поле «${missing[0]}»`
+            : `Заполните поля: ${missing.join(', ')}`,
+        );
         return null;
       }
       if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
@@ -169,7 +198,19 @@ export function VpnSettingsSection(): React.ReactElement {
   });
 
   const disconnectBtn = useAsyncButton(async () => {
-    await stopEmbeddedVpn();
+    // v4.32.840: «VPN отключён» говорится только после того, как отключение
+    // состоялось. Раньше обе строки стояли безусловно, а стоп свой отказ
+    // проглатывал: туннель оставался поднят, лампочка гасла, и человек уходил
+    // в уверенности, что трафик пошёл напрямую. Цена ошибки здесь
+    // несимметрична — «не отключилось, а сказали, что отключилось» хуже, чем
+    // «отключилось, а сказали, что нет».
+    try {
+      await stopEmbeddedVpn();
+    } catch (e) {
+      setStatus('on');
+      showError(userErrorText(e, 'VPN остался включённым: отключить не удалось'));
+      return;
+    }
     setStatus('off');
     showSuccess('VPN отключён');
   });
@@ -328,11 +369,11 @@ export function VpnSettingsSection(): React.ReactElement {
           </View>
         </View>
 
-        {field('Адрес сервера', address, setAddress, { placeholder: 'vps.example.com' })}
+        {field(REQUIRED_LABELS.address, address, setAddress, { placeholder: 'vps.example.com' })}
         {field('Порт', port, setPort, { placeholder: '443', keyboardType: 'numeric' })}
-        {field('UUID', uuid, setUuid, { placeholder: '00000000-0000-...' })}
-        {field('Public key (pbk)', publicKey, setPublicKey)}
-        {field('Short ID (sid)', shortId, setShortId)}
+        {field(REQUIRED_LABELS.uuid, uuid, setUuid, { placeholder: '00000000-0000-...' })}
+        {field(REQUIRED_LABELS.publicKey, publicKey, setPublicKey)}
+        {field(REQUIRED_LABELS.shortId, shortId, setShortId)}
         {field('SNI', sni, setSni, { placeholder: 'microsoft.com' })}
         {field('Flow', flow, setFlow, { placeholder: 'xtls-rprx-vision' })}
         {field('Fingerprint', fingerprint, setFingerprint, { placeholder: 'chrome' })}

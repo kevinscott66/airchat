@@ -12,9 +12,10 @@
  *             (they have uuid@host:port) yet omit the Reality crypto params
  *             (pbk/sid). The parser cannot reject these — they are structurally
  *             fine — so it returns a partial object. The Save-time validation in
- *             VpnSettingsSection is what stops them («Заполните адрес, UUID,
- *             publicKey и shortId»), and the VPN controller's own
- *             `airchat_vpn_incomplete_config` check is the final backstop.
+ *             VpnSettingsSection is what stops them — since v4.32.840 it names
+ *             exactly the empty fields, by the labels printed next to them
+ *             («Заполните поле «Public key (pbk)»») — and the VPN controller's
+ *             own `airchat_vpn_incomplete_config` check is the final backstop.
  *
  * The point of the suite is to make that two-layer behaviour explicit and
  * regression-proof: no fake link may ever silently become a saved, half-broken

@@ -54,6 +54,19 @@ export async function maybeStartEmbeddedVpn(
   }
 }
 
+/**
+ * Остановить туннель.
+ *
+ * v4.32.840: отказ уходит наверх, а не остаётся в журнале. Сорвавшийся стоп
+ * — это не «ничего не произошло»: туннель остался поднят, и весь трафик
+ * телефона по-прежнему идёт через чужой сервер. Экран после такого писал
+ * «VPN отключён» и гасил лампочку, то есть говорил ровно противоположное
+ * тому, что на устройстве. Ошибка старта так себя не вела с самого начала:
+ * там есть `failed`.
+ *
+ * Тихий выход остаётся там, где останавливать нечего: не Android или нет
+ * нативного модуля. Это не отказ, а отсутствие туннеля.
+ */
 export async function stopEmbeddedVpn(): Promise<void> {
   if (Platform.OS !== 'android') return;
   const mod = AirChatVpn;
@@ -62,6 +75,7 @@ export async function stopEmbeddedVpn(): Promise<void> {
     await mod.stop();
   } catch (e) {
     log.warn('airchat_vpn_stop_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -82,7 +96,16 @@ export async function retryEmbeddedVpn(cfg: AppConfig): Promise<AirChatVpnUiStat
   if (!v?.enabled) {
     return 'off';
   }
-  await stopEmbeddedVpn();
+  // v4.32.840: здесь отказ стопа перехватывают намеренно. Это не отключение,
+  // а первый шаг переподключения, и человеку про него сказать нечего: итог
+  // ему сообщит старт, который идёт следом и возвращает `on` или `failed`.
+  // Прервись переподключение на стопе — кнопка «Повторить» молча ничего бы не
+  // делала при живом туннеле, который как раз и просят перезапустить.
+  try {
+    await stopEmbeddedVpn();
+  } catch {
+    // Уже в журнале: airchat_vpn_stop_failed.
+  }
   const max = Math.max(1, v.startRetries ?? 3);
   const delayMs = v.retryDelayMs ?? 2000;
   let last: AirChatVpnUiStatus = 'failed';
