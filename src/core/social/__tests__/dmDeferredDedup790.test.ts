@@ -178,7 +178,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('координатор даёт ровно одну лишнюю попытку и после сдвигает метку', () => {
     expect(COORD).toContain('if (failedOnce.has(frameAtMs)) {');
     expect(COORD).toContain("giveUp('internet_frame_deferred_again');");
-    expect(COORD).toContain('advance(frameAtMs);');
+    // v4.32.831: продвижение зовётся через markDone — кадры пачки заканчивают
+    // разбор не в том порядке, в каком пришли, и он помнит, докуда закончено.
+    expect(COORD).toContain('markDone(frameAtMs);');
   });
 
   it('личный транспорт входит в разбор именно через координатор', () => {

@@ -80,8 +80,11 @@ describe('отметка двигается только по разобранн
     const consumedAt = src.indexOf("if (intake === 'consumed') {");
     expect(giveUpAt).toBeGreaterThan(0);
     expect(consumedAt).toBeGreaterThan(giveUpAt);
-    expect(src.indexOf('advance(frameAtMs);')).toBeGreaterThan(giveUpAt);
-    expect(src.indexOf('advance(frameAtMs);', consumedAt)).toBeGreaterThan(consumedAt);
+    // v4.32.831: продвижение зовётся через markDone — он помнит, докуда пачка
+    // уже закончена, потому что кадры заканчиваются не в том порядке, в каком
+    // пришли.
+    expect(src.indexOf('markDone(frameAtMs);')).toBeGreaterThan(giveUpAt);
+    expect(src.indexOf('markDone(frameAtMs);', consumedAt)).toBeGreaterThan(consumedAt);
   });
 
   it('все три ветки приёма дожидаются разбора и читают его исход', () => {
@@ -110,7 +113,11 @@ describe('отметка двигается только по разобранн
     // качалось бы по кругу при каждом подключении.
     expect(src).toContain('internet_frame_handle_failed_again');
     expect(src).toContain('internet_frame_deferred_again');
-    expect(src).toContain('if (failedOnce.size > 512) {');
+    // v4.32.831: потолок остался только у памяти о провалах. Прежний сбрасывал
+    // заодно и удержания — то есть пятьсот отложенных кадров разом переставали
+    // держать отметку, и следующий же удачный кадр перешагивал их все.
+    expect(src).toContain('if (failedOnce.size > 512) failedOnce.clear();');
+    expect(src).not.toContain('held.clear();');
   });
 
   it('удержанный кадр не даёт соседнему унести отметку за себя', () => {

@@ -81,20 +81,41 @@ export async function startInternetTransportIfEnabled(
   // Именно так удержание при провале и не работало ни в одной пачке длиннее
   // одного кадра — то есть ровно там, где оно и нужно.
   const held = new Set<number>();
+  /**
+   * Кадры, разбор которых идёт прямо сейчас (v4.32.831).
+   *
+   * Держать надо не только упавшее. Пока кадр разбирается, он не лежит ни в
+   * `failedOnce`, ни в `held` — для отметки его как будто нет вовсе, хотя
+   * решение по нему ещё не принято. Считаем, а не помечаем: у двух кадров
+   * одной пачки бывает одна и та же миллисекунда, и пометка снималась бы за
+   * оба сразу.
+   */
+  const inFlight = new Map<number, number>();
+  const hold = (atMs: number): void => {
+    inFlight.set(atMs, (inFlight.get(atMs) ?? 0) + 1);
+  };
+  const release = (atMs: number): void => {
+    const n = inFlight.get(atMs);
+    if (n === undefined) return;
+    if (n > 1) inFlight.set(atMs, n - 1);
+    else inFlight.delete(atMs);
+  };
 
   /**
    * Запомнить первый провал кадра и удержать на нём отметку.
    *
-   * Оба множества растут только на провалах, и потолок у них общий: длинная
-   * сессия с плохой сетью иначе копила бы их без предела, а удержанная навсегда
-   * отметка заставляла бы перекачивать весь накопленный месяц при каждом
-   * подключении.
+   * v4.32.831: потолок остался только у памяти о провалах. Раньше вместе с ней
+   * сбрасывались и удержания — то есть пятьсот с лишним отложенных кадров разом
+   * переставали держать отметку, и следующий же удачный кадр перешагивал их
+   * все. Это потеря накопленного пачкой ровно в том случае, ради которого
+   * удержание и заведено: долгий офлайн, служба ещё не поднялась, первые сотни
+   * кадров отложены. Удержание снимает теперь только исход самого кадра —
+   * «разобрано» или второй отказ подряд. Расти без предела `held` не может:
+   * отметка стоит перед самым ранним из удержанных, значит relay эти кадры
+   * приносит снова, а второй отказ их отпускает.
    */
   const rememberFailure = (atMs: number): void => {
-    if (failedOnce.size > 512) {
-      failedOnce.clear();
-      held.clear();
-    }
+    if (failedOnce.size > 512) failedOnce.clear();
     failedOnce.add(atMs);
     held.add(atMs);
   };
@@ -103,6 +124,7 @@ export async function startInternetTransportIfEnabled(
   const advance = (atMs: number): void => {
     let target = atMs;
     for (const h of held) if (h <= target) target = h - 1;
+    for (const h of inFlight.keys()) if (h <= target) target = h - 1;
     // Кадры внутри пачки приходят не строго по возрастанию времени, и откат
     // отметки назад означал бы повторный разбор уже разобранного.
     if (target <= (watermark ?? 0)) return;
@@ -113,6 +135,20 @@ export async function startInternetTransportIfEnabled(
     flushedAt = now;
     pendingWatermark = null;
     void saveBacklogWatermark(myDid, target);
+  };
+
+  /**
+   * Докуда мы закончили с кадрами — самое позднее такое время (v4.32.831).
+   *
+   * Кадры пачки заканчиваются не в том порядке, в каком пришли: дешёвый отброс
+   * отвечает раньше, чем личное сообщение перед ним. Пока разбор раннего идёт,
+   * отметка стоит перед ним — и без этой памяти, закончив ранний, она встала бы
+   * на нём же, а разобранный поздний пришлось бы качать заново.
+   */
+  let doneUpTo = 0;
+  const markDone = (atMs: number): void => {
+    if (atMs > doneUpTo) doneUpTo = atMs;
+    advance(doneUpTo);
   };
 
   transport.start({
@@ -135,15 +171,20 @@ export async function startInternetTransportIfEnabled(
       // переключился посреди разбора) он сообщал одним `return`, снаружи
       // неотличимым от удачи, — и отметка перешагивала кадр, который relay
       // хранит ещё тридцать суток. Ловушка ниже срабатывала только на брошенное.
+      //
+      // v4.32.831: кадр держит отметку с первой же строки разбора, а не с
+      // момента, когда разбор упал. Раньше между приёмом и провалом он был для
+      // отметки невидим — а между ними лежит вся работа: ECDH, поиск контакта,
+      // несколько походов в SQLite. Соседний дешёвый кадр той же пачки успевал
+      // ответить «разобрано» и унести отметку за ещё разбираемый; когда тот
+      // отвечал «отложено», возвращать отметку было уже некуда — назад она не
+      // ходит. Ночная пачка после офлайна — ровно этот случай: личное
+      // сообщение разбирается долго, отброс рядом — мгновенно.
       void (async () => {
-        /** Второй провал того же кадра — отпускаем: он не транзиентный. */
-        const giveUp = (why: string, err?: unknown): void => {
-          held.delete(frameAtMs);
-          log.warn(why, err === undefined ? {} : { err: err instanceof Error ? err.message : String(err) });
-          advance(frameAtMs);
-        };
+        hold(frameAtMs);
+        let intake: EnvelopeIntake | null = null;
+        let failure: unknown;
         try {
-          let intake: EnvelopeIntake;
           if (isFeedFrame(payload)) {
             intake = await receiveFeedEnvelope(payload, senderDid);
           } else if (isGroupEnvelope(payload)) {
@@ -156,30 +197,45 @@ export async function startInternetTransportIfEnabled(
               (await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)) ??
               'deferred';
           }
-          if (intake === 'consumed') {
-            held.delete(frameAtMs);
-            failedOnce.delete(frameAtMs);
-            advance(frameAtMs);
-            return;
-          }
-          if (failedOnce.has(frameAtMs)) {
-            giveUp('internet_frame_deferred_again');
-            return;
-          }
-          rememberFailure(frameAtMs);
-          log.warn('internet_frame_deferred');
         } catch (e) {
+          // `?? new Error` — от `throw undefined`: иначе провал неотличим от
+          // его отсутствия.
+          failure = e ?? new Error('unknown');
+        }
+        // Своё удержание снимаем ДО решения: иначе кадр не пустил бы отметку
+        // дальше самого себя.
+        release(frameAtMs);
+        /** Второй провал того же кадра — отпускаем: он не транзиентный. */
+        const giveUp = (why: string, err?: unknown): void => {
+          held.delete(frameAtMs);
+          log.warn(why, err === undefined ? {} : { err: err instanceof Error ? err.message : String(err) });
+          markDone(frameAtMs);
+        };
+        if (failure !== undefined) {
           if (failedOnce.has(frameAtMs)) {
             // Отпускаем, иначе отметка встанет навсегда и накопленное будет
             // качаться по кругу.
-            giveUp('internet_frame_handle_failed_again', e);
+            giveUp('internet_frame_handle_failed_again', failure);
             return;
           }
           rememberFailure(frameAtMs);
           log.warn('internet_frame_handle_failed', {
-            err: e instanceof Error ? e.message : String(e),
+            err: failure instanceof Error ? failure.message : String(failure),
           });
+          return;
         }
+        if (intake === 'consumed') {
+          held.delete(frameAtMs);
+          failedOnce.delete(frameAtMs);
+          markDone(frameAtMs);
+          return;
+        }
+        if (failedOnce.has(frameAtMs)) {
+          giveUp('internet_frame_deferred_again');
+          return;
+        }
+        rememberFailure(frameAtMs);
+        log.warn('internet_frame_deferred');
       })();
     },
   });
