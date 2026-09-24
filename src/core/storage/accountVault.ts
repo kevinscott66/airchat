@@ -273,6 +273,26 @@ async function unstashFiles(stash: StashedFiles): Promise<boolean> {
   return true;
 }
 
+/**
+ * v4.32.890: вернуть список профилей к тому, каким он был до попытки.
+ *
+ * Возвращает `false`, если вернуть не удалось; о самом отказе пишет вызывающий
+ * — только он знает, какое из двух восстановлений оборвалось. Подробность
+ * ошибки пишется здесь, как это делает `unstashFiles` рядом.
+ */
+async function restoreProfileState(previous: string | null): Promise<boolean> {
+  try {
+    if (previous) await SecureStore.setItemAsync(PROFILE_STATE_KEY, previous);
+    else await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
+    return true;
+  } catch (error) {
+    log.error('account_vault_profile_state_restore_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 async function replaceVaultDirectory(stageDir: string, finalDir: string, root: string, accountId: string): Promise<void> {
   const previousDir = `${root}.previous-${accountId}-${Date.now()}/`;
   const hadPrevious = await exists(finalDir);
@@ -453,10 +473,12 @@ export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
       if (!(await unstashFiles(stash))) {
         log.error('account_vault_restore_rollback_incomplete', { accountId, stashDir: stash.dir });
       }
-      if (previousProfileState) {
-        await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
-      } else {
-        await SecureStore.deleteItemAsync(PROFILE_STATE_KEY).catch(() => {});
+      // v4.32.890: файлы вернулись, а список профилей — нет: база старая,
+      // оглавление от прерванного восстановления. Прежде этот исход глушился
+      // пустым `.catch(() => {})`, хотя соседний откат файлов умеет сказать
+      // о себе правду.
+      if (!(await restoreProfileState(previousProfileState))) {
+        log.error('account_vault_restore_rollback_profile_state_stuck', { accountId });
       }
       throw error;
     }
@@ -637,10 +659,9 @@ export async function restoreAccountVaultArchive(
       if (!(await unstashFiles(stash))) {
         log.error('account_vault_archive_rollback_incomplete', { accountId, stashDir: stash.dir });
       }
-      if (previousProfileState) {
-        await SecureStore.setItemAsync(PROFILE_STATE_KEY, previousProfileState).catch(() => {});
-      } else {
-        await SecureStore.deleteItemAsync(PROFILE_STATE_KEY).catch(() => {});
+      // v4.32.890: тот же молчавший шаг, что и в восстановлении с устройства.
+      if (!(await restoreProfileState(previousProfileState))) {
+        log.error('account_vault_archive_rollback_profile_state_stuck', { accountId });
       }
       throw error;
     }
