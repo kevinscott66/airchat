@@ -317,9 +317,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   test('своей очереди повторов у откладываемых родов нет', () => {
     const DEF = fs.readFileSync(path.join(__dirname, '..', 'feedDeferred.ts'), 'utf8');
-    expect(DEF).toContain(
-      "export type DeferredType = 'feed_reaction' | 'feed_edit' | 'feed_poll_vote' | 'feed_comment';"
-    );
+    // v4.32.824: родов стало пять, и словарь записан в столбик.
+    expect(DEF).toContain("  | 'feed_poll_vote'\n  | 'feed_comment'\n  | 'feed_comment_reaction';");
     // Полка не бессрочна: сутки, и потерянное за это время уже не вернуть.
     expect(DEF).toContain('export const DEFERRED_TTL_MS = 24 * 60 * 60 * 1000;');
   });

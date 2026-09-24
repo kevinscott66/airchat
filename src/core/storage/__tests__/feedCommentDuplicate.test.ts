@@ -126,7 +126,10 @@ describe('лента поднимает баннер только на дейс�
   it('приём комментария выходит из ветки, если запись не состоялась', () => {
     expect(feedService).toContain('const commentStored = await s.addComment({');
     const idx = feedService.indexOf('const commentStored = await s.addComment({');
-    const after = feedService.slice(idx, idx + 1600);
+    // v4.32.824: между выходом и баннером встал разбор полки отложенных
+    // (реакция на комментарий ждёт его прихода), и прежнего окна в 1 600
+    // знаков до баннера перестало хватать.
+    const after = feedService.slice(idx, idx + 2600);
     expect(after).toContain('if (!commentStored) {');
     // Выход стоит ДО баннера, иначе вся правка ничего не значит.
     expect(after.indexOf('if (!commentStored) {')).toBeLessThan(after.indexOf('emitFeedNotify({'));

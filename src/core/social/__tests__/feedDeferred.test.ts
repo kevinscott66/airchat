@@ -198,10 +198,14 @@ describe('feedDeferred: проводка в feedService', () => {
     );
   });
 
-  it('обе точки прихода публикации разгребают полку', () => {
+  it('все точки прихода ожидаемого разгребают полку', () => {
     expect(CODE).toMatch(/await drainDeferred\(payload\.postId, s, envelopePid\);\n\s*log\.info\('feed_post_received'/);
     expect(CODE).toMatch(/await drainDeferred\(payload\.postId, s, envelopePid\);\n\s*log\.info\('feed_repost_received'/);
-    expect((CODE.match(/await drainDeferred\(/g) ?? []).length).toBe(2);
+    // v4.32.824: третья точка — приход комментария. Реакция на комментарий
+    // лежит на той же полке, но ждёт не публикацию, а его, и публикация
+    // обычно приходит первой.
+    expect(CODE).toMatch(/await drainDeferred\(payload\.postId, s, envelopePid\);\n\s*log\.info\('feed_comment_received'/);
+    expect((CODE.match(/await drainDeferred\(/g) ?? []).length).toBe(3);
   });
 
   it('полка очищается до применения, а не после', () => {

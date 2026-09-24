@@ -2860,9 +2860,10 @@ async function drainDeferred(postId: string, s: FeedStorage, pid: number): Promi
   if ((await saveDeferred(pid, taken.store)) === 'failed') {
     // Очистка не легла: события применятся, но с полки не пропадут и придут
     // сюда снова при следующем приходе публикации. Повтор безвреден — все
-    // четыре откладываемых рода идут по своему ключу (реакция и голос по
-    // автору, комментарий и правка по своему id) и второй раз ничего не
-    // удваивают. Не применить их сейчас было бы хуже: полка живёт сутки.
+    // пять откладываемых родов идут по своему ключу (реакция и голос по
+    // автору, комментарий и правка по своему id, реакция на комментарий — по
+    // комментарию с автором и значком) и второй раз ничего не удваивают. Не
+    // применить их сейчас было бы хуже: полка живёт сутки.
     log.warn('feed_deferred_clear_failed', { postId: postId.slice(0, 24), n: taken.events.length });
   }
   /** Снятые с полки, но так на неё и не вернувшиеся по вине записи. */
@@ -3074,7 +3075,24 @@ async function applyFeedEnvelope(
         (d.remove !== undefined && typeof d.remove !== 'boolean')
       ) break;
       const meta = await s.getCommentMeta(d.commentId);
-      if (!meta || meta.postId !== payload.postId) break;
+      if (!meta) {
+        // v4.32.824: комментария ещё нет — реакция на него ждёт его, а не
+        // пропадает. Повторов у реакции нет вовсе (см. addAndBroadcastReaction),
+        // а обогнать свой комментарий ей просто: кадры одной пачки
+        // ретранслятора разбираются параллельно, и после долгого offline
+        // комментарий с реакцией приезжают вместе. Полка одна и та же, номер
+        // на ней — номер публикации: комментарий лежит там же и применяется
+        // раньше, потому что время у него меньше.
+        if ((await deferFeedEvent(payload, envelopePid)) === 'failed') return 'deferred';
+        log.info('feed_comment_reaction_deferred', {
+          postId: payload.postId.slice(0, 16),
+          commentId: d.commentId.slice(0, 16),
+        });
+        break;
+      }
+      // Комментарий есть, но живёт под другой публикацией — это не опоздание,
+      // а несогласие конверта с базой: ждать тут нечего.
+      if (meta.postId !== payload.postId) break;
       const reactions: Record<string, string[]> = meta.reactions ? { ...meta.reactions } : {};
       const existing = Array.isArray(reactions[d.emoji]) ? reactions[d.emoji] : [];
       if (d.remove) {
@@ -3157,6 +3175,15 @@ async function applyFeedEnvelope(
         log.debug('feed_comment_duplicate_skip', { commentId: d.commentId.slice(0, 16) });
         break;
       }
+      // v4.32.824: комментарий появился — применить всё, что ждало ЕГО, а не
+      // только публикацию. Раньше полка разбиралась единственный раз, при
+      // приходе публикации, и реакции на комментарий этого было мало:
+      // публикация обычно приходит первой, а ждут они разного.
+      //
+      // Второго захода эта петля не даёт: полка снимается ДО применения, и
+      // повторный разбор находит её пустой. Если снять не удалось, тот же
+      // комментарий на втором круге ответит «уже есть» и выйдет строкой выше.
+      await drainDeferred(payload.postId, s, envelopePid);
       log.info('feed_comment_received', { postId: payload.postId.slice(0, 16), commentId: d.commentId.slice(0, 16) });
       // v4.32.92: banner только если это комментарий под постом контакта, которого я вижу
       // (не под моим — авторство поста сложнее проверить без доп. lookup). Простейший

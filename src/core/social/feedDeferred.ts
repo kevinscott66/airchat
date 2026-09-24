@@ -52,13 +52,25 @@ export const DEFERRED_MAX_PER_POST = 24;
  */
 export const DEFERRED_MAX_BYTES = 192 * 1024;
 
-export type DeferredType = 'feed_reaction' | 'feed_edit' | 'feed_poll_vote' | 'feed_comment';
+/**
+ * v4.32.824: сюда добавилась реакция на комментарий. Она ждёт не публикацию, а
+ * комментарий под ней, но полка у неё та же и номер тот же — номер публикации:
+ * комментарий и сам кладётся на неё, а применяется раньше реакции, потому что
+ * события применяются по возрастанию времени.
+ */
+export type DeferredType =
+  | 'feed_reaction'
+  | 'feed_edit'
+  | 'feed_poll_vote'
+  | 'feed_comment'
+  | 'feed_comment_reaction';
 
 export const DEFERRABLE: readonly DeferredType[] = [
   'feed_reaction',
   'feed_edit',
   'feed_poll_vote',
   'feed_comment',
+  'feed_comment_reaction',
 ];
 
 export type DeferredEvent = {
@@ -114,6 +126,13 @@ export function deferredSlot(e: DeferredEvent): string {
   // должен занимать на полке второе место, а два разных комментария одного
   // человека — это два разных события.
   if (e.type === 'feed_comment') return `c|${String(d.commentId ?? '')}`;
+  // v4.32.824: ячейка реакции на комментарий устроена как у реакции на
+  // публикацию, только адрес полнее: комментарий, автор и сам значок. Снятие
+  // ячейку с постановкой делит нарочно — это одно действие над одним значком,
+  // и на полке из них должно остаться последнее по времени.
+  if (e.type === 'feed_comment_reaction') {
+    return `cr|${String(d.commentId ?? '')}|${e.authorDid}|${String(d.emoji ?? '')}`;
+  }
   return `v|${e.authorDid}|${String(d.optionIndex ?? '')}`;
 }
 
