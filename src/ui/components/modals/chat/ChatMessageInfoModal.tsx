@@ -23,6 +23,41 @@ const ROUTE_LABELS: Record<MessageRoute, { title: string; hint: string; icon: 'g
   wifi_direct: { title: 'Wi-Fi Direct', hint: 'Напрямую между устройствами', icon: 'radio-outline' },
 };
 
+/**
+ * Как назвать состояние сообщения человеку (v4.32.886).
+ *
+ * Пузырь эти состояния различает давно: часы «в очереди», крутилка
+ * «отправляется», галочка, две галочки, красный кружок «нажмите для повтора».
+ * Окно сведений же знало ровно два слова — «Прочитано» и «Доставлено», — а всё
+ * остальное сваливало в «Отправлено» с галочкой. То есть у сообщения, которое
+ * рядом в переписке горит красным и не ушло никуда, окно писало «Отправлено».
+ *
+ * Слова взяты те же, что у иконки, и поводы разделены так же: «отправлено» без
+ * CID — это ещё очередь, а не отправка (строку CID окно показывает ниже, и без
+ * этой развилки она противоречила бы подписи).
+ */
+function statusView(
+  status: string,
+  hasCid: boolean
+): { label: string; icon: React.ComponentProps<typeof Ionicons>['name']; tone: 'muted' | 'accent' | 'error' } {
+  switch (status) {
+    case 'read':
+      return { label: 'Прочитано', icon: 'checkmark-done', tone: 'accent' };
+    case 'delivered':
+      return { label: 'Доставлено', icon: 'checkmark-done-outline', tone: 'muted' };
+    case 'sent':
+      return hasCid
+        ? { label: 'Отправлено', icon: 'checkmark-outline', tone: 'muted' }
+        : { label: 'В очереди на отправку', icon: 'cloud-upload-outline', tone: 'muted' };
+    case 'sending':
+      return { label: 'Отправляется…', icon: 'ellipsis-horizontal', tone: 'muted' };
+    case 'failed':
+      return { label: 'Не отправлено', icon: 'alert-circle-outline', tone: 'error' };
+    default:
+      return { label: 'Ожидает отправки', icon: 'time-outline', tone: 'muted' };
+  }
+}
+
 // ─── Message Info Modal ───────────────────────────────────────────────────────
 export function MessageInfoModal({
   msg,
@@ -34,9 +69,15 @@ export function MessageInfoModal({
   const { colors } = useTheme();
   if (!msg) return null;
   const fmtTime = dayMonthShortTimeSec;
-  const statusLabel = msg.status === 'read' ? 'Прочитано' : msg.status === 'delivered' ? 'Доставлено' : 'Отправлено';
-  const statusIcon = msg.status === 'read' ? 'checkmark-done' : msg.status === 'delivered' ? 'checkmark-done-outline' : 'checkmark-outline';
-  const statusColor = msg.status === 'read' ? colors.accent : colors.textSecondary;
+  const view = statusView(msg.status, !!msg.cid);
+  const statusLabel = view.label;
+  const statusIcon = view.icon;
+  const statusColor =
+    view.tone === 'accent' ? colors.accent : view.tone === 'error' ? colors.error : colors.textSecondary;
+  // Первая строка показывает время создания строки. Называть его отправкой
+  // можно только у того, что действительно ушло: у неотправленного это тот
+  // самый обман, ради которого и заведён statusView.
+  const leftDevice = msg.status === 'sent' || msg.status === 'delivered' || msg.status === 'read';
   return (
     <Modal visible={!!msg} transparent animationType="fade" onRequestClose={onClose}>
       <AppPressable style={{ flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', padding: 24 }} onPress={onClose}>
@@ -45,7 +86,7 @@ export function MessageInfoModal({
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
             <Ionicons name="send-outline" size={18} color={colors.accent} style={{ marginRight: 10 }} />
             <View>
-              <Text style={{ color: colors.textMuted, fontSize: 12 }}>Отправлено</Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>{leftDevice ? 'Отправлено' : 'Создано'}</Text>
               <Text style={{ color: colors.text, fontSize: 14 }}>{fmtTime(msg.createdAt)}</Text>
             </View>
           </View>
