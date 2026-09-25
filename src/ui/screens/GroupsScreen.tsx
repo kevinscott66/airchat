@@ -4171,7 +4171,7 @@ function GroupChatScreen({
           <Ionicons name="timer-outline" size={14} color={colors.textMuted} style={{ marginRight: 6 }} />
           <Text style={[gcStyles.pinnedText, { color: colors.textMuted }]}>
             {'Исчезают через '}
-            {disappearMs >= 86400000 ? `${disappearMs / 86400000} д` : disappearMs >= 3600000 ? `${disappearMs / 3600000} ч` : `${disappearMs / 60000} мин`}
+            {formatDisappearLabel(disappearMs)}
           </Text>
         </View>
       ) : null}
