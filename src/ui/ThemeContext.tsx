@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Appearance, StyleSheet } from 'react-native';
-import { kvGet, kvSetChecked } from '../core/storage/local';
+import { log } from '../core/logger';
+import { kvTryGet, kvSetChecked } from '../core/storage/local';
 import { parseHourOfDay } from '../core/time/hourOfDay';
 import { showError } from './components/userFeedback';
 import { applyAccent, colorsForScheme, normalizeAccent, resolveScheme, type AppColors, type ColorScheme, type ThemeMode } from './theme';
@@ -46,6 +47,18 @@ type ThemeContextValue = {
  * (applyPref в настройках), — беда одна и та же.
  */
 export const THEME_SAVE_FAILED_TEXT = 'Настройка не сохранилась. Попробуйте ещё раз.';
+
+/**
+ * Сколько раз переспросить вид у базы и с каким шагом (v4.32.964).
+ *
+ * Шаг больше паузы, которую база держит после неудачного открытия
+ * (`DB_REOPEN_COOLDOWN_MS`, 2 с): переспрашивать раньше — значит получить тот
+ * же отказ из памяти, не дойдя до диска. Пять попыток кроют около двенадцати
+ * секунд — столько длится затор на этих устройствах; дальше молчим, потому что
+ * вечный таймер на мёртвой базе ничего не чинит, а тикать будет до закрытия.
+ */
+const THEME_READ_ATTEMPTS = 5;
+const THEME_READ_RETRY_MS = 2500;
 
 /** Записать значения вида; `false` — хотя бы одно не легло. */
 async function persistTheme(entries: readonly (readonly [string, string])[]): Promise<boolean> {
@@ -118,41 +131,89 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     setBaseColors(colorsForScheme(next));
   }, []);
 
+  /**
+   * Вид читается с диска один раз — но только если он прочитался (v4.32.964).
+   *
+   * Дефект. Шесть значений читались через `kvGet`, а он отдаёт `null` и когда
+   * записи нет, и когда база не открылась. Провайдер темы поднимается самым
+   * первым, ещё до опознания профиля, — то есть ровно в ту секунду, когда база
+   * занята миграциями или держит паузу после неудачного открытия. Отказ читался
+   * как «человек ничего не выбирал», и поверх выбора вставали запасные значения.
+   *
+   * Цена. Светлая тема становится тёмной, акцент — общим, а размер шрифта
+   * падает с «очень крупного» до среднего. Последнее хуже всего: крупный шрифт
+   * выбирают не для красоты, и человек, который его выбрал, после такого
+   * запуска экран просто не читает. Сказать ему нечего — настройки показывают
+   * те же подставленные значения, а не его собственные.
+   *
+   * И это не только на один запуск. Часы ночной темы пишутся тремя ключами
+   * разом: если человек после такого старта всего лишь щёлкнет выключателем
+   * авторежима, на диск уйдут подставленные 21:00–07:00 поверх его настоящих —
+   * он менял выключатель, а потерял расписание.
+   *
+   * Правка. Читаем `kvTryGet`, который отличает «нет записи» от «не прочитали».
+   * Непрочитанное не подменяем: оставляем то, что уже показано, и переспрашиваем
+   * базу — она самолечится, `closeLocalDatabase` снимает и отказ, и паузу.
+   */
   useEffect(() => {
-    void Promise.all([
-      kvGet('app_theme_mode'),
-      kvGet('app_font_size'),
-      kvGet('auto_night_mode'),
-      kvGet('auto_night_start'),
-      kvGet('auto_night_end'),
-      kvGet('app_accent_color'),
-    ]).then(([saved, savedSize, nightMode, nightStart, nightEnd, accentVal]) => {
-      const m = (saved as ThemeMode | null) ?? 'dark';
-      const nightEnabled = nightMode === 'true';
+    let alive = true;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async (): Promise<void> => {
+      const [saved, savedSize, nightMode, nightStart, nightEnd, accentVal] = await Promise.all([
+        kvTryGet('app_theme_mode'),
+        kvTryGet('app_font_size'),
+        kvTryGet('auto_night_mode'),
+        kvTryGet('auto_night_start'),
+        kvTryGet('auto_night_end'),
+        kvTryGet('app_accent_color'),
+      ]);
+      if (!alive) return;
+      // Непрочитанный ключ берёт значение, которое уже показано: на первом
+      // проходе это начальное состояние, на переспросе — то, что успело лечь.
+      const shown = autoNightRef.current;
+      const m = saved ? ((saved.value as ThemeMode | null) ?? 'dark') : modeRef.current;
+      const nightEnabled = nightMode ? nightMode.value === 'true' : shown.enabled;
       // v4.32.929: раньше здесь стоял голый parseInt. Испорченная запись в kv
       // давала NaN, и это било дважды: «Тёмная: NaN:00 – NaN:00» в настройках и
       // тема, которая не переключается вовсе — сравнения с NaN всегда ложны.
       // Границы «не беспокоить» такую проверку получили ещё в v4.32.195,
       // размер шрифта строкой ниже — тоже; ночные часы её не получили.
-      const nStart = parseHourOfDay(nightStart, 21);
-      const nEnd = parseHourOfDay(nightEnd, 7);
+      const nStart = nightStart ? parseHourOfDay(nightStart.value, 21) : shown.start;
+      const nEnd = nightEnd ? parseHourOfDay(nightEnd.value, 7) : shown.end;
       setModeState(m);
       setAutoNightEnabled(nightEnabled);
       setAutoNightStart(nStart);
       setAutoNightEnd(nEnd);
       applyEffectiveColors(m, nightEnabled, nStart, nEnd);
-      const fs = savedSize ? (parseInt(savedSize, 10) as FontSizeValue) : 15;
-      if ([13, 15, 17, 20].includes(fs)) setFontSizeState(fs);
+      if (savedSize) {
+        const fs = savedSize.value ? (parseInt(savedSize.value, 10) as FontSizeValue) : 15;
+        if ([13, 15, 17, 20].includes(fs)) setFontSizeState(fs);
+      }
       // v4.32.347: в хранилище лежит выбор, сделанный старым пикером, — в том
       // числе цвета, на которых белая надпись не читается. Приводим при чтении
       // и, если значение изменилось, переписываем: иначе миграция повторялась бы
       // при каждом запуске, а настройки показывали бы не тот цвет, что нарисован.
-      if (accentVal) {
-        const safe = normalizeAccent(accentVal);
+      if (accentVal?.value) {
+        const safe = normalizeAccent(accentVal.value);
         if (safe) setAccentColorState(safe);
-        if (safe !== accentVal) void kvSetChecked('app_accent_color', safe ?? '');
+        if (safe !== accentVal.value) void kvSetChecked('app_accent_color', safe ?? '');
       }
-    });
+      const unread = [saved, savedSize, nightMode, nightStart, nightEnd, accentVal].some(
+        (r) => r === null,
+      );
+      if (!unread) return;
+      if (attempts >= THEME_READ_ATTEMPTS) {
+        log.warn('theme_read_unreadable', { attempts });
+        return;
+      }
+      attempts += 1;
+      timer = setTimeout(() => { void load(); }, THEME_READ_RETRY_MS);
+    };
+
+    void load();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [applyEffectiveColors]);
 
   // Реагируем на системные изменения темы когда режим — 'system'

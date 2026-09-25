@@ -139,8 +139,12 @@ describe('ни одного своего циферблата в исходни�
     const src = codeOnly('ui/ThemeContext.tsx');
     expect(src).not.toContain('parseInt(nightStart');
     expect(src).not.toContain('parseInt(nightEnd');
-    expect(src).toContain('parseHourOfDay(nightStart, 21)');
-    expect(src).toContain('parseHourOfDay(nightEnd, 7)');
+    // v4.32.964: у довода прибавилось `.value` — чтение вида стало трёхсловным
+    // (`kvTryGet`), и «не прочитали» больше не притворяется пустой записью.
+    // Закрепка здесь про другое и не изменилась: час разбирается с проверкой, а
+    // запасное значение остаётся прежним.
+    expect(src).toContain('parseHourOfDay(nightStart.value, 21)');
+    expect(src).toContain('parseHourOfDay(nightEnd.value, 7)');
   });
 
   it('границы «не беспокоить» разбираются тем же вызовом', () => {
