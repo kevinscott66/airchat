@@ -130,7 +130,7 @@ export function encryptCloudVaultArchive(
   if (passwordError) throw new Error(passwordError);
   const legacyAccountId = accountVaultIdFromMnemonic(mnemonic);
   const accountId = accountIdFromPublicKey(deriveKeyPairFromMnemonic(mnemonic).publicKey);
-  if (archive?.v !== 1 || archive.accountId !== legacyAccountId) throw new Error('Неверная привязка облачной копии к seed-фразе.');
+  if (archive?.v !== 1 || archive.accountId !== legacyAccountId) throw new Error('Облачная копия сделана под другие секретные слова.');
   const plain = new TextEncoder().encode(JSON.stringify(archive));
   if (plain.length > CLOUD_VAULT_MAX_BYTES) throw new Error('Облачная копия слишком большая.');
   const salt = randomBytes(16);

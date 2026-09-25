@@ -1105,7 +1105,7 @@ function SettingsScreenImpl({
       // только что записанный файл, либо отдавала копию первого профиля из
       // любого профиля. Литерал имени остался ровно один, в dialogBackup.
       const uri = await exportDialogBackupToFile();
-      if (!uri) { showError('Копию нечего экспортировать: сид-фраза недоступна'); return; }
+      if (!uri) { showError('Копию нечего экспортировать: секретные слова недоступны'); return; }
       const info = await FileSystem.getInfoAsync(uri);
       if (!info.exists) { showError('Файл резервной копии не найден'); return; }
       // v4.32.310: на Android копия уходила как ТЕКСТ сообщения — весь JSON

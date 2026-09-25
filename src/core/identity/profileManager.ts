@@ -612,7 +612,10 @@ class ProfileManager {
   async addProfile(name: string): Promise<Profile> {
     await this.init();
     if (!this.mnemonicCache || !this.state) {
-      throw new Error('Нет сохранённой seed-фразы');
+      // v4.32.952: текст кириллический, а значит userErrorText пускает его
+      // на экран как есть. «Seed-фраза» — слово разработчика; в доме это
+      // «секретные слова», и говорит их весь онбординг.
+      throw new Error('На устройстве нет секретных слов.');
     }
     // v4.32.22: hard cap на 4 профиля — см. MAX_PROFILES выше. UI прячет
     // форму создания, но проверяем и здесь, чтобы нельзя было обойти через
