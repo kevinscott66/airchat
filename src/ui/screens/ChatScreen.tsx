@@ -96,6 +96,7 @@ import { voiceUploadRefusal } from '../components/voiceLimit';
 import { fileSizeBytes } from '../../core/media/fileSize';
 import { useMediaViewer } from '../components/MediaViewer';
 import { pluralRu } from '../../core/storage/ruPlural';
+import { badgeText } from '../utils/badgeCount';
 import { log, measurePerformance } from '../../core/logger';
 import { toggleAndSyncReaction } from '../../core/social/reactionSync';
 import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
@@ -3844,7 +3845,7 @@ function ChatThreadView({
           >
             {openUnreadCount > 0 ? (
               <View style={{ position: 'absolute', top: -6, right: -6, backgroundColor: colors.errorFill, borderRadius: radius.md, minWidth: 18, paddingHorizontal: 4, alignItems: 'center' }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{openUnreadCount > 99 ? '99+' : String(openUnreadCount)}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(openUnreadCount)}</Text>
               </View>
             ) : null}
             <Ionicons name="chevron-down" size={22} color={contrastingInk(colors.primary)} />

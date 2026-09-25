@@ -100,6 +100,25 @@ for (const line of read('ui/clipboardText.ts').split('\n')) {
   LABEL_CONSTANTS.set(t.slice('export const '.length, eq), t.slice(eq + 4, end));
 }
 
+/**
+ * v4.32.931: названия вкладок тоже переехали в константу — одно слово читает и
+ * глаз в подписи, и озвучка в `accessibilityLabel`. Без развёртки храповик
+ * перестал бы находить «Профиль» нарисованным и объявил бы список вкладок
+ * состоящим из `{TAB_TITLES.feed}`. Это ровно тот же случай, что абзацем выше.
+ */
+{
+  const app = read('App.tsx');
+  const open = app.indexOf('const TAB_TITLES = {');
+  const close = app.indexOf('} as const;', open);
+  for (const line of app.slice(open, close).split('\n')) {
+    const t = line.trim();
+    const colon = t.indexOf(": '");
+    const end = t.indexOf("',", colon + 3);
+    if (colon < 0 || end < 0) continue;
+    LABEL_CONSTANTS.set('TAB_TITLES.' + t.slice(0, colon), t.slice(colon + 3, end));
+  }
+}
+
 /** «{COPY_ID_ACTION}» в тексте — это надпись, лежащая в константе. */
 function resolveLabel(label: string): string {
   if (!label.startsWith('{') || !label.endsWith('}')) return label;
@@ -149,7 +168,7 @@ describe('текст не отправляет на вкладку, которо
   const TABS = read('App.tsx')
     .split('styles.tabActive : styles.tabText}>')
     .slice(1)
-    .map((s) => s.slice(0, s.indexOf('<')));
+    .map((s) => resolveLabel(s.slice(0, s.indexOf('<'))));
 
   test('вкладок пять и они названы', () => {
     expect(TABS).toEqual(['Новости', 'Чаты', 'Группы', 'Профиль', 'Ещё']);

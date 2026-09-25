@@ -22,6 +22,7 @@ import {
   Vibration,
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
+import { badgeText } from '../utils/badgeCount';
 import { buildChatListRows } from './chat-utils/chatListRows';
 import { PersonAvatar } from '../components/PersonAvatar';
 import { AppModal as Modal } from '../components/AppModal';
@@ -398,7 +399,7 @@ function ConvRowImpl({
               return (
               <View style={[rowStyles.badge, { backgroundColor: badgeFill }]}>
                 <Text style={[rowStyles.badgeText, { color: contrastingInk(badgeFill) }]}>
-                  {item.unreadCount > 99 ? '99+' : String(item.unreadCount)}
+                  {badgeText(item.unreadCount)}
                 </Text>
               </View>
               );
@@ -1438,7 +1439,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   </Text>
                   {showBadge ? (
                     <View style={{ backgroundColor: tab.color ?? colors.primary, borderRadius: radius.md, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
-                      <Text style={{ color: contrastingInk(tab.color ?? colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
+                      <Text style={{ color: contrastingInk(tab.color ?? colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(tab.badge)}</Text>
                     </View>
                   ) : null}
                 </View>

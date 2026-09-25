@@ -99,6 +99,7 @@ import {
   recentlyDeletedGroupKey,
 } from '../../core/storage/local';
 import { pluralRu } from '../../core/storage/ruPlural';
+import { badgeText, SMALL_BADGE_MAX } from '../utils/badgeCount';
 // v4.32.168: зеркалим group/channel mute в muteStore (FCM gate).
 import { setMuted as muteSet, unmute as muteUnset, type MuteKind } from '../../core/notifications/muteStore';
 import { decidePage, shouldApplyRows } from '../../core/storage/readResult';
@@ -475,7 +476,7 @@ function GroupListRow({
             ) : null}
             {item.unreadCount > 0 ? (
               <View style={[glStyles.badge, { backgroundColor: item.muted ? colors.mutedFill : colors.primary }]}>
-                <Text style={[glStyles.badgeText, { color: contrastingInk(item.muted ? colors.mutedFill : colors.primary) }]}>{item.unreadCount > 99 ? '99+' : String(item.unreadCount)}</Text>
+                <Text style={[glStyles.badgeText, { color: contrastingInk(item.muted ? colors.mutedFill : colors.primary) }]}>{badgeText(item.unreadCount)}</Text>
               </View>
             ) : null}
           </View>
@@ -4077,7 +4078,7 @@ function GroupChatScreen({
             <Ionicons name="people-outline" size={22} color={colors.text} />
             {amAdmin && pendingJoinCount > 0 ? (
               <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{pendingJoinCount > 9 ? '9+' : String(pendingJoinCount)}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(pendingJoinCount, SMALL_BADGE_MAX)}</Text>
               </View>
             ) : null}
           </AppPressable>
@@ -4296,7 +4297,7 @@ function GroupChatScreen({
                 <Text style={{ color: contrastingInk(colors.mutedFill), fontSize: 14, fontWeight: '800' }}>@</Text>
                 {count > 1 ? (
                   <View style={{ position: 'absolute', top: -5, right: -5, backgroundColor: colors.errorFill, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 }}>
-                    <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{count > 9 ? '9+' : count}</Text>
+                    <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(count, SMALL_BADGE_MAX)}</Text>
                   </View>
                 ) : null}
               </AppPressable>
@@ -4308,7 +4309,7 @@ function GroupChatScreen({
           >
             {group.unreadCount > 0 ? (
               <View style={{ position: 'absolute', top: -6, right: -6, backgroundColor: colors.errorFill, borderRadius: 9, minWidth: 18, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{group.unreadCount > 99 ? '99+' : group.unreadCount}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(group.unreadCount)}</Text>
               </View>
             ) : null}
             <Ionicons name="chevron-down" size={22} color={contrastingInk(colors.primary)} />
@@ -5653,7 +5654,7 @@ function GroupMembersScreen({
           <AppPressable style={[gcStyles.iconBtn, { position: 'relative' }]} onPress={() => setJoinReqVisible(true)} accessibilityRole="button" accessibilityLabel={`Заявки на вступление: ${pendingCount}`}>
             <Ionicons name="person-circle-outline" size={22} color={colors.accent} />
             <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{pendingCount > 9 ? '9+' : String(pendingCount)}</Text>
+              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(pendingCount, SMALL_BADGE_MAX)}</Text>
             </View>
           </AppPressable>
         ) : null}
@@ -6396,7 +6397,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
                   </Text>
                   {showBadge ? (
                     <View style={{ backgroundColor: colors.primary, borderRadius: radius.md, minWidth: 16, paddingHorizontal: 4, alignItems: 'center' }}>
-                      <Text style={{ color: contrastingInk(colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
+                      <Text style={{ color: contrastingInk(colors.primary), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(tab.badge)}</Text>
                     </View>
                   ) : null}
                 </View>

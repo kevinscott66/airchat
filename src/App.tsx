@@ -48,6 +48,7 @@ import { setAppLinkHandler } from './core/net/appLinkRouter';
 import { parseGroupInviteLink } from './core/social/groupInviteLink';
 import { AppPressable } from './ui/components/AppPressable';
 import { membersLabel } from './ui/utils/plural';
+import { badgeText, tabA11yLabel } from './ui/utils/badgeCount';
 import { AppNotifyHost } from './ui/components/AppNotifyHost';
 import { LoginScreen } from './ui/screens/LoginScreen';
 import { ProfileSelector } from './ui/components/ProfileSelector';
@@ -212,6 +213,18 @@ type Gate = 'boot' | 'onboarding' | 'backup_warn' | 'ready';
  */
 /** Расчётная высота капсулы таббара до первого `onLayout` (см. `glassTabBar`). */
 const TAB_BAR_ESTIMATE = 76 + spacing.sm;
+
+/**
+ * Названия нижних вкладок. Одно место на вкладку: то же слово читает глаз в
+ * подписи и озвучка в `accessibilityLabel`, и разойтись им теперь негде.
+ */
+const TAB_TITLES = {
+  feed: 'Новости',
+  chat: 'Чаты',
+  groups: 'Группы',
+  profile: 'Профиль',
+  settings: 'Ещё',
+} as const;
 
 function useMainTabsStyles() {
   return useThemedStyles((c) => ({
@@ -1373,6 +1386,9 @@ function MainTabs({
   const colors = useColors();
   const styles = useMainTabsStyles();
   const tabColor = (active: boolean) => (active ? colors.accent : colors.textSecondary);
+  // v4.32.931: название вкладки записано один раз. Его же произносит озвучка —
+  // а до этой версии подпись у неё складывалась из текста вкладки и голого
+  // числа в кружке: «Чаты. 3».
 
   // @stable  НЕ ИЗМЕНЯТЬ без явного запроса пользователя.
   // Причина: useCallback-стабильные хендлеры для React.memo-экранов. Если заменить
@@ -1585,6 +1601,9 @@ function MainTabs({
               scheduleTab('feed');
             }}
             testID="tab_feed"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === 'feed' }}
+            accessibilityLabel={TAB_TITLES.feed}
           >
             <TabGlyph
               active={tab === 'feed'}
@@ -1592,7 +1611,7 @@ function MainTabs({
               inactiveName="newspaper-outline"
               color={tabColor(tab === 'feed')}
             />
-            <Text style={tab === 'feed' ? styles.tabActive : styles.tabText}>Новости</Text>
+            <Text style={tab === 'feed' ? styles.tabActive : styles.tabText}>{TAB_TITLES.feed}</Text>
           </AppPressable>
           <AppPressable
             style={styles.tabBtn}
@@ -1605,6 +1624,9 @@ function MainTabs({
               scheduleTab('chat');
             }}
             testID="tab_chat"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === 'chat' }}
+            accessibilityLabel={tabA11yLabel(TAB_TITLES.chat, chatUnread)}
           >
             <TabGlyph
               active={tab === 'chat'}
@@ -1615,12 +1637,12 @@ function MainTabs({
               {chatUnread > 0 ? (
                 <View style={styles.tabBadge}>
                   <Text style={styles.tabBadgeText}>
-                    {chatUnread > 99 ? '99+' : String(chatUnread)}
+                    {badgeText(chatUnread)}
                   </Text>
                 </View>
               ) : null}
             </TabGlyph>
-            <Text style={tab === 'chat' ? styles.tabActive : styles.tabText}>Чаты</Text>
+            <Text style={tab === 'chat' ? styles.tabActive : styles.tabText}>{TAB_TITLES.chat}</Text>
           </AppPressable>
           <AppPressable
             style={styles.tabBtn}
@@ -1630,6 +1652,9 @@ function MainTabs({
               scheduleTab('groups');
             }}
             testID="tab_groups"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === 'groups' }}
+            accessibilityLabel={tabA11yLabel(TAB_TITLES.groups, groupUnread)}
           >
             <TabGlyph
               active={tab === 'groups'}
@@ -1640,12 +1665,12 @@ function MainTabs({
               {groupUnread > 0 ? (
                 <View style={styles.tabBadge}>
                   <Text style={styles.tabBadgeText}>
-                    {groupUnread > 99 ? '99+' : String(groupUnread)}
+                    {badgeText(groupUnread)}
                   </Text>
                 </View>
               ) : null}
             </TabGlyph>
-            <Text style={tab === 'groups' ? styles.tabActive : styles.tabText}>Группы</Text>
+            <Text style={tab === 'groups' ? styles.tabActive : styles.tabText}>{TAB_TITLES.groups}</Text>
           </AppPressable>
           <AppPressable
             style={styles.tabBtn}
@@ -1655,6 +1680,9 @@ function MainTabs({
               scheduleTab('profile');
             }}
             testID="tab_profile"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === 'profile' }}
+            accessibilityLabel={TAB_TITLES.profile}
           >
             <TabGlyph
               active={tab === 'profile'}
@@ -1662,7 +1690,7 @@ function MainTabs({
               inactiveName="person-outline"
               color={tabColor(tab === 'profile')}
             />
-            <Text style={tab === 'profile' ? styles.tabActive : styles.tabText}>Профиль</Text>
+            <Text style={tab === 'profile' ? styles.tabActive : styles.tabText}>{TAB_TITLES.profile}</Text>
           </AppPressable>
           <AppPressable
             style={styles.tabBtn}
@@ -1672,6 +1700,9 @@ function MainTabs({
               scheduleTab('settings');
             }}
             testID="tab_settings"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === 'settings' }}
+            accessibilityLabel={TAB_TITLES.settings}
           >
             <TabGlyph
               active={tab === 'settings'}
@@ -1679,7 +1710,7 @@ function MainTabs({
               inactiveName="settings-outline"
               color={tabColor(tab === 'settings')}
             />
-            <Text style={tab === 'settings' ? styles.tabActive : styles.tabText}>Ещё</Text>
+            <Text style={tab === 'settings' ? styles.tabActive : styles.tabText}>{TAB_TITLES.settings}</Text>
           </AppPressable>
         </View>
         <View style={styles.userHintRow}>
