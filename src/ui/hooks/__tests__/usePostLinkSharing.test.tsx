@@ -24,7 +24,14 @@ jest.mock('../../../core/social/feedService', () => ({
   publishPostLinkCopy: (pair: unknown, id: string) => mockPublish(pair, id),
   revokePostLinkCopy: (pair: unknown, id: string) => mockRevoke(pair, id),
 }));
-jest.mock('../../../core/social/publicPost', () => ({ publicPostStoreAvailable: () => true }));
+jest.mock('../../../core/social/publicPost', () => ({
+  publicPostStoreAvailable: () => true,
+  // v4.32.902: сервер здесь не при делах — отметки в этом наборе читаются.
+  // Мок нужен, чтобы вызов до него не дошёл молча через undefined.
+  publicPostCopyExists: jest.fn(async () => {
+    throw new Error('сервер спрашивать не должны: отметки прочитаны');
+  }),
+}));
 let mockStoredIds = new Set<string>();
 jest.mock('../../../core/social/postLinkState', () => ({
   listLinkPublishedPostIds: jest.fn(async () => new Set(mockStoredIds)),

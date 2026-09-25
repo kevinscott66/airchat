@@ -35,6 +35,9 @@ jest.mock('../../storage/local', () => ({
   kvDelete: async (k: string) => { mockKv.delete(k); },
   // v4.32.626: снятие глушения ходит через проверенную форму — см. unmute.
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); },
+  // v4.32.902: скан профильных ключей идёт трёхсостоянной формой — без неё
+  // profileScopedKv получил бы undefined и объявил список непрочитанным.
+  kvTryListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
 }));
 

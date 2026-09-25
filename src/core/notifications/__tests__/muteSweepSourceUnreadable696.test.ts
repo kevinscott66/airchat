@@ -25,6 +25,9 @@ jest.mock('../../storage/local', () => ({
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); },
+  // v4.32.902: скан профильных ключей идёт трёхсостоянной формой — без неё
+  // profileScopedKv получил бы undefined и объявил список непрочитанным.
+  kvTryListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),
 }));
 jest.mock('../../identity/profileManager', () => ({

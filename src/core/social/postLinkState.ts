@@ -13,23 +13,36 @@
 import { log } from '../logger';
 import {
   scopedKvDeleteChecked,
-  scopedKvListKeysByPrefix,
   scopedKvSetChecked,
+  scopedKvTryListKeysByPrefix,
 } from '../storage/profileScopedKv';
 import { FEED_LINK_PUBLISHED_PREFIX, feedLinkPublishedKey } from '../storage/kvKeys';
 
-/** Id своих записей активного профиля, опубликованных по ссылке. */
-export async function listLinkPublishedPostIds(): Promise<Set<string>> {
+/**
+ * Id своих записей активного профиля, опубликованных по ссылке.
+ *
+ * `null` — отметки не прочитались (v4.32.902). Раньше здесь возвращался
+ * пустой набор, и экран понимал его как «наружу ничего не выложено»: у
+ * опубликованной записи пропадало «Отозвать ссылку», а незашифрованная копия
+ * так и лежала на сервере до перезапуска. Пустой набор теперь значит ровно
+ * то, что значит, — отметок нет.
+ */
+export async function listLinkPublishedPostIds(): Promise<Set<string> | null> {
   try {
+    const keys = await scopedKvTryListKeysByPrefix(FEED_LINK_PUBLISHED_PREFIX);
+    if (keys === null) {
+      log.warn('feed_link_published_list_unreadable', {});
+      return null;
+    }
     const ids = new Set<string>();
-    for (const key of await scopedKvListKeysByPrefix(FEED_LINK_PUBLISHED_PREFIX)) {
+    for (const key of keys) {
       const postId = key.slice(FEED_LINK_PUBLISHED_PREFIX.length);
       if (postId) ids.add(postId);
     }
     return ids;
   } catch (e) {
     log.warn('feed_link_published_list_failed', { err: e instanceof Error ? e.message : String(e) });
-    return new Set();
+    return null;
   }
 }
 

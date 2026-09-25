@@ -50,7 +50,9 @@ jest.mock('../../storage/local', () => ({
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
-  kvTryListKeysByPrefix: jest.fn(async () => []),
+  // v4.32.902: скан ключей идёт трёхсостоянной формой — заглушка «всегда
+  // пусто» после правки означала бы «отметок нет», а не «их не искали».
+  kvTryListKeysByPrefix: jest.fn(async (prefix: string) => [...mockKv.keys()].filter((k) => k.startsWith(prefix))),
   kvListKeysByPrefix: jest.fn(async (prefix: string) => [...mockKv.keys()].filter((k) => k.startsWith(prefix))),
   setPollVote: jest.fn(async () => undefined),
   deletePollVote: jest.fn(async () => undefined),
@@ -85,6 +87,17 @@ import { publicKeyToDidKey } from '../../identity/did';
 import { publishPostLinkCopy, refreshPublicPostCopy, revokePostLinkCopy, setFeedProfileContext } from '../feedService';
 import { listLinkPublishedPostIds } from '../postLinkState';
 
+/**
+ * Отметки как набор. v4.32.902: чтение стало трёхсостоянием, и `null` здесь
+ * означало бы, что база отказала на ровном месте, — такого в этих тестах быть
+ * не должно, поэтому проверяется отдельно.
+ */
+async function publishedIds(): Promise<Set<string>> {
+  const ids = await listLinkPublishedPostIds();
+  expect(ids).not.toBeNull();
+  return ids ?? new Set<string>();
+}
+
 const keys = ed25519.keygen();
 const pair = { secretKey: keys.secretKey, publicKey: keys.publicKey };
 const myDid = publicKeyToDidKey(keys.publicKey);
@@ -104,13 +117,13 @@ beforeEach(() => {
 describe('отметка «опубликовано по ссылке»', () => {
   it('ставится после того, как сервер принял копию', async () => {
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(true);
-    expect([...(await listLinkPublishedPostIds())]).toEqual(['p1']);
+    expect([...(await publishedIds())]).toEqual(['p1']);
   });
 
   it('не ставится, если сервер копию не принял', async () => {
     mockServer.putWorks = false;
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
-    expect((await listLinkPublishedPostIds()).size).toBe(0);
+    expect((await publishedIds()).size).toBe(0);
   });
 
   /**
@@ -124,7 +137,7 @@ describe('отметка «опубликовано по ссылке»', () => 
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
     expect(mockServer.copies.has('p1')).toBe(false);
     expect(mockDeleteTypes).toEqual(['feed_delete']);
-    expect((await listLinkPublishedPostIds()).size).toBe(0);
+    expect((await publishedIds()).size).toBe(0);
   });
 
   it('отметка не легла и снять не вышло — отзыв ушёл в очередь повторов', async () => {
@@ -146,12 +159,12 @@ describe('отметка «опубликовано по ссылке»', () => 
   it('копия, выложенная старой версией, находится при правке и получает отметку', async () => {
     mockServer.copies.add('p1');
     expect(await refreshPublicPostCopy(pair, 'p1')).toBe(true);
-    expect((await listLinkPublishedPostIds()).has('p1')).toBe(true);
+    expect((await publishedIds()).has('p1')).toBe(true);
   });
 
   it('правка неопубликованной записи отметку не ставит', async () => {
     expect(await refreshPublicPostCopy(pair, 'p1')).toBe(true);
-    expect((await listLinkPublishedPostIds()).size).toBe(0);
+    expect((await publishedIds()).size).toBe(0);
   });
 });
 
@@ -160,7 +173,7 @@ describe('отзыв ссылки', () => {
     await publishPostLinkCopy(pair, 'p1');
     expect(await revokePostLinkCopy(pair, 'p1')).toBe(true);
     expect(mockServer.copies.has('p1')).toBe(false);
-    expect((await listLinkPublishedPostIds()).size).toBe(0);
+    expect((await publishedIds()).size).toBe(0);
     expect(mockPosts.has('p1')).toBe(true);
     // Сервер принимает для снятия копии подписанный feed_delete.
     expect(mockDeleteTypes).toEqual(['feed_delete']);
@@ -171,6 +184,6 @@ describe('отзыв ссылки', () => {
     mockServer.deleteWorks = false;
     expect(await revokePostLinkCopy(pair, 'p1')).toBe(false);
     expect(mockServer.copies.has('p1')).toBe(true);
-    expect((await listLinkPublishedPostIds()).has('p1')).toBe(true);
+    expect((await publishedIds()).has('p1')).toBe(true);
   });
 });

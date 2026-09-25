@@ -13,6 +13,9 @@ jest.mock('../local', () => ({
     return true;
   }),
   kvDelete: jest.fn(async (k: string) => { delete kv[k]; }),
+  // v4.32.902: скан профильных ключей идёт трёхсостоянной формой.
+  kvTryListKeysByPrefix: jest.fn(async (prefix: string) =>
+    Object.keys(kv).filter((k) => k.startsWith(prefix))),
   kvListKeysByPrefix: jest.fn(async (prefix: string) =>
     Object.keys(kv).filter((k) => k.startsWith(prefix))),
 }));

@@ -3074,8 +3074,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
 
   const handleLongPressPost = useCallback((item: FeedPostRow) => {
     Vibration.vibrate(30);
+    // v4.32.902: если отметки «опубликовано по ссылке» не прочитались, состояние
+    // своей записи дочитывается у сервера — иначе в меню не будет «Отозвать
+    // ссылку», а незашифрованная копия останется открытой всем.
+    void postLinks.resolvePublished(item);
     setActionSheetPost(item);
-  }, []);
+  }, [postLinks]);
 
   const handleReactionLongPress = useCallback((emoji: string, dids: string[]) => {
     const names = dids.map((d) => {

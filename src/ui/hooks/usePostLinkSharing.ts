@@ -12,7 +12,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useTranslation } from 'react-i18next';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { publishPostLinkCopy, revokePostLinkCopy } from '../../core/social/feedService';
-import { publicPostStoreAvailable } from '../../core/social/publicPost';
+import { publicPostCopyExists, publicPostStoreAvailable } from '../../core/social/publicPost';
 import { listLinkPublishedPostIds } from '../../core/social/postLinkState';
 import {
   createPostLinkFlow,
@@ -37,6 +37,12 @@ export interface PostLinkSharing {
   isBusy: (postId: string) => boolean;
   /** Можно ли эту запись опубликовать по ссылке вообще (своя, облако есть). */
   mayPublish: (post: LinkablePost) => boolean;
+  /**
+   * Уточнить у сервера, опубликована ли запись, — если отметки не прочитались
+   * (v4.32.902). В обычном случае не делает ничего; зовётся перед показом
+   * меню записи, чтобы «Отозвать ссылку» не пропало.
+   */
+  resolvePublished: (post: LinkablePost) => Promise<void>;
   copyLink: (post: LinkablePost) => Promise<PostLinkHandoffOutcome>;
   shareLink: (post: LinkablePost, message: string) => Promise<PostLinkHandoffOutcome>;
   publish: (post: LinkablePost) => Promise<void>;
@@ -66,6 +72,13 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   // Тот же набор, но без ожидания перерисовки: нажатие сразу после публикации
   // не должно снова спрашивать «опубликовать?» по устаревшему состоянию.
   const publishedRef = useRef<Set<string>>(new Set());
+  // v4.32.902: отметки не прочитались — про эти записи мы не знаем ничего.
+  // «Пусто» тут значило бы «наружу ничего не выложено», а это неправда:
+  // незашифрованная копия могла остаться на сервере, и «Отозвать ссылку»
+  // исчезло бы вместе с единственным способом её снять.
+  const unknownRef = useRef(false);
+  // У кого уже спрашивали сервер — второй раз за то же меню не ходим.
+  const askedRef = useRef<Set<string>>(new Set());
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const pairRef = useRef(pair);
   pairRef.current = pair;
@@ -76,11 +89,14 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   useEffect(() => {
     let alive = true;
     publishedRef.current = new Set();
+    unknownRef.current = false;
+    askedRef.current = new Set();
     setPublishedIds(new Set());
     void listLinkPublishedPostIds().then((ids) => {
       if (!alive) return;
-      publishedRef.current = new Set(ids);
-      setPublishedIds(new Set(ids));
+      unknownRef.current = ids === null;
+      publishedRef.current = new Set(ids ?? []);
+      setPublishedIds(new Set(ids ?? []));
     });
     return () => { alive = false; };
   }, [did]);
@@ -122,6 +138,30 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
     published: publishedRef.current.has(post.id),
   }), [did]);
 
+  /**
+   * Дочитать состояние одной записи у сервера, когда отметки не прочитались.
+   *
+   * HEAD по копии отвечает «есть» только когда она действительно есть; отказ
+   * сети от «нет копии» здесь не отличается, но хуже прежнего не делает:
+   * раньше состояние всё равно считалось «не опубликовано». Зато при живой
+   * сети «Отозвать ссылку» возвращается на место.
+   */
+  const resolvePublished = useCallback(async (post: LinkablePost) => {
+    if (!unknownRef.current) return;
+    if (post.authorDid !== did || publishedRef.current.has(post.id)) return;
+    if (askedRef.current.has(post.id)) return;
+    askedRef.current.add(post.id);
+    let exists = false;
+    try {
+      exists = await publicPostCopyExists(post.id);
+    } catch {
+      exists = false;
+    }
+    if (!exists) return;
+    publishedRef.current.add(post.id);
+    setPublishedIds(new Set(publishedRef.current));
+  }, [did]);
+
   /** Общий разбор исхода: что сказать человеку. */
   const report = useCallback((outcome: PostLinkHandoffOutcome, copied: boolean) => {
     switch (outcome.kind) {
@@ -144,29 +184,35 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   }, [t]);
 
   const copyLink = useCallback(async (post: LinkablePost) => {
+    await resolvePublished(post);
     const outcome = await flow.copyLink(target(post), buildPostLink(post.id).web);
     report(outcome, true);
     return outcome;
-  }, [flow, target, report]);
+  }, [flow, target, report, resolvePublished]);
 
   const shareLink = useCallback(async (post: LinkablePost, message: string) => {
+    await resolvePublished(post);
     const outcome = await flow.shareLink(target(post), message);
     report(outcome, false);
     return outcome;
-  }, [flow, target, report]);
+  }, [flow, target, report, resolvePublished]);
 
   const publish = useCallback(async (post: LinkablePost) => {
+    await resolvePublished(post);
     const outcome = await flow.publish(target(post));
     if (outcome === 'published') showSuccess(t('feed.linkPublishedToast'));
     else if (outcome === 'failed') showError(t('feed.linkPublishFailed'));
     else if (outcome === 'unavailable') showError(t('feed.linkPublishUnavailable'));
-  }, [flow, target, t]);
+    // v4.32.902: 'alreadyPublished' молчит — сюда приходят, когда отметку
+    // дочитали у сервера, и пункт меню уже сменился на «Отозвать ссылку».
+  }, [flow, target, t, resolvePublished]);
 
   const revoke = useCallback(async (post: LinkablePost) => {
+    await resolvePublished(post);
     const outcome = await flow.revoke(target(post));
     if (outcome === 'revoked') showSuccess(t('feed.linkRevokedToast'));
     else if (outcome === 'failed') showError(t('feed.linkRevokeFailed'));
-  }, [flow, target, t]);
+  }, [flow, target, t, resolvePublished]);
 
   const isPublished = useCallback((postId: string) => publishedIds.has(postId), [publishedIds]);
   const isBusy = useCallback((postId: string) => busyIds.has(postId), [busyIds]);
@@ -175,5 +221,5 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
     [target],
   );
 
-  return { isPublished, isBusy, mayPublish, copyLink, shareLink, publish, revoke };
+  return { isPublished, isBusy, mayPublish, resolvePublished, copyLink, shareLink, publish, revoke };
 }

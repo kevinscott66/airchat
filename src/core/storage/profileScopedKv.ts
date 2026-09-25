@@ -21,7 +21,7 @@ import {
   kvDelete,
   kvDeleteChecked,
   kvGetSecretCellScoped,
-  kvListKeysByPrefix,
+  kvTryListKeysByPrefix,
   kvSetChecked,
   kvSetSecret,
   kvTryGet,
@@ -259,6 +259,27 @@ export async function scopedKvListKeysByPrefix(prefix: string): Promise<string[]
 }
 
 /**
+ * Тот же скан трёхсостояниями (v4.32.902): `null` — база не ответила.
+ *
+ * Пустой список и несостоявшееся чтение — разные вещи. Для «заглушённых
+ * чатов» разница невелика: лишний звук. А для отметок «опубликовано по
+ * ссылке» пустой список значит «наружу ничего не выложено» — и открытая всем
+ * копия остаётся на сервере без кнопки «Отозвать».
+ */
+export async function scopedKvTryListKeysByPrefix(prefix: string): Promise<string[] | null> {
+  return scopedKvTryListKeysByPrefixFor(activeProfileId(), prefix);
+}
+
+/** То же у названного профиля. См. scopedKvTryListKeysByPrefix. */
+export async function scopedKvTryListKeysByPrefixFor(
+  pid: number,
+  prefix: string,
+): Promise<string[] | null> {
+  const read = await listScopedKeys(pid, prefix);
+  return read.ok ? read.keys : null;
+}
+
+/**
  * То же у названного профиля (v4.32.813).
  *
  * Понадобилось переносу имён ключей присутствия: он идёт для того аккаунта,
@@ -266,31 +287,49 @@ export async function scopedKvListKeysByPrefix(prefix: string): Promise<string[]
  * из profileManager там было бы догадкой.
  */
 export async function scopedKvListKeysByPrefixFor(pid: number, prefix: string): Promise<string[]> {
+  // Отказ базы здесь по-прежнему выдаётся за пустой список: вызывающие,
+  // которым эта разница важна, зовут scopedKvTryListKeysByPrefixFor.
+  return (await listScopedKeys(pid, prefix)).keys;
+}
+
+/**
+ * Общая часть обоих сканов: что нашли и удалось ли дочитать.
+ *
+ * `ok: false` идёт вместе с тем, что всё-таки собрали, — двусоставная форма
+ * нужна, чтобы у прежней функции ничего не изменилось: при отказе общего
+ * скана она, как и раньше, отдаёт ключи своего namespace, а не пустоту.
+ */
+async function listScopedKeys(pid: number, prefix: string): Promise<{ ok: boolean; keys: string[] }> {
   const cut = profileScopedKey(pid, '').length;
-  const keys = new Set(
-    (await kvListKeysByPrefix(profileScopedKey(pid, prefix))).map((k) => k.slice(cut)),
-  );
-  if (pid !== 1) return [...keys];
-  for (const legacy of await kvListKeysByPrefix(prefix)) {
+  const scoped = await kvTryListKeysByPrefix(profileScopedKey(pid, prefix));
+  if (scoped === null) return { ok: false, keys: [] };
+  const keys = new Set(scoped.map((k) => k.slice(cut)));
+  if (pid !== 1) return { ok: true, keys: [...keys] };
+  const legacyKeys = await kvTryListKeysByPrefix(prefix);
+  if (legacyKeys === null) return { ok: false, keys: [...keys] };
+  // Пропущенное общее имя — тоже недочитанный список: за ним могла стоять
+  // живая запись, и объявлять её отсутствующей нельзя.
+  let ok = true;
+  for (const legacy of legacyKeys) {
     const own = await kvTryGet(profileScopedKey(1, legacy));
     // База не ответила — общую запись не трогаем: удалить, не скопировав,
     // значит потерять её насовсем.
-    if (own === null) continue;
+    if (own === null) { ok = false; continue; }
     let has = own.value != null;
     if (!has) {
       const bare = await kvTryGet(legacy);
-      if (bare === null) continue;
+      if (bare === null) { ok = false; continue; }
       if (bare.value != null) {
         // v4.32.615: не переписалось — общее имя не трогаем и в список его не
         // добавляем. Раньше `has` ставился до проверки: заглушённый чат после
         // неудачной копии оказывался и вычеркнут из обоих namespace, и
         // объявлен существующим — то есть беззвучно начинал звонить.
-        if (!await kvSetChecked(profileScopedKey(1, legacy), bare.value)) continue;
+        if (!await kvSetChecked(profileScopedKey(1, legacy), bare.value)) { ok = false; continue; }
         has = true;
       }
     }
     await kvDelete(legacy);
     if (has) keys.add(legacy);
   }
-  return [...keys];
+  return { ok, keys: [...keys] };
 }
