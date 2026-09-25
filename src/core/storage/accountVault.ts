@@ -293,8 +293,69 @@ async function restoreProfileState(previous: string | null): Promise<boolean> {
   }
 }
 
+/** Начало имени, под которое замена отодвигает прежнюю копию. */
+function previousVaultPrefix(accountId: string): string {
+  return `.previous-${accountId}-`;
+}
+
+/**
+ * Копии, застрявшие под `.previous-…` (v4.32.968).
+ *
+ * @returns имена внутри корня, от старой к свежей. Метка времени в имени —
+ * `Date.now()`, тринадцать знаков до 2286 года, так что обычная сортировка
+ * строк здесь совпадает с порядком по времени.
+ */
+async function strandedVaultNames(root: string, accountId: string): Promise<string[]> {
+  try {
+    if (!(await exists(root))) return [];
+    const prefix = previousVaultPrefix(accountId);
+    return (await FileSystem.readDirectoryAsync(root)).filter((n) => n.startsWith(prefix)).sort();
+  } catch (error) {
+    log.warn('account_vault_previous_scan_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * Вернуть на место копию, застрявшую при прерванной замене (v4.32.968).
+ *
+ * Замена уводит прежнюю копию в `.previous-…` и возвращает её при отказе — так
+ * было написано и раньше. Но возврат стоял под немым `.catch(() => {})`, а
+ * выключенное питание и убитый процесс никакого `catch` не ждут вовсе. Тогда
+ * копии по своему имени нет, а на диске она есть: `.previous-…` до сих пор не
+ * читал и не убирал никто во всём приложении. Спрашивающий получал «копии
+ * нет» — то есть единственный местный слепок счёта пропадал вместе с ответом
+ * на вопрос, был ли он.
+ *
+ * Зовётся перед каждым чтением копии. Молча ничего не делает в единственном
+ * обычном случае: копия на своём месте.
+ */
+async function restoreStrandedVault(accountId: string): Promise<void> {
+  const root = vaultRootUri();
+  const finalDir = vaultUri(accountId);
+  if (!root || !finalDir) return;
+  if (await exists(finalDir)) return;
+  const names = await strandedVaultNames(root, accountId);
+  if (names.length === 0) return;
+  const newest = names[names.length - 1];
+  try {
+    await FileSystem.moveAsync({ from: `${root}${newest}/`, to: finalDir });
+    log.warn('account_vault_restored_from_previous', { accountId });
+  } catch (error) {
+    log.error('account_vault_restore_from_previous_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  for (const stale of names.slice(0, -1)) {
+    await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true }).catch(() => {});
+  }
+}
+
 async function replaceVaultDirectory(stageDir: string, finalDir: string, root: string, accountId: string): Promise<void> {
-  const previousDir = `${root}.previous-${accountId}-${Date.now()}/`;
+  const previousDir = `${root}${previousVaultPrefix(accountId)}${Date.now()}/`;
   const hadPrevious = await exists(finalDir);
   if (hadPrevious) await FileSystem.moveAsync({ from: finalDir, to: previousDir });
   try {
@@ -302,11 +363,24 @@ async function replaceVaultDirectory(stageDir: string, finalDir: string, root: s
   } catch (error) {
     await FileSystem.deleteAsync(finalDir, { idempotent: true }).catch(() => {});
     if (hadPrevious) {
-      await FileSystem.moveAsync({ from: previousDir, to: finalDir }).catch(() => {});
+      // v4.32.968: отказ возврата больше не молчит. Он значит, что копия
+      // осталась лежать под чужим именем, — и тому, кто разбирает потом, надо
+      // знать, где её искать.
+      await FileSystem.moveAsync({ from: previousDir, to: finalDir }).catch((e: unknown) => {
+        log.error('account_vault_previous_rollback_failed', {
+          dir: previousDir,
+          err: e instanceof Error ? e.message : String(e),
+        });
+      });
     }
     throw error;
   }
-  if (hadPrevious) await FileSystem.deleteAsync(previousDir, { idempotent: true });
+  // v4.32.968: убираем не только свою отодвинутую копию, но и застрявшие от
+  // прежних попыток: на своём месте теперь лежит свежая, и всё под
+  // `.previous-…` — уже мусор, который иначе не убрал бы никто.
+  for (const stale of await strandedVaultNames(root, accountId)) {
+    await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true }).catch(() => {});
+  }
 }
 
 /** Snapshot closed local databases before the wallet wipe removes them. */
@@ -376,12 +450,22 @@ export async function deleteAccountVault(mnemonic: string): Promise<void> {
   const dir = vaultUri(accountId);
   if (!dir) return;
   await FileSystem.deleteAsync(dir, { idempotent: true });
+  // v4.32.968: вместе с копией уносим и застрявшие под `.previous-…`. Иначе
+  // удаление было бы на словах: подъёмник ниже нашёл бы такую и вернул на
+  // место — данные счёта, которые человек велел стереть.
+  const root = vaultRootUri();
+  if (root) {
+    for (const stale of await strandedVaultNames(root, accountId)) {
+      await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true }).catch(() => {});
+    }
+  }
   log.info('account_vault_deleted', { accountId });
 }
 
 /** Restore the seed-bound snapshot, if one exists on this installation. */
 export async function hasAccountVaultSnapshot(mnemonic: string): Promise<boolean> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
+  await restoreStrandedVault(accountId);
   const dir = vaultUri(accountId);
   return !!dir && (await exists(`${dir}${MANIFEST_FILE}`));
 }
@@ -389,6 +473,7 @@ export async function hasAccountVaultSnapshot(mnemonic: string): Promise<boolean
 /** Restore the seed-bound snapshot, if one exists on this installation. */
 export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
+  await restoreStrandedVault(accountId);
   const dir = vaultUri(accountId);
   const base = FileSystem.documentDirectory;
   if (!dir || !base) return false;
@@ -525,6 +610,7 @@ export function missingArchiveDbFiles(archive: AccountVaultArchive): string[] {
  */
 export async function readAccountVaultArchive(mnemonic: string): Promise<AccountVaultArchive | null> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
+  await restoreStrandedVault(accountId);
   const dir = vaultUri(accountId);
   if (!dir) return null;
   const manifestUri = `${dir}${MANIFEST_FILE}`;
