@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 // квадратом внутри светлого сообщения.
 import { useColors, useThemedStyles } from '../ThemeContext';
 import { useBubbleSurface } from '../BubbleKindContext';
+import { useAutoDownloadGate } from '../screens/chat-components/useAutoDownloadGate';
 
 const SCREEN_W = Dimensions.get('window').width;
 const CELL_SIZE = (SCREEN_W - 48 - 8) / 3; // 3 columns with padding
@@ -94,9 +95,30 @@ async function fetchTenor(
 
 // ─── Inline GIF bubble renderer ──────────────────────────────────────────────
 
+/**
+ * Пузырь GIF.
+ *
+ * v4.32.939: спрашивается «Автозагрузка медиа». До этой версии пузырь шёл на
+ * Tenor всегда — и тем самым мимо единственной настройки, которой человек мог
+ * это запретить: снимки и голосовые её слушались (`useAutoDownloadGate`), а
+ * GIF нет. Цена у GIF при этом выше, чем у своего вложения. Своё лежит
+ * зашифрованным в нашем же хранилище, а тут устройство само, без единого
+ * нажатия, идёт на чужой сервер — Tenor принадлежит Google, — и отдаёт ему
+ * свой адрес и точное время, когда переписку открыли. Достаточно, чтобы
+ * собеседник прислал GIF.
+ *
+ * Прислать чужой адрес нельзя с v4.32.240 (`gifEnvelope`), так что выдать
+ * себя ОТПРАВИТЕЛЮ этим уже не выйдет. Речь о третьей стороне, которой
+ * человек ничего не отправлял.
+ */
 export function GifBubble({ url, isMe }: { url: string | null; isMe: boolean }): React.ReactElement {
   const [errored, setErrored] = useState(false);
+  const [wanted, setWanted] = useState(false);
+  const gated = useAutoDownloadGate();
   const bubble = useBubbleSurface(isMe);
+  // Порядок ветвей важен: сначала негодный адрес, потом запрет. По негодному
+  // адресу не ходят ни при какой настройке, и предлагать «нажмите, чтобы
+  // загрузить» там значило бы обещать несбыточное.
   // url === null — адрес не прошёл проверку (см. gifEnvelope). Рисуем ту же
   // заглушку, что и при ошибке загрузки: ходить по нему нельзя.
   if (!url || errored) {
@@ -109,6 +131,23 @@ export function GifBubble({ url, isMe }: { url: string | null; isMe: boolean }):
         <Ionicons name="image-outline" size={32} color={ink} />
         <Text style={{ color: ink, fontSize: 12, marginTop: 4 }}>GIF</Text>
       </View>
+    );
+  }
+  if (gated && !wanted) {
+    const ink = bubble.plate.ink;
+    return (
+      <AppPressable
+        onPress={() => setWanted(true)}
+        accessibilityRole="button"
+        accessibilityLabel="GIF — нажмите, чтобы загрузить"
+      >
+        <View style={[gb.wrap, { backgroundColor: bubble.plate.fill }]}>
+          <Ionicons name="cloud-download-outline" size={32} color={ink.secondary} />
+          <Text style={{ color: ink.text, fontSize: font.xs, marginTop: 4, textAlign: 'center' }}>
+            GIF — нажмите, чтобы загрузить
+          </Text>
+        </View>
+      </AppPressable>
     );
   }
   return (
