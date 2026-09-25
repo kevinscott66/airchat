@@ -37,7 +37,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { publicKeyToDidKey } from '../identity/did';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
-import { listContactsFor, listContactsReadDetailed } from './contacts';
+import { listContactsReadDetailed } from './contacts';
 import { catFromIpfs } from '../transport/ipfs/node';
 import { insertStory, deleteExpiredStories, countActiveStoriesByAuthor, STORY_TTL_MS } from '../storage/local';
 import { decodeStoryEnvelope, encodeStoryEnvelope, type StoryEnvelope } from './storyEnvelope';
@@ -316,17 +316,44 @@ async function applyIncomingStory(envelope: StoryEnvelope, pid: number): Promise
   // «не прочиталось» и «нечем сохранять» происходят вместе. Теперь конверт
   // отбрасывается: сторис живёт сутки, контакт публикует их пачками, и потеря
   // одной стоит несравнимо меньше принятой чужой.
+  //
+  // v4.32.957: разделение исходов сделано не на `catch`. Он тут был мёртвым:
+  // `listContactsFor` — это `(await listContactsReadFor(pid)) ?? []`, а
+  // `readContactsFor` гасит любое исключение своим `catch` и отдаёт null. То
+  // есть отказ базы приходил сюда пустым массивом, до `catch` дело не доходило
+  // никогда, и выполнялась ветка «автора нет в контактах» → 'consumed'. Кадр
+  // объявлялся разобранным, метка «докуда прочитано» у ретранслятора уезжала
+  // вперёд — и сторис пропадала молча и навсегда, ровно как описано в докблоке
+  // выше. Тот же исход давал частичный отказ: не открылась строка ИМЕННО этого
+  // контакта — автор объявлялся незнакомцем.
+  //
+  // Теперь спрашивается подробное чтение: null — не открылся указатель,
+  // `missing` — сколько строк не расшифровалось этим проходом. Незнакомцем
+  // автор объявляется только по ПОЛНОМУ справочнику.
+  let contactsRead: Awaited<ReturnType<typeof listContactsReadDetailed>>;
   try {
-    const contacts = await listContactsFor(pid);
-    if (!contacts.some((c) => c.peerPublicKey === envelope.authorPubB64)) {
-      log.debug('story_author_not_in_contacts_drop', { author: envelope.authorPubB64.slice(0, 8) });
-      return 'consumed';
-    }
+    contactsRead = await listContactsReadDetailed(pid);
   } catch (e) {
-    // v4.32.760: «не прочиталось» — не «не в контактах». Ленту это по-прежнему
-    // не открывает: пока список недоступен, ничего не пишется.
+    // Страховка, а не путь отказа чтения: тот приходит значением, не броском.
     log.warn('story_contacts_unreadable_defer', { err: e instanceof Error ? e.message : String(e) });
     return 'deferred';
+  }
+  if (contactsRead === null) {
+    // v4.32.760: «не прочиталось» — не «не в контактах». Ленту это по-прежнему
+    // не открывает: пока список недоступен, ничего не пишется.
+    log.warn('story_contacts_unreadable_defer', { reason: 'index' });
+    return 'deferred';
+  }
+  if (!contactsRead.contacts.some((c) => c.peerPublicKey === envelope.authorPubB64)) {
+    if (contactsRead.missing > 0) {
+      // Короткий справочник — не повод записывать автора в незнакомцы.
+      // Отсрочка стоит повторной загрузки вложения, потеря сторис —
+      // невосполнима: её живут сутки и второй раз не присылают.
+      log.warn('story_contacts_partial_defer', { missing: contactsRead.missing });
+      return 'deferred';
+    }
+    log.debug('story_author_not_in_contacts_drop', { author: envelope.authorPubB64.slice(0, 8) });
+    return 'consumed';
   }
 
   // Потолок проверяется ДО скачивания медиа: именно загрузка вложения, а не

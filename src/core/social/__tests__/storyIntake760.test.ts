@@ -18,7 +18,15 @@
  * откладываем ровно то, что пройдёт само.
  */
 
-/** Что сделает чтение списка контактов: true — бросит, как занятая база. */
+/**
+ * Что сделает чтение списка контактов: true — откажет, как занятая база.
+ *
+ * v4.32.957: именно ОТКАЖЕТ, а не бросит. Настоящее `readContactsFor` гасит
+ * любое исключение своим `catch` и отдаёт значением: null у различающих входов,
+ * пустой список у сплющивающего. Прежняя подмена бросала — и потому проверка
+ * ниже проходила по мёртвой ветке `catch`, а не по тому, что бывает на
+ * устройстве.
+ */
 let mockContactsReadFails = false;
 /** Что сделает счётчик активных сторис автора: true — бросит. */
 let mockCountFails = false;
@@ -37,11 +45,10 @@ let mockUuid = 0;
 jest.mock('uuid', () => ({ v4: () => `story${++mockUuid}` }));
 
 jest.mock('../contacts', () => ({
-  listContactsFor: async () => {
-    if (mockContactsReadFails) throw new Error('database is locked');
-    return mockContacts;
-  },
-  listContactsReadFor: async () => ({ ok: true, contacts: mockContacts }),
+  listContactsFor: async () => (mockContactsReadFails ? [] : mockContacts),
+  listContactsReadFor: async () => (mockContactsReadFails ? null : mockContacts),
+  listContactsReadDetailed: async () =>
+    mockContactsReadFails ? null : { contacts: mockContacts, missing: 0 },
 }));
 
 jest.mock('../../storage/local', () => ({

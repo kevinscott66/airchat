@@ -207,7 +207,9 @@ describe('форма исходников', () => {
     const s = src('storyService.ts');
     expect(s).toContain("import { ownerPidForPublicKey } from '../identity/ownerPidLookup';");
     expect(s).toContain('const pid = ownerPidForPublicKey(pair.publicKey);');
-    expect(s).toContain('const contacts = await listContactsFor(pid);');
+    // v4.32.957: справочник спрашивают вместе с числом непрочитанных строк —
+    // адресат запроса прежний, это всё тот же названный `pid`.
+    expect(s).toContain('contactsRead = await listContactsReadDetailed(pid);');
     expect(s).not.toContain('await listContacts()');
   });
 

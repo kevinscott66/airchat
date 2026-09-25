@@ -41,7 +41,10 @@ jest.mock('uuid', () => ({ v4: () => `story${++mockUuid}` }));
 
 jest.mock('../contacts', () => ({
   listContactsFor: async () => mockContacts,
-  listContactsReadFor: async () => ({ ok: true, contacts: mockContacts }),
+  listContactsReadFor: async () => mockContacts,
+  // v4.32.957: приём сторис спрашивает справочник вместе с числом строк,
+  // которые не открылись, — короткий список он больше не принимает за полный.
+  listContactsReadDetailed: async () => ({ contacts: mockContacts, missing: 0 }),
 }));
 
 jest.mock('../../storage/local', () => ({
