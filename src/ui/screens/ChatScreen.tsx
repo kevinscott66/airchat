@@ -141,7 +141,7 @@ import {
 } from '../../core/social/cloudTranslate';
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
 import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
-import { scopedKvGet, scopedKvSet, scopedKvTryGet } from '../../core/storage/profileScopedKv';
+import { scopedKvGet, scopedKvSet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { mergeChatWindow } from '../../core/utils/mergeChatWindow';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
 import { MAX_MESSAGE_TEXT } from '../../core/social/messageTextLimit';
@@ -3518,7 +3518,22 @@ function ChatThreadView({
                     onPress: () => {
                       const newVal = !autoTranslate;
                       void (async () => {
-                        await scopedKvSet(chatAutoTranslateKey(peerB64), newVal ? '1' : '0');
+                        // v4.32.897: `scopedKvSet` гасит ответ базы и отдаёт
+                        // void — отказ записи выглядел точно как удача.
+                        // Пункт меню перерисовывался в новое положение, а на
+                        // диске оставалось прежнее, и при следующем открытии
+                        // чата возвращалось оно.
+                        //
+                        // У автоперевода это не размер шрифта: выключенный он
+                        // означает, что текст переписки больше не уходит в
+                        // переводчик. «Выключилось, но не сохранилось» вернёт
+                        // отправку после перезапуска, не сказав ни слова, —
+                        // при том что выключают его как раз затем, чтобы
+                        // разговор никуда не уезжал.
+                        if (!(await scopedKvSetChecked(chatAutoTranslateKey(peerB64), newVal ? '1' : '0'))) {
+                          showError('Настройка не сохранилась. Попробуйте ещё раз.');
+                          return;
+                        }
                         setAutoTranslate(newVal);
                         if (!newVal) setTranslationCache({});
                       })();
@@ -3545,7 +3560,18 @@ function ChatThreadView({
                         actions: [
                           ...sizes.map(([label, sz]) => ({
                             label,
-                            onPress: () => { setChatFontSize(sz); void scopedKvSet(chatFontSizeKey(peerB64), sz ? String(sz) : ''); },
+                            // v4.32.897: не легло — размер возвращается к
+                            // прежнему. Иначе выбранный он держался до выхода
+                            // из чата и молча пропадал.
+                            onPress: () => {
+                              const prev = chatFontSize;
+                              setChatFontSize(sz);
+                              void scopedKvSetChecked(chatFontSizeKey(peerB64), sz ? String(sz) : '').then((ok) => {
+                                if (ok) return;
+                                setChatFontSize(prev);
+                                showError('Настройка не сохранилась. Попробуйте ещё раз.');
+                              });
+                            },
                           })),
                           { label: 'Отмена', cancel: true },
                         ],

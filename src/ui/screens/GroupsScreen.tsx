@@ -145,7 +145,7 @@ import {
 } from '../../core/social/cloudTranslate';
 import { CLOUD_TRANSLATE_OFF_MESSAGE, cloudTranslateAllowed } from '../../core/social/translateConsent';
 import { chatAutoTranslateKey, chatBgKey, chatFontSizeKey, groupConvId, groupLastSentKey, RECENT_REACTIONS_KEY, TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
-import { scopedKvGet, scopedKvSet, scopedKvTryGet } from '../../core/storage/profileScopedKv';
+import { scopedKvGet, scopedKvSet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { AnimatedDots } from '../components/AnimatedDots';
 // v4.32.227 (BUG-09): тёмный прокручиваемый action-sheet — замена Alert-меню,
 // которые на Android обрезаются до 3 кнопок и становятся неотменяемыми.
@@ -3662,7 +3662,17 @@ function GroupChatScreen({
         // Положение приходит из окна: пересчитывать его от autoTranslate
         // нельзя — окно не закрылось и уже нарисовало новое.
         const newVal = next ?? !autoTranslate;
-        void scopedKvSet(chatAutoTranslateKey(groupConvId(group.id)), newVal ? '1' : '0').then(() => {
+        // v4.32.897: ответ записи выбрасывался — см. тот же разбор в
+        // ChatScreen. Выключенный автоперевод означает, что сообщения группы
+        // больше не уходят в переводчик; «выключилось, но не сохранилось»
+        // вернёт отправку после перезапуска молча. Рычажок окно нарисовало
+        // само, и вернуть его на место нечем, кроме как не менять своё
+        // состояние: перерисовка вернёт прежнее положение.
+        void scopedKvSetChecked(chatAutoTranslateKey(groupConvId(group.id)), newVal ? '1' : '0').then((ok) => {
+          if (!ok) {
+            showError('Настройка не сохранилась. Попробуйте ещё раз.');
+            return;
+          }
           setAutoTranslate(newVal);
           if (!newVal) setTranslationCache({});
         });
@@ -3671,16 +3681,29 @@ function GroupChatScreen({
       case 'wallpaper':
         setWallpaperPickerVisible(true);
         return;
-      case 'font_size':
+      case 'font_size': {
+        // v4.32.897: пять кнопок писали размер мимо ответа базы. Не легло —
+        // размер возвращается к прежнему, иначе выбранный держался до выхода
+        // из группы и молча пропадал.
+        const pickFontSize = (sz: number | null) => () => {
+          const prev = grpChatFontSize;
+          setGrpChatFontSize(sz);
+          void scopedKvSetChecked(chatFontSizeKey(groupConvId(group.id)), sz ? String(sz) : '').then((ok) => {
+            if (ok) return;
+            setGrpChatFontSize(prev);
+            showError('Настройка не сохранилась. Попробуйте ещё раз.');
+          });
+        };
         openSheet('Размер шрифта', 'Выберите размер:', [
-          { text: 'Маленький (13)', onPress: () => { setGrpChatFontSize(13); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '13'); } },
-          { text: 'Обычный (15)', onPress: () => { setGrpChatFontSize(15); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '15'); } },
-          { text: 'Крупный (17)', onPress: () => { setGrpChatFontSize(17); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '17'); } },
-          { text: 'Очень крупный (20)', onPress: () => { setGrpChatFontSize(20); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), '20'); } },
-          { text: 'По умолчанию', onPress: () => { setGrpChatFontSize(null); void scopedKvSet(chatFontSizeKey(groupConvId(group.id)), ''); } },
+          { text: 'Маленький (13)', onPress: pickFontSize(13) },
+          { text: 'Обычный (15)', onPress: pickFontSize(15) },
+          { text: 'Крупный (17)', onPress: pickFontSize(17) },
+          { text: 'Очень крупный (20)', onPress: pickFontSize(20) },
+          { text: 'По умолчанию', onPress: pickFontSize(null) },
           { text: 'Отмена', style: 'cancel' },
         ]);
         return;
+      }
       case 'media':
         setMediaGalleryVisible(true);
         return;
