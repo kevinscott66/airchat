@@ -7,7 +7,7 @@ import { useTheme } from '../../../ThemeContext';
 import { avatarShape, badgeTint, font, radius, scrim } from '../../../theme';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { type GroupStats } from '../../../../core/storage/local';
-import { dayMonthLongYear } from '../../../../core/time/ruDateTime';
+import { dayMonthLongYear, dayMonthShortFromYmd } from '../../../../core/time/ruDateTime';
 import { pluralRu } from '../../../../core/storage/ruPlural';
 import { shownName } from '../../../../core/social/unreadableName';
 import { shortIdentity } from '../../../identity/shortId';
@@ -46,11 +46,17 @@ function GroupStatsModalImpl({ visible, onClose, grpStats, memberCount }: GroupS
                 <View style={styles.body}>
                   <View style={styles.tilesRow}>
                     {[
-                      { label: 'Сообщений', value: grpStats.totalMessages, icon: 'chatbubble-outline' as const },
-                      { label: 'Медиафайлов', value: grpStats.mediaCount, icon: 'images-outline' as const },
-                      { label: 'Участников', value: memberCount, icon: 'people-outline' as const },
+                      // v4.32.926: подпись плитки — это существительное при числе над ней,
+                      // а не заголовок столбца: читается она вместе с ним. Места
+                      // согласование не стоит ничего: форма «многих» здесь самая длинная
+                      // из трёх, то есть плитка шире от этой правки не становится.
+                      { label: pluralRu(grpStats.totalMessages, 'Сообщение', 'Сообщения', 'Сообщений'), value: grpStats.totalMessages, icon: 'chatbubble-outline' as const },
+                      { label: pluralRu(grpStats.mediaCount, 'Медиафайл', 'Медиафайла', 'Медиафайлов'), value: grpStats.mediaCount, icon: 'images-outline' as const },
+                      { label: pluralRu(memberCount, 'Участник', 'Участника', 'Участников'), value: memberCount, icon: 'people-outline' as const },
+                      // Ключ — значок, а не подпись: подпись теперь меняется с числом,
+                      // и плитка пересобиралась бы заново на каждом новом сообщении.
                     ].map((item) => (
-                      <View key={item.label} style={[styles.tile, { backgroundColor: colors.surfaceHigh }]}>
+                      <View key={item.icon} style={[styles.tile, { backgroundColor: colors.surfaceHigh }]}>
                         <Ionicons name={item.icon} size={22} color={colors.accent} />
                         <Text style={[styles.tileValue, { color: colors.text }]}>{item.value}</Text>
                         <Text style={[styles.tileLabel, { color: colors.textMuted }]}>{item.label}</Text>
@@ -73,7 +79,7 @@ function GroupStatsModalImpl({ visible, onClose, grpStats, memberCount }: GroupS
                         {grpStats.dailyActivity.map((d, i) => {
                           const maxCount = Math.max(...grpStats.dailyActivity.map((x) => x.count), 1);
                           const barH = Math.max(3, Math.round((d.count / maxCount) * 44));
-                          const dayLabel = d.date.slice(5).replace('-', '/');
+                          const dayLabel = dayMonthShortFromYmd(d.date);
                           const isToday = i === grpStats.dailyActivity.length - 1;
                           return (
                             <View key={i} style={styles.chartCol}>

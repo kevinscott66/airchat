@@ -86,6 +86,27 @@ export function dayMonthShortYearIfOther(ts: number, now: number = Date.now()): 
   return same ? dayMonthShort(ts) : dayMonthShortYear(ts);
 }
 
+/**
+ * «25 сен» из строки вида `2026-09-25` (v4.32.926).
+ *
+ * Такие строки складывает статистика группы: день там собран из местных
+ * `getFullYear/getMonth/getDate`, то есть это местный день, а не сутки UTC.
+ * Разбирать его надо тем же местным счётом. `new Date('2026-09-25')` по
+ * стандарту — полночь UTC; западнее Гринвича она приходится на предыдущие
+ * сутки, и подпись под столбиком уехала бы на день назад у всех, чей часовой
+ * пояс отрицателен: «сегодня» подписано бы вчерашним числом.
+ *
+ * Строка не той формы подписи не даёт вовсе: пусто честнее, чем «NaN undefined».
+ */
+export function dayMonthShortFromYmd(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return '';
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return '';
+  return dayMonthShort(new Date(Number(m[1]), month - 1, day).getTime());
+}
+
 /** «12 августа». */
 export function dayMonthLong(ts: number): string {
   if (!isUsableTimestamp(ts)) return '';
