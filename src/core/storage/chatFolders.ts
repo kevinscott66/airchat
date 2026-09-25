@@ -51,6 +51,26 @@ export const FOLDER_NAME_MAX_LEN = 40;
 export type FolderNames = Record<string, string>;
 
 /**
+ * Чем кончилась попытка записи (v4.32.904).
+ *
+ * Прежде и удача, и неудача возвращались набором названий: при отказе — тем,
+ * что лежало в базе до попытки. Экран отличал от него только `null` («не
+ * прочитали»), а остальные отказы принимал за удачу — окно переименования
+ * закрывалось, и человек уходил с уверенностью, что папка названа.
+ *
+ * `names` при отказе — то, что в базе на самом деле: шапку по нему всё равно
+ * можно освежить, соврав при этом только в одном — в молчании, которого
+ * теперь нет.
+ */
+export type FolderWrite =
+  | { ok: true; names: FolderNames }
+  | { ok: false; why: 'unreadable'; names: null }
+  | { ok: false; why: 'write_failed' | 'limit' | 'bad_color'; names: FolderNames };
+
+/** Предел числа папок — показывается человеку, когда он в него упёрся. */
+export { MAX_FOLDERS };
+
+/**
  * Ключом может быть только цвет метки — то же правило, что у самой метки
  * переписки (v4.32.295, conversationMeta.isColorTag): разъехавшись, они дали бы
  * метку, для которой папку не назвать. Палитрой не ограничиваемся: она менялась
@@ -111,42 +131,44 @@ export async function loadFolderNames(): Promise<FolderNames> {
  * `{...folderNames}` из состояния React значило бы затирать изменения, о
  * которых экран ещё не знает.
  *
- * `null` — набор не прочитался, и поэтому ничего не записано. v4.32.699: до
- * этого перечитывание отвечало пустым набором и на отказ базы, а записывается
- * набор целиком — значит переименование одной папки стирало названия всех
- * остальных, ровно то, от чего перечитывание и заводилось.
+ * `ok: false` — не записано, и `why` говорит почему. v4.32.699: перечитывание
+ * отвечало пустым набором и на отказ базы, а записывается набор целиком —
+ * значит переименование одной папки стирало названия всех остальных.
+ * v4.32.904: неудача возвращалась прежним набором, то есть объектом, и экран
+ * её не отличал — окно закрывалось как после удачи.
  */
-export async function setFolderName(color: string, rawName: string): Promise<FolderNames | null> {
+export async function setFolderName(color: string, rawName: string): Promise<FolderWrite> {
   const current = await readFolderNames();
   if (current === null) {
     log.warn('folder_names_unreadable', { color });
-    return null;
+    return { ok: false, why: 'unreadable', names: null };
   }
   if (!isColorKey(color)) {
     log.warn('folder_names_bad_color', { len: color.length });
-    return current;
+    return { ok: false, why: 'bad_color', names: current };
   }
   const name = rawName.trim().slice(0, FOLDER_NAME_MAX_LEN);
   const next = { ...current };
   if (!name) {
-    if (!(color in next)) return current;
+    // Папки и так нет: просить нечего, и в базе уже то, что человек хотел.
+    if (!(color in next)) return { ok: true, names: current };
     delete next[color];
   } else {
-    if (next[color] === name) return current;
+    if (next[color] === name) return { ok: true, names: current };
     if (!(color in next) && Object.keys(next).length >= MAX_FOLDERS) {
       log.warn('folder_names_limit', { count: Object.keys(next).length });
-      return current;
+      return { ok: false, why: 'limit', names: current };
     }
     next[color] = name;
   }
   if (!(await writeProfileSharedSecret(FOLDER_NAMES_KEY, JSON.stringify(next)))) {
     log.warn('folder_names_write_failed', { color });
-    return current;
+    return { ok: false, why: 'write_failed', names: current };
   }
-  return next;
+  return { ok: true, names: next };
 }
 
 /** Удалить папку. Метки с переписок не снимает — они принадлежат перепискам. */
-export async function removeFolderName(color: string): Promise<FolderNames | null> {
+export async function removeFolderName(color: string): Promise<FolderWrite> {
   return await setFolderName(color, '');
 }

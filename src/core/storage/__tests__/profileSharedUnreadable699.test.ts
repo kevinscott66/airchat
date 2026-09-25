@@ -139,7 +139,7 @@ describe('проверка не пустая: база отвечает — вс
   it('папка переименовывается, соседние остаются', async () => {
     put(foldersKey(1), { [RED]: 'Врач', [BLUE]: 'Работа' });
     const next = await setFolderName(RED, 'Клиника');
-    expect(next).toEqual({ [RED]: 'Клиника', [BLUE]: 'Работа' });
+    expect(next).toEqual({ ok: true, names: { [RED]: 'Клиника', [BLUE]: 'Работа' } });
     expect(read(foldersKey(1))).toEqual({ [RED]: 'Клиника', [BLUE]: 'Работа' });
   });
 
@@ -163,7 +163,7 @@ describe('набор не прочитался — его не переписы�
     put(foldersKey(1), { [RED]: 'Врач', [BLUE]: 'Работа' });
     const before = read(foldersKey(1));
     mockDbFails = true;
-    expect(await setFolderName(RED, 'Клиника')).toBeNull();
+    expect(await setFolderName(RED, 'Клиника')).toEqual({ ok: false, why: 'unreadable', names: null });
     mockDbFails = false;
     expect(read(foldersKey(1))).toEqual(before);
   });
@@ -218,9 +218,12 @@ describe('исходник: чтение общей записи объявле�
       'export async function toggleMutedAuthor(did: string): Promise<Set<string> | null> {',
     );
     const folders = SRC('../chatFolders.ts');
+    // v4.32.904: тип стал шире — отказ от записи объявляется не только при
+    // нечитаемом наборе, но и при неудавшейся записи и при переполнении.
     expect(folders).toContain(
-      'export async function setFolderName(color: string, rawName: string): Promise<FolderNames | null> {',
+      'export async function setFolderName(color: string, rawName: string): Promise<FolderWrite> {',
     );
+    expect(folders).toContain("return { ok: false, why: 'unreadable', names: null };");
     expect(folders).toContain('const current = await readFolderNames();');
     expect(folders).not.toContain('const current = await loadFolderNames();');
   });
@@ -237,7 +240,9 @@ describe('исходник: чтение общей записи объявле�
       path.join(__dirname, '../../../ui/screens/ChatListScreen.tsx'),
       'utf8',
     );
-    expect(list).toContain("showError('Не удалось прочитать названия папок');");
+    // v4.32.904: текст ушёл в разбор причины — отказов стало несколько, и у
+    // каждого свои слова.
+    expect(list).toContain("res.why === 'unreadable' ? 'Не удалось прочитать названия папок'");
   });
 });
 

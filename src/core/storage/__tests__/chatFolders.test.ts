@@ -99,7 +99,8 @@ describe('названия папок принадлежат профилю', ()
 
   it('без активного профиля не пишет ничего', async () => {
     mockActiveId = null;
-    expect(await setFolderName(RED, 'Врач')).toEqual({});
+    // v4.32.904: раньше отказ приходил прежним набором и был неотличим от удачи.
+    expect(await setFolderName(RED, 'Врач')).toEqual({ ok: false, why: 'write_failed', names: {} });
     expect(Object.keys(mockLocal.__kv)).toEqual([]);
   });
 
@@ -107,8 +108,9 @@ describe('названия папок принадлежат профилю', ()
     await setFolderName(RED, 'Врач');
     mockWriteFails = true;
     // Иначе вкладка появлялась бы на экране и исчезала после перезапуска.
-    expect(await setFolderName(BLUE, 'Работа')).toEqual({ [RED]: 'Врач' });
-    expect(await removeFolderName(RED)).toEqual({ [RED]: 'Врач' });
+    const kept = { ok: false, why: 'write_failed', names: { [RED]: 'Врач' } };
+    expect(await setFolderName(BLUE, 'Работа')).toEqual(kept);
+    expect(await removeFolderName(RED)).toEqual(kept);
   });
 });
 
@@ -182,29 +184,29 @@ describe('разбор записи', () => {
 describe('одна дорога записи', () => {
   it('пустое название удаляет папку — как и «Удалить папку»', async () => {
     await setFolderName(RED, 'Врач');
-    expect(await setFolderName(RED, '   ')).toEqual({});
+    expect(await setFolderName(RED, '   ')).toEqual({ ok: true, names: {} });
     await setFolderName(RED, 'Врач');
-    expect(await removeFolderName(RED)).toEqual({});
+    expect(await removeFolderName(RED)).toEqual({ ok: true, names: {} });
   });
 
   it('удаление несуществующей папки ничего не пишет', async () => {
     const before = await removeFolderName(RED);
-    expect(before).toEqual({});
+    expect(before).toEqual({ ok: true, names: {} });
     expect(mockLocal.__kv[key1]).toBeUndefined();
   });
 
   it('пробелы по краям названия не сохраняются', async () => {
-    expect(await setFolderName(RED, '  Работа  ')).toEqual({ [RED]: 'Работа' });
+    expect(await setFolderName(RED, '  Работа  ')).toEqual({ ok: true, names: { [RED]: 'Работа' } });
   });
 
   it('название длиннее предела обрезается при записи', async () => {
-    const names = await setFolderName(RED, 'я'.repeat(FOLDER_NAME_MAX_LEN + 5));
-    expect(names).not.toBeNull();
-    expect(names?.[RED]).toHaveLength(FOLDER_NAME_MAX_LEN);
+    const written = await setFolderName(RED, 'я'.repeat(FOLDER_NAME_MAX_LEN + 5));
+    expect(written.ok).toBe(true);
+    expect(written.names?.[RED]).toHaveLength(FOLDER_NAME_MAX_LEN);
   });
 
   it('цвет неправильного вида не попадает в запись', async () => {
-    expect(await setFolderName('DROP TABLE', 'Врач')).toEqual({});
+    expect(await setFolderName('DROP TABLE', 'Врач')).toEqual({ ok: false, why: 'bad_color', names: {} });
     expect(mockLocal.__kv[key1]).toBeUndefined();
   });
 
@@ -213,12 +215,14 @@ describe('одна дорога записи', () => {
     for (let i = 0; i < 32; i++) many[`#${i.toString(16).padStart(6, '0')}`] = `Папка ${i}`;
     mockLocal.__kv[key1] = `enc2:${Buffer.from(JSON.stringify(many), 'utf8').toString('base64')}`;
     const after = await setFolderName(RED, 'Ещё одна');
-    expect(after).not.toBeNull();
-    expect(Object.keys(after ?? {})).toHaveLength(32);
-    expect(RED in (after ?? {})).toBe(false);
+    // v4.32.904: про предел теперь говорят вслух, а не молча ничего не делают.
+    expect(after.ok).toBe(false);
+    expect(after.ok ? null : after.why).toBe('limit');
+    expect(Object.keys(after.names ?? {})).toHaveLength(32);
+    expect(RED in (after.names ?? {})).toBe(false);
     // Переименовать уже существующую переполнение не мешает.
     const renamed = await setFolderName('#000000', 'Переименована');
-    expect(renamed).not.toBeNull();
-    expect(renamed?.['#000000']).toBe('Переименована');
+    expect(renamed.ok).toBe(true);
+    expect(renamed.names?.['#000000']).toBe('Переименована');
   });
 });

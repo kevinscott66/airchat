@@ -66,6 +66,7 @@ import {
   FOLDER_COLORS,
   FOLDER_NAME_MAX_LEN,
   loadFolderNames,
+  MAX_FOLDERS,
   removeFolderName,
   setFolderName,
   type FolderNames,
@@ -750,17 +751,30 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
    * с экрана и возвращалась после перезапуска.
    */
   const applyFolderName = useCallback(async (color: string, name: string) => {
-    const next = name.trim() ? await setFolderName(color, name) : await removeFolderName(color);
-    // v4.32.699: null — прежние названия не прочитались, поэтому запись не шла.
-    // Показать здесь пустую шапку значило бы соврать: папки на месте.
-    if (!next) {
-      showError('Не удалось прочитать названия папок');
+    const removing = !name.trim();
+    const res = removing ? await removeFolderName(color) : await setFolderName(color, name);
+    // v4.32.699: названия не прочитались, поэтому запись не шла. Показать
+    // здесь пустую шапку значило бы соврать: папки на месте.
+    //
+    // v4.32.904: остальные отказы приходили сюда прежним набором — объектом, —
+    // и проверка их пропускала. Окно закрывалось как после удачи, а в базе не
+    // менялось ничего: человек уходил уверенным, что папка названа.
+    if (!res.ok) {
+      showError(
+        res.why === 'unreadable' ? 'Не удалось прочитать названия папок'
+          : res.why === 'limit' ? `Папок уже ${MAX_FOLDERS} — это предел`
+            : removing ? 'Не удалось удалить папку'
+              : 'Не удалось сохранить название папки',
+      );
+      // Шапку всё же освежаем: в res.names то, что в базе на самом деле, и
+      // прежнее состояние экрана могло от неё отстать.
+      if (res.names) setFolderNames(res.names);
       return;
     }
-    setFolderNames(next);
+    setFolderNames(res.names);
     // Вкладку удалённой папки нужно отпустить, иначе список останется
     // отфильтрованным по метке, которой в шапке уже нет.
-    if (!next[color]) setFilterTab((t) => (t === color ? 'all' : t));
+    if (!res.names[color]) setFilterTab((t) => (t === color ? 'all' : t));
     setRenameFolderColor(null);
   }, []);
 
