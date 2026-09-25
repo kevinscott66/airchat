@@ -522,6 +522,10 @@ function finalizeConfig(cfg: AppConfig): AppConfig {
 /** Documents/airchat-config.json — пользовательский runtime-override (relay и т.п.). */
 async function readUserOverride(): Promise<Partial<AppConfig>> {
   try {
+    // v4.32.967: если прошлое сохранение оборвали посередине, настройки лежат
+    // под именем `.prev`. Поднять их надо до чтения — иначе запуск уйдёт на
+    // умолчания (общий ntfy.sh) при целом файле рядом.
+    await restoreStrandedOverride();
     const uri = `${FileSystem.documentDirectory ?? ''}airchat-config.json`;
     const info = await FileSystem.getInfoAsync(uri);
     // v4.32.194 (Round-24 #7): reject oversized / non-object overrides.
@@ -693,6 +697,44 @@ function documentConfigOverrideUri(): string {
 }
 
 /**
+ * Куда сохранение отодвигает прежний файл на время замены (v4.32.967).
+ *
+ * Имя постоянное, а не с меткой времени: найти эту копию должен тот, кто
+ * запустится следующим, ничего не зная о прерванном сохранении.
+ */
+function documentConfigOverridePreviousUri(): string {
+  return `${documentConfigOverrideUri()}.prev`;
+}
+
+/**
+ * Вернуть на место файл, отодвинутый прерванным сохранением (v4.32.967).
+ *
+ * Между «отодвинули прежний» и «поставили новый» есть миг, когда настройки
+ * лежат под именем `.prev`. Обычно этот миг закрывает `catch` самого
+ * сохранения, но питание и убитый процесс никакого `catch` не ждут. Тогда
+ * файла нет, а настройки целы — и поднять их некому, кроме следующего чтения.
+ *
+ * @returns `true` — на месте лежит нужный файл или возвращать было нечего;
+ *          `false` — отодвинутая копия есть, а вернуть её не вышло. Второе для
+ *          пишущего значит «не прочитали»: настройки существуют, просто сейчас
+ *          недоступны, и слить с ними патч нечем.
+ */
+async function restoreStrandedOverride(): Promise<boolean> {
+  try {
+    const uri = documentConfigOverrideUri();
+    if ((await FileSystem.getInfoAsync(uri)).exists) return true;
+    const previous = documentConfigOverridePreviousUri();
+    if (!(await FileSystem.getInfoAsync(previous)).exists) return true;
+    await FileSystem.moveAsync({ from: previous, to: uri });
+    log.warn('config_override_restored_from_previous');
+    return true;
+  } catch (e) {
+    log.warn('config_override_restore_failed', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
+/**
  * @returns `{}` — файла нет, переопределять нечего; объект — то, что в нём
  * лежит; `null` — файл есть, но прочитать его не удалось.
  *
@@ -709,6 +751,9 @@ function documentConfigOverrideUri(): string {
  */
 async function readConfigOverride(): Promise<Partial<AppConfig> | null> {
   try {
+    // v4.32.967: отодвинутая копия — это настройки, а не мусор. Пока она не
+    // вернулась на место, «файла нет» сказать нельзя: сливать патч не с чем.
+    if (!(await restoreStrandedOverride())) return null;
     const uri = documentConfigOverrideUri();
     const info = await FileSystem.getInfoAsync(uri);
     if (!info.exists) return {};
@@ -764,11 +809,32 @@ export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<App
   // следующее сохранение (см. выше) прежде затирало бы остальное начисто.
   const uri = documentConfigOverrideUri();
   const temporary = `${uri}.tmp-${Date.now()}`;
+  const previous = documentConfigOverridePreviousUri();
+  let movedAside = false;
   try {
     await FileSystem.writeAsStringAsync(temporary, JSON.stringify(mergedOverride, null, 2));
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    // v4.32.967: прежний файл отодвигаем, а не удаляем. Прежде здесь стояло
+    // `deleteAsync(uri)` перед переносом — и между двумя строками на диске не
+    // оставалось ни одной копии настроек. Отказ переноса (место кончилось,
+    // песочница ответила отказом) попадал в `catch`, а `catch` удалял ещё и
+    // временный файл, то есть последнюю копию слитого. Настройки своего
+    // ретранслятора, VPN и туннеля исчезали совсем, следующий запуск уходил на
+    // публичный ntfy.sh — ровно то, чего эта функция обещает не делать
+    // («прежние целы»), и ровно то, от чего в v4.32.729 заводили временный файл.
+    await FileSystem.deleteAsync(previous, { idempotent: true });
+    if ((await FileSystem.getInfoAsync(uri)).exists) {
+      await FileSystem.moveAsync({ from: uri, to: previous });
+      movedAside = true;
+    }
     await FileSystem.moveAsync({ from: temporary, to: uri });
+    await FileSystem.deleteAsync(previous, { idempotent: true });
   } catch (e) {
+    // Порядок важен: сначала вернуть прежнее, потом убирать за собой. Если и
+    // возврат не вышел, копия остаётся под `.prev` — её поднимет ближайшее
+    // чтение.
+    if (movedAside) {
+      await FileSystem.moveAsync({ from: previous, to: uri }).catch(() => {});
+    }
     await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => {});
     log.warn('config_override_write_failed', { err: e instanceof Error ? e.message : String(e) });
     throw e;
