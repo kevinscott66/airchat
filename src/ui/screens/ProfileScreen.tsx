@@ -35,7 +35,7 @@ import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
 import { profileManager } from '../../core/identity/profileManager';
 import { republishOwnUsernameToDirectory } from '../../core/identity/usernameRegistry';
-import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
+import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, ownFieldTryGet } from '../../core/identity/ownProfile';
 import { readLinkProofRecord } from '../../core/identity/linkProof';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../core/identity/verification';
@@ -287,13 +287,25 @@ function ProfileScreenImpl({
         setTwitterVerified(!!savedTwitterProof);
         setGithubVerified(!!savedGithubProof);
       }
-      // Account creation date — store on first launch
-      let createdAt = await ownFieldGet('account_created_at');
-      if (!createdAt) {
-        createdAt = String(Date.now());
-        await ownFieldSet('account_created_at', createdAt);
+      // Дата заведения аккаунта — записывается при первом запуске.
+      //
+      // v4.32.903: тремя состояниями. Прежде чтение сводило «не записано» и
+      // «не прочиталось» к одному null, и после отказа базы сюда ложилась
+      // сегодняшняя дата — поверх настоящей. Возраст аккаунта обнулялся
+      // навсегда: «В AirChat 2 года» превращалось в «В AirChat Сегодня», и
+      // вернуть прежнюю дату было уже неоткуда.
+      const created = await ownFieldTryGet('account_created_at');
+      if (created?.text) {
+        if (alive) setAccountCreatedAt(parseInt(created.text, 10));
+      } else if (created) {
+        // Записи нет — первый запуск. Показываем дату, только если она легла:
+        // «В AirChat Сегодня» при неудавшейся записи означало бы отсчёт,
+        // который никто не начал.
+        const now = Date.now();
+        if ((await ownFieldSet('account_created_at', String(now))) && alive) setAccountCreatedAt(now);
       }
-      if (alive) setAccountCreatedAt(parseInt(createdAt, 10));
+      // created === null — база не ответила. Ничего не пишем и ничего не
+      // показываем: строка про возраст просто не появится до следующего раза.
       const [posts, contacts] = await Promise.all([
         loadFeedPosts(200, 0),
         listContacts(),

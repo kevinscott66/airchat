@@ -93,6 +93,17 @@ export async function ownFieldGet(key: OwnProfileKey): Promise<string | null> {
 }
 
 /**
+ * То же поле активного профиля, но тремя состояниями (v4.32.903).
+ *
+ * `null` — не прочиталось, `{ text: null }` — не записано. Разница важна там,
+ * где на «не записано» экран отвечает записью: приняв отказ базы за пустоту,
+ * он затрёт живое значение свежим. См. ownFieldTryGetFor.
+ */
+export async function ownFieldTryGet(key: OwnProfileKey): Promise<{ text: string | null } | null> {
+  return await ownFieldTryGetFor(activeProfileId(), key);
+}
+
+/**
  * Поле карточки ЗАДАННОГО профиля.
  *
  * v4.32.478: активный профиль — это то, что человек открыл на экране прямо
