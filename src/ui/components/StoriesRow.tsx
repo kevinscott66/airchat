@@ -68,7 +68,7 @@ import { showError } from './userFeedback';
 import { log } from '../../core/logger';
 // v4.32.50: модалка профиля при тапе на имя автора сторис.
 import { UserProfilePeek } from './UserProfilePeek';
-import { nameInitial } from '../../core/social/contactLabel';
+import { contactLabel, nameInitial } from '../../core/social/contactLabel';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from './userErrorText';
 
@@ -318,7 +318,7 @@ function StoryViewer({
           >
             <View style={[sv.authorDot, { backgroundColor: c.primary }]} />
             <Text style={sv.authorName}>
-              {isOwn ? 'Моя сторис' : (nameMap?.[story.authorPubB64] ?? shortIdentity(story.authorPubB64))}
+              {isOwn ? 'Моя сторис' : contactLabel(nameMap?.[story.authorPubB64], shortIdentity(story.authorPubB64))}
             </Text>
           </AppPressable>
           <View style={sv.headerActions}>
@@ -354,10 +354,15 @@ function StoryViewer({
                       onPress: () => {
                         Alert.alert(
                           'Просмотры',
-                          viewers.map((v) => {
-                            const name = nameMap?.[v];
-                            return name ?? `${v.slice(0, 10)}…`;
-                          }).join('\n') || 'Нет данных',
+                          // v4.32.906: две ошибки в одной строке. `??`
+                          // пропускал пустое имя — у контакта, чья карточка ещё
+                          // не приехала, `displayName` равен '', и в списке
+                          // посмотревших появлялась пустая строка. А запасное
+                          // значение бралось своей формой, головой в десять
+                          // знаков, — тем же человеком, который парой строк выше
+                          // подписан по правилу дома.
+                          viewers.map((v) => contactLabel(nameMap?.[v], shortIdentity(v)))
+                            .join('\n') || 'Нет данных',
                           [{ text: 'ОК' }]
                         );
                       },
@@ -602,7 +607,10 @@ export function StoriesRow({
         authorPubB64: pub,
         stories,
         hasUnread,
-        displayName: nameMap.get(pub) ?? shortIdentity(pub),
+        // v4.32.906: то же пустое имя. Отсюда оно расходилось дальше: в
+        // кружке рисовалась буква «?», а подпись под ним пропадала совсем —
+        // ''.split(' ')[0] пуст.
+        displayName: contactLabel(nameMap.get(pub), shortIdentity(pub)),
       });
     }
     if (!aliveRef.current) return;
