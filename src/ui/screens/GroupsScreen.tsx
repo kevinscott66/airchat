@@ -6101,13 +6101,26 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
       setGrpMsgSearchScan(null);
       return;
     }
+    // v4.32.962: снятия таймера мало — он спасает только от запроса, который
+    // ещё не ушёл. Поиск здесь идёт по истории ВСЕХ групп сразу, то есть
+    // дольше всех остальных: пока он считает «проект», человек дописывает
+    // «проектная смета», второй проход успевает вернуться первым, а следом
+    // приходит первый — и под новой строкой поиска ложится список находок по
+    // старой. Выглядит это как сломанный поиск: слов из запроса в найденном
+    // нет, а переход по строке уводит в сообщение, которого не искали. Заодно
+    // врёт и приписка «просмотрено не всё» — она из того же ответа.
+    // Тот же флаг стоит у поиска внутри группы (v4.32.506), у переписки
+    // (v4.32.239) и у общего поиска на списке чатов (v4.32.184); здесь —
+    // единственное место, где его не было.
+    let alive = true;
     const t = setTimeout(() => {
       void searchAllGroupMessages(grpSearch.trim(), pid, 20).then((res) => {
+        if (!alive) return;
         setGrpMsgSearchResults(res.items);
         setGrpMsgSearchScan(res.scan);
       });
     }, 400);
-    return () => clearTimeout(t);
+    return () => { alive = false; clearTimeout(t); };
   }, [grpSearch, pid]);
 
   const loadGroups = useCallback(async () => {
