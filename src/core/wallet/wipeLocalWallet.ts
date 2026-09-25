@@ -31,6 +31,7 @@ import { AUTH_SECURE_KEYS, authGuard } from '../security/authGuard';
 import { BIOMETRIC_SECURE_KEYS } from '../security/biometricUnlock';
 import { cancelScheduledDialogBackup, deleteAllDialogBackups } from '../storage/dialogBackup';
 import { SYNC_DEVICE_SECURE_KEYS, clearSyncDeviceCredentials } from '../sync/syncApi';
+import { AGENT_BRIDGE_SECURE_KEYS } from '../bridge/agentBridgeKeys';
 
 const FCM_TOKEN_KEY = 'airchat_fcm_token_v1';
 
@@ -48,6 +49,7 @@ const SECRET_KEYS: readonly string[] = [
   ...KEYPAIR_SECURE_KEYS,
   ...AUTH_SECURE_KEYS,
   ...SYNC_DEVICE_SECURE_KEYS,
+  ...AGENT_BRIDGE_SECURE_KEYS,
   PROFILE_STATE_KEY,
   DEK_KEY,
   // Канарейка секретом не является — её содержимое известно заранее. Но
@@ -138,6 +140,22 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // чтобы следующий владелец устройства не унаследовал blocked контакты.
   await step('push_service', () => disposePushNotificationService(), failed);
   await step('rate_limiter', () => rateLimiter.resetForProfileSwitch(), failed);
+  // v4.32.923: ключ агента — это право включить туннель и переписать
+  // настройки приложения, и сброс не трогал его вовсе. «Удалить данные на
+  // устройстве» отвечало `ok: true`, а прежний владелец сохранял управление
+  // телефоном: секрет лежит в SecureStore, переустановку он переживает, а
+  // новому хозяину об этом сказать нечем — мост себя ни значком, ни
+  // уведомлением не показывает.
+  //
+  // Мост гасим здесь же, и порядок не косметика: живая подписка держит
+  // выведенные из секрета темы в памяти и принимает команды до самого
+  // перезапуска — сколько бы ключей мы ни стёрли с диска после неё.
+  await step('agent_bridge', async () => {
+    const { stopAgentBridge } = await import('../bridge/agentBridge');
+    stopAgentBridge();
+    const { clearBridgeSecrets } = await import('../bridge/agentBridgeKeys');
+    await clearBridgeSecrets();
+  }, failed);
   await step('live_account_sync', async () => {
     const { cancelLiveAccountSync } = await import('../sync/liveAccountSync');
     cancelLiveAccountSync();

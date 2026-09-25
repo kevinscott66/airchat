@@ -153,6 +153,10 @@ jest.mock('../../media/cacheFiles', () => ({ purgeSensitiveCache: async () => mo
 jest.mock('../../media/avatarFiles', () => ({ sweepAvatarFiles: async () => mockStep('avatars') }));
 jest.mock('../../security/clipboardSecret', () => ({ clearSecretClipboardNow: async () => mockStep('clipboard') }));
 jest.mock('../../transport/ipfs/node', () => ({ resetIpfsClient: () => mockStep('ipfs_client') }));
+// v4.32.923: сам `agentBridgeKeys` НЕ подменяем — его удаление идёт через тот же
+// мок SecureStore, и проверять надо настоящую функцию. Подменяем только живую
+// подписку: поднимать веб-сокет ради сброса незачем.
+jest.mock('../../bridge/agentBridge', () => ({ stopAgentBridge: () => mockStep('agent_bridge_stop') }));
 
 import { SEED_SECURE_KEYS } from '../../backup/seedPhrase';
 import { SESSION_SECURE_KEYS } from '../../backup/seedPhrase';
@@ -164,6 +168,17 @@ import { PROFILE_STATE_KEY } from '../../identity/profileStateKey';
 import { performLocalWalletWipe } from '../wipeLocalWallet';
 
 const FCM_TOKEN_KEY = 'airchat_fcm_token_v1';
+/**
+ * Ключи моста агента — у самого моста.
+ *
+ * Запасной список здесь не ради удобства. Без него файл не грузится на коде,
+ * где экспорта ещё нет, и красным становятся даже контрольные проверки — то
+ * есть проверка перестаёт отличать поломку от отсутствия правки. Что экспорт
+ * всё-таки есть и совпадает, спрошено отдельно, ниже.
+ */
+const BRIDGE_KEYS: readonly string[] =
+  (jest.requireActual('../../bridge/agentBridgeKeys') as { AGENT_BRIDGE_SECURE_KEYS?: readonly string[] })
+    .AGENT_BRIDGE_SECURE_KEYS ?? ['airchat_agent_bridge_secret', 'airchat_agent_bridge_seq'];
 const SEED_KEY = SEED_SECURE_KEYS[0];
 const ALL_SECRETS = [
   ...SEED_SECURE_KEYS,
@@ -175,6 +190,7 @@ const ALL_SECRETS = [
   DEK_KEY,
   DEK_CANARY_KEY,
   FCM_TOKEN_KEY,
+  ...BRIDGE_KEYS,
 ];
 
 /*
@@ -242,7 +258,7 @@ describe('performLocalWalletWipe', () => {
       'ipfs_client', 'messaging_service', 'call_service', 'feed_storage_close', 'local_db_close',
       'dialog_backups', 'account_vault', 'sync_device_credentials', 'dek_memory',
       'collect_profile_ids', 'profiles', 'mnemonic', 'keypair', 'local_db', 'feed_dbs',
-      'media_cache', 'avatars', 'clipboard',
+      'media_cache', 'avatars', 'clipboard', 'agent_bridge_stop',
     ]) {
       expect([name, posOf(name) >= 0]).toEqual([name, true]);
     }
@@ -395,6 +411,60 @@ describe('performLocalWalletWipe', () => {
 
     expect(mockCalls).toContain(`log:wallet_wipe_done:${JSON.stringify(res)}`);
     expect(mockCalls.some((c) => c.startsWith('log:wallet_wipe_secrets_survived:'))).toBe(true);
+  });
+
+  describe('ключ агента: сброс отбирает управление телефоном (v4.32.923)', () => {
+    /*
+     * Дефект: сброс не трогал секрет моста агента вовсе. «Выйти и удалить
+     * данные на устройстве» отвечало `ok: true`, а прежний владелец сохранял
+     * право включить туннель и переписать настройки: секрет лежит в
+     * SecureStore, переустановку он переживает, а новому хозяину сказать об
+     * этом нечем — мост себя ни значком, ни уведомлением не показывает.
+     */
+    it('секрет и счётчик моста стёрты', async () => {
+      await performLocalWalletWipe();
+
+      for (const key of BRIDGE_KEYS) {
+        expect([key, mockStore.has(key)]).toEqual([key, false]);
+        expect(mockCalls).toContain(`delete:${key}`);
+      }
+    });
+
+    it('живая подписка гасится ДО удаления секрета', async () => {
+      // Порядок здесь не косметика: подписка держит выведенные из секрета темы
+      // в памяти и принимает команды до самого перезапуска — сколько бы ключей
+      // мы ни стёрли с диска после неё.
+      await performLocalWalletWipe();
+
+      expect(orderOf('agent_bridge_stop')).toBeLessThan(posOf(`delete:${BRIDGE_KEYS[0]}`));
+    });
+
+    it('уцелевший ключ моста назван, а не замолчан', async () => {
+      // Ради этого он и в списке проверки: удаление в SecureStore умеет
+      // отказать, и тогда сброс обязан ответить отказом, а не «готово».
+      mockDeleteFailures.set(BRIDGE_KEYS[0], 99);
+
+      const res = await performLocalWalletWipe();
+
+      expect(res.survivors).toEqual([BRIDGE_KEYS[0]]);
+      expect(res.failedSteps).toContain('agent_bridge');
+      expect(res.ok).toBe(false);
+    });
+
+    it('список ключей взят у моста, а не переписан в сбросе', () => {
+      // Переписанный, он молча перестал бы замечать новый ключ — и именно про
+      // этот ключ никто бы не узнал.
+      const real = jest.requireActual('../../bridge/agentBridgeKeys') as {
+        AGENT_BRIDGE_SECURE_KEYS?: readonly string[];
+      };
+      expect(real.AGENT_BRIDGE_SECURE_KEYS).toEqual(BRIDGE_KEYS);
+    });
+
+    it('ПРОВЕРКА НЕ ПУСТАЯ: ключи моста и правда лежали на устройстве', () => {
+      // Иначе «стёрты» значило бы «их и не было»: класть их обязан beforeEach.
+      for (const key of BRIDGE_KEYS) expect(mockStore.get(key)).toBe('secret');
+      expect(new Set(BRIDGE_KEYS).size).toBe(2);
+    });
   });
 
   it('списки секретных ключей не пересекаются и не пусты', () => {

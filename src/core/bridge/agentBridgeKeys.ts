@@ -43,6 +43,15 @@ export const BRIDGE_SECRET_BYTES = 32;
 const SECRET_KEY = 'airchat_agent_bridge_secret';
 const SEQ_KEY = 'airchat_agent_bridge_seq';
 
+/**
+ * Что здесь лежит в SecureStore — для тех, кто обязан это стереть.
+ *
+ * Список нужен наружу ровно затем, чтобы сброс кошелька не переписывал имена
+ * ключей у себя: переписанный, он молча перестал бы замечать новый ключ, и
+ * именно про этот ключ никто бы не узнал.
+ */
+export const AGENT_BRIDGE_SECURE_KEYS = [SECRET_KEY, SEQ_KEY] as const;
+
 /** Соль HKDF. Версия в ней затем, чтобы смена формата сменила и темы. */
 const HKDF_SALT = new TextEncoder().encode('airchat-agent-bridge-v1');
 
@@ -175,4 +184,17 @@ export async function readAcceptedSeq(): Promise<number> {
 
 export async function writeAcceptedSeq(seq: number): Promise<void> {
   await SecureStore.setItemAsync(SEQ_KEY, String(seq));
+}
+
+/**
+ * Забыть ключ агента совсем.
+ *
+ * Это не отзыв: отзыв — это `rotateBridgeSecret`, после которого мост работает
+ * с новым ключом. Здесь моста не остаётся вовсе, и зовут это со сброса
+ * кошелька, где у устройства меняется владелец. Счётчик уходит вместе с
+ * секретом: он имеет смысл только при нём, а оставшись, встретил бы следующий
+ * секрет с чужим номером и отверг бы первые команды нового хозяина.
+ */
+export async function clearBridgeSecrets(): Promise<void> {
+  for (const key of AGENT_BRIDGE_SECURE_KEYS) await SecureStore.deleteItemAsync(key);
 }
