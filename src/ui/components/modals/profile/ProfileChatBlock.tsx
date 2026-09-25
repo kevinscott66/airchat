@@ -379,15 +379,15 @@ export function ProfileChatBlock({
               placeholder="Личная заметка (видна только вам)…"
             />
             <View style={styles.noteActions}>
-              <AppPressable onPress={() => setNoteEditVisible(false)}>
+              <AppPressable onPress={() => setNoteEditVisible(false)} accessibilityRole="button">
                 <Text style={[styles.noteBtn, { color: colors.textSecondary }]}>Отмена</Text>
               </AppPressable>
               {contactNote ? (
-                <AppPressable onPress={deleteNote}>
+                <AppPressable onPress={deleteNote} accessibilityRole="button">
                   <Text style={[styles.noteBtn, { color: colors.error }]}>Удалить</Text>
                 </AppPressable>
               ) : null}
-              <AppPressable onPress={saveNote}>
+              <AppPressable onPress={saveNote} accessibilityRole="button">
                 <Text style={[styles.noteBtn, styles.noteSave, { color: colors.accent }]}>Сохранить</Text>
               </AppPressable>
             </View>

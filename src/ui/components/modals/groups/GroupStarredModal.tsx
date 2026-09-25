@@ -112,7 +112,7 @@ function StarredRowImpl({ entry, textColor, mutedColor, primaryColor, starColor,
         style={[styles.rowText, unreadable ? styles.rowTextUnreadable : null, { color: unreadable ? mutedColor : textColor }]}
         numberOfLines={4}
       >{unreadable ? UNREADABLE_MESSAGE_TEXT : grpMsg.text}</Text>
-      <AppPressable onPress={handleUnstar} style={styles.unstarBtn}>
+      <AppPressable onPress={handleUnstar} style={styles.unstarBtn} accessibilityRole="button">
         <Text style={[styles.unstarText, { color: primaryColor }]}>Убрать из избранного</Text>
       </AppPressable>
     </View>

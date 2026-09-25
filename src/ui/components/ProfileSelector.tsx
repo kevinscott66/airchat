@@ -375,11 +375,11 @@ export function ProfileSelector({
                       )}
                     </AppPressable>
                     <View style={styles.rowActions}>
-                      <AppPressable onPress={() => openRename(profile)} hitSlop={8}>
+                      <AppPressable onPress={() => openRename(profile)} hitSlop={8} accessibilityRole="button">
                         <Text style={styles.link}>Переименовать</Text>
                       </AppPressable>
                       {profiles.length > 1 ? (
-                        <AppPressable onPress={() => confirmDelete(profile)} hitSlop={8} style={styles.deleteBtn}>
+                        <AppPressable onPress={() => confirmDelete(profile)} hitSlop={8} style={styles.deleteBtn} accessibilityRole="button">
                           <Text style={styles.linkDanger}>Удалить</Text>
                         </AppPressable>
                       ) : null}
@@ -458,10 +458,10 @@ export function ProfileSelector({
                 autoFocus
               />
               <View style={styles.renameBtns}>
-                <AppPressable style={[styles.renameCancel, { marginRight: 12 }]} onPress={() => setRenameId(null)}>
+                <AppPressable style={[styles.renameCancel, { marginRight: 12 }]} onPress={() => setRenameId(null)} accessibilityRole="button">
                   <Text style={styles.renameCancelText}>Отмена</Text>
                 </AppPressable>
-                <AppPressable style={[styles.createButton, { flex: 1 }]} onPress={() => void submitRename()}>
+                <AppPressable style={[styles.createButton, { flex: 1 }]} onPress={() => void submitRename()} accessibilityRole="button">
                   <Text style={styles.createButtonText}>Сохранить</Text>
                 </AppPressable>
               </View>

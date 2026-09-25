@@ -74,6 +74,7 @@ export function ContactCardBubble({
             },
           ]);
         }}
+        accessibilityRole="button"
       >
         <Text style={{ color: accentColor, fontSize: 13, fontWeight: '600' }}>Добавить контакт</Text>
       </AppPressable>

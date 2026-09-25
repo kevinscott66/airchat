@@ -1088,12 +1088,13 @@ export function UserProfilePeek({
                           setRenaming(false);
                           setRenameDraft(contactLabel(contact?.displayName, fallbackName ?? ''));
                         }}
+                        accessibilityRole="button"
                       >
                         <Text style={[styles.renameCancel, { color: colors.textSecondary }]}>
                           Отмена
                         </Text>
                       </AppPressable>
-                      <AppPressable onPress={() => void handleSubmitRename()}>
+                      <AppPressable onPress={() => void handleSubmitRename()} accessibilityRole="button">
                         <Text style={[styles.renameSave, { color: colors.accent }]}>
                           Сохранить
                         </Text>

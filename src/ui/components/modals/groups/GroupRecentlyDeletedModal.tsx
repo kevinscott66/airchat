@@ -103,6 +103,7 @@ function DeletedRowImpl({ entry, onRestore, textColor, mutedColor, borderColor, 
       <AppPressable
         style={[styles.restoreBtn, { backgroundColor: restore.fill }]}
         onPress={handleRestore}
+        accessibilityRole="button"
       >
         <Text style={[styles.restoreText, { color: restore.ink }]}>Восстановить</Text>
       </AppPressable>

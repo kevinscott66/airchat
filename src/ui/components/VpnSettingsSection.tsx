@@ -363,7 +363,7 @@ export function VpnSettingsSection(): React.ReactElement {
               autoCorrect={false}
               multiline
             />
-            <Pressable style={styles.parseBtn} onPress={applyParsedLink}>
+            <Pressable style={styles.parseBtn} onPress={applyParsedLink} accessibilityRole="button">
               <Text style={styles.parseBtnText}>Разобрать</Text>
             </Pressable>
           </View>

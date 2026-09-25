@@ -850,7 +850,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.modalHeader}>
-            <AppPressable onPress={() => { setAddVisible(false); resetAddForm(); }} style={styles.modalCancel}>
+            <AppPressable onPress={() => { setAddVisible(false); resetAddForm(); }} style={styles.modalCancel} accessibilityRole="button">
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={styles.modalTitle}>Новый контакт</Text>
@@ -996,6 +996,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
                 <AppPressable
                   onPress={() => { void requestCamPermission(); }}
                   style={[styles.pasteBtn, { marginTop: 12 }]}
+                  accessibilityRole="button"
                 >
                   <Text style={styles.pasteBtnText}>Запросить доступ</Text>
                 </AppPressable>
@@ -1035,10 +1036,10 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
               testID="contacts_rename_input"
             />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 16 }}>
-              <AppPressable onPress={() => { setRenameTarget(null); setRenameDraft(''); }}>
+              <AppPressable onPress={() => { setRenameTarget(null); setRenameDraft(''); }} accessibilityRole="button">
                 <Text style={{ color: colors.textSecondary, fontSize: 15, padding: 8 }}>Отмена</Text>
               </AppPressable>
-              <AppPressable onPress={() => void submitRename()}>
+              <AppPressable onPress={() => void submitRename()} accessibilityRole="button">
                 <Text style={{ color: colors.accent, fontSize: 15, fontWeight: '600', padding: 8 }}>Сохранить</Text>
               </AppPressable>
             </View>

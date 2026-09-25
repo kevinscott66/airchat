@@ -567,7 +567,7 @@ function AddContactModal({
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[acStyles.root, { backgroundColor: colors.background }]}>
           <View style={[acStyles.header, { borderBottomColor: colors.border }]}>
-            <AppPressable onPress={() => { reset(); onClose(); }} style={acStyles.cancelBtn}>
+            <AppPressable onPress={() => { reset(); onClose(); }} style={acStyles.cancelBtn} accessibilityRole="button">
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[acStyles.title, { color: colors.text }]}>Новый чат</Text>
@@ -1126,6 +1126,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   }
                 }}
                 style={{ paddingVertical: 6, alignItems: 'center' }}
+                accessibilityRole="button"
               >
                 <Text style={{ color: colors.accent, fontSize: 14 }}>Создать папку с этой меткой</Text>
               </AppPressable>
@@ -1142,6 +1143,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   }
                 }}
                 style={{ paddingVertical: 6, alignItems: 'center' }}
+                accessibilityRole="button"
               >
                 <Text style={{ color: colors.accent, fontSize: 14 }}>Переименовать папку «{colorPickerItem?.colorTag ? folderNames[colorPickerItem.colorTag] : ''}»</Text>
               </AppPressable>
@@ -1164,6 +1166,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   setColorPickerItem(null);
                 }}
                 style={{ paddingVertical: 6, alignItems: 'center' }}
+                accessibilityRole="button"
               >
                 <Text style={{ color: colors.error, fontSize: 15 }}>Убрать метку</Text>
               </AppPressable>
@@ -1484,6 +1487,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 if (!renameFolderColor) return;
                 void applyFolderName(renameFolderColor, renameFolderInput);
               }}
+              accessibilityRole="button"
             >
               <Text style={{ color: contrastingInk(colors.primary), fontWeight: '600' }}>Сохранить</Text>
             </AppPressable>
@@ -1492,10 +1496,11 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 if (!renameFolderColor) return;
                 void applyFolderName(renameFolderColor, '');
               }}
+              accessibilityRole="button"
             >
               <Text style={{ color: colors.error, textAlign: 'center', fontSize: 15 }}>Удалить папку</Text>
             </AppPressable>
-            <AppPressable onPress={() => setRenameFolderColor(null)}>
+            <AppPressable onPress={() => setRenameFolderColor(null)} accessibilityRole="button">
               <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: 15 }}>Отмена</Text>
             </AppPressable>
           </AppPressable>

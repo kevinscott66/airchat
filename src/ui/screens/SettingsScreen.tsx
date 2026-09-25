@@ -2018,7 +2018,7 @@ function SettingsScreenImpl({
           />
         </View>
         {autoNightEnabled ? (
-          <AppPressable onPress={() => { setNightStartTmp(autoNightStart); setNightEndTmp(autoNightEnd); setNightTimeModal(true); }} style={{ paddingBottom: 10, paddingHorizontal: 4 }}>
+          <AppPressable onPress={() => { setNightStartTmp(autoNightStart); setNightEndTmp(autoNightEnd); setNightTimeModal(true); }} style={{ paddingBottom: 10, paddingHorizontal: 4 }} accessibilityRole="button">
             <Text style={{ color: colors.accent, fontSize: scaleFont(13) }}>
               Изменить время ({hourOfDayLabel(autoNightStart)} – {hourOfDayLabel(autoNightEnd)})
             </Text>
@@ -2791,7 +2791,7 @@ function SettingsScreenImpl({
                 })}
               </ScrollView>
             )}
-            <AppPressable onPress={() => setActiveSessionsVisible(false)} style={{ marginTop: 12 }}>
+            <AppPressable onPress={() => setActiveSessionsVisible(false)} style={{ marginTop: 12 }} accessibilityRole="button">
               <Text style={styles.pwdCancel}>Закрыть</Text>
             </AppPressable>
           </AppPressable>
@@ -2830,10 +2830,11 @@ function SettingsScreenImpl({
                 void ownFieldSet('user_custom_status', s)
                   .then((ok) => { if (!ok) { setCustomStatus(prev); showError('Не удалось сохранить статус'); } })
                   .catch((e: unknown) => { setCustomStatus(prev); showError(userErrorText(e, 'Не удалось сохранить статус')); });
-              }}>
+              }}
+              accessibilityRole="button">
                 <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
               </AppPressable>
-              <AppPressable onPress={() => setStatusModal(false)}>
+              <AppPressable onPress={() => setStatusModal(false)} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </AppPressable>
@@ -2861,10 +2862,11 @@ function SettingsScreenImpl({
                     loadQuickReplies();
                   });
                 }
-              }}>
+              }}
+              accessibilityRole="button">
                 <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
               </AppPressable>
-              <AppPressable onPress={() => setEditingQR(null)}>
+              <AppPressable onPress={() => setEditingQR(null)} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </AppPressable>
@@ -2915,7 +2917,7 @@ function SettingsScreenImpl({
                   </Text>
                 )}
               </AppPressable>
-              <AppPressable onPress={() => { setSetPwdModal(false); setSetPwdPurpose(null); setNewPwd(''); setNewPwd2(''); setPwdStep('new'); }}>
+              <AppPressable onPress={() => { setSetPwdModal(false); setSetPwdPurpose(null); setNewPwd(''); setNewPwd2(''); setPwdStep('new'); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -2942,7 +2944,7 @@ function SettingsScreenImpl({
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy} accessibilityState={{ disabled: backupUnlockBusy, busy: backupUnlockBusy }}>
                 {backupUnlockBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Открыть</Text>}
               </AppPressable>
-              <AppPressable onPress={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }}>
+              <AppPressable onPress={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -2969,7 +2971,7 @@ function SettingsScreenImpl({
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy} accessibilityState={{ disabled: bioBusy, busy: bioBusy }}>
                 {bioBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Включить</Text>}
               </AppPressable>
-              <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }}>
+              <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -2998,7 +3000,7 @@ function SettingsScreenImpl({
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy} accessibilityState={{ disabled: appleBindBusy, busy: appleBindBusy }}>
                 {appleBindBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Продолжить</Text>}
               </AppPressable>
-              <AppPressable onPress={() => { setAppleBindModal(false); setAppleBindPwd(''); }}>
+              <AppPressable onPress={() => { setAppleBindModal(false); setAppleBindPwd(''); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -3061,7 +3063,7 @@ function SettingsScreenImpl({
                   </Text>
                 )}
               </AppPressable>
-              <AppPressable onPress={() => { setChangePwdModal(false); setOldPwd(''); setNewPwd(''); setNewPwd2(''); setPwdStep('old'); }}>
+              <AppPressable onPress={() => { setChangePwdModal(false); setOldPwd(''); setNewPwd(''); setNewPwd2(''); setPwdStep('old'); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>
@@ -3081,10 +3083,10 @@ function SettingsScreenImpl({
               <Text style={[styles.label, { paddingHorizontal: 4 }]}>—</Text>
               <HourStepper styles={styles} colors={colors} caption="Конец" a11yName="конец ночного режима" hour={nightEndTmp} onChange={setNightEndTmp} />
             </View>
-            <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 8 }]} onPress={() => { void setAutoNight(true, nightStartTmp, nightEndTmp); setNightTimeModal(false); }}>
+            <AppPressable style={[styles.pwdPrimaryBtn, { marginTop: 8 }]} onPress={() => { void setAutoNight(true, nightStartTmp, nightEndTmp); setNightTimeModal(false); }} accessibilityRole="button">
               <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
             </AppPressable>
-            <AppPressable onPress={() => setNightTimeModal(false)}><Text style={styles.pwdCancel}>Отмена</Text></AppPressable>
+            <AppPressable onPress={() => setNightTimeModal(false)} accessibilityRole="button"><Text style={styles.pwdCancel}>Отмена</Text></AppPressable>
           </AppPressable>
         </AppPressable>
       </Modal>
@@ -3110,10 +3112,11 @@ function SettingsScreenImpl({
               if (dndTimeModal === 'start') { const prev = dndStart; setDndStart(dndTimeTmp); applyKvPref('dnd_start', String(dndTimeTmp), () => setDndStart(prev)); }
               else { const prev = dndEnd; setDndEnd(dndTimeTmp); applyKvPref('dnd_end', String(dndTimeTmp), () => setDndEnd(prev)); }
               setDndTimeModal(null);
-            }}>
+            }}
+            accessibilityRole="button">
               <Text style={styles.pwdPrimaryBtnText}>Сохранить</Text>
             </AppPressable>
-            <AppPressable onPress={() => setDndTimeModal(null)}><Text style={styles.pwdCancel}>Отмена</Text></AppPressable>
+            <AppPressable onPress={() => setDndTimeModal(null)} accessibilityRole="button"><Text style={styles.pwdCancel}>Отмена</Text></AppPressable>
           </AppPressable>
         </AppPressable>
       </Modal>
@@ -3191,7 +3194,7 @@ function SettingsScreenImpl({
                   </AppPressable>
                 </>
               )}
-              <AppPressable onPress={closeSeedModal}>
+              <AppPressable onPress={closeSeedModal} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Закрыть</Text>
               </AppPressable>
             </View>
@@ -3218,7 +3221,7 @@ function SettingsScreenImpl({
               <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy} accessibilityState={{ disabled: cloudBusy, busy: cloudBusy }}>
                 {cloudBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Зашифровать и отправить</Text>}
               </AppPressable>
-              <AppPressable onPress={() => { setCloudPasswordModal(false); setCloudPasswordInput(''); }}>
+              <AppPressable onPress={() => { setCloudPasswordModal(false); setCloudPasswordInput(''); }} accessibilityRole="button">
                 <Text style={styles.pwdCancel}>Отмена</Text>
               </AppPressable>
             </View>

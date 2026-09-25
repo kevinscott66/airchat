@@ -47,6 +47,7 @@ function GroupSeenByModalImpl({ msg, allMembers, onClose }: GroupSeenByModalProp
           <AppPressable
             onPress={onClose}
             style={{ marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, alignSelf: 'center' }}
+            accessibilityRole="button"
           >
             <Text style={{ color: colors.text, fontSize: 14 }}>Закрыть</Text>
           </AppPressable>

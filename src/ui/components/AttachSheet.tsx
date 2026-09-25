@@ -466,6 +466,7 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
         <AppPressable
           style={styles.permBtn}
           onPress={() => showPermissionDeniedAlert('галерее', 'Для просмотра фото и видео внутри приложения.')}
+          accessibilityRole="button"
         >
           <Text style={styles.permBtnText}>Настройки</Text>
         </AppPressable>
@@ -513,6 +514,7 @@ function GalleryTab({ onSend }: { onSend: (assets: Array<{ uri: string; type: 'i
               });
               onSend(out);
             }}
+            accessibilityRole="button"
           >
             <Text style={styles.sendBtnText}>Отправить ({selected.length})</Text>
           </AppPressable>
@@ -560,7 +562,7 @@ function SimpleActionTab({
       </View>
       <Text style={styles.title}>{label}</Text>
       <Text style={styles.desc}>{description}</Text>
-      <AppPressable style={styles.btn} onPress={onAction}>
+      <AppPressable style={styles.btn} onPress={onAction} accessibilityRole="button">
         <Text style={styles.btnText}>Открыть</Text>
       </AppPressable>
     </View>

@@ -181,7 +181,7 @@ export function CreateGroupModal({
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[cgStyles.root, { backgroundColor: colors.background, paddingTop: insets.top }]}>
           <View style={[cgStyles.header, { borderBottomColor: colors.border }]}>
-            <AppPressable onPress={() => { reset(); onClose(); }} style={cgStyles.side}>
+            <AppPressable onPress={() => { reset(); onClose(); }} style={cgStyles.side} accessibilityRole="button">
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[cgStyles.title, { color: colors.text }]}>Новая группа</Text>

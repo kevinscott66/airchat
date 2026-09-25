@@ -102,7 +102,7 @@ export function DmPollCreatorModal({
             </View>
           ))}
           {options.length < 8 ? (
-            <AppPressable onPress={() => setOptions((prev) => [...prev, ''])} style={{ paddingVertical: 8, alignItems: 'center' }}>
+            <AppPressable onPress={() => setOptions((prev) => [...prev, ''])} style={{ paddingVertical: 8, alignItems: 'center' }} accessibilityRole="button">
               <Text style={{ color: colors.accent, fontSize: 14 }}>+ Добавить вариант</Text>
             </AppPressable>
           ) : null}
@@ -123,7 +123,7 @@ export function DmPollCreatorModal({
           <Text style={{ color: colors.textMuted, fontSize: font.xs, marginBottom: 4, marginLeft: 28 }}>
             В переписке на двоих собеседник всё равно видит, что голос ваш.
           </Text>
-          <AppPressable onPress={submit} style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center', marginTop: 8 }}>
+          <AppPressable onPress={submit} style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center', marginTop: 8 }} accessibilityRole="button">
             <Text style={{ color: primaryInk(colors).text, fontWeight: '700', fontSize: 16 }}>Создать</Text>
           </AppPressable>
         </AppPressable>

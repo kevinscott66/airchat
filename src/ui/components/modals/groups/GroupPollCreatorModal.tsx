@@ -152,10 +152,10 @@ export function PollCreatorModal({
             приходит участникам подписанным сообщением.
           </Text>
           <View style={pollStyles.btnRow}>
-            <AppPressable style={[pollStyles.btn, { borderColor: colors.border }]} onPress={onClose}>
+            <AppPressable style={[pollStyles.btn, { borderColor: colors.border }]} onPress={onClose} accessibilityRole="button">
               <Text style={{ color: colors.text }}>Отмена</Text>
             </AppPressable>
-            <AppPressable style={[pollStyles.btn, { backgroundColor: colors.primary, borderColor: colors.primary }]} onPress={submit}>
+            <AppPressable style={[pollStyles.btn, { backgroundColor: colors.primary, borderColor: colors.primary }]} onPress={submit} accessibilityRole="button">
               <Text style={{ color: primaryInk(colors).text, fontWeight: '600' }}>Создать</Text>
             </AppPressable>
           </View>

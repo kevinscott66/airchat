@@ -208,30 +208,38 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: правило не превр�
 });
 
 describe('места, названные поимённо', () => {
-  const at = (file: string, line: number): Site | undefined =>
-    sites.find((s) => s.file === file && s.line === line);
+  // v4.32.950: привязка была по номеру строки, и любая соседняя правка в том
+  // же файле роняла проверку, ничего не сломав по существу. Место опознаётся
+  // по файлу и признаку занятости — они и есть предмет, а номер строки нет.
+  const at = (file: string, condition: string): Site | undefined =>
+    sites.find((s) => s.file === file && s.condition === condition);
 
   it('отправка сообщения в переписке', () => {
-    const s = at(join('screens', 'ChatScreen.tsx'), 4405);
-    expect(s?.condition).toBe('sending');
+    const s = at(join('screens', 'ChatScreen.tsx'), 'sending');
+    expect(s).toBeDefined();
     expect(stateOf(s?.tag ?? '')).toContain('busy: sending');
   });
 
   it('рассылка по контактам', () => {
-    const s = at(join('screens', 'ChatListScreen.tsx'), 1235);
-    expect(s?.condition).toBe('broadcastSending');
-    expect(stateOf(s?.tag ?? '')).toContain('busy: broadcastSending');
+    const s = at(join('screens', 'ChatListScreen.tsx'), 'broadcastSending');
+    expect(s).toBeDefined();
+    const state = stateOf(s?.tag ?? '');
+    expect(state).toContain('busy: broadcastSending');
+    // Запрет тут составной: пустой текст, пустой список адресатов, отправка.
+    expect(state).toContain("disabled: !broadcastMsg.trim() || broadcastSelected.size === 0 || broadcastSending");
   });
 
   it('выгрузка копии в облако', () => {
-    const s = at(join('screens', 'SettingsScreen.tsx'), 3218);
-    expect(s?.condition).toBe('cloudBusy');
-    expect(stateOf(s?.tag ?? '')).toContain('busy: cloudBusy');
+    const s = at(join('screens', 'SettingsScreen.tsx'), 'cloudBusy');
+    expect(s).toBeDefined();
+    const state = stateOf(s?.tag ?? '');
+    expect(state).toContain('busy: cloudBusy');
+    expect(state).toContain('disabled: !isCloudVaultConfigured() || cloudBusy');
   });
 
   it('открытие вложенного файла — там запрета нет, только занятость', () => {
-    const s = at(join('screens', 'chat-components', 'DocBubble.tsx'), 161);
-    expect(s?.condition).toBe('opening');
+    const s = at(join('screens', 'chat-components', 'DocBubble.tsx'), 'opening');
+    expect(s).toBeDefined();
     expect(stateOf(s?.tag ?? '')).toBe('{{ busy: opening }}');
   });
 });

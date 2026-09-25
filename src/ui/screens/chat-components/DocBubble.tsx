@@ -39,7 +39,7 @@ function InlineVideoPlayer({
         nativeControls
         contentFit="contain"
       />
-      <AppPressable onPress={onClose} style={{ padding: 6, alignItems: 'center' }}>
+      <AppPressable onPress={onClose} style={{ padding: 6, alignItems: 'center' }} accessibilityRole="button">
         <Text style={{ color: mutedColor, fontSize: 12 }}>✕ Закрыть</Text>
       </AppPressable>
     </View>

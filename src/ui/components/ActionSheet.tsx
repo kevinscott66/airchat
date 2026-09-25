@@ -102,6 +102,7 @@ export function ActionSheet({
             <AppPressable
               style={[styles.cancel, { backgroundColor: colors.surfaceHigh }]}
               onPress={onClose}
+              accessibilityRole="button"
             >
               <Text style={[styles.cancelText, { color: colors.text }]}>Отмена</Text>
             </AppPressable>

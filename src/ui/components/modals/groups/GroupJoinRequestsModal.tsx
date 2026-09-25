@@ -62,12 +62,14 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
                     <AppPressable
                       style={{ backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6, marginRight: 4 }}
                       onPress={() => onApprove(item)}
+                      accessibilityRole="button"
                     >
                       <Text style={{ color: contrastingInk(colors.primary), fontSize: 13, fontWeight: '600' }}>Принять</Text>
                     </AppPressable>
                     <AppPressable
                       style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 6 }}
                       onPress={() => onReject(item)}
+                      accessibilityRole="button"
                     >
                       <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>Отклонить</Text>
                     </AppPressable>
@@ -76,7 +78,7 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
                 ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 24 }}>Нет запросов</Text>}
                 style={{ maxHeight: 400 }}
               />
-              <AppPressable style={styles.closeBtn} onPress={onClose}>
+              <AppPressable style={styles.closeBtn} onPress={onClose} accessibilityRole="button">
                 <Text style={{ color: colors.accent, fontSize: 15, fontWeight: '600' }}>Закрыть</Text>
               </AppPressable>
             </>

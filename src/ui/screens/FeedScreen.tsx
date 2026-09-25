@@ -3358,6 +3358,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
               <AppPressable
                 key={tag}
                 onPress={() => setActiveHashtag(tag)}
+                accessibilityRole="button"
+                accessibilityLabel={`Показать только ${tag}`}
                 style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.lg, paddingHorizontal: 10, paddingVertical: 4, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}
               >
                 <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '500' }}>{tag}</Text>
@@ -3370,6 +3372,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         {activeHashtag ? (
           <AppPressable
             onPress={() => setActiveHashtag(null)}
+            accessibilityRole="button"
+            accessibilityLabel={`${activeHashtag} — снять отбор`}
             style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: activeTint.fill, borderRadius: radius.xl, paddingHorizontal: 12, paddingVertical: 5 }}
           >
             <Text style={{ color: activeTint.ink, fontWeight: '600', fontSize: 14 }}>{activeHashtag}</Text>
@@ -3380,6 +3384,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         {mutedAuthors.size > 0 ? (
           <AppPressable
             onPress={() => Alert.alert(t('feed.mutedAuthorsTitle'), t('feed.mutedAuthorsMsg', { count: mutedAuthors.size }), [{ text: t('common.ok') }])}
+            accessibilityRole="button"
             style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginHorizontal: 16, marginBottom: 6, backgroundColor: quietTint.fill, borderRadius: radius.xl, paddingHorizontal: 12, paddingVertical: 5 }}
           >
             <Ionicons name="eye-off-outline" size={14} color={quietTint.ink} style={{ marginRight: 4 }} />
@@ -3398,7 +3403,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         ) : null}
 
         {unread > 0 ? (
-          <AppPressable style={styles.unreadBanner} onPress={() => void loadFeed()}>
+          <AppPressable style={styles.unreadBanner} onPress={() => void loadFeed()} accessibilityRole="button">
             <Text style={styles.unreadText}>
               {unread} непрочитанных — обновить
             </Text>
@@ -3406,7 +3411,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         ) : null}
 
         {queueLen > 0 ? (
-          <AppPressable style={styles.queueBanner} onPress={onFlushQueueNow} testID="feed_queue_banner">
+          <AppPressable style={styles.queueBanner} onPress={onFlushQueueNow} testID="feed_queue_banner" accessibilityRole="button">
             <Ionicons name="time-outline" size={18} color={styles.queueText.color} style={{ marginRight: 8 }} />
             <View style={{ flex: 1 }}>
               <Text style={styles.queueText}>

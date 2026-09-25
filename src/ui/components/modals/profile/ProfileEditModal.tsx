@@ -443,7 +443,7 @@ export function ProfileEditModal({
           {/* Шапка — стекло: под ней проезжает содержимое, и глухая полоса
               отрезала бы его, вместо того чтобы показать, что оно уходит. */}
           <GlassSurface style={styles.header} variant="regular" wash>
-            <AppPressable onPress={onClose} hitSlop={8} accessibilityLabel="Отмена">
+            <AppPressable onPress={onClose} hitSlop={8} accessibilityLabel="Отмена" accessibilityRole="button">
               <Text style={[styles.headerSide, { color: colors.textSecondary }]}>Отмена</Text>
             </AppPressable>
             <Text style={[styles.headerTitle, { color: colors.text }]}>Редактировать профиль</Text>

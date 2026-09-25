@@ -207,6 +207,7 @@ export function StoryComposerModal({
                 <AppPressable
                   style={[s.pickBtn, { backgroundColor: c.primary }]}
                   onPress={() => runGalleryPick(() => pick(mode === 'video' ? 'video' : 'photo'))}
+                  accessibilityRole="button"
                 >
                   <Text style={[s.pickText, { color: primaryInk(c).text }]}>Выбрать из галереи</Text>
                 </AppPressable>
@@ -229,6 +230,7 @@ export function StoryComposerModal({
               disabled={!ready}
               accessibilityState={{ disabled: !ready }}
               onPress={publish}
+              accessibilityRole="button"
             >
               <Text style={[s.publishText, { color: primaryInk(c).text }]}>Опубликовать</Text>
             </AppPressable>

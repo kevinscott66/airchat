@@ -70,7 +70,7 @@ export function GroupReactionDetailModal({
               ) : null}
             </ScrollView>
           </View>
-          <AppPressable onPress={onClose} style={{ marginTop: 4, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border }}>
+          <AppPressable onPress={onClose} style={{ marginTop: 4, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border }} accessibilityRole="button">
             <Text style={{ color: colors.text, fontSize: 14 }}>Закрыть</Text>
           </AppPressable>
         </AppPressable>

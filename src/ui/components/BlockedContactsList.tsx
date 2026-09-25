@@ -74,6 +74,7 @@ export function BlockedContactsList(): React.ReactElement {
           onPress={() => {
             void reload();
           }}
+          accessibilityRole="button"
         >
           <Text style={styles.unblockText}>Повторить</Text>
         </AppPressable>
@@ -116,6 +117,7 @@ export function BlockedContactsList(): React.ReactElement {
                 await reload();
               })();
             }}
+            accessibilityRole="button"
           >
             <Text style={styles.unblockText}>Разблокировать</Text>
           </AppPressable>

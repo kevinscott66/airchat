@@ -864,10 +864,11 @@ function ProfileScreenImpl({
                 onPress={() => {
                   void Share.share({ message: `Добавь меня в AirChat:\n${buildContactLink(did).web}` });
                 }}
+                accessibilityRole="button"
               >
                 <Text style={styles.linkText}>Поделиться…</Text>
               </AppPressable>
-              <AppPressable style={styles.linkBtn} onPress={() => setShowQrModal(false)}>
+              <AppPressable style={styles.linkBtn} onPress={() => setShowQrModal(false)} accessibilityRole="button">
                 <Text style={styles.linkText}>Закрыть</Text>
               </AppPressable>
             </View>
@@ -962,6 +963,7 @@ function ProfileScreenImpl({
                           .catch(() => Alert.alert('Избранное', 'Не удалось убрать: хранилище занято. Попробуйте ещё раз.'));
                       }}
                       style={{ marginTop: 6 }}
+                      accessibilityRole="button"
                     >
                       <Text style={{ color: colors.textMuted, fontSize: scaleFont(12) }}>Убрать из избранного</Text>
                     </AppPressable>
@@ -990,7 +992,8 @@ function ProfileScreenImpl({
                       if (ok) setCallLogEntries([]);
                       else Alert.alert('История звонков', 'Не удалось очистить: хранилище занято. Попробуйте ещё раз.');
                     });
-                  }} style={{ marginRight: 12 }}>
+                  }} style={{ marginRight: 12 }}
+                  accessibilityRole="button">
                     <Text style={{ color: colors.error, fontSize: scaleFont(13) }}>Очистить</Text>
                   </AppPressable>
                 ) : null}
@@ -1079,10 +1082,10 @@ function ProfileScreenImpl({
                   Копию вставляют в поле восстановления при первом запуске приложения. Пароль не
                   хранится нигде: забудете — копия не откроется.
                 </Text>
-                <AppPressable style={styles.btn} onPress={runExportBtn.onPress} testID="btn_confirm_export">
+                <AppPressable style={styles.btn} onPress={runExportBtn.onPress} testID="btn_confirm_export" accessibilityRole="button">
                   <Text style={styles.btnText}>Экспортировать</Text>
                 </AppPressable>
-                <AppPressable style={styles.linkBtn} onPress={() => setExportModal(false)} testID="btn_cancel_export">
+                <AppPressable style={styles.linkBtn} onPress={() => setExportModal(false)} testID="btn_cancel_export" accessibilityRole="button">
                   <Text style={styles.linkText}>Отмена</Text>
                 </AppPressable>
               </View>

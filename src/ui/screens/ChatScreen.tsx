@@ -318,7 +318,7 @@ function ReactionDetailModal({
               ) : null}
             </ScrollView>
           </View>
-          <AppPressable style={[rdStyles.closeBtn, { borderColor: colors.border }]} onPress={onClose}>
+          <AppPressable style={[rdStyles.closeBtn, { borderColor: colors.border }]} onPress={onClose} accessibilityRole="button">
             <Text style={{ color: colors.accent }}>Закрыть</Text>
           </AppPressable>
         </AppPressable>

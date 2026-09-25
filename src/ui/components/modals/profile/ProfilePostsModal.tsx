@@ -480,6 +480,8 @@ export function ProfilePostsPane({
               ]}
               onPress={() => setAlbumId(null)}
               accessibilityLabel="Все истории"
+              accessibilityRole="button"
+              accessibilityState={{ selected: albumId === null }}
             >
               <Text style={[styles.chipText, { color: albumId === null ? colors.background : colors.text }]}>
                 Все истории
@@ -544,6 +546,7 @@ export function ProfilePostsPane({
                   style={styles.draftBtn}
                   onPress={() => setDraft(null)}
                   accessibilityLabel="Отмена"
+                  accessibilityRole="button"
                 >
                   <Text style={[styles.draftBtnText, { color: colors.textMuted }]}>Отмена</Text>
                 </AppPressable>

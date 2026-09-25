@@ -199,7 +199,7 @@ export function ForwardModal({
       <KeyboardHost variant="modal">
       <View style={[fwdStyles.root, { backgroundColor: colors.background }]}>
         <View style={[fwdStyles.header, { borderBottomColor: colors.border }]}>
-          <AppPressable onPress={onClose} style={fwdStyles.cancelBtn}>
+          <AppPressable onPress={onClose} style={fwdStyles.cancelBtn} accessibilityRole="button">
             <Text style={{ color: colors.accent }}>Отмена</Text>
           </AppPressable>
           <Text style={[fwdStyles.title, { color: colors.text }]}>Переслать</Text>

@@ -189,7 +189,7 @@ export function MessageInfoModal({
               </View>
             );
           })() : null}
-          <AppPressable onPress={onClose} style={{ marginTop: 16, backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, alignItems: 'center' }}>
+          <AppPressable onPress={onClose} style={{ marginTop: 16, backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12, alignItems: 'center' }} accessibilityRole="button">
             <Text style={{ color: primaryInk(colors).text, fontWeight: '700' }}>Закрыть</Text>
           </AppPressable>
         </AppPressable>

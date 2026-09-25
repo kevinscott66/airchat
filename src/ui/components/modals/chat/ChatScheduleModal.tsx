@@ -90,6 +90,8 @@ export function ScheduleModal({
             <AppPressable
               style={[schStyles.dayToggle, { borderColor: colors.border, backgroundColor: customTomorrow ? colors.primary : 'transparent' }]}
               onPress={() => setCustomTomorrow((v) => !v)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: customTomorrow }}
             >
               <Text style={{ color: customTomorrow ? primaryInk(colors).text : colors.textMuted, fontSize: 12 }}>Завтра</Text>
             </AppPressable>
@@ -97,6 +99,7 @@ export function ScheduleModal({
               style={[schStyles.scheduleBtn, { backgroundColor: colors.primary }]}
               onPress={scheduleCustom}
               disabled={!customHour}
+              accessibilityRole="button"
             >
               <Text style={[schStyles.scheduleBtnText, { color: primaryInk(colors).text }]}>Запланировать</Text>
             </AppPressable>
