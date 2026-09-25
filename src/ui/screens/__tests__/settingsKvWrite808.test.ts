@@ -123,7 +123,9 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежнее правило це
     // умолчанию (v4.32.811): у него своя запись, но откат тот же.
     expect((SETTINGS.match(/void applyPref\(/g) ?? []).length).toBe(10);
     expect((SETTINGS.match(/void applyPref\(\(\) => privacyPrefSet/g) ?? []).length).toBe(4);
-    expect(SETTINGS).toContain(').then((ok) => { if (ok) return broadcastLastSeenPref(); });');
+    // v4.32.901: форма ветки изменилась (исход рассылки теперь виден человеку),
+    // но дверь та же — своя запись, потом рассылка при ok.
+    expect(SETTINGS).toContain('return broadcastLastSeenPref().then((res) => {');
   });
 
   it('чтение настроек при открытии экрана не менялось', () => {

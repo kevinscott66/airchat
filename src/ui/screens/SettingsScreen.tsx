@@ -167,6 +167,17 @@ type SubScreen =
  */
 const PERMISSIONS_MENU_AVAILABLE = Platform.OS === 'android';
 
+/**
+ * Рассылка «кто видит моё время входа» охватила не всех (v4.32.901).
+ *
+ * Бывшие контакты берутся только из карты отправленного, и её не удалось
+ * прочитать. Выбранный вариант уже сохранён и по нынешним контактам разослан,
+ * поэтому просим не переделывать, а повторить: карта на диске цела, и второй
+ * заход догонит остальных.
+ */
+const LAST_SEEN_PARTIAL =
+  'Выбор сохранён, но дошёл не до всех: список тех, кому вы раньше разрешали видеть время входа, не прочитался. Выберите вариант ещё раз, чтобы повторить рассылку.';
+
 type Props = {
   profilesEnabled?: boolean;
   /** Вызывается после переключения профиля из встроенного subScreen «Профили» —
@@ -1646,7 +1657,17 @@ function SettingsScreenImpl({
                 void applyPref(
                   () => privacyPrefSet('privacy_last_seen_visibility', val),
                   () => { setLastSeenVisibility(prev); setMyLastSeenVisibility(prev); },
-                ).then((ok) => { if (ok) return broadcastLastSeenPref(); });
+                ).then((ok) => {
+                  if (!ok) return;
+                  // v4.32.901: рассылка могла охватить не всех — список тех,
+                  // кому раньше было сказано «показывай», не прочитался.
+                  // Молчать здесь нельзя: человек видит выбранный вариант и
+                  // считает, что закрылся, а бывший контакт продолжает
+                  // отмечать его время входа.
+                  return broadcastLastSeenPref().then((res) => {
+                    if (res === 'sent_map_unreadable') showError(LAST_SEEN_PARTIAL);
+                  });
+                });
               }}
               style={{
                 paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.xl,

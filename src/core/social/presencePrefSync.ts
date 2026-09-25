@@ -164,13 +164,22 @@ async function currentVisibility(pid: number): Promise<LastSeenVisibility> {
 }
 
 /**
+ * Итог рассылки (v4.32.901).
+ *
+ * `sent_map_unreadable` — карта отправленного не прочиталась, и список
+ * адресатов вышел неполным: бывшие контакты в него не попали. Настройка при
+ * этом сохранена, а рассылка по нынешним контактам прошла.
+ */
+export type LastSeenBroadcast = 'ok' | 'sent_map_unreadable';
+
+/**
  * Разослать текущее решение. Вызывается при изменении настройки.
  *
  * Адресаты — контакты И все, кому решение уже отправлялось: человека могли
  * удалить из контактов после того, как ему сказали «показывай», и тогда
  * отзыв обязан до него дойти.
  */
-export async function broadcastLastSeenPref(): Promise<void> {
+export async function broadcastLastSeenPref(): Promise<LastSeenBroadcast> {
   // v4.32.479: решение, адресная книга и карта отправленного — одного профиля,
   // выбранного здесь. Рассылка ждёт сеть на каждом адресате, и к её концу
   // активным может быть уже другой аккаунт.
@@ -183,7 +192,16 @@ export async function broadcastLastSeenPref(): Promise<void> {
     log.warn('presence_pref_contacts_failed', { err: e instanceof Error ? e.message : String(e) });
   }
   const contactSet = new Set(contactPubs);
-  const sent = (await loadSent(pid)) ?? {};
+  // v4.32.901: `null` здесь значит «прочитать не вышло», и для дедупликации
+  // пустая карта безвредна — лишняя отправка дешева. Но из этой же карты
+  // берутся ТЕ, КОГО УЖЕ НЕТ В КОНТАКТАХ, а отзыв обязан дойти именно до них:
+  // отметку «был в сети» ведёт получатель, сервера, который её спрячет, нет,
+  // и второго захода не будет — рассылка идёт только по нажатию, а
+  // syncLastSeenPrefTo срабатывает при открытии переписки, которой с
+  // удалённым контактом уже не открыть. Молча сведя отказ к пустой карте,
+  // экран показывал «Никто», а бывший контакт продолжал видеть время входа.
+  const sentRead = await loadSent(pid);
+  const sent = sentRead ?? {};
   const targets = new Set<string>([...contactPubs, ...Object.keys(sent)]);
   const fresh: SentMap = {};
   for (const peer of targets) {
@@ -196,7 +214,15 @@ export async function broadcastLastSeenPref(): Promise<void> {
     if (await sendPref(peer, show)) fresh[peer] = show;
   }
   await recordSent(pid, fresh);
-  log.info('presence_pref_broadcast', { visibility, targets: targets.size, sent: Object.keys(fresh).length });
+  log.info('presence_pref_broadcast', {
+    visibility,
+    targets: targets.size,
+    sent: Object.keys(fresh).length,
+    sentMapUnreadable: sentRead === null,
+  });
+  // Карта на диске цела: recordSent отказывается писать поверх непрочитанной
+  // (v4.32.693), так что повтор той же настройки действительно догонит всех.
+  return sentRead === null ? 'sent_map_unreadable' : 'ok';
 }
 
 /**

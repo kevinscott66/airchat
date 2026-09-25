@@ -168,7 +168,11 @@ describe('экран настроек: переключатель возвращ
 
   it('рассылка идёт только после успешной записи', () => {
     const s = screen();
-    expect(s).toContain(').then((ok) => { if (ok) return broadcastLastSeenPref(); });');
+    // v4.32.901: у «времени входа» ветка стала многострочной — исход рассылки
+    // теперь показывают человеку. Условие осталось прежним: сначала запись,
+    // и только при ok — рассылка.
+    expect(s).toMatch(/\)\.then\(\(ok\) => \{\n\s*if \(!ok\) return;/);
+    expect(s).toContain('return broadcastLastSeenPref().then((res) => {');
     expect(s).toContain(').then((ok) => { if (ok) return broadcastMyProfile(); });');
   });
 

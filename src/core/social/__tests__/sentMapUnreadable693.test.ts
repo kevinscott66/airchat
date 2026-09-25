@@ -174,7 +174,10 @@ describe('оба списка «кому отправлено» читаются
     it(`${file}: у читающих подставлено пустое, а не «не знаем»`, () => {
       const s = src(file);
       expect(s).not.toMatch(/const sent = await loadSent\(pid\);/);
-      expect(s).toContain('const sent = (await loadSent(pid)) ?? {};');
+      // v4.32.901: в рассылке presencePrefSync то же самое чтение разнесено на
+      // две строки — пустая карта для дедупликации, а сам факт отказа уходит
+      // на экран. Правило «подставлено пустое» от этого не изменилось.
+      expect(s).toMatch(/const sent = (\(await loadSent\(pid\)\)|sentRead) \?\? \{\};/);
     });
   }
 });
