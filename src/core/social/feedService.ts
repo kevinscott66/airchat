@@ -2999,12 +2999,17 @@ async function deferFeedEvent(payload: FeedEnvelopePayload, pid: number): Promis
 /**
  * Отложить снятие только тогда, когда по этой публикации уже что-то лежит.
  *
- * Снятие реакции проверить негде: removeReaction на неизвестной публикации
- * молча ничего не делает и отличить «публикации нет» от «реакции не было» по
- * ней нельзя. Но важен здесь один случай — реакция поставлена и снята до
- * прихода публикации: без этого снятие потеряется, а отложенная постановка
- * применится, и получатель увидит реакцию, которой автор уже нет. Если полка
- * по публикации пуста, откладывать нечего.
+ * Важен здесь один случай — реакция поставлена и снята до прихода публикации:
+ * без этого снятие потеряется, а отложенная постановка применится, и
+ * получатель увидит реакцию, которой у автора уже нет. Если полка по
+ * публикации пуста, откладывать нечего.
+ *
+ * v4.32.966: раньше здесь было написано «снятие проверить негде» — и это было
+ * правдой, пока removeReaction молчал обо всех своих исходах разом. Теперь он
+ * отвечает словом, и нечитаемый столбец разбирается до этого вызова, отдельной
+ * веткой. Сюда доходит только то, что применено или применять было нечего, —
+ * и «публикации нет» по-прежнему неотличимо от «реакции не было» ровно
+ * настолько, насколько это здесь и неважно: решает полка.
  */
 async function deferFeedEventIfPending(payload: FeedEnvelopePayload, pid: number): Promise<DeferWrite> {
   const store = await loadDeferred(pid);
@@ -3240,7 +3245,19 @@ async function applyFeedEnvelope(
       if (typeof d.emoji !== 'string' || d.emoji.length === 0 || d.emoji.length > 16) break;
       if (typeof payload.postId !== 'string' || payload.postId.length === 0 || payload.postId.length > 128) break;
       if (d.remove) {
-        await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
+        const removal = await s.removeReaction(payload.postId, d.emoji, payload.authorDid);
+        // v4.32.966: столбец реакций не прочитался — снятие НЕ применено, и
+        // «разобрано» про этот конверт сказать нельзя. Постановка этот случай
+        // различала с v4.32.544 (`addReaction` отвечает `false`, кадр ложится
+        // на полку), снятие — нет: оно молчало одинаково и про «сняли», и про
+        // «не смогли прочитать». А повторов у реакции нет вовсе, так что
+        // потерянное снятие — это реакция, которую автор снял, а получатель
+        // видит навсегда. Откладываем кадр: ключ к столбцу появится — снятие
+        // доедет.
+        if (removal === 'unreadable') {
+          log.warn('feed_unreaction_unreadable', { postId: payload.postId.slice(0, 16) });
+          return 'deferred';
+        }
         // v4.32.783: снятие не легло на полку — конверт не разобран.
         if ((await deferFeedEventIfPending(payload, envelopePid)) === 'failed') return 'deferred';
         log.info('feed_unreaction_received', { postId: payload.postId.slice(0, 16), emoji: d.emoji });
@@ -5030,7 +5047,14 @@ export async function toggleAndBroadcastReaction(
   const existing = await s.getPost(postId);
   const alreadyReacted = !!existing?.reactions?.[emoji]?.includes(myDid);
   if (alreadyReacted) {
-    await s.removeReaction(postId, emoji, myDid);
+    // v4.32.966: сюда «нечитаемый столбец» приходить не должен — реакцию мы
+    // только что в нём увидели, а из нечитаемого столбца `getPost` не
+    // показывает ничего. Но если столбец успел перестать открываться между
+    // этими двумя строками, молчать нельзя: ниже безусловная рассылка, и
+    // контакты сняли бы реакцию, которая у автора осталась на месте.
+    if ((await s.removeReaction(postId, emoji, myDid)) === 'unreadable') {
+      throw new Error(reactionUnreadableText('post'));
+    }
   } else if (!(await s.addReaction(postId, emoji, myDid))) {
     // v4.32.608: отказ потолком раньше был неотличим от успеха — эмодзи
     // никуда не записывался, но улетал контактам и оставался на экране до

@@ -213,6 +213,14 @@ export const COMMENTS_MAX_PER_AUTHOR_PER_POST = 50;
 /** Исход записи комментария: записался, надгробие, потолок автора, повтор. */
 export type FeedCommentWrite = 'inserted' | 'tombstoned' | 'author_limit' | 'duplicate';
 
+/**
+ * Чем кончилось снятие реакции (v4.32.966).
+ *
+ * `unreadable` — отдельное слово нарочно: «не прочитали» это не «сняли» и не
+ * «нечего снимать», и разбор конверта обязан отличать его от них.
+ */
+export type ReactionRemoval = 'removed' | 'absent' | 'no_post' | 'unreadable';
+
 export class FeedStorage {
   private db: SQLite.SQLiteDatabase | null = null;
   private readonly profileId: number;
@@ -782,14 +790,28 @@ export class FeedStorage {
   /**
    * v4.32.29: удалить реакцию конкретного DID по эмодзи (unreact). Если ни одного did
    * не осталось для этого emoji, запись emoji удаляется целиком.
+   *
+   * v4.32.966: отвечает словом, а не молчанием. Постановка реакции отвечала
+   * `false` на нечитаемый столбец с v4.32.544, и разбор конверта по этому
+   * ответу откладывал кадр; снятие на тот же случай молчало, и вызывающему
+   * было нечем отличить «сняли» от «не смогли прочитать, что там лежит». А у
+   * реакции повторов нет вовсе: потерянное снятие значит, что получатель
+   * навсегда видит реакцию, которую автор уже снял.
+   *
+   *   `removed`    — сняли и записали;
+   *   `absent`     — снимать было нечего (публикация есть, такой реакции нет);
+   *   `no_post`    — публикации на устройстве нет;
+   *   `unreadable` — столбец не открылся ключом или не разобрался: что там
+   *                  лежит, неизвестно, и «сняли» тут сказать нельзя.
    */
-  async removeReaction(postId: string, emoji: string, authorDid: string): Promise<void> {
+  async removeReaction(postId: string, emoji: string, authorDid: string): Promise<ReactionRemoval> {
     const d = await this.ensureDb();
     const row = await d.getFirstAsync<{ reactions: string | null }>(
       'SELECT reactions FROM feed WHERE id = ?',
       [postId]
     );
-    if (!row?.reactions) return;
+    if (!row) return 'no_post';
+    if (!row.reactions) return 'absent';
     const dek = await getOrCreateDataEncryptionKey();
     // v4.32.544: здесь перезапись и раньше не случалась (пустая строка даёт
     // null и ранний выход), но молча — теперь причина видна в журнале, а
@@ -797,12 +819,17 @@ export class FeedStorage {
     const cell = readAtRestCell(row.reactions, dek);
     if (!mayOverwrite(cell)) {
       log.warn('feed_reaction_column_unreadable', {});
-      return;
+      return 'unreadable';
     }
     const reactions = parseJsonColumn<Record<string, string[]>>(cellTextOrNull(cell));
-    if (!reactions) return;
+    // Столбец открылся, но разобрать его нечем. Это не «реакций не было»:
+    // писать поверх такого столбца нельзя, и сказать «сняли» — тоже.
+    if (!reactions) {
+      log.warn('feed_reaction_json_unreadable', {});
+      return 'unreadable';
+    }
     const list = reactions[emoji];
-    if (!list || !list.includes(authorDid)) return;
+    if (!list || !list.includes(authorDid)) return 'absent';
     const filtered = list.filter((x) => x !== authorDid);
     if (filtered.length > 0) reactions[emoji] = filtered;
     else delete reactions[emoji];
@@ -810,6 +837,7 @@ export class FeedStorage {
       encryptAtRestString(JSON.stringify(reactions), dek),
       postId,
     ]);
+    return 'removed';
   }
 
   async setBookmarked(postId: string, bookmarked: boolean): Promise<void> {
