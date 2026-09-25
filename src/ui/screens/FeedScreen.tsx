@@ -4221,7 +4221,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                           <AppPressable
                             hitSlop={8}
                             onPress={() => {
-                              Alert.alert(t('feed.deleteCommentConfirm'), undefined, [
+                              // v4.32.908: тела не было вовсе, и вопрос
+                              // умалчивал главное — удаление рассылается
+                              // тумбстоуном, то есть комментарий пропадёт и у
+                              // тех, кто его уже получил. У публикации этажом
+                              // выше это сказано словами (deletePostSelfMsg) —
+                              // у комментария не было сказано никак.
+                              Alert.alert(t('feed.deleteCommentConfirm'), t('feed.deleteCommentMsg'), [
                                 { text: t('common.cancel'), style: 'cancel' },
                                 { text: t('common.delete'), style: 'destructive', onPress: () => void deleteComment(c.id) },
                               ]);

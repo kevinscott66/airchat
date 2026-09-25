@@ -110,10 +110,18 @@ interface RowProps {
 
 function ScheduledRowImpl({ item, onDelete, textColor, mutedColor, borderColor, dangerColor }: RowProps) {
   const handlePress = useCallback(() => {
-    Alert.alert('Удалить?', 'Отменить запланированное сообщение?', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Удалить', style: 'destructive', onPress: () => onDelete(item.id) },
-    ]);
+    // v4.32.908: было «Удалить?» с телом «Отменить запланированное
+    // сообщение?» — два вопроса подряд, из которых первый не называл, что
+    // удаляют, а второй спрашивал о том же ещё раз. Ни один не говорил
+    // последствия: текст сообщения стирается вместе со строкой.
+    Alert.alert(
+      'Удалить запланированное сообщение?',
+      'Оно не уйдёт в назначенное время, а его текст удалится. Отменить нельзя.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => onDelete(item.id) },
+      ],
+    );
   }, [onDelete, item.id]);
   // v4.32.565: причина задержки — не украшение. Строку, которая не уйдёт,
   // пользователь иначе видит пустой и ждёт её отправки вечно.
