@@ -25,6 +25,7 @@ import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 import { purgeSensitiveCache } from '../media/cacheFiles';
 import { clearSecretClipboardNow } from '../security/clipboardSecret';
 import { sweepAvatarFiles } from '../media/avatarFiles';
+import { sweepStoryAlbumFiles } from '../media/storyAlbumFiles';
 import { clearDekMemory, DEK_CANARY_KEY, DEK_KEY } from '../storage/localEncryption';
 import { resetIpfsClient } from '../transport/ipfs/node';
 import { AUTH_SECURE_KEYS, authGuard } from '../security/authGuard';
@@ -243,6 +244,21 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // Пустой список «оставить»: живых профилей после сброса не осталось ни
   // одного, значит ни один файл аватара больше никому не принадлежит.
   await step('avatars', () => sweepAvatarFiles([]), failed);
+  // v4.32.924: альбомы историй сброс не трогал. Уборка кэша сюда не достаёт по
+  // устройству: альбом — это СВОЯ копия в documentDirectory, и сделана она
+  // именно затем, чтобы пережить любую чистку кэша. Пустой список «оставить»
+  // здесь честен ровно потому же, почему у аватаров: живых профилей после
+  // сброса нет ни одного, и ни одна сохранённая история больше ничья.
+  await step('story_albums', () => sweepStoryAlbumFiles([]), failed);
+  // Журнал приложения — опись переписки, а не её содержание: DID собеседников,
+  // номера сообщений, состояние молчания, времена сетевых путей. Файл лежит
+  // рядом с базой и переживал сброс целиком, причём молча: включается он
+  // скрытым режимом разработчика, и человек, включивший его однажды, о файле
+  // уже не помнит.
+  await step('app_log', async () => {
+    const { deleteAppLogFile } = await import('../fileLogSink');
+    await deleteAppLogFile();
+  }, failed);
 
   // Проверка и одна повторная попытка. Разовый сбой SecureStore (устройство
   // заблокировано, keystore занят) со второго раза проходит; если не прошёл —

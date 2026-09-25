@@ -151,6 +151,13 @@ jest.mock('../../../notifications/pushNotifications', () => ({ disposePushNotifi
 jest.mock('../../security/rateLimiter', () => ({ rateLimiter: { resetForProfileSwitch: async () => mockStep('rate_limiter') } }));
 jest.mock('../../media/cacheFiles', () => ({ purgeSensitiveCache: async () => mockStep('media_cache') }));
 jest.mock('../../media/avatarFiles', () => ({ sweepAvatarFiles: async () => mockStep('avatars') }));
+jest.mock('../../media/storyAlbumFiles', () => ({
+  sweepStoryAlbumFiles: async (keep: readonly unknown[]) => {
+    mockCalls.push(`story_albums_keep:${keep.length}`);
+    mockStep('story_albums');
+  },
+}));
+jest.mock('../../fileLogSink', () => ({ deleteAppLogFile: async () => mockStep('app_log') }));
 jest.mock('../../security/clipboardSecret', () => ({ clearSecretClipboardNow: async () => mockStep('clipboard') }));
 jest.mock('../../transport/ipfs/node', () => ({ resetIpfsClient: () => mockStep('ipfs_client') }));
 // v4.32.923: сам `agentBridgeKeys` НЕ подменяем — его удаление идёт через тот же
@@ -259,6 +266,7 @@ describe('performLocalWalletWipe', () => {
       'dialog_backups', 'account_vault', 'sync_device_credentials', 'dek_memory',
       'collect_profile_ids', 'profiles', 'mnemonic', 'keypair', 'local_db', 'feed_dbs',
       'media_cache', 'avatars', 'clipboard', 'agent_bridge_stop',
+      'story_albums', 'app_log',
     ]) {
       expect([name, posOf(name) >= 0]).toEqual([name, true]);
     }
@@ -411,6 +419,51 @@ describe('performLocalWalletWipe', () => {
 
     expect(mockCalls).toContain(`log:wallet_wipe_done:${JSON.stringify(res)}`);
     expect(mockCalls.some((c) => c.startsWith('log:wallet_wipe_secrets_survived:'))).toBe(true);
+  });
+
+  describe('файлы, которые сброс оставлял на диске (v4.32.924)', () => {
+    /*
+     * Дефект: «удалить данные на устройстве» не трогало ни альбомы историй, ни
+     * журнал приложения. Альбом — это своя копия снимка в documentDirectory,
+     * сделанная именно затем, чтобы пережить любую чистку кэша; журнал — опись
+     * переписки (DID собеседников, номера сообщений, состояние молчания).
+     * И то и другое оставалось лежать рядом с пустой базой.
+     */
+    it('альбомы историй сметены, и «оставить» — пустой список', async () => {
+      // Непустой список здесь значил бы «эти истории сохранить»: у сброса
+      // сохранять нечего и не для кого.
+      await performLocalWalletWipe();
+
+      expect(posOf('story_albums')).toBeGreaterThanOrEqual(0);
+      expect(mockCalls).toContain('story_albums_keep:0');
+    });
+
+    it('журнал приложения удалён', async () => {
+      await performLocalWalletWipe();
+
+      expect(posOf('app_log')).toBeGreaterThanOrEqual(0);
+    });
+
+    it('упавшая уборка файлов не отменяет ни соседнюю, ни успех сброса', async () => {
+      // Файлы — не секреты: их отказ не повод объявить сброс неудавшимся, но и
+      // не повод бросить оставшуюся уборку на полпути.
+      mockThrowingSteps.add('story_albums');
+
+      const res = await performLocalWalletWipe();
+
+      expect(res.failedSteps).toContain('story_albums');
+      expect(posOf('app_log')).toBeGreaterThanOrEqual(0);
+      expect(res.ok).toBe(true);
+    });
+
+    it('ПРОВЕРКА НЕ ПУСТАЯ: уборка файлов идёт после закрытия и стирания баз', async () => {
+      // Иначе проверка была бы довольна и уборкой, снесённой в самое начало,
+      // где имена файлов ещё принадлежат живым профилям.
+      await performLocalWalletWipe();
+
+      expect(orderOf('local_db')).toBeLessThan(orderOf('avatars'));
+      expect(orderOf('media_cache')).toBeLessThan(orderOf('avatars'));
+    });
   });
 
   describe('ключ агента: сброс отбирает управление телефоном (v4.32.923)', () => {

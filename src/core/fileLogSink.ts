@@ -2,6 +2,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { setFileSink } from './logger';
 
 const FLUSH_MS = 400;
+/** Имя файла задано только здесь; в UI оно не показывается. */
+const LOG_FILE_NAME = 'airchat-app.log';
 const MAX_FILE_BYTES = 1_500_000;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let pending = '';
@@ -50,12 +52,38 @@ export async function initFileLogging(): Promise<void> {
     logPath = null;
     return;
   }
-  /** Имя файла задано только в коде; в UI не показывается. */
-  logPath = `${base}airchat-app.log`;
+  logPath = `${base}${LOG_FILE_NAME}`;
   setFileSink((line) => {
     pending += `${line}\n`;
     scheduleFlush();
   });
+}
+
+/**
+ * Убрать журнал приложения с диска совсем (v4.32.924).
+ *
+ * Зовут это со сброса кошелька. Файл переживал «удалить данные на устройстве»
+ * целиком: в нём лежат DID собеседников, номера сообщений, состояние молчания
+ * и времена сетевых путей — то есть кто с кем и когда переписывался. Строку
+ * переписки сброс уносил, а эту опись — нет.
+ *
+ * Путь берётся из каталога, а не из `logPath`: тот заполнен, только пока
+ * диагностика включена в ЭТОМ запуске. Файл же остаётся от прошлого — включали
+ * диагностику когда-то, потом приложение перезапустили, и `initFileLogging`
+ * никто больше не звал. Смотреть на `logPath` значило бы чаще всего не найти
+ * ничего и уйти с чистой совестью.
+ */
+export async function deleteAppLogFile(): Promise<void> {
+  pending = '';
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  setFileSink(null);
+  logPath = null;
+  const base = FileSystem.documentDirectory;
+  if (!base) return;
+  await FileSystem.deleteAsync(`${base}${LOG_FILE_NAME}`, { idempotent: true });
 }
 
 /** После переключения скрытой диагностики — пересоздать sink. */
