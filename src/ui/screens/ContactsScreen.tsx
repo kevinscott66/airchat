@@ -934,9 +934,13 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
                   log.info('ui_contacts_scanner_ready', {});
                 }}
                 onMountError={(e) => {
-                  const msg = e?.message ?? 'camera mount error';
-                  setScannerError(msg);
-                  log.warn('ui_contacts_scanner_mount_error', { err: msg });
+                  // v4.32.907: на экран уходило `e.message` как есть, а его
+                  // пишет expo-camera по-английски: поверх видоискателя, между
+                  // двумя русскими подсказками, человек читал «Camera is not
+                  // running» — или `camera mount error`, если сообщения не было
+                  // вовсе. Журналу сырой текст нужен, экрану — нет.
+                  setScannerError(userErrorText(e, 'Не удалось включить камеру'));
+                  log.warn('ui_contacts_scanner_mount_error', { err: rawErrorText(e) });
                 }}
                 onBarcodeScanned={(ev) => {
                   const data = (ev as { data?: string; nativeEvent?: { data?: string } })?.data

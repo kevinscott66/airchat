@@ -37,7 +37,7 @@ import { GlassSurface } from '../components/GlassSurface';
 import { validateMnemonic } from 'bip39';
 import { WelcomeLayout, WelcomeSheen } from '../components/WelcomeStage';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
-import { rawErrorText, userErrorText } from '../components/userErrorText';
+import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
 import { AirChatLockup } from '../components/AirChatLockup';
 import { ThemeSwitchButton } from '../components/ThemeSwitchButton';
 import { SecretScreenGuard } from '../components/SecretScreenGuard';
@@ -565,9 +565,23 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       await wipeMnemonicAndSessionFlags();
     } catch (e) {
       // Молчать нельзя: человек нажал «Да, назад» и вправе знать, что не вышло.
-      Alert.alert('AirChat', `Не удалось отменить создание аккаунта: ${
-        rawErrorText(e)
-      }`);
+      //
+      // v4.32.907: к русскому началу фразы приклеивался машинный хвост —
+      // rawErrorText написан для журнала, и так прямо сказано в его докблоке.
+      // На этом экране человек ещё не завёл аккаунт и подавно не разберёт
+      // `documentDirectory unavailable`.
+      //
+      // Начало фразы остаётся всегда: без него причина — даже своя, русская —
+      // не говорит, ЧТО именно не вышло. Дописывается она, только если её
+      // писали для чтения (как в ленте, v4.32.689).
+      const raw = rawErrorText(e);
+      log.warn('ui_onboarding_wipe_failed', { err: raw });
+      Alert.alert(
+        'AirChat',
+        isUserFacingMessage(raw)
+          ? `Не удалось отменить создание аккаунта: ${raw}`
+          : 'Не удалось отменить создание аккаунта. Попробуйте ещё раз.',
+      );
       return;
     }
     setPendingPair(null);
