@@ -88,7 +88,7 @@ export function SheetShell({
   return (
     <AppModal visible transparent animationType="none" onRequestClose={onClose} testID={testID}>
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: t }]}>
-        <AppPressable noScale style={styles.scrim} onPress={onClose} accessibilityLabel="Закрыть" />
+        <AppPressable noScale style={styles.scrim} onPress={onClose} accessibilityRole="button" accessibilityLabel="Закрыть" />
       </Animated.View>
       {/* `box-none` — не украшение, а условие того, что нажатие мимо листа
           вообще куда-то доходит (v4.32.579). Полка растянута на весь экран

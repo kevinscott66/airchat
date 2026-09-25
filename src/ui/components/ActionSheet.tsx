@@ -64,7 +64,7 @@ export function ActionSheet({
       rootStyle={styles.flex}
     >
       {/* Подложка: тап закрывает лист */}
-      <AppPressable style={styles.backdrop} onPress={onClose} />
+      <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={styles.backdrop} onPress={onClose} />
       <View style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border, paddingBottom: insets.bottom + 8 }]}>
         <View style={styles.handleWrap}>
           <View style={[styles.handle, { backgroundColor: colors.border }]} />

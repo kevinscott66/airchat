@@ -4565,7 +4565,12 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         onRequestClose={() => setActionSheetPost(null)}
         rootStyle={{ flex: 1, justifyContent: 'flex-end', backgroundColor: scrim.modal }}
       >
+          {/* v4.32.948: подложка нажимается и закрывает лист, значит это кнопка.
+              Без подписи озвучка объявляла её безымянной областью во весь
+              экран — ровно поверх того, ради чего лист открыли. */}
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть"
             style={StyleSheet.absoluteFill}
             onPress={() => setActionSheetPost(null)}
           />

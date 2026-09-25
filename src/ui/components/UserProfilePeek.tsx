@@ -1032,6 +1032,7 @@ export function UserProfilePeek({
         <AppPressable
           style={StyleSheet.absoluteFill}
           onPress={onClose}
+          accessibilityRole="button"
           accessibilityLabel="Закрыть"
         />
         {/* Card поверх backdrop; inner-тапы не закрывают модалку.

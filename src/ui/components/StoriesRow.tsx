@@ -257,7 +257,17 @@ function StoryViewer({
     <Modal visible animationType="fade" statusBarTranslucent onRequestClose={onClose} presentationStyle="overFullScreen">
       <View style={sv.root}>
         {/* Progress indicators */}
-        <View style={sv.progress}>
+        {/*
+          v4.32.948: место в череде рисовалось только полосками. Озвучка их не
+          видит: у неё нет ни числа сторис, ни номера текущей, а значит нет и
+          ответа на вопрос «долго ли ещё листать». Подпись отдаётся обёртке, а
+          сами полоски из обхода убираются — поштучно они не значат ничего.
+        */}
+        <View
+          style={sv.progress}
+          accessible
+          accessibilityLabel={`Сторис ${index + 1} из ${stories.length}`}
+        >
           {stories.map((_, i) => (
             i < index ? (
               <View key={i} style={[sv.progressBar, { backgroundColor: mediaScrim.ink }]} />
@@ -403,12 +413,19 @@ function StoryViewer({
         </View>
         {/* View count for own stories */}
         {isOwn && !mayCountViewers(viewerList) ? (
-          <View style={sv.viewCount}>
+          // v4.32.948: нарисован вопросительный знак, и озвучка читала именно
+          // его — «вопросительный знак». Знак этот значит «столбец со списком
+          // зрителей не открылся», и сказать это надо словами.
+          <View style={sv.viewCount} accessible accessibilityLabel="Сколько человек посмотрело — неизвестно">
             <Ionicons name="eye-off-outline" size={16} color={mediaScrim.ink} />
             <Text style={sv.viewCountText}>?</Text>
           </View>
         ) : isOwn && viewerCount(viewerList) > 0 ? (
-          <View style={sv.viewCount}>
+          <View
+            style={sv.viewCount}
+            accessible
+            accessibilityLabel={`Посмотрело: ${viewerCount(viewerList)}`}
+          >
             <Ionicons name="eye-outline" size={16} color={mediaScrim.ink} />
             <Text style={sv.viewCountText}>{viewerCount(viewerList)}</Text>
           </View>
@@ -417,8 +434,16 @@ function StoryViewer({
         {!isOwn && !replyPaused ? (
           <View style={sv.replyBar}>
             {['❤️', '🔥', '😂', '😮', '👏', '🎉'].map((emoji) => (
+              // v4.32.948: внутри только глиф. Озвучка прочтёт его имя —
+              // «красное сердце» — и на этом остановится: что нажатие
+              // отправляет ответ автору И перелистывает дальше, из рисунка не
+              // следует. Оба последствия названы, потому что второе необратимо:
+              // вернуться к этой сторис нажатием «назад» уже нельзя, если она
+              // была последней.
               <AppPressable
                 key={emoji}
+                accessibilityRole="button"
+                accessibilityLabel={`Ответить ${emoji} и листать дальше`}
                 style={sv.reactionBtn}
                 onPress={() => {
                   sendStoryReply(emoji);
@@ -461,8 +486,31 @@ function StoryViewer({
         {/* Tap zones — only when reply input is not focused */}
         {!replyPaused ? (
           <>
-            <AppPressable style={[sv.tapZone, { left: 0, width: W * 0.4 }]} onPress={goPrev} />
-            <AppPressable style={[sv.tapZone, { right: 0, width: W * 0.6 }]} onPress={goNext} />
+            {/*
+              v4.32.948: две невидимые полосы во всю высоту экрана — это
+              ЕДИНСТВЕННЫЙ способ перейти к соседней сторис. Ни роли, ни
+              подписи у них не было: озвучка объявляла две безымянные области
+              поверх всего остального и не давала способа двинуться.
+
+              Подписи разные не для красоты. Правая на последней сторис не
+              листает, а закрывает просмотр, и обещать «следующая» там нельзя.
+              Левая на первой не делает ничего — это `disabled`, а не молчание:
+              озвучка скажет «недоступно» вместо того, чтобы отправить человека
+              нажимать впустую.
+            */}
+            <AppPressable
+              accessibilityRole="button"
+              accessibilityLabel="Предыдущая сторис"
+              accessibilityState={{ disabled: index === 0 }}
+              style={[sv.tapZone, { left: 0, width: W * 0.4 }]}
+              onPress={goPrev}
+            />
+            <AppPressable
+              accessibilityRole="button"
+              accessibilityLabel={index < stories.length - 1 ? 'Следующая сторис' : 'Закрыть просмотр'}
+              style={[sv.tapZone, { right: 0, width: W * 0.6 }]}
+              onPress={goNext}
+            />
           </>
         ) : null}
         {/* v4.32.50: профиль автора сторис по тапу на имя. */}

@@ -917,7 +917,7 @@ function ProfileScreenImpl({
         {/* Starred messages modal */}
         <Modal visible={starredVisible} transparent animationType="slide" onRequestClose={() => setStarredVisible(false)}>
           <View style={{ flex: 1, backgroundColor: scrim.modal }}>
-            <AppPressable style={{ flex: 1 }} onPress={() => setStarredVisible(false)} />
+            <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={{ flex: 1 }} onPress={() => setStarredVisible(false)} />
             <View style={{ borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: colors.surface, maxHeight: '80%' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <Ionicons name="star" size={18} color={colors.star} style={{ marginRight: 10 }} />
@@ -975,7 +975,7 @@ function ProfileScreenImpl({
         {/* Call history modal */}
         <Modal visible={callLogVisible} transparent animationType="slide" onRequestClose={() => setCallLogVisible(false)}>
           <View style={{ flex: 1, backgroundColor: scrim.modal }}>
-            <AppPressable style={{ flex: 1 }} onPress={() => setCallLogVisible(false)} />
+            <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={{ flex: 1 }} onPress={() => setCallLogVisible(false)} />
             <View style={{ borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: colors.surface, maxHeight: '75%' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <Ionicons name="call" size={18} color={colors.accent} style={{ marginRight: 10 }} />

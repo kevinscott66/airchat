@@ -323,7 +323,7 @@ export function ProfileSelector({
       keyboardVerticalOffset={0}
     >
       <View style={embedded ? styles.embeddedOverlay : styles.overlay}>
-        {embedded ? null : <AppPressable style={styles.backdrop} onPress={onClose} />}
+        {embedded ? null : <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={styles.backdrop} onPress={onClose} />}
         <View style={embedded ? styles.embeddedContainer : styles.container}>
               <ScrollView
                 keyboardShouldPersistTaps="handled"
