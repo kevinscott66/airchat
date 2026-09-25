@@ -2,6 +2,8 @@ import { Alert, Platform, ToastAndroid } from 'react-native';
 import { authGuard } from '../../core/security/authGuard';
 import { hasPeerHalf, localHalfDone, peerHalfDone, type TwoSidedOutcome } from '../../core/social/twoSidedEdit';
 import { pushConfirm, pushToast, type ConfirmActionSpec } from './appNotify';
+import { lockoutMinutesLeft } from '../utils/lockScreen';
+import { minutesLabel } from '../utils/plural';
 
 /**
  * Понятные уведомления без технического жаргона для пользователя.
@@ -50,11 +52,18 @@ export function reportSendRefusal(res: { explained?: boolean }, message: string)
  * читал, что пароль неверный, пробовал снова и снова получал то же самое, не
  * понимая, что происходит и когда это кончится. Экран блокировки про срок
  * говорит с самого начала; смена пароля и просмотр seed-фразы — теперь тоже.
+ *
+ * v4.32.928: блокировка одна на всё приложение, а фраза о ней была написана
+ * дважды и по-разному — «Попробуйте через 5 минут» на экране блокировки и
+ * «Повторите через 5 мин» здесь. Человек упирается в обе: сначала в смене
+ * пароля, потом на входе. Считает минуты теперь общий `lockoutMinutesLeft`,
+ * называет их общий `minutesLabel`, глагол взят у экрана — он старше и его
+ * читают чаще.
  */
 export async function showPasswordRejected(): Promise<void> {
   const waitMs = await authGuard.getLockoutTimeRemaining();
   if (waitMs > 0) {
-    showError(`Слишком много попыток. Повторите через ${Math.ceil(waitMs / 60_000)} мин`);
+    showError(`Слишком много попыток. Попробуйте через ${minutesLabel(lockoutMinutesLeft(waitMs))}`);
     return;
   }
   const left = await authGuard.getRemainingAttempts();

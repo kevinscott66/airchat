@@ -11,7 +11,7 @@
  *
  * Здесь нет ни кэшей, ни часов: «сейчас» приходит аргументом.
  */
-import { ruPlural } from '../text/ruPlural';
+import { HOURS, MINUTES, ruPlural } from '../text/ruPlural';
 import { isSameCalendarDay, weekdayLabel } from './calendarTime';
 import { clockTime, dayMonthLong } from './ruDateTime';
 
@@ -24,8 +24,6 @@ export type LastSeenBucket =
   | 'days'        // вчера и пока день недели читается однозначно
   | 'long_ago'    // дальше — датой
   | 'never';      // никогда не видели
-
-const HOURS = ['час', 'часа', 'часов'] as const;
 
 const ONLINE_THRESHOLD_MS = 60_000;
 const RECENTLY_THRESHOLD_MS = 5 * 60_000;
@@ -41,7 +39,7 @@ export function lastSeenLabel(
   if (diff < RECENTLY_THRESHOLD_MS) return { bucket: 'recently', label: 'недавно' };
   if (diff < 60 * 60_000) {
     const mins = Math.floor(diff / 60_000);
-    return { bucket: 'minutes', label: `был(а) ${mins} мин назад` };
+    return { bucket: 'minutes', label: `был(а) ${mins} ${ruPlural(mins, MINUTES)} назад` };
   }
   if (diff < 24 * 3_600_000) {
     const hrs = Math.floor(diff / 3_600_000);

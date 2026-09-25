@@ -103,12 +103,13 @@ describe('что написано в пузыре', () => {
     expect(t).not.toBe('Живая геолокация');
     expect(t).toContain('не обновляется');
     expect(liveLocDetail({ expireAt: NOW + 30 * MIN, now: NOW, updatedAt: NOW - 5 * MIN })).toBe(
-      'последняя точка 5 мин назад',
+      'последняя точка 5 минут назад',
     );
   });
 
   it('идущая сессия говорит, сколько осталось', () => {
-    expect(liveLocDetail({ expireAt: NOW + 12 * MIN, now: NOW, updatedAt: NOW })).toBe('ещё 12 мин');
+    expect(liveLocDetail({ expireAt: NOW + 12 * MIN, now: NOW, updatedAt: NOW })).toBe('ещё 12 минут');
+    expect(liveLocDetail({ expireAt: NOW + 2 * MIN, now: NOW, updatedAt: NOW })).toBe('ещё 2 минуты');
   });
 
   it('последняя минута — «меньше минуты», а не «ещё 0 мин»', () => {

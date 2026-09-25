@@ -4,7 +4,7 @@
 // v4.32.421: само правило живёт в core/text/ruPlural — его же зовут подписи в
 // ядре, а третья, написанная заново копия склоняла «22 часов».
 export { ruPlural } from '../../core/text/ruPlural';
-import { ruPlural } from '../../core/text/ruPlural';
+import { HOURS, MINUTES, ruPlural } from '../../core/text/ruPlural';
 
 /** «5 участников» / «1 участник». */
 export function membersLabel(n: number): string {
@@ -26,9 +26,20 @@ export function devicesLabel(n: number): string {
   return `${n} ${ruPlural(n, ['устройство', 'устройства', 'устройств'])}`;
 }
 
-/** «через 1 минуту» / «через 3 минуты» / «через 5 минут». */
+/**
+ * «через 1 минуту» / «через 3 минуты» / «через 5 минут».
+ *
+ * v4.32.928: сами формы переехали в `core/text/ruPlural`. Те же слова нужны
+ * подписям в ядре («был(а) 20 минут назад»), а ядру нельзя импортировать
+ * из `ui/`.
+ */
 export function minutesLabel(n: number): string {
-  return `${n} ${ruPlural(n, ['минуту', 'минуты', 'минут'])}`;
+  return `${n} ${ruPlural(n, MINUTES)}`;
+}
+
+/** «1 час» / «3 часа» / «5 часов» (v4.32.928). Падеж тот же, что у минут. */
+export function hoursLabel(n: number): string {
+  return `${n} ${ruPlural(n, HOURS)}`;
 }
 
 /**

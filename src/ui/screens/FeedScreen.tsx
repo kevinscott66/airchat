@@ -58,7 +58,7 @@ import * as ImagePicker from 'expo-image-picker';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { loadConfig } from '../../core/config';
 import { contactLabel } from '../../core/social/contactLabel';
-import { membersLabel, ruPlural, subscribersLabel } from '../utils/plural';
+import { hoursLabel, membersLabel, minutesLabel, ruPlural, subscribersLabel } from '../utils/plural';
 import {
   loadFeedPosts,
   publishFeedPost,
@@ -4389,10 +4389,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       whenLabel = t('feed.time.justNow');
                     } else if (diffSec < 3600) {
                       const min = Math.max(1, Math.round(diffSec / 60));
-                      whenLabel = t('feed.time.minAgo', { n: min });
+                      whenLabel = t('feed.time.minAgo', { label: minutesLabel(min) });
                     } else if (sameDay) {
                       const hr = Math.floor(diffSec / 3600);
-                      whenLabel = hr < 6 ? t('feed.time.hrAgo', { n: hr, time }) : t('feed.time.today', { time });
+                      whenLabel =
+                        hr < 6
+                          ? t('feed.time.hrAgo', { label: hoursLabel(hr), time })
+                          : t('feed.time.today', { time });
                     } else if (isYesterday) {
                       whenLabel = t('feed.time.yesterday', { time });
                     } else {

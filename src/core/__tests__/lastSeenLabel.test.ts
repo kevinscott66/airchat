@@ -19,7 +19,13 @@ describe('lastSeenLabel', () => {
   });
 
   it('минуты и часы склоняются', () => {
-    expect(lastSeenLabel(now - 20 * 60_000, now).label).toBe('был(а) 20 мин назад');
+    // v4.32.928: до этой версии проверка называлась «минуты и часы
+    // склоняются», а закрепляла «20 мин» — то есть ровно несклоняемое.
+    expect(lastSeenLabel(now - 20 * 60_000, now).label).toBe('был(а) 20 минут назад');
+    // Единственное число здесь достижимо только на 21, 31, 41 и 51: ниже
+    // пяти минут корзина другая — «недавно».
+    expect(lastSeenLabel(now - 21 * 60_000, now).label).toBe('был(а) 21 минуту назад');
+    expect(lastSeenLabel(now - 22 * 60_000, now).label).toBe('был(а) 22 минуты назад');
     expect(lastSeenLabel(now - 1 * 3_600_000, now).label).toBe('был(а) 1 час назад');
     expect(lastSeenLabel(now - 3 * 3_600_000, now).label).toBe('был(а) 3 часа назад');
     expect(lastSeenLabel(now - 9 * 3_600_000, now).label).toBe('был(а) 9 часов назад');
