@@ -34,7 +34,13 @@ describe('блокировка: обещано ровно то, что запи�
   });
 
   it('тексты отказа берутся из общих констант, а не сочиняются заново', () => {
-    expect(SRC).toContain("import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter }");
+    // v4.32.916: проверка ловила весь список импорта целиком и падала от
+    // любого нового имени рядом — хотя стоит она ради другого. Спрашиваем то,
+    // ради чего: оба текста приходят из rateLimiter, а не написаны здесь.
+    const line = SRC.split('\n').find((l) => l.includes("from '../../core/security/rateLimiter'"));
+    expect(line).toBeDefined();
+    expect(line).toContain('BLOCK_NOT_SAVED_OFF');
+    expect(line).toContain('BLOCK_NOT_SAVED_ON');
   });
 
   it('успех больше не объявляется в then без проверки', () => {

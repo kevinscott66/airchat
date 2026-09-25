@@ -31,7 +31,7 @@ import {
 } from '../../core/social/contacts';
 import { publicKeyToDidKey, didFromPubB64 } from '../../core/identity/did';
 import { getMessagingService } from '../../core/social/messaging';
-import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_CONFIRM_BODY, BLOCK_CONFIRM_TITLE, BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showSuccess } from '../components/userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
@@ -565,24 +565,35 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
           },
           {
             text: alreadyBlocked ? 'Разблокировать' : 'Заблокировать',
+            style: alreadyBlocked ? 'default' : 'destructive',
             onPress: () => {
-              void (async () => {
-                try {
-                  // v4.32.617: успех показывали, не спросив, легла ли запись.
-                  if (alreadyBlocked) {
-                    if (await rateLimiter.unblockContact(dup.peerPublicKey)) showSuccess('Разблокировано');
-                    else showError(BLOCK_NOT_SAVED_OFF);
-                  } else {
-                    if (await rateLimiter.blockContact(dup.peerPublicKey)) showSuccess('Заблокировано');
-                    else showError(BLOCK_NOT_SAVED_ON);
+              const run = () => {
+                void (async () => {
+                  try {
+                    // v4.32.617: успех показывали, не спросив, легла ли запись.
+                    if (alreadyBlocked) {
+                      if (await rateLimiter.unblockContact(dup.peerPublicKey)) showSuccess('Разблокировано');
+                      else showError(BLOCK_NOT_SAVED_OFF);
+                    } else {
+                      if (await rateLimiter.blockContact(dup.peerPublicKey)) showSuccess('Заблокировано');
+                      else showError(BLOCK_NOT_SAVED_ON);
+                    }
+                    await load();
+                    setAddVisible(false);
+                    resetAddForm();
+                  } catch (e) {
+                    showError(userErrorText(e, 'Не удалось изменить блокировку'));
                   }
-                  await load();
-                  setAddVisible(false);
-                  resetAddForm();
-                } catch (e) {
-                  showError(userErrorText(e, 'Не удалось изменить блокировку'));
-                }
-              })();
+                })();
+              };
+              // v4.32.916: здесь запрет вставал с одного нажатия и молча —
+              // соседнее «Удалить» переспрашивает, а это нет. Снятие запрета
+              // ничего не отнимает, его не переспрашиваем.
+              if (alreadyBlocked) { run(); return; }
+              Alert.alert(BLOCK_CONFIRM_TITLE, BLOCK_CONFIRM_BODY, [
+                { text: 'Отмена', style: 'cancel' },
+                { text: 'Заблокировать', style: 'destructive', onPress: run },
+              ]);
             },
           },
           {
@@ -680,21 +691,31 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         {
           // v4.32.44: быстрый блок/разблок прямо из списка контактов — не надо идти в ChatScreen.
           text: isBlocked ? 'Разблокировать' : 'Заблокировать',
+          style: isBlocked ? 'default' : 'destructive',
           onPress: () => {
-            void (async () => {
-              try {
-                if (isBlocked) {
-                  if (await rateLimiter.unblockContact(c.peerPublicKey)) showSuccess('Разблокировано');
-                  else showError(BLOCK_NOT_SAVED_OFF);
-                } else {
-                  if (await rateLimiter.blockContact(c.peerPublicKey)) showSuccess('Заблокировано');
-                  else showError(BLOCK_NOT_SAVED_ON);
+            const run = () => {
+              void (async () => {
+                try {
+                  if (isBlocked) {
+                    if (await rateLimiter.unblockContact(c.peerPublicKey)) showSuccess('Разблокировано');
+                    else showError(BLOCK_NOT_SAVED_OFF);
+                  } else {
+                    if (await rateLimiter.blockContact(c.peerPublicKey)) showSuccess('Заблокировано');
+                    else showError(BLOCK_NOT_SAVED_ON);
+                  }
+                  await load();
+                } catch (e) {
+                  showError(userErrorText(e, 'Не удалось изменить блокировку'));
                 }
-                await load();
-              } catch (e) {
-                showError(userErrorText(e, 'Не удалось изменить блокировку'));
-              }
-            })();
+              })();
+            };
+            // v4.32.916: «быстро» значило «без вопроса»: одно нажатие в меню
+            // строки — и запрет стоит. Соседнее «Удалить» переспрашивает.
+            if (isBlocked) { run(); return; }
+            Alert.alert(BLOCK_CONFIRM_TITLE, BLOCK_CONFIRM_BODY, [
+              { text: 'Отмена', style: 'cancel' },
+              { text: 'Заблокировать', style: 'destructive', onPress: run },
+            ]);
           },
         },
         {

@@ -100,7 +100,7 @@ import { log, measurePerformance } from '../../core/logger';
 import { toggleAndSyncReaction } from '../../core/social/reactionSync';
 import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { profileManager } from '../../core/identity/profileManager';
-import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_CONFIRM_BODY, BLOCK_CONFIRM_TITLE, BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
 import { reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
 import { exportBody } from '../../core/social/exportLine';
@@ -3675,7 +3675,9 @@ function ChatThreadView({
                           setIsBlocked(false);
                         }, 'Не удалось разблокировать', 'ui_chat_unblock_failed');
                       } else {
-                        Alert.alert('Заблокировать?', 'Сообщения будут отклонены.', [
+                        // v4.32.916: было «Сообщения будут отклонены.» — про
+                        // звонки и про свою сторону запрета ни слова.
+                        Alert.alert(BLOCK_CONFIRM_TITLE, BLOCK_CONFIRM_BODY, [
                           { text: 'Отмена', style: 'cancel' },
                           { text: 'Заблокировать', style: 'destructive', onPress: () => runGuardedOp(async () => {
                             const ok = await rateLimiter.blockContact(peerB64);

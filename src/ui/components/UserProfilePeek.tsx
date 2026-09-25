@@ -137,7 +137,7 @@ import {
 } from '../../core/storage/local';
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { setDisappearAndSync } from '../../core/social/disappearSync';
-import { BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
+import { BLOCK_CONFIRM_BODY, BLOCK_CONFIRM_TITLE, BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { initiateCall } from '../../core/social/callService';
 import { callStartText } from '../callStartText';
 import { copyGuardState } from '../../core/social/copyGuard';
@@ -869,7 +869,9 @@ export function UserProfilePeek({
         .catch((e: unknown) => showError(userErrorText(e, 'Не удалось разблокировать')));
       return;
     }
-    Alert.alert('Заблокировать?', 'Сообщения и звонки от этого человека будут отклонены.', [
+    // v4.32.916: текст был полнее чатовского, но и он не договаривал — своё к
+    // заблокированному тоже перестаёт уходить. Теперь строка одна на все места.
+    Alert.alert(BLOCK_CONFIRM_TITLE, BLOCK_CONFIRM_BODY, [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Заблокировать',
