@@ -1074,6 +1074,15 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
               {FOLDER_COLORS.map((ct) => (
                 <AppPressable
                   key={ct.value}
+                  accessibilityRole="button"
+                  // v4.32.934: семь одинаковых кружков подряд озвучка читала
+                  // как «кнопка, кнопка, кнопка…» — выбрать метку вслепую было
+                  // нечем. Название цвета уже лежит рядом с ним в палитре
+                  // (chatFolders.FOLDER_COLORS), а если человек назвал этой
+                  // меткой папку, то её название и есть то, чем он эту метку
+                  // называет сам.
+                  accessibilityLabel={folderNames[ct.value] ? `${ct.label} — «${folderNames[ct.value]}»` : ct.label}
+                  accessibilityState={{ selected: colorPickerItem?.colorTag === ct.value }}
                   onPress={() => {
                     if (colorPickerItem) {
                       const pid = activeProfileId();

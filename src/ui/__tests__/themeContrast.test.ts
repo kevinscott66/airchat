@@ -1942,7 +1942,7 @@ describe('сюжеты: поверх чужого кадра и поверх в�
   });
 
   it('фоны текстовой сторис известны — чернила на них считаются', () => {
-    for (const bg of [...STORY_TEXT_BACKGROUNDS, STORY_TEXT_VIEWER_BG]) {
+    for (const bg of [...STORY_TEXT_BACKGROUNDS.map((b) => b.hex), STORY_TEXT_VIEWER_BG]) {
       const ink = inkOn(darkColors, bg);
       expect(contrast(ink.text, bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(ink.secondary, bg)).toBeGreaterThanOrEqual(4.5);
@@ -1955,7 +1955,7 @@ describe('сюжеты: поверх чужого кадра и поверх в�
 
   it('фон сторис выбирает автор, и теме он не подчиняется', () => {
     for (const [, p] of palettes) {
-      for (const bg of STORY_TEXT_BACKGROUNDS) {
+      for (const { hex: bg } of STORY_TEXT_BACKGROUNDS) {
         expect(bg).not.toBe(p.background);
         expect(bg).not.toBe(p.surface);
       }

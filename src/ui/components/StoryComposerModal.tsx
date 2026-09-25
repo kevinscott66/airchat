@@ -110,7 +110,7 @@ export function StoryComposerModal({
 
   // Фон текстовой сторис известен — его только что выбрал автор, — поэтому
   // чернила считаются от него, а не пишутся белым «на глаз» (правило 415-го).
-  const textBg = STORY_TEXT_BACKGROUNDS[bgIdx];
+  const textBg = STORY_TEXT_BACKGROUNDS[bgIdx].hex;
   const textInk = inkOn(darkColors, textBg);
   const textPlate = nestedFill(textBg);
   const textPlateInk = inkOn(darkColors, textPlate);
@@ -238,14 +238,20 @@ export function StoryComposerModal({
           <View style={[s.bottom, { paddingBottom: insets.bottom + spacing.md }]}>
             {isText ? (
               <View style={s.swatches}>
-                {STORY_TEXT_BACKGROUNDS.map((color, i) => (
+                {STORY_TEXT_BACKGROUNDS.map((bg, i) => (
                   <AppPressable
-                    key={color}
-                    accessibilityLabel={`Фон ${i + 1}`}
+                    key={bg.hex}
+                    accessibilityRole="button"
+                    // v4.32.934: было «Фон 1»…«Фон 6» — порядковый номер в
+                    // массиве. Он не описывает ни один из шести кружков и
+                    // меняется, стоит переставить набор. Название лежит рядом
+                    // с цветом в theme.ts.
+                    accessibilityLabel={`Фон: ${bg.name}`}
+                    accessibilityState={{ selected: i === bgIdx }}
                     onPress={() => setBgIdx(i)}
                     style={[
                       s.swatch,
-                      { backgroundColor: color, borderColor: textInk.text, borderWidth: i === bgIdx ? 3 : 1 },
+                      { backgroundColor: bg.hex, borderColor: textInk.text, borderWidth: i === bgIdx ? 3 : 1 },
                     ]}
                   />
                 ))}
