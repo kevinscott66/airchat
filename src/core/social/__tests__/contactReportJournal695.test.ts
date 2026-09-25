@@ -11,6 +11,11 @@
  * Проверка ведётся поведением: profileScopedKv берётся настоящий, а отказ
  * подделывается на уровне базы — `kvTryGet` отвечает null ровно так же, как
  * отвечает при сбое SQLite.
+ *
+ * v4.32.946: журнал переехал в шифрованную пару, и подделка базы переехала
+ * вместе с ним. Отказ теперь приходит состоянием `unreadable` — тем же, каким
+ * оборачивается и неоткрывшийся шифртекст; для журнала это намеренно один и
+ * тот же ответ, и здесь проверяется именно он.
  */
 const mockPid = 2;
 const DID = 'did:key:z6MkПервый';
@@ -26,6 +31,19 @@ const mockFailWrites = new Set<string>();
 jest.mock('../../storage/local', () => ({
   kvTryGet: async (k: string) => (mockFailReads.has(k) ? null : { value: mockKv.get(k) ?? null }),
   kvSetChecked: async (k: string, v: string) => {
+    if (mockFailWrites.has(k)) return false;
+    mockKv.set(k, v);
+    return true;
+  },
+  // v4.32.946: шифрованная пара. Расшифровка здесь не подделывается — она не
+  // предмет проверки; предмет — три состояния столбца, и они те же самые.
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const scoped = `p${pid}:${k}`;
+    if (mockFailReads.has(scoped)) return { state: 'unreadable' };
+    const own = mockKv.get(scoped);
+    return own === undefined ? { state: 'absent' } : { state: 'plain', text: own };
+  },
+  kvSetSecret: async (k: string, v: string) => {
     if (mockFailWrites.has(k)) return false;
     mockKv.set(k, v);
     return true;
@@ -122,7 +140,7 @@ describe('отказ записи тоже не выдаётся за успех
 describe('исходник: чтение объявлено тройственным', () => {
   it('есть readReports с тремя ответами и на нём стоит запись', () => {
     expect(SRC).toContain('async function readReports(): Promise<ContactReport[] | null> {');
-    expect(SRC).toContain('const read = await scopedKvTryGet(KEY);');
+    expect(SRC).toContain('const read = await scopedKvTryGetSecret(KEY);');
     expect(SRC).toContain('return read === null ? null : parseReports(read.value);');
     expect(SRC).toContain('const prev = await readReports();');
     expect(SRC).toContain('if (prev === null) {');
@@ -131,6 +149,14 @@ describe('исходник: чтение объявлено тройственн
   it('старая слепая пара «прочитать-записать» не вернулась', () => {
     expect(SRC).not.toContain('scopedKvGet(KEY)');
     expect(SRC).not.toContain('await scopedKvSet(KEY,');
-    expect(SRC).toContain('await scopedKvSetChecked(KEY, JSON.stringify(next))');
+    expect(SRC).toContain('await scopedKvSetSecretChecked(KEY, JSON.stringify(next))');
+  });
+
+  // v4.32.946: журнал — did собеседника рядом с причиной, и в открытом
+  // столбце базы ему не место. Открытая пара сюда не возвращается.
+  it('журнал пишется и читается только шифрованной парой', () => {
+    expect(SRC).toContain("import { scopedKvSetSecretChecked, scopedKvTryGetSecret } from '../storage/profileScopedKv';");
+    expect(SRC).not.toContain('scopedKvTryGet(');
+    expect(SRC).not.toContain('scopedKvSetChecked(');
   });
 });

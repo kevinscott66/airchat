@@ -37,6 +37,19 @@ jest.mock('../../storage/local', () => ({
     mockKv.set(k, v);
     return true;
   },
+  // v4.32.946: карта «кому уже отправлено» переехала в шифрованную пару.
+  // Расшифровка здесь не подделывается — предмет проверки не она, а три
+  // состояния столбца, и отказ базы даёт то же `unreadable`.
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const scoped = `p${pid}:${k}`;
+    if (mockFailReads.has(scoped)) return { state: 'unreadable' };
+    const own = mockKv.get(scoped);
+    return own === undefined ? { state: 'absent' } : { state: 'plain', text: own };
+  },
+  kvSetSecret: async (k: string, v: string) => {
+    mockKv.set(k, v);
+    return true;
+  },
   kvDelete: async (k: string) => {
     mockKv.delete(k);
   },
@@ -159,9 +172,22 @@ describe('оба списка «кому отправлено» читаются
     it(`${file}: чтение трёхзначное`, () => {
       const s = src(file);
       expect(s).toContain('async function loadSent(pid: number): Promise<SentMap | null> {');
-      expect(s).toContain('const read = await scopedKvTryGetFor(pid, SENT_KEY);');
+      // v4.32.946: карта переехала в шифрованную пару. Тройственность от
+      // этого только шире: к «база не ответила» добавилось «не открылось», а
+      // ответ на оба один — не знаем, значит не пишем.
+      expect(s).toContain('const read = await scopedKvTryGetSecretFor(pid, SENT_KEY);');
       expect(s).toContain(`return read === null ? null : parseSentMap(read.value, ${guard});`);
       expect(s).not.toContain('scopedKvGetFor(pid, SENT_KEY)');
+    });
+
+    // v4.32.946: карта — список открытых ключей собеседников, то есть граф
+    // связей. Открытая запись сюда не возвращается, а отказ шифрованной не
+    // молчит: открытым текстом взамен не пишут, и потерю надо видеть.
+    it(`${file}: карта пишется только шифртекстом, и отказ записи слышен`, () => {
+      const s = src(file);
+      expect(s).toContain('if (!await scopedKvSetSecretCheckedFor(pid, SENT_KEY, JSON.stringify(merged))) {');
+      expect(s).not.toContain('scopedKvSetFor(pid, SENT_KEY');
+      expect(s).not.toContain('scopedKvTryGetFor(pid, SENT_KEY)');
     });
 
     it(`${file}: не прочитали — не пишем`, () => {

@@ -17,7 +17,7 @@
  * рядом работает вторая половина, которую никто снаружи не отменит, —
  * взаимность в presenceService (скрыл своё время — не видишь чужое).
  */
-import { scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvSetSecretCheckedFor, scopedKvTryGetSecretFor } from '../storage/profileScopedKv';
 import { listContactsFor } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentFlag, trimSentMap } from './sentMap';
@@ -48,6 +48,11 @@ export { PRESENCE_PREF_PREFIX };
  * v4.32.325: своё у каждого аккаунта (scopedKvGet/Set). Это список открытых
  * ключей собеседников, то есть граф связей: общая запись смешивала адресатов
  * разных аккаунтов и переживала удаление профиля.
+ *
+ * v4.32.946: и шифртекстом. Здесь строка говорит больше, чем в profileSync: не
+ * только кому слали, но и ЧТО — кому открыто время последнего входа, а кому
+ * закрыто. Настройка приватности, разложенная по именам собеседников, в
+ * открытом столбце базы лежать не должна.
  */
 const SENT_KEY = 'presence:pref_sent';
 const SENT_MAX = 1000;
@@ -74,7 +79,7 @@ function activeProfileId(): number {
  * время входа, а его владелец уверен, что закрыл его всем.
  */
 async function loadSent(pid: number): Promise<SentMap | null> {
-  const read = await scopedKvTryGetFor(pid, SENT_KEY);
+  const read = await scopedKvTryGetSecretFor(pid, SENT_KEY);
   return read === null ? null : parseSentMap(read.value, isSentFlag);
 }
 
@@ -100,7 +105,12 @@ async function recordSent(pid: number, patch: SentMap): Promise<void> {
       return;
     }
     const merged = trimSentMap(mergeSentMap(stored, patch), SENT_MAX);
-    await scopedKvSetFor(pid, SENT_KEY, JSON.stringify(merged));
+    // v4.32.946: отказ записи больше не молчит. Цена ему здесь та же, что у
+    // потерянной правки выше: собеседник останется неуведомлённым, а мы
+    // решим иначе — см. loadSent.
+    if (!await scopedKvSetSecretCheckedFor(pid, SENT_KEY, JSON.stringify(merged))) {
+      log.warn('presence_pref_sent_write_failed', { pid, patch: Object.keys(patch).length });
+    }
   };
   const started = sentTx.then(run, run);
   sentTx = started.catch(() => {});

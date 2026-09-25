@@ -42,6 +42,19 @@ jest.mock('../../storage/local', () => ({
     mockKv.set(k, v);
     return true;
   },
+  // v4.32.946: карта «кому уже отправлено» переехала в шифрованную пару.
+  // Расшифровка здесь не подделывается — предмет проверки не она, а три
+  // состояния столбца, и отказ базы даёт то же `unreadable`.
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const scoped = `p${pid}:${k}`;
+    if (mockFailReads.has(scoped)) return { state: 'unreadable' };
+    const own = mockKv.get(scoped);
+    return own === undefined ? { state: 'absent' } : { state: 'plain', text: own };
+  },
+  kvSetSecret: async (k: string, v: string) => {
+    mockKv.set(k, v);
+    return true;
+  },
   kvDelete: async (k: string) => {
     mockKv.delete(k);
   },

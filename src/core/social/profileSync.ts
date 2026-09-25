@@ -13,7 +13,13 @@
  * Кому уже отправлено — помнится в kv, чтобы открытие чата не превращалось в
  * повторную рассылку одного и того же.
  */
-import { scopedKvGetFor, scopedKvSet, scopedKvSetFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
+import {
+  scopedKvGetFor,
+  scopedKvSet,
+  scopedKvSetFor,
+  scopedKvSetSecretCheckedFor,
+  scopedKvTryGetSecretFor,
+} from '../storage/profileScopedKv';
 import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
 import { ownAvatarNameFor, ownAvatarUriFor } from '../identity/ownAvatar';
 import { listContactsFor, setPeerProfileForChecked } from './contacts';
@@ -55,6 +61,13 @@ export { PROFILE_PREFIX, PROFILE_REQ_PREFIX };
  * ключи этого модуля. Это список открытых ключей собеседников, то есть граф
  * связей: общая запись смешивала адресатов разных аккаунтов и переживала
  * удаление профиля, доставаясь следующему с тем же номером.
+ *
+ * v4.32.946: и шифртекстом. Та фраза «список открытых ключей собеседников, то
+ * есть граф связей» была сказана про разделение по аккаунтам, а про открытый
+ * столбец базы — нет, хотя она про него ровно в той же мере: карта называет
+ * всех, кому этот аккаунт слал профиль, и когда. Остальные ключи модуля
+ * (отметка времени, дескриптор своей загрузки) о других людях не говорят и
+ * остаются как были.
  */
 const SENT_KEY = 'profile:sent';
 const SENT_MAX = 1000;
@@ -89,7 +102,7 @@ function activeProfileId(): number {
  * лишней рассылкой, — но повод один, и правило должно быть одним.
  */
 async function loadSent(pid: number): Promise<SentMap | null> {
-  const read = await scopedKvTryGetFor(pid, SENT_KEY);
+  const read = await scopedKvTryGetSecretFor(pid, SENT_KEY);
   return read === null ? null : parseSentMap(read.value, isSentVersion);
 }
 
@@ -113,7 +126,13 @@ async function recordSent(pid: number, patch: SentMap): Promise<void> {
       return;
     }
     const merged = trimSentMap(mergeSentMap(stored, patch), SENT_MAX);
-    await scopedKvSetFor(pid, SENT_KEY, JSON.stringify(merged));
+    // v4.32.946: отказ записи больше не молчит. Открытым текстом взамен не
+    // пишем (см. scopedKvSetSecretCheckedFor), поэтому незамеченный отказ
+    // означал бы потерянную правку; цена ей — лишняя рассылка профиля на
+    // следующем заходе, и в журнале это должно быть видно.
+    if (!await scopedKvSetSecretCheckedFor(pid, SENT_KEY, JSON.stringify(merged))) {
+      log.warn('profile_sent_write_failed', { pid, patch: Object.keys(patch).length });
+    }
   };
   const started = sentTx.then(run, run);
   sentTx = started.catch(() => {});

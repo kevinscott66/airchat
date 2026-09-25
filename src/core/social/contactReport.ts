@@ -13,9 +13,17 @@
  *     сети без модератора действительно прекращает поток от него.
  *
  * Журнал профильный и локальный. Он не уходит ни собеседнику, ни на сервер.
+ *
+ * v4.32.946: и профильный, и ЗАШИФРОВАННЫЙ. Каждая запись — did собеседника
+ * рядом с причиной, то есть кусок графа связей вместе с оценкой: «на этого
+ * человека я пожаловался за оскорбления». В открытом столбце базы такой
+ * строке не место, и рядом, в mutedAuthors, ровно то же правило записано с
+ * v4.32.293 — здесь оно просто запоздало. Прежние записи открытым текстом
+ * читаются как есть и уходят в шифртекст при первой же записи: перенос делает
+ * само хранилище (см. scopedKvTryGetSecretFor).
  */
 
-import { scopedKvSetChecked, scopedKvTryGet } from '../storage/profileScopedKv';
+import { scopedKvSetSecretChecked, scopedKvTryGetSecret } from '../storage/profileScopedKv';
 import { log } from '../logger';
 
 export type ReportReason = 'spam' | 'abuse' | 'fraud' | 'illegal' | 'other';
@@ -66,10 +74,15 @@ function parseReports(raw: string | null): ContactReport[] {
  * Испорченное содержимое сюда не относится: его модуль намеренно читает как
  * пустоту (см. parseReports) — восстанавливать там нечего, и дописывать поверх
  * можно. Здесь различается только «база не ответила».
+ *
+ * v4.32.946: с шифртекстом к «база не ответила» добавился второй случай —
+ * «не открылось». Ответ у них один и тот же намеренно: неоткрывшийся журнал
+ * может быть целым (ключ не подняли), и дописать поверх него значило бы
+ * стереть настоящий след. Отказ дешевле.
  */
 async function readReports(): Promise<ContactReport[] | null> {
   try {
-    const read = await scopedKvTryGet(KEY);
+    const read = await scopedKvTryGetSecret(KEY);
     return read === null ? null : parseReports(read.value);
   } catch (e) {
     log.warn('contact_reports_read_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -106,7 +119,7 @@ export async function recordContactReport(
     throw new Error('Журнал жалоб не прочитался. Попробуйте ещё раз.');
   }
   const next = [{ did, reason, at: Date.now(), blocked }, ...prev].slice(0, MAX_REPORTS);
-  if (!await scopedKvSetChecked(KEY, JSON.stringify(next))) {
+  if (!await scopedKvSetSecretChecked(KEY, JSON.stringify(next))) {
     log.warn('contact_report_write_failed', { reason });
     throw new Error('Жалоба не записалась. Попробуйте ещё раз.');
   }

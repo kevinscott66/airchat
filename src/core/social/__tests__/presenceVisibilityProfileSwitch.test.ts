@@ -34,6 +34,14 @@ jest.mock('../../storage/local', () => ({
   kvTryGet: async (k: string) => ({ value: mockKv.get(k) ?? null }),
   kvSet: async (k: string, v: string) => { mockKv.set(k, v); },
   kvSetChecked: async (k: string, v: string) => { mockKv.set(k, v); return true; },
+  // v4.32.946: карта «кому уже отправлено» переехала в шифрованную пару.
+  // Здесь проверяется разделение по профилям, и подделка держит значение в
+  // той же ячейке — иначе проверка перестала бы проверять то, ради чего есть.
+  kvGetSecretCellScoped: async (pid: number, k: string) => {
+    const own = mockKv.get(`p${pid}:${k}`);
+    return own === undefined ? { state: 'absent' } : { state: 'plain', text: own };
+  },
+  kvSetSecret: async (k: string, v: string) => { mockKv.set(k, v); return true; },
   kvDelete: async (k: string) => { mockKv.delete(k); },
   kvDeleteChecked: async (k: string) => { mockKv.delete(k); return true; },
   kvListKeysByPrefix: async (p: string) => [...mockKv.keys()].filter((k) => k.startsWith(p)),

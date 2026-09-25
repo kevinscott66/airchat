@@ -47,6 +47,16 @@ jest.mock('../../storage/profileScopedKv', () => {
       kv[k] = v;
       return true;
     }),
+    // v4.32.946: журнал переехал в шифрованную пару. Отвечает она так же
+    // тройственно и с той же ценой отказа — подделка повторяет открытую.
+    scopedKvTryGetSecret: jest.fn(async (k: string) =>
+      mockBroken ? null : { value: kv[k] ?? null }
+    ),
+    scopedKvSetSecretChecked: jest.fn(async (k: string, v: string) => {
+      if (mockWriteFails) return false;
+      kv[k] = v;
+      return true;
+    }),
     scopedKvSetCheckedFor: jest.fn(async (pid: number, k: string, v: string) => {
       if (mockWriteFails) return false;
       kv[scoped(pid, k)] = v;
