@@ -11,6 +11,7 @@ import { log } from '../../logger';
 import { getHeliaUnixfs, isIpfsEnabled } from './heliaNode';
 import { cachePut } from './blockstore';
 import { getWorkingAddUrl } from './healthCheck';
+import { cidForLog, urlForLog } from './logFields';
 
 let client: KuboRPCClient | null = null;
 let lastUrl: string | null = null;
@@ -115,11 +116,11 @@ async function addViaHttpApiFallback(data: Uint8Array): Promise<string | null> {
             const hash = parseKuboAddResponseBody(vpnRes.bodyText);
             if (hash) {
               await cachePut(hash, data);
-              log.info('ipfs_add_via_http', { urlPrefix: url.slice(0, 40), cidPrefix: hash.slice(0, 12) });
+              log.info('ipfs_add_via_http', { urlPrefix: urlForLog(url), cidPrefix: cidForLog(hash) });
               return hash;
             }
           }
-          log.warn('ipfs_http_add_vpn_failed', { url, status: vpnRes.status, attempt: attempt + 1 });
+          log.warn('ipfs_http_add_vpn_failed', { urlPrefix: urlForLog(url), status: vpnRes.status, attempt: attempt + 1 });
           // Не падаем на обычный fetch — иначе трафик пойдёт не через VPN.
           continue;
         }
@@ -139,27 +140,27 @@ async function addViaHttpApiFallback(data: Uint8Array): Promise<string | null> {
         // a hostile add endpoint can stream unbounded JSON-lines and OOM the heap.
         const cl = res.headers.get('content-length');
         if (cl && Number(cl) > 1 * 1024 * 1024) {
-          log.warn('ipfs_http_add_oversize_drop', { url, contentLength: cl });
+          log.warn('ipfs_http_add_oversize_drop', { urlPrefix: urlForLog(url), contentLength: cl });
           continue;
         }
         const raw = await res.text();
         if (raw.length > 1 * 1024 * 1024) {
-          log.warn('ipfs_http_add_oversize_drop_post', { url, bytes: raw.length });
+          log.warn('ipfs_http_add_oversize_drop_post', { urlPrefix: urlForLog(url), bytes: raw.length });
           continue;
         }
         if (!res.ok) {
-          log.warn('ipfs_http_add_http_status', { url, status: res.status, attempt: attempt + 1 });
+          log.warn('ipfs_http_add_http_status', { urlPrefix: urlForLog(url), status: res.status, attempt: attempt + 1 });
           continue;
         }
         const hash = parseKuboAddResponseBody(raw);
         if (hash) {
           await cachePut(hash, data);
-          log.info('ipfs_add_via_http', { urlPrefix: url.slice(0, 40), cidPrefix: hash.slice(0, 12) });
+          log.info('ipfs_add_via_http', { urlPrefix: urlForLog(url), cidPrefix: cidForLog(hash) });
           return hash;
         }
         } catch (e) {
           log.warn('ipfs_http_add_url_failed', {
-            url,
+            urlPrefix: urlForLog(url),
             attempt: attempt + 1,
             err: e instanceof Error ? e.message : String(e),
           });
@@ -200,21 +201,21 @@ async function catViaHttpGateways(cid: string): Promise<Uint8Array | null> {
       const IPFS_MAX_BYTES = 50 * 1024 * 1024;
       const cl = res.headers.get('content-length');
       if (cl && Number(cl) > IPFS_MAX_BYTES) {
-        log.warn('ipfs_cat_oversize_drop', { cidPrefix: cid.slice(0, 12), contentLength: cl });
+        log.warn('ipfs_cat_oversize_drop', { cidPrefix: cidForLog(cid), contentLength: cl });
         continue;
       }
       const buf = new Uint8Array(await res.arrayBuffer());
       if (buf.byteLength > IPFS_MAX_BYTES) {
-        log.warn('ipfs_cat_oversize_drop_post', { cidPrefix: cid.slice(0, 12), bytes: buf.byteLength });
+        log.warn('ipfs_cat_oversize_drop_post', { cidPrefix: cidForLog(cid), bytes: buf.byteLength });
         continue;
       }
       await cachePut(cid, buf);
-      log.info('ipfs_cat_via_http_gateway', { cidPrefix: cid.slice(0, 12) });
+      log.info('ipfs_cat_via_http_gateway', { cidPrefix: cidForLog(cid) });
       return buf;
     } catch (e) {
       log.warn('ipfs_cat_http_gateway_failed', {
         err: e instanceof Error ? e.message : String(e),
-        url: url.slice(0, 64),
+        urlPrefix: urlForLog(url),
       });
     }
   }
@@ -246,27 +247,27 @@ async function addViaKubo(data: Uint8Array): Promise<string | null> {
         // v4.32.193 (Round-23 #2): cap Kubo add response before text().
         const cl = res.headers.get('content-length');
         if (cl && Number(cl) > 1 * 1024 * 1024) {
-          log.warn('ipfs_add_kubo_oversize_drop', { url, contentLength: cl });
+          log.warn('ipfs_add_kubo_oversize_drop', { urlPrefix: urlForLog(url), contentLength: cl });
           continue;
         }
         const raw = await res.text();
         if (raw.length > 1 * 1024 * 1024) {
-          log.warn('ipfs_add_kubo_oversize_drop_post', { url, bytes: raw.length });
+          log.warn('ipfs_add_kubo_oversize_drop_post', { urlPrefix: urlForLog(url), bytes: raw.length });
           continue;
         }
         if (!res.ok) {
-          log.warn('ipfs_add_kubo_http_status', { url, status: res.status, attempt: attempt + 1 });
+          log.warn('ipfs_add_kubo_http_status', { urlPrefix: urlForLog(url), status: res.status, attempt: attempt + 1 });
           continue;
         }
         const hash = parseKuboAddResponseBody(raw);
         if (hash) {
           await cachePut(hash, data);
-          log.info('ipfs_add_via_kubo', { cidPrefix: hash.slice(0, 12), urlPrefix: url.slice(0, 40) });
+          log.info('ipfs_add_via_kubo', { cidPrefix: cidForLog(hash), urlPrefix: urlForLog(url) });
           return hash;
         }
       } catch (e) {
         log.warn('ipfs_add_kubo_failed', {
-          url,
+          urlPrefix: urlForLog(url),
           attempt: attempt + 1,
           err: e instanceof Error ? e.message : String(e),
         });
@@ -335,7 +336,7 @@ export async function catFromIpfs(cid: string): Promise<Uint8Array | null> {
       for await (const buf of c.cat(cid)) {
         running += buf.length;
         if (running > IPFS_MAX_BYTES) {
-          log.warn('ipfs_cat_kubo_oversize_drop', { cidPrefix: cid.slice(0, 12), bytes: running });
+          log.warn('ipfs_cat_kubo_oversize_drop', { cidPrefix: cidForLog(cid), bytes: running });
           return null;
         }
         chunks.push(buf);
@@ -350,7 +351,7 @@ export async function catFromIpfs(cid: string): Promise<Uint8Array | null> {
       return merged;
     }
   } catch (e) {
-    log.warn('ipfs_cat_failed', { err: e instanceof Error ? e.message : String(e), cid });
+    log.warn('ipfs_cat_failed', { err: e instanceof Error ? e.message : String(e), cidPrefix: cidForLog(cid) });
     resetIpfsClient();
   }
   return catViaHttpGateways(cid);
