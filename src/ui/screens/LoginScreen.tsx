@@ -211,7 +211,7 @@ export function LoginScreen({ pair: pairProp, onDone }: Props): React.ReactEleme
             <Text style={styles.sub}>Ключи на месте. Осталось имя, под которым вас увидят собеседники — его можно поменять в профиле.</Text>
             {did ? (
               <Text style={styles.did} testID="user_did">
-                Ваш адрес: {shortIdentity(did, 20)}
+                Ваш ID: {shortIdentity(did, 20)}
               </Text>
             ) : null}
             <Text style={styles.fieldLabel} nativeID="login_username_label">

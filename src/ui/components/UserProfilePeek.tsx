@@ -1171,7 +1171,11 @@ export function UserProfilePeek({
                   accessibilityRole="button"
                   accessibilityLabel={COPY_LINK_ACTION}
                 >
-                  <Text style={[styles.didLabel, { color: colors.textSecondary }]}>DID</Text>
+                  {/* v4.32.914: подпись была «DID» — единственное место, где
+                      человеку показывали слово протокола. Кнопка «поделиться»
+                      в двух сантиметрах правее уже озвучивалась как
+                      «Поделиться ID». */}
+                  <Text style={[styles.didLabel, { color: colors.textSecondary }]}>ID</Text>
                   <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1}>
                     {shortDid(resolved.did, 10)}
                   </Text>

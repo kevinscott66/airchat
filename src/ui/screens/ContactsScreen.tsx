@@ -545,7 +545,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       const alreadyBlocked = blockedSet.has(dup.peerPublicKey);
       Alert.alert(
         'Контакт уже добавлен',
-        `«${dup.displayName}» уже в списке. Один и тот же адрес нельзя добавить дважды.`,
+        `«${dup.displayName}» уже в списке. Один и тот же ID нельзя добавить дважды.`,
         [
           { text: 'Отмена', style: 'cancel' },
           {
