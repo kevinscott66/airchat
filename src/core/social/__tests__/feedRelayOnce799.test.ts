@@ -231,9 +231,18 @@ describe('форма исходников: правка стоит там, гд�
 
   it('проверка стоит последней в условии пересылки', () => {
     const body = codeOnly(SRC());
-    const at = body.indexOf("payload.type !== 'feed_view' &&");
+    const at = body.indexOf("payload.type !== 'feed_view'");
     expect(at).toBeGreaterThan(0);
-    expect(body.slice(at, at + 120)).toContain('!feedRelayMarkOrHas(dedupKey)');
+    const gate = body.slice(at, at + 500);
+    // v4.32.943: перед отметкой спрашивается квота пересылки. Она про то же
+    // самое — нести или не нести, — и по той же причине стоит ДО отметки:
+    // отказ по квоте не должен записываться как «уже понёс».
+    const budget = gate.indexOf('feedRelayBudget.admit(payload.authorDid');
+    const mark = gate.indexOf('!feedRelayMarkOrHas(dedupKey)');
+    const relay = gate.indexOf('void feedGossipRelay(');
+    expect(budget).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(budget);
+    expect(relay).toBeGreaterThan(mark);
   });
 
   it('обе отметки чистятся вместе при смене профиля', () => {

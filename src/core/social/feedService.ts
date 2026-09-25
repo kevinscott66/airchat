@@ -58,6 +58,7 @@ import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { FEED_MAX_DOC_BYTES, FEED_MAX_DOCS, FEED_POST_MAX_BYTES } from './composeDraft';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
+import { FeedRelayBudget } from './feedRelayBudget';
 import { reactionAddRefusal } from './reactionMapPolicy';
 import { reactionLimitError, reactionUnreadableText } from './reactionWrite';
 // v4.32.528: тип, в котором сбой чтения отличим от пустой ленты.
@@ -809,6 +810,16 @@ async function isAuthorBlocked(authorDid: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Квота пересылки чужого (v4.32.943).
+ *
+ * Одна на приложение, а не на профиль: она про радио и батарею устройства, а
+ * они при смене профиля не меняются. Обнулять её вместе с отметками ленты
+ * значило бы дать потоку начаться заново по команде извне — переключение
+ * профиля инициирует человек, но темп чужих конвертов задаёт не он.
+ */
+const feedRelayBudget = new FeedRelayBudget();
 
 async function feedGossipRelay(
   innerFrame: Uint8Array,
@@ -3772,13 +3783,22 @@ export async function receiveFeedEnvelope(
   // от «видели» и осечкой разбора не снимается — см. feedRelayMarkOrHas.
   // Проверка стоит последней: отмечать то, что мы и не собирались пересылать,
   // значило бы запретить пересылку самим себе на будущее.
+  //
+  // v4.32.943: и не больше, чем моё радио согласно потратить на чужое за
+  // минуту — см. feedRelayBudget. Квота спрашивается раньше отметки «уже
+  // переслали» по той же причине, по какой отметка стоит последней: отказ по
+  // квоте это «сейчас не понесу», и записывать его как «уже понёс» значило бы
+  // запретить пересылку этого конверта навсегда.
   if (
     opts?.gossip !== false &&
     incomingHops < FEED_RELAY_MAX_HOPS &&
-    payload.type !== 'feed_view' &&
-    !feedRelayMarkOrHas(dedupKey)
+    payload.type !== 'feed_view'
   ) {
-    void feedGossipRelay(innerFrame, incomingHops + 1, senderDid, payload.authorDid);
+    if (!feedRelayBudget.admit(payload.authorDid, Date.now())) {
+      log.info('feed_gossip_relay_budget_spent', { authorDid: payload.authorDid.slice(0, 24) });
+    } else if (!feedRelayMarkOrHas(dedupKey)) {
+      void feedGossipRelay(innerFrame, incomingHops + 1, senderDid, payload.authorDid);
+    }
   }
   // v4.32.133: recheck — a rebind can have run to completion during the
   // parseAndVerify await, swapping the storage context out from under us.
