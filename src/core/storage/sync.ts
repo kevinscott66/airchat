@@ -182,8 +182,10 @@ export async function runSyncIfOnline(handlers?: SyncHandlers): Promise<void> {
           kept += 1;
           continue;
         }
-        // Dedup для 'dm' по messageId — оставляем только первый экземпляр
-        if (item.kind === 'dm') {
+        // Dedup для 'dm' по messageId — оставляем только первый экземпляр.
+        // Нечитаемую строку тут не трогаем: её messageId нам неизвестен, и
+        // принять её за дубликат значило бы удалить неотправленное письмо.
+        if (item.kind === 'dm' && item.payload !== null) {
           try {
             const p = JSON.parse(item.payload) as { messageId?: string };
             if (p.messageId) {
@@ -205,7 +207,18 @@ export async function runSyncIfOnline(handlers?: SyncHandlers): Promise<void> {
         // null — ни одна ветка не высказалась; разбирается ниже как неизвестный kind.
         let outcome: ItemOutcome | null = null;
         try {
-          if (item.kind === 'msg') {
+          if (item.payload === null) {
+            // v4.32.955: столбец не открылся ключом устройства (заблокированный
+            // Keychain сразу после перезагрузки, занятая база). Раньше сюда
+            // приезжала пустая строка — неотличимо от испорченного конверта, —
+            // и ветки ниже ставили `delivered`: неотправленное личное сообщение
+            // удалялось навсегда и засчитывалось в «отправлено». Причина
+            // проходящая, поэтому строка ждёт: попытка тратится, как у конверта
+            // неизвестного вида, и через потолок попыток она уйдёт в
+            // dead-letter, а не исчезнет на первом же отказе чтения.
+            log.warn('outbox_payload_unreadable', { id: item.id, kind: item.kind });
+            outcome = { kind: 'failed' };
+          } else if (item.kind === 'msg') {
             const { topic, cidHint } = JSON.parse(item.payload) as {
               topic: unknown;
               cidHint: unknown;
