@@ -3533,10 +3533,17 @@ function GroupChatScreen({
               // v4.32.226: REAL views — distinct readers from seen_by (read-receipt
               // backed), not the old blind per-open view_count counter (which inflated
               // to thousands on a 1-subscriber channel from the owner's own re-opens).
+              // v4.32.927: число пишется как есть. Сокращение здесь было
+              // английским целиком: латинская K и латинская же точка в дроби
+              // — «1.2K» в русском окне. По-русски же сокращать тут нечего:
+              // «1,2 тыс.» длиннее точного «1247» и при этом менее точно.
+              // А главное — четырьмя строками выше стоит счётчик ТОГО ЖЕ числа
+              // для автора, и он всегда печатал его целиком: одна и та же запись
+              // показывала автору «1247», а подписчику канала — «1.2K».
               <>
                 <Ionicons name="eye-outline" size={11} color={outgoing ? meInk.muted : colors.textMuted} style={{ marginRight: 2 }} />
                 <Text style={{ fontSize: font.xs, color: outgoing ? meInk.secondary : colors.textMuted, marginRight: 4 }}>
-                  {(item.seenBy?.length ?? 0) >= 1000 ? `${((item.seenBy!.length) / 1000).toFixed(1)}K` : item.seenBy!.length}
+                  {item.seenBy!.length}
                 </Text>
               </>
             ) : null}
