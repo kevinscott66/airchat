@@ -315,6 +315,7 @@ export function RelaySettingsSection(): React.ReactElement {
             style={styles.secondaryBtn}
             onPress={checkBtn.onPress}
             disabled={checkBtn.loading || !enabled}
+            accessibilityState={{ disabled: checkBtn.loading || !enabled, busy: checkBtn.loading }}
           >
             {checkBtn.loading ? (
               <ActivityIndicator color={styles.primaryColor.color} />
@@ -326,6 +327,7 @@ export function RelaySettingsSection(): React.ReactElement {
             style={styles.primaryBtn}
             onPress={saveBtn.onPress}
             disabled={saveBtn.loading || !enabled}
+            accessibilityState={{ disabled: saveBtn.loading || !enabled, busy: saveBtn.loading }}
           >
             {saveBtn.loading ? (
               <ActivityIndicator color={styles.primaryOn.color} />
@@ -339,7 +341,7 @@ export function RelaySettingsSection(): React.ReactElement {
         </View>
 
         {custom ? (
-          <Pressable style={styles.resetBtn} onPress={resetBtn.onPress} disabled={resetBtn.loading}>
+          <Pressable style={styles.resetBtn} onPress={resetBtn.onPress} disabled={resetBtn.loading} accessibilityState={{ disabled: resetBtn.loading, busy: resetBtn.loading }}>
             {resetBtn.loading ? (
               <ActivityIndicator color={styles.primaryColor.color} />
             ) : (

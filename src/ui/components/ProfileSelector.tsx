@@ -414,6 +414,7 @@ export function ProfileSelector({
                       style={[styles.createButton, isCreating && styles.disabledButton]}
                       onPress={() => void handleAddProfile()}
                       disabled={isCreating}
+                      accessibilityState={{ disabled: isCreating, busy: isCreating }}
                     >
                       {isCreating ? (
                         <ActivityIndicator color={primaryInk(colors).text} />

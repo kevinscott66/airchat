@@ -391,7 +391,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
         ) : null}
 
         {canRetry ? (
-          <Pressable style={styles.retryBtn} onPress={retryBtn.onPress} disabled={retryBtn.loading}>
+          <Pressable style={styles.retryBtn} onPress={retryBtn.onPress} disabled={retryBtn.loading} accessibilityState={{ disabled: retryBtn.loading, busy: retryBtn.loading }}>
             {retryBtn.loading ? (
               <ActivityIndicator color={styles.accent.color} />
             ) : (
@@ -453,6 +453,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
                   style={styles.retryBtn}
                   onPress={countBtn.onPress}
                   disabled={countBtn.loading}
+                  accessibilityState={{ disabled: countBtn.loading, busy: countBtn.loading }}
                   testID="openflux_count"
                 >
                   {countBtn.loading ? (

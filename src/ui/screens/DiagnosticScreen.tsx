@@ -240,6 +240,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
           style={[styles.button, busy && styles.buttonDisabled]}
           onPress={() => void run()}
           disabled={busy}
+          accessibilityState={{ disabled: busy, busy: busy }}
           testID="diagnostic_retry"
         >
           {busy ? (

@@ -234,6 +234,7 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
             style={[styles.button, busy && styles.buttonDisabled]}
             onPress={() => void submit()}
             disabled={busy}
+            accessibilityState={{ disabled: busy, busy: busy }}
             testID="forgot_submit"
             accessibilityRole="button"
             accessibilityLabel="Сохранить"

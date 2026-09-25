@@ -392,6 +392,7 @@ export function VpnSettingsSection(): React.ReactElement {
             style={styles.secondaryBtn}
             onPress={saveBtn.onPress}
             disabled={saveBtn.loading}
+            accessibilityState={{ disabled: saveBtn.loading, busy: saveBtn.loading }}
           >
             {saveBtn.loading ? (
               <ActivityIndicator color={styles.primaryColor.color} />
@@ -404,6 +405,7 @@ export function VpnSettingsSection(): React.ReactElement {
               style={styles.primaryBtn}
               onPress={disconnectBtn.onPress}
               disabled={disconnectBtn.loading}
+              accessibilityState={{ disabled: disconnectBtn.loading, busy: disconnectBtn.loading }}
             >
               {disconnectBtn.loading ? (
                 <ActivityIndicator color={styles.primaryOn.color} />
@@ -419,6 +421,7 @@ export function VpnSettingsSection(): React.ReactElement {
               style={styles.primaryBtn}
               onPress={connectBtn.onPress}
               disabled={connectBtn.loading}
+              accessibilityState={{ disabled: connectBtn.loading, busy: connectBtn.loading }}
             >
               {connectBtn.loading ? (
                 <ActivityIndicator color={styles.primaryOn.color} />

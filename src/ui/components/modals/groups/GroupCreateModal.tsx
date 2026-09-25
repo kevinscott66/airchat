@@ -185,7 +185,7 @@ export function CreateGroupModal({
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[cgStyles.title, { color: colors.text }]}>Новая группа</Text>
-            <AppPressable onPress={() => void submit()} style={[cgStyles.side, { alignItems: 'flex-end' }]} disabled={busy}>
+            <AppPressable onPress={() => void submit()} style={[cgStyles.side, { alignItems: 'flex-end' }]} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
               {busy ? <ActivityIndicator color={colors.accent} /> : (
                 <Text style={{ color: colors.accent, fontSize: 16, fontWeight: '600' }}>Создать</Text>
               )}

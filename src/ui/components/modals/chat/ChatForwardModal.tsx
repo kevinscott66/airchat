@@ -204,7 +204,7 @@ export function ForwardModal({
           </AppPressable>
           <Text style={[fwdStyles.title, { color: colors.text }]}>Переслать</Text>
           {selected.size > 0 ? (
-            <AppPressable accessibilityRole="button" accessibilityLabel="Отправить" onPress={() => void sendToSelected()} style={[fwdStyles.cancelBtn, { alignItems: 'flex-end' }]} disabled={sending}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Отправить" onPress={() => void sendToSelected()} style={[fwdStyles.cancelBtn, { alignItems: 'flex-end' }]} disabled={sending} accessibilityState={{ disabled: sending, busy: sending }}>
               {sending ? <ActivityIndicator size="small" color={colors.accent} /> : <Ionicons name="send" size={20} color={colors.accent} />}
             </AppPressable>
           ) : (
@@ -294,6 +294,7 @@ export function ForwardModal({
               style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center' }}
               onPress={() => void sendToSelected()}
               disabled={sending}
+              accessibilityState={{ disabled: sending, busy: sending }}
             >
               {sending
                 ? <ActivityIndicator color={primaryInk(colors).text} />

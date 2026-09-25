@@ -4411,6 +4411,7 @@ function ChatThreadView({
             onLongPress={() => { if (msg.trim()) setScheduleVisible(true); }}
             delayLongPress={600}
             disabled={sending}
+            accessibilityState={{ disabled: sending, busy: sending }}
           >
             {sending ? (
               <ActivityIndicator color={contrastingInk(colors.primary)} />

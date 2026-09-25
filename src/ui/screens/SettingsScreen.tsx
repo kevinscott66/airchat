@@ -1612,6 +1612,7 @@ function SettingsScreenImpl({
             style={styles.logoutRow}
             onPress={confirmLogout}
             disabled={logoutBusy}
+            accessibilityState={{ disabled: logoutBusy, busy: logoutBusy }}
             testID="btn_logout_wipe"
             accessibilityRole="button"
             accessibilityLabel="Выйти и удалить данные на устройстве"
@@ -2118,6 +2119,7 @@ function SettingsScreenImpl({
         style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
         onPress={() => void clearCache()}
         disabled={cacheBusy}
+        accessibilityState={{ disabled: cacheBusy, busy: cacheBusy }}
         android_ripple={{ color: colors.ripple }}
       >
         {cacheBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="trash-outline" size={22} color={colors.text} />}
@@ -2276,6 +2278,7 @@ function SettingsScreenImpl({
             setAppleBindModal(true);
           }}
           disabled={appleBindBusy}
+          accessibilityState={{ disabled: appleBindBusy, busy: appleBindBusy }}
           testID="settings_bind_apple"
         >
           <Ionicons name="logo-apple" size={22} color={colors.text} />
@@ -2519,6 +2522,7 @@ function SettingsScreenImpl({
         android_ripple={{ color: colors.ripple }}
         onPress={exportBackupBtn.onPress}
         disabled={backupBusy}
+        accessibilityState={{ disabled: backupBusy, busy: backupBusy }}
       >
         {backupBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="archive-outline" size={22} color={colors.text} />}
         <View style={styles.rowBody}>
@@ -2537,6 +2541,7 @@ function SettingsScreenImpl({
         android_ripple={{ color: colors.ripple }}
         onPress={() => { setCloudPasswordInput(''); setCloudPasswordModal(true); }}
         disabled={!isCloudVaultConfigured() || cloudBusy}
+        accessibilityState={{ disabled: !isCloudVaultConfigured() || cloudBusy, busy: cloudBusy }}
       >
         {cloudBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="cloud-upload-outline" size={22} color={isCloudVaultConfigured() ? colors.text : colors.textMuted} />}
         <View style={styles.rowBody}>
@@ -2566,6 +2571,7 @@ function SettingsScreenImpl({
         android_ripple={{ color: colors.ripple }}
         onPress={() => { void handleDialogBackupImport(); }}
         disabled={backupBusy}
+        accessibilityState={{ disabled: backupBusy, busy: backupBusy }}
       >
         {backupBusy ? <ActivityIndicator color={colors.accent} /> : <Ionicons name="download-outline" size={22} color={colors.text} />}
         <View style={styles.rowBody}>
@@ -2902,7 +2908,7 @@ function SettingsScreenImpl({
                   testID="set_password_input"
                 />
               )}
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(false)} disabled={pwdBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(false)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
                 {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
                   <Text style={styles.pwdPrimaryBtnText}>
                     {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
@@ -2933,7 +2939,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="backup_unlock_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy} accessibilityState={{ disabled: backupUnlockBusy, busy: backupUnlockBusy }}>
                 {backupUnlockBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Открыть</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }}>
@@ -2960,7 +2966,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="biometric_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy} accessibilityState={{ disabled: bioBusy, busy: bioBusy }}>
                 {bioBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Включить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }}>
@@ -2989,7 +2995,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="apple_binding_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy} accessibilityState={{ disabled: appleBindBusy, busy: appleBindBusy }}>
                 {appleBindBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Продолжить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setAppleBindModal(false); setAppleBindPwd(''); }}>
@@ -3048,7 +3054,7 @@ function SettingsScreenImpl({
                   testID="change_password_repeat"
                 />
               )}
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(true)} disabled={pwdBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(true)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
                 {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
                   <Text style={styles.pwdPrimaryBtnText}>
                     {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
@@ -3180,7 +3186,7 @@ function SettingsScreenImpl({
                     placeholder="Пароль приложения"
                     testID="seed_password_input"
                   />
-                  <AppPressable style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy}>
+                  <AppPressable style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy} accessibilityState={{ disabled: seedBusy, busy: seedBusy }}>
                     {seedBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Показать</Text>}
                   </AppPressable>
                 </>
@@ -3209,7 +3215,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="cloud_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy}>
+              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy} accessibilityState={{ disabled: cloudBusy, busy: cloudBusy }}>
                 {cloudBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Зашифровать и отправить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setCloudPasswordModal(false); setCloudPasswordInput(''); }}>

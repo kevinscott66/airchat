@@ -4791,6 +4791,7 @@ function GroupChatScreen({
                 onPress={send}
                 onLongPress={() => { if (text.trim()) setGrpScheduleVisible(true); }}
                 disabled={sending}
+                accessibilityState={{ disabled: sending, busy: sending }}
               >
                 {sending ? <ActivityIndicator color={contrastingInk(colors.primary)} size="small" /> : <Ionicons name="send" size={18} color={contrastingInk(colors.primary)} />}
               </AppPressable>

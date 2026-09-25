@@ -453,6 +453,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
                       style={[styles.button, loading && styles.buttonDisabled]}
                       onPress={() => void submitValue(password)}
                       disabled={loading}
+                      accessibilityState={{ disabled: loading, busy: loading }}
                       accessibilityRole="button"
                       accessibilityLabel="Войти"
                       testID="app_password_submit"

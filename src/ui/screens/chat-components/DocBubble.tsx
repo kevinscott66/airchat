@@ -143,6 +143,7 @@ export function DocBubble({
       <AppPressable
         style={{ width: 220, borderRadius: radius.md, overflow: 'hidden', backgroundColor: bubble.plate.fill }}
         onPress={() => { if (blobRef) { void playBlobVideo(); } else { setVideoPlaying(true); } }}
+        accessibilityState={{ busy: opening }}
       >
         <View style={{ height: 120, alignItems: 'center', justifyContent: 'center' }}>
           {opening ? <ActivityIndicator size="large" color={iconColor} /> : <Ionicons name="play-circle" size={48} color={iconColor} />}
@@ -165,6 +166,7 @@ export function DocBubble({
         // тоже проходит общую дверь.
         openExternal(url, 'chat_doc', 'Не удалось открыть файл');
       }}
+      accessibilityState={{ busy: opening }}
     >
       <Ionicons name="document-outline" size={28} color={iconColor} />
       <View style={{ flex: 1 }}>

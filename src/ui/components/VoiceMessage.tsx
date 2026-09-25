@@ -671,6 +671,7 @@ export function VoicePlayer({ uri, durationMs, isOutgoing, blob }: PlayerProps):
         onPress={() => void togglePlayback()}
         style={vpStyles.playBtn}
         disabled={busy || gone}
+        accessibilityState={{ disabled: busy || gone, busy: busy }}
         accessibilityRole="button"
         accessibilityLabel={
           busy

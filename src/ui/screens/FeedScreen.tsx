@@ -4305,6 +4305,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   style={[cmStyles.sendBtn, (!commentText.trim() || commentSending) && { opacity: 0.4 }]}
                   onPress={() => void submitComment()}
                   disabled={!commentText.trim() || commentSending}
+                  accessibilityState={{ disabled: !commentText.trim() || commentSending, busy: commentSending }}
                 >
                   {commentSending
                     ? <ActivityIndicator size="small" color={cmStyles.sendInk.color} />

@@ -571,7 +571,7 @@ function AddContactModal({
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[acStyles.title, { color: colors.text }]}>Новый чат</Text>
-            <AppPressable onPress={() => void submit()} style={acStyles.doneBtn} disabled={busy}>
+            <AppPressable onPress={() => void submit()} style={acStyles.doneBtn} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
               {busy ? <ActivityIndicator color={colors.accent} /> : (
                 <Text style={{ color: colors.accent, fontSize: 16, fontWeight: '600' }}>Готово</Text>
               )}
@@ -1237,6 +1237,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   accessibilityLabel="Отправить рассылку"
                   style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: broadcastFill, alignItems: 'center', justifyContent: 'center' }}
                   disabled={!broadcastMsg.trim() || broadcastSelected.size === 0 || broadcastSending}
+                  accessibilityState={{ disabled: !broadcastMsg.trim() || broadcastSelected.size === 0 || broadcastSending, busy: broadcastSending }}
                   onPress={() => {
                     if (!broadcastMsg.trim() || broadcastSelected.size === 0) return;
                     setBroadcastSending(true);
