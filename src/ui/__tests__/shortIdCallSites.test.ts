@@ -11,6 +11,13 @@
  * законное сокращение: журнал читает разработчик, а не собеседник, и там
  * важна не различимость людей, а длина строки. Поэтому правило действует
  * только на `src/ui` — слой, который рисует то, что человек прочитает как имя.
+ *
+ * v4.32.910. Храповик держал не всё: две копии прожили под ним больше
+ * четырёхсот версий, потому что обе резали значение без говорящего имени —
+ * элемент списка (`item.slice(0, 24)`) и результат кодирования
+ * (`.toString('base64').slice(0, 6)`). Первую пришлось снять по месту, вторую
+ * ловит новое правило ниже. Вывод, который стоит запомнить: правило по имени
+ * значения ловит только аккуратно названное.
  */
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
@@ -75,6 +82,16 @@ function isHeadTail(line: string): boolean {
  */
 const IDENTITY_SLICE = /[A-Za-z0-9_$.]*(?:[Dd]id|[Pp]ub(?:B64)?|[Pp]ublicKey|[Kk]ey)\.slice\(/;
 
+/**
+ * Личность, закодированная на месте и тут же обрезанная.
+ *
+ * v4.32.910. Правило выше смотрит на ИМЯ значения — и именно поэтому мимо
+ * него проехала четырнадцатая копия: `Buffer.from(parsedKey).toString(
+ * 'base64').slice(0, 6)` режет не `key`, а результат кодирования, у которого
+ * имени нет вовсе. Такую форму опознаёт кодирование, а не имя.
+ */
+const ENCODED_SLICE = /\.toString\('(?:base64|hex)'\)\s*\.slice\(/;
+
 describe('личность сокращается в одном месте', () => {
   it('файлы вообще нашлись — иначе проверка пустая', () => {
     expect(FILES.length).toBeGreaterThan(100);
@@ -100,12 +117,25 @@ describe('личность сокращается в одном месте', () 
     expect(offenders).toEqual([]);
   });
 
+  it('экранный слой не режет и только что закодированный ключ', () => {
+    const offenders: string[] = [];
+    for (const f of FILES) {
+      if (f.key === HOME || !f.key.startsWith('ui/')) continue;
+      for (const line of f.lines) {
+        if (ENCODED_SLICE.test(line)) offenders.push(`${f.key}: ${line}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('запрещённые формы действительно опознаются', () => {
     // Невырожденность: без этого проверки выше зелены и на пустом правиле.
     expect(isHeadTail('return `${did.slice(0, 12)}…${did.slice(-6)}`;')).toBe(true);
     expect(IDENTITY_SLICE.test('const name = m.displayName ?? m.peerPubB64.slice(0, 8);')).toBe(true);
     expect(IDENTITY_SLICE.test('const short = did.slice(0, 16);')).toBe(true);
     expect(IDENTITY_SLICE.test('contactLabel(c.displayName, c.peerPublicKey.slice(0, 16))')).toBe(true);
+    expect(ENCODED_SLICE.test("`Контакт ${Buffer.from(k).toString('base64').slice(0, 6)}`")).toBe(true);
+    expect(ENCODED_SLICE.test("const id = toHex(h).toString('hex').slice(0, 24);")).toBe(true);
   });
 
   it('законные срезы под правило не попадают', () => {
@@ -115,6 +145,9 @@ describe('личность сокращается в одном месте', () 
     expect(IDENTITY_SLICE.test('const top = candidates.slice(0, MAX_CANDIDATES);')).toBe(false);
     expect(IDENTITY_SLICE.test('const head = keys.slice(0, 3);')).toBe(false);
     expect(IDENTITY_SLICE.test("const preview = item.text.slice(0, 60) + '…';")).toBe(false);
+    // Кодирование без среза — не сокращение личности, а просто кодирование.
+    expect(ENCODED_SLICE.test("const mine = Buffer.from(pair.publicKey).toString('base64');")).toBe(false);
+    expect(ENCODED_SLICE.test("const short = shortIdentity(Buffer.from(k).toString('base64'));")).toBe(false);
   });
 
   it('сокращение зовут отовсюду, где раньше было своё', () => {

@@ -36,9 +36,23 @@ export function BlockedContactsList(): React.ReactElement {
     void reload();
   }, [reload]);
 
-  const nameFor = (pubB64: string): string => {
+  /**
+   * Чем подписать строку: имя сверху, ключ под ним.
+   *
+   * v4.32.910: ключ под именем резался своей формой — головой в 24 знака без
+   * хвоста, — и у контакта, чьё имя неизвестно, строка складывалась из ДВУХ
+   * РАЗНЫХ сокращений одного ключа: сверху `sYk1v0…1qA4E=` (его подставляет
+   * contactLabel), снизу `sYk1v0QpX3nJ7mR2tLc8WbF4…`. Сверить их глазами
+   * нельзя, и второе ничего не добавляло — тот же ключ, обрезанный иначе.
+   *
+   * Теперь форма одна, а ключ показывается только тогда, когда сверху стоит
+   * настоящее имя: там он и нужен — отличить двух Ань друг от друга.
+   */
+  const rowFor = (pubB64: string): { title: string; keyLine: string | null } => {
     const c = contacts.find((x) => x.peerPublicKey === pubB64);
-    return contactLabel(c?.displayName, shortIdentity(pubB64));
+    const short = shortIdentity(pubB64);
+    const title = contactLabel(c?.displayName, short);
+    return { title, keyLine: title === short ? null : short };
   };
 
   if (loading) {
@@ -80,13 +94,17 @@ export function BlockedContactsList(): React.ReactElement {
       testID="blocked_contacts_list"
       data={blocked}
       keyExtractor={(k) => k}
-      renderItem={({ item }) => (
+      renderItem={({ item }) => {
+        const { title, keyLine } = rowFor(item);
+        return (
         <View style={styles.row}>
           <View style={styles.rowText}>
-            <Text style={styles.name}>{nameFor(item)}</Text>
-            <Text style={styles.mono} numberOfLines={1}>
-              {item.slice(0, 24)}…
-            </Text>
+            <Text style={styles.name}>{title}</Text>
+            {keyLine ? (
+              <Text style={styles.mono} numberOfLines={1}>
+                {keyLine}
+              </Text>
+            ) : null}
           </View>
           <AppPressable
             style={styles.unblock}
@@ -102,7 +120,8 @@ export function BlockedContactsList(): React.ReactElement {
             <Text style={styles.unblockText}>Разблокировать</Text>
           </AppPressable>
         </View>
-      )}
+        );
+      }}
     />
   );
 }
