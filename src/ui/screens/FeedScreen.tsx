@@ -139,7 +139,7 @@ import {
   saveComposeDraft,
   selectComposeDocs,
 } from '../../core/social/composeDraft';
-import { getMutedAuthors, toggleMutedAuthor } from '../../core/social/mutedAuthors';
+import { getMutedAuthors, MAX_MUTED, toggleMutedAuthor } from '../../core/social/mutedAuthors';
 import { atTimestamp, hasMoreAfterRefresh, mergeByRowId, mergeListHead } from '../../core/storage/listHeadMerge';
 import { decidePage, shouldApplyRows, type DbRead } from '../../core/storage/readResult';
 import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../../core/storage/readRetry';
@@ -1363,14 +1363,24 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // setState-updater'а — React вправе вызвать его дважды, и провал записи
   // интерфейс всё равно не замечал.
   const toggleMuteAuthor = useCallback(async (authorDid: string) => {
-    // v4.32.699: null — прежний список не прочитался, и записи не было. Взять
-    // его за пустой значило бы показать, что заглушённых больше нет.
-    const next = await toggleMutedAuthor(authorDid);
-    if (!next) {
-      showError('Не удалось прочитать список заглушённых');
+    // v4.32.699: список не прочитался, и записи не было. Взять его за пустой
+    // значило бы показать, что заглушённых больше нет.
+    //
+    // v4.32.905: остальные отказы приходили сюда прежним набором — объектом, —
+    // и проверка их пропускала. Лента перерисовывалась прежним списком без
+    // единого слова: человек заглушал автора и видел его записи дальше.
+    const res = await toggleMutedAuthor(authorDid);
+    if (!res.ok) {
+      showError(
+        res.why === 'unreadable' ? 'Не удалось прочитать список заглушённых'
+          : res.why === 'limit' ? `Заглушённых уже ${MAX_MUTED} — это предел`
+            : 'Не удалось изменить список заглушённых',
+      );
+      // Список всё же освежаем: в res.muted то, что в базе на самом деле.
+      if (res.muted) setMutedAuthors(res.muted);
       return;
     }
-    setMutedAuthors(next);
+    setMutedAuthors(res.muted);
   }, []);
 
   // ─── Share to chat ──────────────────────────────────────────────────────────

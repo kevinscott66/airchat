@@ -103,17 +103,19 @@ describe('заглушённые принадлежат профилю', () => {
   it('повторное переключение снимает', async () => {
     await toggleMutedAuthor(NOISY);
     const after = await toggleMutedAuthor(NOISY);
-    expect(after).not.toBeNull();
-    expect(after?.has(NOISY)).toBe(false);
+    expect(after.ok).toBe(true);
+    expect(after.muted?.has(NOISY)).toBe(false);
     resetMutedAuthorsCache();
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
 
   it('без активного профиля не пишет ничего', async () => {
     mockActiveId = null;
-    const set = await toggleMutedAuthor(NOISY);
-    expect(set).not.toBeNull();
-    expect(set?.size).toBe(0);
+    const res = await toggleMutedAuthor(NOISY);
+    // v4.32.905: раньше отказ приходил прежним набором и был неотличим от удачи.
+    expect(res.ok).toBe(false);
+    expect(res.ok ? null : res.why).toBe('no_profile');
+    expect(res.muted?.size).toBe(0);
     expect(Object.keys(mockLocal.__kv)).toEqual([]);
   });
 });
@@ -196,9 +198,9 @@ describe('кэш', () => {
   it('не расходится с базой, если запись не удалась', async () => {
     await getMutedAuthors();
     mockWriteFails = true;
-    const set = await toggleMutedAuthor(NOISY);
-    expect(set).not.toBeNull();
-    expect(set?.has(NOISY)).toBe(false);
+    const res = await toggleMutedAuthor(NOISY);
+    expect(res.ok).toBe(false);
+    expect(res.muted?.has(NOISY)).toBe(false);
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
 });

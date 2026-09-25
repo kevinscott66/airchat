@@ -97,38 +97,60 @@ export async function isAuthorMuted(did: string): Promise<boolean> {
 }
 
 /**
+ * Чем кончилась попытка заглушить или расслышать автора (v4.32.905).
+ *
+ * Прежде и удача, и отказ возвращались набором заглушённых: при отказе — тем,
+ * что лежало в базе до попытки. Экран отличал от него только `null` («список
+ * не прочитался»), а остальные отказы принимал за удачу и молча перерисовывал
+ * ленту прежним списком.
+ *
+ * `muted` при отказе — то, что в базе на самом деле: экран по нему всё равно
+ * обновляется, соврав при этом только в одном — в молчании, которого теперь
+ * нет.
+ */
+export type MuteWrite =
+  | { ok: true; muted: Set<string> }
+  | { ok: false; why: 'unreadable'; muted: null }
+  | { ok: false; why: 'write_failed' | 'limit' | 'no_profile'; muted: Set<string> };
+
+/** Предел числа заглушённых — показывается человеку, когда он в него упёрся. */
+export { MAX_MUTED };
+
+/**
  * Переключить заглушение и вернуть новый список — интерфейс показывает именно
  * то, что записано, а не то, что он предположил.
  *
- * `null` — список не прочитался, и поэтому ничего не записано: запись идёт
- * целиком, так что «взять пустой набор и добавить одного» означало бы вернуть
- * человеку в ленту всех, кого он когда-либо заглушил.
+ * `ok: false` — не записано, и `why` говорит почему. «Не прочитали» выделено
+ * отдельно: запись идёт целиком, так что «взять пустой набор и добавить
+ * одного» означало бы вернуть человеку в ленту всех, кого он когда-либо
+ * заглушил.
  */
-export async function toggleMutedAuthor(did: string): Promise<Set<string> | null> {
+export async function toggleMutedAuthor(did: string): Promise<MuteWrite> {
   const current = await currentMuted();
   if (current === null) {
     log.warn('muted_authors_unreadable', { didLen: did.length });
-    return null;
+    return { ok: false, why: 'unreadable', muted: null };
   }
   const pid = activeProfileIdOrNull();
   if (!did || pid == null) {
     log.warn('muted_authors_no_profile', { didLen: did.length });
-    return current;
+    return { ok: false, why: 'no_profile', muted: current };
   }
   const next = new Set(current);
   if (next.has(did)) {
     next.delete(did);
   } else if (next.size >= MAX_MUTED) {
     log.warn('muted_authors_limit', { size: next.size });
-    return current;
+    return { ok: false, why: 'limit', muted: current };
   } else {
     next.add(did);
   }
   // Кэш обновляем только вслед за записью: разойдись они — интерфейс показывал
   // бы заглушение, которого в базе нет, и после перезапуска оно бы «отменилось».
   if (!(await writeProfileSharedSecret(MUTED_AUTHORS_KEY, JSON.stringify([...next])))) {
-    return current;
+    log.warn('muted_authors_write_failed', { didLen: did.length });
+    return { ok: false, why: 'write_failed', muted: current };
   }
   cache = { profileId: pid, set: next };
-  return next;
+  return { ok: true, muted: next };
 }
