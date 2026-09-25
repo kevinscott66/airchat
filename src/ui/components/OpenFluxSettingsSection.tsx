@@ -44,6 +44,7 @@ import {
   type OpenFluxUiStatus,
 } from '../../core/vpn/openFluxController';
 import { addOpenFluxReviveListener } from '../../core/vpn/openFluxNetworkGuard';
+import { clockTimeSec } from '../../core/time/ruDateTime';
 
 /**
  * «Включён», а не «Работает». Разница не косметическая: статус `on` означает
@@ -70,12 +71,6 @@ const STATUS_LABEL: Record<OpenFluxUiStatus, string> = {
 
 /** Пока счётчик включён, обновляем его сами: считает ядро, событий оно не шлёт. */
 const STATS_POLL_MS = 2000;
-
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
 
 export type OpenFluxSettingsSectionProps = {
   /**
@@ -426,9 +421,13 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
                     Из них не дошло до адресата: {stats.failures}
                   </Text>
                 ) : null}
+                {/* v4.32.929: время здесь считал свой formatTime — третья в доме
+                    копия «часы:минуты:секунды» и единственная без проверки метки.
+                    Нулевой lastAt она рисовала как «03:00:00»: час не тот, но
+                    выглядит как настоящий ответ. clockTimeSec на такое молчит. */}
                 {stats.lastTarget && stats.lastAt ? (
                   <Text style={styles.proofLine}>
-                    Последнее: {stats.lastTarget}, в {formatTime(stats.lastAt)}
+                    Последнее: {stats.lastTarget}, в {clockTimeSec(stats.lastAt)}
                   </Text>
                 ) : null}
                 <Text style={styles.proofLine}>

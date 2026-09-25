@@ -82,6 +82,7 @@ import {
   type QuickReply,
 } from '../../core/storage/local';
 import { templateReadable } from '../../core/social/templateSearch';
+import { hourOfDayLabel, parseHourOfDay } from '../../core/time/hourOfDay';
 import { UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
 import {
   getDefaultDisappearMs,
@@ -511,8 +512,11 @@ function SettingsScreenImpl({
       };
       setAutoLockDelayMs(parseClamped(lockDelay, 0, 0, 24 * 60 * 60 * 1000));
       setDndEnabled(dndEn === 'true');
-      setDndStart(parseClamped(dndS, 22, 0, 23));
-      setDndEnd(parseClamped(dndE, 8, 0, 23));
+      // v4.32.929: час суток разбирает общий parseHourOfDay — тот же, что у
+      // ночной темы. parseClamped остаётся задержке автоблокировки: там
+      // границы свои и часом не являются.
+      setDndStart(parseHourOfDay(dndS, 22));
+      setDndEnd(parseHourOfDay(dndE, 8));
       setOnlyContactsCanAddToGroup(onlyCtGrp === 'true');
       setNotifyMentions(notMentions !== 'false');
       setNotifyVibrate(nVibrate !== 'false');
@@ -1937,11 +1941,11 @@ function SettingsScreenImpl({
           <View style={[styles.switchRow, styles.switchRowLast, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
             <Text style={[styles.label, { flex: 1 }]}>Часы</Text>
             <AppPressable onPress={() => { setDndTimeTmp(dndStart); setDndTimeModal('start'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 6 }}>
-              <Text style={{ color: colors.accent, fontWeight: '600' }}>{String(dndStart).padStart(2, '0')}:00</Text>
+              <Text style={{ color: colors.accent, fontWeight: '600' }}>{hourOfDayLabel(dndStart)}</Text>
             </AppPressable>
             <Text style={{ color: colors.textMuted }}>–</Text>
             <AppPressable onPress={() => { setDndTimeTmp(dndEnd); setDndTimeModal('end'); }} style={{ backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 6 }}>
-              <Text style={{ color: colors.accent, fontWeight: '600' }}>{String(dndEnd).padStart(2, '0')}:00</Text>
+              <Text style={{ color: colors.accent, fontWeight: '600' }}>{hourOfDayLabel(dndEnd)}</Text>
             </AppPressable>
           </View>
         ) : null}
@@ -1996,7 +2000,7 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Автоматически</Text>
             <Text style={styles.desc}>
               {autoNightEnabled
-                ? `Тёмная: ${String(autoNightStart).padStart(2, '0')}:00 – ${String(autoNightEnd).padStart(2, '0')}:00`
+                ? `Тёмная: ${hourOfDayLabel(autoNightStart)} – ${hourOfDayLabel(autoNightEnd)}`
                 : 'Включать тёмную тему по расписанию'}
             </Text>
           </View>
@@ -2011,7 +2015,7 @@ function SettingsScreenImpl({
         {autoNightEnabled ? (
           <AppPressable onPress={() => { setNightStartTmp(autoNightStart); setNightEndTmp(autoNightEnd); setNightTimeModal(true); }} style={{ paddingBottom: 10, paddingHorizontal: 4 }}>
             <Text style={{ color: colors.accent, fontSize: scaleFont(13) }}>
-              Изменить время ({String(autoNightStart).padStart(2, '0')}:00 – {String(autoNightEnd).padStart(2, '0')}:00)
+              Изменить время ({hourOfDayLabel(autoNightStart)} – {hourOfDayLabel(autoNightEnd)})
             </Text>
           </AppPressable>
         ) : null}

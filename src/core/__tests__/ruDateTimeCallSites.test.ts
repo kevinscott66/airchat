@@ -10,6 +10,18 @@
  * Запрет здесь полный, без «дома-исключения»: ruDateTime тоже обходится без
  * Intl. Появится нужда в настоящей локализации — сначала появится словарь
  * второго языка, и тогда это правило меняют осознанно, а не молча.
+ *
+ * v4.32.929. Храповик ловил обход через Intl и через свой массив месяцев — но
+ * не самый простой обход: часы и минуты, собранные руками из `getHours()` и
+ * `padStart`. Так в доме жили ещё три циферблата. Один — в разделе туннеля, и
+ * он отличался от здешнего тем, что рисовал «03:00:00» вместо молчания на
+ * пустой метке. Второй — семь копий подписи «22:00» в настройках. Третий —
+ * переходник `formatTime` в ленте, звавший `dayMonthShortTime` и больше
+ * ничего.
+ *
+ * Запрещена здесь минута, а не час: `getHours()` законно спрашивают там, где
+ * час — это решение, а не подпись (окно тишины, окно ночной темы). Циферблат
+ * без минут не собрать, поэтому одной минуты и хватает.
  */
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
@@ -63,6 +75,10 @@ const FILES = collect(SRC).map((full) => ({
 
 const INTL = /\.toLocale(?:Date|Time)?String\(/;
 const MONTHS = /'янв'|'января'|"янв"|"января"/;
+/** Циферблат руками: минуту у даты спрашивают только затем, чтобы её написать. */
+const CLOCK = /\.getMinutes\(\)/;
+/** Подпись часа настройки: «22:00», собранное из padStart. Дома нет ни у кого. */
+const HOUR_LABEL = /padStart\(2, ?'0'\)\}:00/;
 
 describe('дата и время не спрашивают язык у телефона', () => {
   it('файлы вообще нашлись — иначе проверка пустая', () => {
@@ -84,12 +100,32 @@ describe('дата и время не спрашивают язык у теле�
     expect(offenders).toEqual([]);
   });
 
+  it('часы и минуты не собирают руками', () => {
+    const offenders: string[] = [];
+    for (const f of FILES) {
+      if (f.key === HOME) continue;
+      for (const line of f.lines) if (CLOCK.test(line)) offenders.push(`${f.key}: ${line}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('подпись «22:00» тоже не собирают руками — ни в одном файле', () => {
+    const offenders: string[] = [];
+    for (const f of FILES) {
+      for (const line of f.lines) if (HOUR_LABEL.test(line)) offenders.push(`${f.key}: ${line}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('запрещённые формы действительно опознаются', () => {
     // Невырожденность: без этого обе проверки зелены и на пустом правиле.
     expect(INTL.test("const d = new Date(m.createdAt).toLocaleString();")).toBe(true);
     expect(INTL.test("new Date(ts).toLocaleDateString('ru-RU')")).toBe(true);
     expect(INTL.test("date.toLocaleTimeString(undefined, { hour: '2-digit' })")).toBe(true);
     expect(MONTHS.test("const MONTHS = ['янв','фев','мар'];")).toBe(true);
+    expect(CLOCK.test("return `${pad(d.getHours())}:${pad(d.getMinutes())}`;")).toBe(true);
+    expect(HOUR_LABEL.test("<Text>{String(dndStart).padStart(2, '0')}:00</Text>")).toBe(true);
+    expect(HOUR_LABEL.test("`Тёмная: ${String(s).padStart(2, '0')}:00`")).toBe(true);
   });
 
   it('похожее, но законное, под правило не попадает', () => {
@@ -99,6 +135,12 @@ describe('дата и время не спрашивают язык у теле�
     expect(INTL.test("value.toString();")).toBe(false);
     expect(INTL.test("const label = localeName(code);")).toBe(false);
     expect(MONTHS.test("const label = 'январь';")).toBe(false);
+    // Час как решение, а не как подпись: это законно и запрету не подлежит.
+    expect(CLOCK.test("isWithinDndWindow(start, end, new Date().getHours())")).toBe(false);
+    // Нули дописывают не только часам: шестнадцатеричный байт, длительность
+    // записи, ключ дня `YYYY-MM-DD`. Правило смотрит на «:00» следом.
+    expect(HOUR_LABEL.test("out += b.toString(16).padStart(2, '0');")).toBe(false);
+    expect(HOUR_LABEL.test("`${m}:${String(s).padStart(2, '0')}`")).toBe(false);
   });
 
   it('подписи зовут отовсюду, где раньше был свой Intl', () => {

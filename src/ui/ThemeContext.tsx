@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Appearance, StyleSheet } from 'react-native';
 import { kvGet, kvSetChecked } from '../core/storage/local';
+import { parseHourOfDay } from '../core/time/hourOfDay';
 import { showError } from './components/userFeedback';
 import { applyAccent, colorsForScheme, normalizeAccent, resolveScheme, type AppColors, type ColorScheme, type ThemeMode } from './theme';
 
@@ -128,8 +129,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     ]).then(([saved, savedSize, nightMode, nightStart, nightEnd, accentVal]) => {
       const m = (saved as ThemeMode | null) ?? 'dark';
       const nightEnabled = nightMode === 'true';
-      const nStart = nightStart ? parseInt(nightStart, 10) : 21;
-      const nEnd = nightEnd ? parseInt(nightEnd, 10) : 7;
+      // v4.32.929: раньше здесь стоял голый parseInt. Испорченная запись в kv
+      // давала NaN, и это било дважды: «Тёмная: NaN:00 – NaN:00» в настройках и
+      // тема, которая не переключается вовсе — сравнения с NaN всегда ложны.
+      // Границы «не беспокоить» такую проверку получили ещё в v4.32.195,
+      // размер шрифта строкой ниже — тоже; ночные часы её не получили.
+      const nStart = parseHourOfDay(nightStart, 21);
+      const nEnd = parseHourOfDay(nightEnd, 7);
       setModeState(m);
       setAutoNightEnabled(nightEnabled);
       setAutoNightStart(nStart);

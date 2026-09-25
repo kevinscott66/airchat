@@ -583,7 +583,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
           <View style={styles.postHeaderText}>
             <Text style={styles.author}>{isRepost ? repostLabel : label}</Text>
             <View style={styles.timeRow}>
-              <Text style={styles.time}>{formatTime(item.timestamp)}</Text>
+              <Text style={styles.time}>{dayMonthShortTime(item.timestamp)}</Text>
               {item.editedAt ? (
                 <Text style={[styles.time, { fontStyle: 'italic', color: colors.textMuted }]}>{t('feed.edited')}</Text>
               ) : null}
@@ -859,10 +859,6 @@ type Props = {
   /** v4.32.609: своё имя в тексте — открыть собственный профиль (таб знает App). */
   onOpenOwnProfile?: () => void;
 };
-
-function formatTime(ts: number): string {
-  return dayMonthShortTime(ts);
-}
 
 /**
  * v4.32.528: применить прочитанный список, если чтение удалось.
@@ -2941,7 +2937,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   ? t('common.you')
                   : shownName(commentPost.authorName, commentPost.nameUnreadable, t('common.contact'))}
               </Text>
-              <Text style={cmStyles.pinnedTime}>{formatTime(commentPost.timestamp)}</Text>
+              <Text style={cmStyles.pinnedTime}>{dayMonthShortTime(commentPost.timestamp)}</Text>
             </View>
           </AppPressable>
           {commentPost.text ? (
@@ -4153,7 +4149,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                           >
                             <Text style={cmStyles.commentAuthor}>{isOwn ? t('common.you') : shownName(c.authorName, c.nameUnreadable, t('common.anonymous'))}</Text>
                           </AppPressable>
-                          <Text style={cmStyles.commentTime}>{formatTime(c.timestamp)}</Text>
+                          <Text style={cmStyles.commentTime}>{dayMonthShortTime(c.timestamp)}</Text>
                         </View>
                         {/* v4.32.588: непрочитанный комментарий приходил
                             пустой строкой и рисовался пустым пузырём. */}

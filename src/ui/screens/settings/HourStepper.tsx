@@ -6,6 +6,10 @@
  * арифметикой перехода через полночь. Три копии одного вычисления означают
  * три места, где эту полночь можно однажды не учесть.
  *
+ * v4.32.929: сама подпись «22:00» тоже не здешняя. Те же четыре часа
+ * показаны в настройках ещё и свёрнутой строкой — «Тёмная: 21:00 – 07:00», —
+ * и там она была выписана заново.
+ *
  * Компонент объявлен на уровне модуля, а стили и палитра приходят пропсами:
  * если объявлять его внутри экрана, React на каждом рендере видел бы новый тип
  * и сносил бы поддерево вместо обновления.
@@ -17,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../components/AppPressable';
 import type { AppColors } from '../../theme';
 import type { makeStyles } from './settingsStyles';
+import { hourOfDayLabel } from '../../../core/time/hourOfDay';
 
 type SettingsStyles = ReturnType<typeof makeStyles>;
 
@@ -51,7 +56,7 @@ export function HourStepper({
   fontSize,
 }: HourStepperProps): React.ReactElement {
   const about = a11yName ? `: ${a11yName}` : '';
-  const value = `${String(hour).padStart(2, '0')}:00`;
+  const value = hourOfDayLabel(hour);
   return (
     <View style={{ alignItems: 'center' }}>
       {caption ? <Text style={[styles.desc, { marginBottom: 4 }]}>{caption}</Text> : null}
