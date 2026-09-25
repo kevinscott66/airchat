@@ -30,14 +30,14 @@ describe('formatByteSize', () => {
   });
 
   it('мегабайты — с одним знаком и без хвостового нуля', () => {
-    expect(formatByteSize(1_200_000)).toBe('1.2 МБ');
+    expect(formatByteSize(1_200_000)).toBe('1,2 МБ'); // v4.32.918: запятая
     expect(formatByteSize(8_000_000)).toBe('8 МБ');
     // Раньше здесь было «50.0 МБ» в одном месте и «51200 KB» в другом.
-    expect(formatByteSize(52_428_800)).toBe('52.4 МБ');
+    expect(formatByteSize(52_428_800)).toBe('52,4 МБ');
   });
 
   it('гигабайты существуют', () => {
-    expect(formatByteSize(2_500_000_000)).toBe('2.5 ГБ');
+    expect(formatByteSize(2_500_000_000)).toBe('2,5 ГБ');
     expect(formatByteSize(999_999_999)).toBe('1 ГБ');
   });
 
@@ -49,7 +49,7 @@ describe('formatByteSize', () => {
 
   it('округление вниз ничего не обещает сверх', () => {
     expect(formatByteSize(8_990_000)).toBe('9 МБ');
-    expect(formatByteSize(8_990_000, { roundDown: true })).toBe('8.9 МБ');
+    expect(formatByteSize(8_990_000, { roundDown: true })).toBe('8,9 МБ');
     expect(formatByteSize(999_999, { roundDown: true })).toBe('999 КБ');
   });
 });
