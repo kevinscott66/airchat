@@ -776,7 +776,7 @@ import { WallpaperPickerModal } from '../components/modals/chat/ChatWallpaperPic
 // ─── Schedule Message Modal ───────────────────────────────────────────────────
 import { ScheduleModal } from '../components/modals/chat/ChatScheduleModal';
 import { shortIdentity } from '../identity/shortId';
-import { clockTime, fullDateTime } from '../../core/time/ruDateTime';
+import { clockTime, dayMonthShortTime, fullDateTime } from '../../core/time/ruDateTime';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { createReceiptClaims } from '../../core/social/receiptClaim';
@@ -2116,7 +2116,9 @@ function ChatThreadView({
       // строки — а человеку показывали, что всё удалилось.
       await deleteScheduledMessage(id, activeProfileId);
       await reloadScheduled();
-    }, 'Не удалось удалить отложенное сообщение', 'ui_chat_delete_scheduled_failed');
+      // v4.32.913: то же, что в группе, — список и вопрос зовут это
+      // сообщение запланированным, отказ звал отложенным.
+    }, 'Не удалось удалить запланированное сообщение', 'ui_chat_delete_scheduled_failed');
   }, [reloadScheduled, activeProfileId]);
   const closeStarred = useCallback(() => setStarredVisible(false), []);
   const unstarFromModal = useCallback((id: string) => {
@@ -2701,7 +2703,12 @@ function ChatThreadView({
       // об отказе тут значило бы соврать в обратную сторону.
       log.warn('schedule_dm_reload_failed', { err: rawErrorText(e) });
     }
-    showSuccess(`Запланировано на ${fullDateTime(sendAt)}`);
+    // v4.32.913: `fullDateTime` — форма сведений о сообщении и выгрузки, с
+    // секундами: «25 сентября 2026, 14:30:00». Выбирают время с точностью до
+    // минуты, а секунды в ответе обещают точность, которой человек не задавал;
+    // хуже того, список запланированных показывает ту же минуту иначе — «25
+    // сен, 14:30». Теперь подтверждение и список говорят одно и то же.
+    showSuccess(`Запланировано на ${dayMonthShortTime(sendAt)}`);
   }, [msg, peerB64, takeComposer, reloadScheduled]);
 
   const retryFailedMessage = useCallback((row: ChatMessageRow) => {

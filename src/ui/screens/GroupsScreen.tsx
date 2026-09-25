@@ -311,7 +311,7 @@ import { shareTextExport } from '../../core/media/cacheFiles';
 import { getEmojiSuggestions } from './chat-utils/emoji';
 import { BubbleKindProvider } from '../BubbleKindContext';
 import { shortIdentity } from '../identity/shortId';
-import { fullDateTime } from '../../core/time/ruDateTime';
+import { dayMonthShortTime, fullDateTime } from '../../core/time/ruDateTime';
 import { log } from '../../core/logger';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
@@ -780,7 +780,11 @@ function GroupChatScreen({
       // списком — DELETE не находил строки, но runGuardedOp рапортовал успех.
       await deleteScheduledMessage(id, pid);
       await reloadGrpScheduled();
-    }, 'Не удалось удалить отложенное сообщение', 'ui_group_delete_scheduled_failed');
+      // v4.32.913: «отложенное» — слово из кода. На экране это сообщение
+      // зовётся запланированным везде: заголовок списка «Запланированные»,
+      // вопрос «Удалить запланированное сообщение?» — и отказ приходил прямо
+      // на этот вопрос, называя удаляемое иначе, чем вопрос секундой раньше.
+    }, 'Не удалось удалить запланированное сообщение', 'ui_group_delete_scheduled_failed');
   }, [reloadGrpScheduled, pid]);
   /**
    * Своя роль в группе — своя строка в group_members.
@@ -4951,7 +4955,13 @@ function GroupChatScreen({
           }
           takeGroupText();
           await reloadGrpScheduled();
-          showSuccess('Сообщение запланировано');
+          // v4.32.913: в личной переписке то же действие называет время, а
+          // здесь оно умалчивалось — проверить, правильно ли поняли выбранную
+          // минуту, было негде: список запланированных открывается отдельной
+          // кнопкой. Форма времени взята из этого самого списка
+          // (`dayMonthShortTime`), чтобы подтверждение и строка в списке
+          // читались как одно и то же время.
+          showSuccess(`Запланировано на ${dayMonthShortTime(sendAt)}`);
         })()}
       />
       <ScheduledListModal
