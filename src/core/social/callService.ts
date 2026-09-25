@@ -1510,17 +1510,34 @@ export async function initCallService(pair: KeyPairBytes, profileId = 1): Promis
   if (serviceEpoch !== epoch || myPubB64Global !== myPub) return;
   stopRegisterRetry();
   await ensureRegistered(myPub, epoch);
+  // v4.32.963: после ожидания эпоху надо спросить заново. Первая попытка
+  // регистрации ходит в сеть и на мёртвом сигнальном сервере висит до срока
+  // ожидания; за это время человек успевает сменить профиль, и запуск под
+  // новым ключом проходит целиком — со своим сторожем. Возвращаясь, старый
+  // запуск клал свой сторож поверх: новый оставался заведённым, но
+  // безымянным, снять его было уже нечем.
+  if (serviceEpoch !== epoch || myPubB64Global !== myPub) return;
   // Сторож заводится в любом случае — и когда первая попытка удалась. Он
   // снимается только вместе со службой: пока она жива, регистрация должна
   // быть жива тоже.
-  registerRetryTimer = setInterval(() => {
+  //
+  // v4.32.963: и снимает себя он именно СЕБЯ. Раньше в тике стоял общий
+  // `stopRegisterRetry`, а тот снимает то, что записано в поле, — то есть
+  // сторожа текущей эпохи. Забытый сторож прошлого ключа продолжал тикать и
+  // на каждом тике убивал живого: после второй смены профиля регистрацию не
+  // восстанавливал уже никто, телефон переставал принимать звонки до
+  // перезапуска, а экран диагностики показывал «повтор не идёт» — и это было
+  // единственной правдой во всей картине.
+  const mine: ReturnType<typeof setInterval> = setInterval(() => {
     if (serviceEpoch !== epoch || myPubB64Global !== myPub) {
-      stopRegisterRetry();
+      clearInterval(mine);
+      if (registerRetryTimer === mine) registerRetryTimer = null;
       return;
     }
     if (isSignalingLive()) return;
     void ensureRegistered(myPub, epoch).catch(() => { /* следующая попытка через интервал */ });
   }, REGISTER_RETRY_MS);
+  registerRetryTimer = mine;
 }
 
 /**
