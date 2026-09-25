@@ -16,8 +16,10 @@
 import {
   scopedKvGetFor,
   scopedKvSet,
+  scopedKvSetCheckedFor,
   scopedKvSetFor,
   scopedKvSetSecretCheckedFor,
+  scopedKvTryGetFor,
   scopedKvTryGetSecretFor,
 } from '../storage/profileScopedKv';
 import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
@@ -88,6 +90,19 @@ type SentMap = Record<string, number>;
 
 /** Готовый к отправке конверт вместе с ключом «эту версию уже отправляли». */
 type Built = { env: PeerProfileEnvelope; version: number };
+
+/**
+ * Чем кончилась сборка конверта (v4.32.960).
+ *
+ * `'empty'` — посылать нечего: профиль не заполнен. Исход обычный и
+ * окончательный до тех пор, пока человек его не заполнит.
+ *
+ * `'unreadable'` — отметку версии не прочитали (или не смогли записать
+ * первую). Не знаем номер версии — не рассылаем: отличить «то же самое» от
+ * «уже другое» нечем, а ошибка в эту сторону уводит карточку всем контактам
+ * заново. Исход временный, следующее открытие переписки попробует снова.
+ */
+type BuildOutcome = Built | 'empty' | 'unreadable';
 
 function activeProfileId(): number {
   return profileManager.getActiveProfile()?.id ?? 1;
@@ -246,7 +261,7 @@ async function buildEnvelope(
   pid: number,
   audience: Audience,
   visibility: AvatarVisibility | null,
-): Promise<Built | null> {
+): Promise<BuildOutcome> {
   const name = await getOwnDisplayNameFor(pid);
   const username = await getOwnUsernameFor(pid);
   // v4.32.378: тем же правилом, каким конверт чистится на сборке. Иначе
@@ -267,15 +282,35 @@ async function buildEnvelope(
   // нового.
   const avatarName = await ownAvatarNameFor(pid);
   const links = await ownLinksFor(pid);
-  if (!name && !username && !bio && !pronouns && !status && !avatarName && !links) return null;
+  if (!name && !username && !bio && !pronouns && !status && !avatarName && !links) return 'empty';
   const now = Date.now();
-  let stamp = Number(await scopedKvGetFor(pid, CHANGED_AT_KEY)) || 0;
+  // v4.32.960: отметку спрашиваем тремя состояниями. Прежде её читала
+  // `scopedKvGetFor`, а та отказ базы отдаёт неотличимо от «записи нет»: занятый
+  // SQLite приводил сюда `stamp = 0`, то есть ветку «первый запуск после
+  // обновления» — и она затирала НАСТОЯЩУЮ отметку сегодняшним временем.
+  // Свёртка версии менялась, `sent[peer] === version` переставало совпадать, и
+  // карточка с именем и фотографией уезжала заново каждому контакту. Это ровно
+  // тот «круг рассылки», который запрещает комментарий ниже, — только заходящий
+  // не через отсутствие записи, а через невозможность её прочитать.
+  const read = await scopedKvTryGetFor(pid, CHANGED_AT_KEY);
+  if (read === null) {
+    log.warn('profile_changed_at_unreadable', { pid });
+    return 'unreadable';
+  }
+  let stamp = Number(read.value) || 0;
   if (!stamp) {
     // Первый запуск после обновления: профиль уже заполнен, но отметки нет.
     // Без записи ts был бы «сейчас» и менялся при каждом вызове — тогда любое
     // открытие чата выглядело бы как новая версия и рассылка шла бы по кругу.
+    //
+    // v4.32.960: потому же читаем и ответ записи. Не легла — «сейчас» осталось
+    // бы только в памяти, и следующий вызов собрал бы другую версию из ничего:
+    // круг рассылки завёлся бы сам, без единой правки профиля.
     stamp = now;
-    await scopedKvSetFor(pid, CHANGED_AT_KEY, String(stamp));
+    if (!(await scopedKvSetCheckedFor(pid, CHANGED_AT_KEY, String(stamp)))) {
+      log.warn('profile_changed_at_first_write_failed', { pid });
+      return 'unreadable';
+    }
   }
   const shareAvatar = avatarAllowed(visibility, audience);
   const avatarCid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
@@ -364,7 +399,13 @@ export async function broadcastMyProfile(): Promise<void> {
   // v4.32.707: рассылка идёт по списку контактов, поэтому аудитория здесь
   // всегда «contacts»; переключатель читается один раз на всю рассылку.
   const built = await buildEnvelope(pid, 'contacts', await avatarVisibilityTryFor(pid));
-  if (!built) return;
+  // v4.32.960: 'unreadable' — версию не знаем. Рассылать по выдуманной значит
+  // отправить карточку заново ВСЕМ контактам; промолчать стоит одного пропуска,
+  // а зовут рассылку и на запуске, и после каждой правки профиля.
+  if (typeof built === 'string') {
+    if (built === 'unreadable') log.warn('profile_broadcast_skipped_unreadable', { pid });
+    return;
+  }
   const text = encodeProfileEnvelope(built.env);
   const { version } = built;
 
@@ -468,7 +509,11 @@ async function sendProfileTo(
   const built = await buildEnvelope(pid, audience, visibility);
   // Профиль пуст — посылать нечего, и это не осечка: заполнит человек, уедет
   // само (см. broadcastMyProfile).
-  if (!built) return 'skipped';
+  if (built === 'empty') return 'skipped';
+  // v4.32.960: а вот отметку версии не прочитали — это именно осечка, и
+  // «skipped» её бы спрятал: просьбу о карточке (handleIncomingProfileRequest)
+  // тогда сочли бы отвеченной, и повтору было бы нечем её переспросить.
+  if (built === 'unreadable') return 'failed';
   const { version } = built;
   if (!force) {
     const sent = (await loadSent(pid)) ?? {};

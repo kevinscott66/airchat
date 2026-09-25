@@ -30,6 +30,12 @@ jest.mock('../../storage/profileScopedKv', () => ({
   scopedKvSetFor: jest.fn(async (pid: number, key: string, v: string) => {
     mockKv.set(`${pid}:${key}`, v);
   }),
+  // v4.32.960: первая отметка версии профиля пишется проверенной записью —
+  // не легла, значит версия была бы разовой и рассылка пошла бы по кругу.
+  scopedKvSetCheckedFor: jest.fn(async (pid: number, key: string, v: string) => {
+    mockKv.set(`${pid}:${key}`, v);
+    return true;
+  }),
   // v4.32.946: карта «кому какую версию отправляли» переехала в шифрованную
   // пару. Для этой проверки шифр безразличен — важно, что значение то же
   // самое; подделка держит его в той же ячейке, что и открытая пара.
