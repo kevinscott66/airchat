@@ -11,12 +11,28 @@ import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
 import { ruPlural } from '../../../utils/plural';
 import { UNREADABLE_VIEWERS_TEXT } from '../../../../core/storage/unreadableText';
+import { groupSendProblemText, type GroupSendProblem } from '../../../../core/social/groupSendOutcome';
 
+/**
+ * v4.32.951: «Отправлено» здесь стояло безусловно, над временем создания
+ * строки. Своя строка в группе пишется ДО рассылки, и её отказ до этой версии
+ * жил ровно столько, сколько висела плашка, — окно сведений о сообщении,
+ * которое не получил никто, писало «Отправлено» и время. То же слово в личной
+ * переписке давно условное: там соседнее окно пишет «Создано», пока сообщение
+ * не покинуло устройство (см. ChatMessageInfoModal).
+ *
+ * Отметка приходит снаружи: она лежит не в строке сообщения, а в записи
+ * профиля (groupSendProblemStore), и читает её экран группы — тот же, что
+ * открывает это окно.
+ */
 export function GrpMessageInfoModal({
   msg,
+  problem,
   onClose,
 }: {
   msg: GroupMessageRow | null;
+  /** Отметка «не ушло», если рассылка этого сообщения не состоялась. */
+  problem?: GroupSendProblem | null;
   onClose: () => void;
 }): React.ReactElement | null {
   const { colors } = useTheme();
@@ -34,12 +50,23 @@ export function GrpMessageInfoModal({
           <Text style={{ color: colors.text, fontWeight: '700', fontSize: 17, marginBottom: 16 }}>Сведения о сообщении</Text>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-            <Ionicons name="send-outline" size={18} color={colors.accent} style={{ marginRight: 10 }} />
-            <View>
-              <Text style={{ color: colors.textMuted, fontSize: 12 }}>Отправлено</Text>
+            <Ionicons
+              name={problem ? 'alert-circle-outline' : 'send-outline'}
+              size={18}
+              color={problem ? colors.error : colors.accent}
+              style={{ marginRight: 10 }}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>{problem ? 'Создано' : 'Отправлено'}</Text>
               <Text style={{ color: colors.text, fontSize: 14 }}>{fmtTime(msg.createdAt)}</Text>
             </View>
           </View>
+
+          {problem ? (
+            <Text style={{ color: colors.error, fontSize: font.sm, marginBottom: 12 }}>
+              {groupSendProblemText(problem)}
+            </Text>
+          ) : null}
 
           {msg.senderName ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>

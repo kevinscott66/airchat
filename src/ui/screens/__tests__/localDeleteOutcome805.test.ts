@@ -173,7 +173,11 @@ describe('форма исходников: правка стоит там, гд�
 
   it('оба экрана считают «строки нет» удачей, а отказ — нет', () => {
     expect(CHAT).toContain("return (await svc.deleteMessageLocally(row.id)) !== 'failed';");
-    expect(GROUPS).toContain("remove: async () => (await deleteGroupMessageChecked(item.id, pid)) !== 'failed',");
+    // v4.32.951: тело закрытия стало составным — удачное удаление теперь ещё
+    // и снимает отметку «не ушло». Предмет проверки прежний: удачей считается
+    // всё, кроме отказа, и «строки нет» остаётся удачей.
+    expect(GROUPS).toContain("const gone = (await deleteGroupMessageChecked(item.id, pid)) !== 'failed';");
+    expect(GROUPS).toContain('return gone;');
   });
 
   it('«Удалить у себя» перестало обещать за базу', () => {

@@ -1494,7 +1494,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       };
       await insertGroupMessageOrThrow(row);
       await touchGroupConversation(grp.id, pid, msg.slice(0, 60), false, myName, false, myPubB64);
-      announceGroupSend(fanoutGroupMessage(grp.id, msg, myName, myPubB64, row.id));
+      announceGroupSend(fanoutGroupMessage(grp.id, msg, myName, myPubB64, row.id), { msgId: row.id, pid });
       showSuccess(t('feed.forwardedToGroup', { name: grp.name }));
       setShareToTarget(null);
       // v4.32.893: перехват был глухой — `catch {}` без разбора выводил одно

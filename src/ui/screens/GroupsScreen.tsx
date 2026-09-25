@@ -113,6 +113,9 @@ import { decideOwnDescriptionWrite } from '../../core/social/groupMetaEvents';
 import { SafeScreen } from '../components/SafeScreen';
 import { showError, showSuccess } from '../components/userFeedback';
 import { announceGroupSend } from '../groupSendAnnounce';
+import { groupSendProblemText } from '../../core/social/groupSendOutcome';
+import { loadGroupSendProblemsFor, forgetGroupSendProblemsFor, type GroupSendProblemMap } from '../../core/social/groupSendProblemStore';
+import { GroupMessageStatusIcon } from './chat-components/GroupMessageStatusIcon';
 import { groupControlProblem } from '../../core/social/groupControlOutcome';
 import { announceCtl, announceInviteToken } from '../groupControlAnnounce';
 import { useTheme, useScaledFont } from '../ThemeContext';
@@ -734,7 +737,6 @@ function GroupChatScreen({
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const jumpHighlightAnim = useRef(new RNAnimated.Value(0)).current;
   /** ID of the message just sent this session — shows single ✓ until next reload. */
-  const lastSentMsgIdRef = useRef<string | null>(null);
   /** "Seen by" modal: shows who has read a specific outgoing message */
   const [seenByMsg, setSeenByMsg] = useState<GroupMessageRow | null>(null);
   const myPubB64 = useMemo(() => Buffer.from(pair.publicKey).toString('base64'), [pair]);
@@ -1043,6 +1045,14 @@ function GroupChatScreen({
   // конверт всегда, а loadMessages зовут на каждую запись в хранилище.
   const refusedGroupReceiptsRef = useRef<Map<string, number>>(new Map());
 
+  /**
+   * Отметки «это сообщение не ушло» — по id (v4.32.951). Пустая карта здесь
+   * значит «отказов нет», а НЕ «прочитать не удалось»: нечитаемый ответ
+   * оставляет прежнюю карту, иначе экран нарисовал бы галочки там, где
+   * отметка есть и просто не открылась.
+   */
+  const [sendProblems, setSendProblems] = useState<GroupSendProblemMap>({});
+
   const loadMessages = useCallback(async () => {
     await loadTaskRef.current.run(async () => {
     // Purge any expired disappearing messages before loading
@@ -1061,6 +1071,9 @@ function GroupChatScreen({
       return;
     }
     setMsgReadFailed(false);
+    const problems = await loadGroupSendProblemsFor(pid);
+    if (!isMountedRef.current) return;
+    if (problems) setSendProblems(problems);
     const msgs = read;
     // v4.32.533: обновление читает первую страницу, а зовут его на каждую
     // запись в базе — на входящее сообщение, реакцию, правку, отметку о
@@ -1155,7 +1168,12 @@ function GroupChatScreen({
       // раньше показа и переживает снятие приложения из многозадачности.
       note: () => noteViewOnceShown(pid, 'group', item.id),
       forget: async () => { await forgetViewOnceShown(pid, 'group', item.id); },
-      remove: async () => (await deleteGroupMessageChecked(item.id, pid)) !== 'failed',
+      remove: async () => {
+        const gone = (await deleteGroupMessageChecked(item.id, pid)) !== 'failed';
+        // v4.32.951: см. одиночное удаление.
+        if (gone) void forgetGroupSendProblemsFor(pid, [item.id]);
+        return gone;
+      },
       reload: () => { void loadMessages(); },
       // Вложение живёт на relay около трёх часов — старое уже не достать.
       onUnavailable: () => showError('Снимок больше недоступен'),
@@ -1954,7 +1972,7 @@ function GroupChatScreen({
             const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
             await insertGroupMessageOrThrow(row);
             await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
-            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
+            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
             sentCount++;
           } catch (e) {
             failedCount++;
@@ -2066,7 +2084,7 @@ function GroupChatScreen({
       await touchGroupConversation(group.id, pid, viewOnce ? '👁 Одноразовое фото' : (cids.length > 1 ? `📷 ${cids.length} фото` : '📷 Фото'), false, myDisplayName, false, myPubB64);
       // v4.32.244: cids не передавались вообще — снимок оставался только у
       // отправителя, у остальных приходил пустой текст.
-      announceGroupSend(fanoutGroupMessage(group.id, msgText, myDisplayName, myPubB64, row.id, cids));
+      announceGroupSend(fanoutGroupMessage(group.id, msgText, myDisplayName, myPubB64, row.id, cids), { msgId: row.id, pid });
       await loadMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить фото'));
@@ -2130,7 +2148,7 @@ function GroupChatScreen({
       };
       await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, `📎 ${asset.name ?? 'Документ'}`, false, myDisplayName, false, myPubB64);
-      announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
+      announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
       await loadMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить документ'));
@@ -2174,7 +2192,7 @@ function GroupChatScreen({
       };
       await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, '📍 Геолокация', false, myDisplayName, false, myPubB64);
-      announceGroupSend(fanoutGroupMessage(group.id, locText, myDisplayName, myPubB64, row.id));
+      announceGroupSend(fanoutGroupMessage(group.id, locText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
       await loadMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить геолокацию'));
@@ -2239,7 +2257,7 @@ function GroupChatScreen({
             const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
             await insertGroupMessageOrThrow(row);
             await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
-            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
+            announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
             sentCount++;
           } catch (e) {
             failedCount++;
@@ -2293,7 +2311,7 @@ function GroupChatScreen({
       return;
     }
     await touchGroupConversation(group.id, pid, `📇 ${c.displayName ?? ''}`, false, myDisplayName, false, myPubB64);
-    announceGroupSend(fanoutGroupMessage(group.id, cardText, myDisplayName, myPubB64, row.id));
+    announceGroupSend(fanoutGroupMessage(group.id, cardText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
     await loadMessages();
   }, [group.id, myPubB64, myDisplayName, pid, loadMessages]);
 
@@ -2319,7 +2337,7 @@ function GroupChatScreen({
       };
       await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, '🎞 GIF', false, myDisplayName, false, myPubB64);
-      announceGroupSend(fanoutGroupMessage(group.id, gifText, myDisplayName, myPubB64, row.id));
+      announceGroupSend(fanoutGroupMessage(group.id, gifText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
       await loadMessages();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось отправить GIF'));
@@ -2388,6 +2406,8 @@ function GroupChatScreen({
             // как это делает свайп рядом.
             const write = await deleteGroupMessageChecked(msg.id, pid);
             if (write !== 'failed') {
+              // v4.32.951: отметка «не ушло» переживать своё сообщение не должна.
+              void forgetGroupSendProblemsFor(pid, [msg.id]);
               // v4.32.232: удаление чистило только свою БД — у остальных
               // сообщение оставалось на месте.
               announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: msg.id }, myDisplayName));
@@ -2963,7 +2983,6 @@ function GroupChatScreen({
     void (async () => {
       try {
         const newMsgId = uuidv4();
-        lastSentMsgIdRef.current = newMsgId;
         const row: GroupMessageRow = {
           id: newMsgId,
           groupId: group.id,
@@ -2985,7 +3004,8 @@ function GroupChatScreen({
           fanoutGroupMessage(group.id, t, myDisplayName, myPubB64, row.id, undefined, {
             id: row.replyToId,
             preview: row.replyToPreview,
-          })
+          }),
+          { msgId: row.id, pid }
         );
         await loadMessages();
         // Отсчёт медленного режима. Отметка пишется в kv, а не только в ref:
@@ -3580,11 +3600,14 @@ function GroupChatScreen({
               </Text>
             </AppPressable>
             {isMe ? (
-              <Ionicons
-                name={item.id === lastSentMsgIdRef.current ? 'checkmark-outline' : 'checkmark-done-outline'}
-                size={13}
-                color={outgoing ? meInk.muted : colors.textMuted}
-                style={{ marginLeft: 2 }}
+              <GroupMessageStatusIcon
+                problem={sendProblems[item.id]?.problem ?? null}
+                seenCount={item.seenBy?.length ?? 0}
+                onDarkFill={outgoing}
+                onProblemPress={() => {
+                  const p = sendProblems[item.id]?.problem;
+                  if (p) Alert.alert('', groupSendProblemText(p));
+                }}
               />
             ) : null}
           </View>
@@ -4571,6 +4594,8 @@ function GroupChatScreen({
                             if (res[i] === 'failed') return;
                             announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'del', msgId: id }, myDisplayName));
                           });
+                          // v4.32.951: см. одиночное удаление.
+                          void forgetGroupSendProblemsFor(pid, ids.filter((_, i) => res[i] !== 'failed'));
                           setSelectedGrpIds(new Set());
                           void loadMessages();
                           const failed = res.filter((r) => r === 'failed').length;
@@ -4843,7 +4868,7 @@ function GroupChatScreen({
                       };
                       await insertGroupMessageOrThrow(row);
                       await touchGroupConversation(group.id, pid, '🎤 Голосовое сообщение', false, myDisplayName, false, myPubB64);
-                      announceGroupSend(fanoutGroupMessage(group.id, voiceText, myDisplayName, myPubB64, row.id));
+                      announceGroupSend(fanoutGroupMessage(group.id, voiceText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
                       await loadMessages();
                       // v4.32.722: своё голосовое — всегда к нему, как и свой текст.
                       requestAnimationFrame(() => {
@@ -4905,7 +4930,11 @@ function GroupChatScreen({
 
       {/* Message info modal */}
       {grpMsgInfoTarget ? (
-        <GrpMessageInfoModal msg={grpMsgInfoTarget} onClose={() => setGrpMsgInfoTarget(null)} />
+        <GrpMessageInfoModal
+          msg={grpMsgInfoTarget}
+          problem={grpMsgInfoTarget ? (sendProblems[grpMsgInfoTarget.id]?.problem ?? null) : null}
+          onClose={() => setGrpMsgInfoTarget(null)}
+        />
       ) : null}
 
       {/* Seen by modal */}
@@ -5052,7 +5081,7 @@ function GroupChatScreen({
               };
               await insertGroupMessageOrThrow(row);
               await touchGroupConversation(group.id, pid, isQuizPoll ? '🧠 Викторина' : allowMultiple ? '☑️ Опрос' : '📊 Опрос', false, myDisplayName, false, myPubB64);
-              announceGroupSend(fanoutGroupMessage(group.id, pollText, myDisplayName, myPubB64, row.id));
+              announceGroupSend(fanoutGroupMessage(group.id, pollText, myDisplayName, myPubB64, row.id), { msgId: row.id, pid });
               await loadMessages();
             } catch (e) {
               showError(userErrorText(e, 'Не удалось отправить опрос'));
