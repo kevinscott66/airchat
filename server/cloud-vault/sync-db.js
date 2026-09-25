@@ -273,13 +273,25 @@ class SyncDatabase {
       -- ищут лента, группы и карточка незнакомца. Запись кладёт только
       -- подпись этим же ключом (см. /v1/avatar в index.js); ts — отметка
       -- подписанного запроса, старый запрос не ложится поверх нового.
+      --
+      -- v4.32.940: sig и nonce — те самые, которыми владелец подписал запрос.
+      -- Раньше они проверялись на входе и выбрасывались, а показывающая
+      -- сторона получала только байты и метку версии, посчитанную самим
+      -- сервером. То есть лицо человека она принимала на слово сервера:
+      -- подменить его мог кто угодно, у кого есть доступ к этой базе, и
+      -- заметить подмену было нечем. Теперь подпись хранится и отдаётся
+      -- вместе с фото, а собрать подписанную строку обратно можно из bytes,
+      -- nonce и updated_at — imageB64 в ней канонический (см. decodeBase64 в
+      -- index.js: запрос с неканоническим base64 не принимается вовсе).
       CREATE TABLE IF NOT EXISTS public_avatars (
         public_key TEXT PRIMARY KEY NOT NULL,
         mime TEXT NOT NULL,
         bytes BLOB NOT NULL,
         hash TEXT NOT NULL,
         size INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        sig TEXT,
+        nonce TEXT
       );
 
       -- v4.32.557: журнал подключений устройств. Нужен для двух вещей сразу.
@@ -353,6 +365,7 @@ class SyncDatabase {
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
     this.ensureUsernameDirectoryColumn();
+    this.ensurePublicAvatarProofColumns();
     this.ensureDeviceMetadataColumns();
     this.ensureAccountMutationSequenceColumn();
     this.ensureProfileScopedCursors();
@@ -464,6 +477,18 @@ class SyncDatabase {
    * «имя занято, владелец не назван». Ключ появится, когда владелец в
    * следующий раз подтвердит имя из приложения.
    */
+  /**
+   * v4.32.940: подпись под фото. У записей, положенных до этой версии, её нет
+   * и взять неоткуда — такие фото отдаются без доказательства, и показывающая
+   * сторона их не покажет. Чинится само: владелец перевыкладывает фото при
+   * каждом запуске (broadcastMyProfile).
+   */
+  ensurePublicAvatarProofColumns() {
+    const columns = new Set(this.db.prepare('PRAGMA table_info(public_avatars)').all().map((column) => column.name));
+    if (!columns.has('sig')) this.db.exec('ALTER TABLE public_avatars ADD COLUMN sig TEXT');
+    if (!columns.has('nonce')) this.db.exec('ALTER TABLE public_avatars ADD COLUMN nonce TEXT');
+  }
+
   ensureUsernameDirectoryColumn() {
     const columns = new Set(this.db.prepare('PRAGMA table_info(sync_usernames)').all().map((column) => column.name));
     if (!columns.has('profile_public_key')) {
@@ -737,7 +762,7 @@ class SyncDatabase {
    * Положить фото профиля (v4.32.722). Отказ `stale` — на месте уже лежит
    * запись из более позднего запроса; `full` — исчерпан общий потолок байт.
    */
-  putPublicAvatar(publicKeyB64, mime, bytes, ts, { maxTotalBytes }) {
+  putPublicAvatar(publicKeyB64, mime, bytes, ts, { maxTotalBytes, sig = null, nonce = null }) {
     const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -754,12 +779,13 @@ class SyncDatabase {
         return { ok: false, reason: 'full' };
       }
       this.db.prepare(`
-        INSERT INTO public_avatars (public_key, mime, bytes, hash, size, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO public_avatars (public_key, mime, bytes, hash, size, updated_at, sig, nonce)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(public_key) DO UPDATE SET
           mime = excluded.mime, bytes = excluded.bytes, hash = excluded.hash,
-          size = excluded.size, updated_at = excluded.updated_at
-      `).run(publicKeyB64, mime, bytes, hash, bytes.length, ts);
+          size = excluded.size, updated_at = excluded.updated_at,
+          sig = excluded.sig, nonce = excluded.nonce
+      `).run(publicKeyB64, mime, bytes, hash, bytes.length, ts, sig, nonce);
       this.db.exec('COMMIT');
       return { ok: true, hash };
     } catch (error) {
@@ -779,7 +805,7 @@ class SyncDatabase {
   /** Фото целиком — для раздачи. */
   getPublicAvatar(publicKeyB64) {
     return this.db.prepare(
-      'SELECT mime, bytes, hash FROM public_avatars WHERE public_key = ?',
+      'SELECT mime, bytes, hash, updated_at AS updatedAt, sig, nonce FROM public_avatars WHERE public_key = ?',
     ).get(publicKeyB64) || null;
   }
 

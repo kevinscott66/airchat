@@ -1545,7 +1545,7 @@ function verifyAvatarRequest(body) {
     mime = image ? avatarMimeOf(image) : null;
     if (!image || !mime) return null;
   }
-  return { act: parsed.act, publicKeyB64: parsed.publicKeyB64, ts: parsed.ts, nonce: parsed.nonce, image, mime };
+  return { act: parsed.act, publicKeyB64: parsed.publicKeyB64, ts: parsed.ts, nonce: parsed.nonce, image, mime, signature };
 }
 
 app.post('/v1/avatar', (req, res) => {
@@ -1561,6 +1561,10 @@ app.post('/v1/avatar', (req, res) => {
     }
     const result = syncDb.putPublicAvatar(request.publicKeyB64, request.mime, request.image, request.ts, {
       maxTotalBytes: AVATAR_MAX_TOTAL_BYTES,
+      // v4.32.940: подпись и одноразовое число кладутся вместе с фото — из них
+      // собирается обратно ровно та строка, которую подписал владелец.
+      sig: request.signature,
+      nonce: request.nonce,
     });
     if (!result.ok) return res.status(result.reason === 'full' ? 507 : 409).json({ error: result.reason });
     return res.json({ ok: true, v: result.hash });
@@ -1616,6 +1620,54 @@ app.get('/v1/avatar/:key/img', (req, res) => {
     return res.send(Buffer.from(row.bytes));
   } catch {
     noStore(res);
+    return res.status(500).json({ error: 'avatar_read_failed' });
+  }
+});
+
+/**
+ * Фото вместе с подписью владельца (v4.32.940).
+ *
+ * `/img` отдаёт байты, и поверить в них можно только серверу: метку версии
+ * считает он сам, подписи под ней нет. Для лица человека этого мало — это
+ * ровно то, по чему собеседника узнают в ленте, в группе и в карточке.
+ *
+ * Здесь отдаётся подписанная строка целиком, ровно в том виде, в каком её
+ * подписывал владелец, — собранная обратно из байтов, nonce и ts. Ключ, на
+ * котором её проверяют, показывающая сторона берёт не отсюда: адрес запроса
+ * и есть этот ключ.
+ *
+ * Перед выдачей сервер проверяет подпись сам. Не ради безопасности (клиент
+ * проверит ещё раз и только его проверка чего-то стоит), а чтобы расхождение
+ * в сборке строки обнаружилось здесь и сразу, а не выглядело у человека как
+ * «фото пропало».
+ */
+app.get('/v1/avatar/:key/signed', (req, res) => {
+  noStore(res);
+  const key = avatarKeyFromUrl(req.params.key);
+  if (!key) return res.status(400).json({ error: 'invalid_avatar_key' });
+  try {
+    const row = syncDb.getPublicAvatar(key);
+    if (!row) return res.status(404).json({ error: 'avatar_not_found' });
+    // Записи до v4.32.940 подписи не хранят. Взять её неоткуда: она была в
+    // запросе, а запрос давно отработан.
+    if (!row.sig || !row.nonce) return res.status(409).json({ error: 'avatar_proof_missing' });
+    const payload = safeStableStringify({
+      v: 1,
+      ts: row.updatedAt,
+      nonce: row.nonce,
+      publicKeyB64: key,
+      act: 'put',
+      imageB64: Buffer.from(row.bytes).toString('base64'),
+    });
+    if (!payload) return res.status(500).json({ error: 'avatar_proof_failed' });
+    const publicKey = decodeBase64(key, 32);
+    let ok = false;
+    try {
+      ok = publicKey ? ed25519.verify(Buffer.from(row.sig, 'base64'), Buffer.from(payload, 'utf8'), publicKey) : false;
+    } catch { ok = false; }
+    if (!ok) return res.status(409).json({ error: 'avatar_proof_broken' });
+    return res.json({ payload, signature: row.sig });
+  } catch {
     return res.status(500).json({ error: 'avatar_read_failed' });
   }
 });

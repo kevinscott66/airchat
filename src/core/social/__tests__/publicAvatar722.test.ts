@@ -7,12 +7,16 @@
  * находит человека и по ключу, и по did, отдаёт один и тот же объект, а фото
  * из конверта контакта оставляет главнее серверного.
  */
+import { createHash } from 'node:crypto';
 import { didFromPubB64 } from '../../identity/did';
 
 const mockMyPub = new Uint8Array(32).fill(3);
 const PEER_PUB = Buffer.from(new Uint8Array(32).fill(7)).toString('base64');
 const PEER_URL = Buffer.from(new Uint8Array(32).fill(7)).toString('base64url');
-const HASH = 'a'.repeat(32);
+// v4.32.940: свёртка теперь сверяется с байтами, а не просто едет в адресе.
+const PEER_IMG = Buffer.from([0xff, 0xd8, 0xff, 7, 7, 7]);
+const HASH = createHash('sha256').update(PEER_IMG).digest('hex').slice(0, 32);
+const PEER_FILE = `file:///cache/pubavatar-${PEER_URL}-${HASH}.img`;
 
 let mockVisibility: 'everybody' | 'contacts' | 'nobody' | null = 'everybody';
 let mockImg: string | null = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]).toString('base64');
@@ -32,12 +36,32 @@ jest.mock('../../identity/profileManager', () => ({
     getActiveKeyPair: () => ({ publicKey: mockMyPub, secretKey: new Uint8Array(64) }),
   },
 }));
+// v4.32.940: подпись здесь подделана намеренно — эти проверки про справку
+// пачкой и про старшинство фото из конверта. Настоящая проверка подписи живёт
+// в publicAvatarProof940.test.ts, и подменить её заглушкой там нечем.
 jest.mock('../../crypto/signature', () => ({
   signJson: jest.fn(async (_pair: unknown, obj: Record<string, unknown>) => ({ payload: JSON.stringify(obj), signature: 'sig' })),
+  verifySignedJson: jest.fn(async () => ({
+    v: 1,
+    act: 'put',
+    publicKeyB64: Buffer.from(new Uint8Array(32).fill(7)).toString('base64'),
+    imageB64: Buffer.from([0xff, 0xd8, 0xff, 7, 7, 7]).toString('base64'),
+  })),
+}));
+jest.mock('expo-file-system/legacy', () => ({
+  cacheDirectory: 'file:///cache/',
+  documentDirectory: 'file:///docs/',
+  EncodingType: { Base64: 'base64' },
+  getInfoAsync: jest.fn(async () => ({ exists: false })),
+  writeAsStringAsync: jest.fn(async () => undefined),
 }));
 jest.mock('../../net/timedFetch', () => ({
-  fetchWithDeadline: jest.fn(async (url: string, init: { body: string }, _o: unknown, read: (r: unknown) => unknown) =>
-    read(await mockFetch(url, JSON.parse(init.body)))),
+  fetchWithDeadline: jest.fn(async (url: string, init: { body?: string }, _o: unknown, read: (r: unknown) => unknown) => {
+    if (typeof url === 'string' && url.endsWith('/signed')) {
+      return read({ ok: true, status: 200, json: async () => ({ payload: '{}', signature: 'sig' }) });
+    }
+    return read(await mockFetch(url, init.body ? JSON.parse(init.body) : null));
+  }),
 }));
 jest.mock('../contacts', () => ({
   listContacts: jest.fn(async () => mockContacts),
@@ -112,7 +136,8 @@ test('фото незнакомца находится по ключу и по d
   expect(mockFetch.mock.calls[0][1]).toEqual({ keys: [PEER_URL] });
   expect(woke).toHaveBeenCalled();
   const src = avatarSourceFor(PEER_PUB);
-  expect(src).toEqual({ cid: null, uri: `https://vault.test/v1/avatar/${PEER_URL}/img?v=${HASH}` });
+  // v4.32.940: показывается проверенный файл на устройстве, а не адрес сервера.
+  expect(src).toEqual({ cid: null, uri: PEER_FILE });
   expect(avatarSourceFor(PEER_PUB)).toBe(src);
   expect(avatarSourceFor(didFromPubB64(PEER_PUB))).toBe(src);
   // Ответ запомнен: повторная отрисовка сервер не дёргает.

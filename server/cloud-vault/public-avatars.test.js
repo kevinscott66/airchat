@@ -11,6 +11,9 @@ const os = require('os');
 const path = require('path');
 const test = require('node:test');
 const { ed25519 } = require('@noble/curves/ed25519.js');
+// v4.32.940: подмена байтов в обход конечной точки — так это и выглядит у
+// того, кто добрался до хранилища.
+const { DatabaseSync } = require('node:sqlite');
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-public-avatars-'));
 process.env.CLOUD_VAULT_DIR = dataDir;
@@ -123,4 +126,87 @@ test('справка по фото отвергает мусор в ключах
   const many = Array.from({ length: 65 }, (_, i) => identity(10 + i).urlKey);
   assert.equal((await send(base, '/v1/avatars/lookup', { keys: many })).status, 400);
   assert.equal((await fetch(`${base}/v1/avatar/short/img`)).status, 400);
+});
+
+/**
+ * v4.32.940. Дефект: фото отдавалось голыми байтами, и поверить в них можно
+ * было только серверу — метку версии он считает сам, подписи под ней нет.
+ * Кто угодно с доступом к базе подменял человеку лицо, и заметить это было
+ * нечем. Подпись владельца при этом существовала: она проверялась на входе и
+ * выбрасывалась.
+ *
+ * Правка: подпись хранится, и `/signed` отдаёт подписанную строку целиком,
+ * собранную обратно из байтов, nonce и ts. Ключ для проверки показывающая
+ * сторона берёт не из ответа: адрес запроса и есть этот ключ.
+ */
+test('фото отдаётся вместе с подписью владельца, и подпись сходится', async (t) => {
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const nina = identity(80);
+
+  assert.equal((await fetch(`${base}/v1/avatar/${nina.urlKey}/signed`)).status, 404);
+
+  assert.equal((await send(base, '/v1/avatar', signed(nina, { act: 'put', imageB64: JPEG.toString('base64') }))).status, 200);
+
+  const proof = await fetch(`${base}/v1/avatar/${nina.urlKey}/signed`);
+  assert.equal(proof.status, 200);
+  const body = await proof.json();
+
+  // Подпись сходится с ключом, которым и спрашивали, — а не с тем, который
+  // сервер назвал бы сам.
+  const publicKey = Buffer.from(nina.urlKey, 'base64url');
+  assert.equal(
+    ed25519.verify(Buffer.from(body.signature, 'base64'), Buffer.from(body.payload, 'utf8'), publicKey),
+    true,
+  );
+
+  const parsed = JSON.parse(body.payload);
+  assert.equal(parsed.act, 'put');
+  assert.equal(parsed.publicKeyB64, nina.publicKeyB64);
+  // В строке лежит ровно то фото, что отдаёт /img: подпись покрывает байты.
+  assert.deepEqual(Buffer.from(parsed.imageB64, 'base64'), JPEG);
+  const img = await fetch(`${base}/v1/avatar/${nina.urlKey}/signed`.replace('/signed', '/img'));
+  assert.deepEqual(Buffer.from(await img.arrayBuffer()), JPEG);
+
+  // ПОДМЕНА. Байты в базе меняем в обход конечной точки — ровно так это и
+  // выглядело бы у того, кто добрался до хранилища.
+  const db = new DatabaseSync(path.join(dataDir, 'sync.sqlite'));
+  db.prepare('UPDATE public_avatars SET bytes = ? WHERE public_key = ?').run(PNG, nina.publicKeyB64);
+  db.close();
+
+  const swapped = await fetch(`${base}/v1/avatar/${nina.urlKey}/signed`);
+  assert.equal(swapped.status, 409);
+  assert.equal((await swapped.json()).error, 'avatar_proof_broken');
+
+  // Снятое фото не отдаёт и доказательства.
+  assert.equal((await send(base, '/v1/avatar', signed(nina, { act: 'del' }))).status, 200);
+  assert.equal((await fetch(`${base}/v1/avatar/${nina.urlKey}/signed`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/avatar/short/signed`)).status, 400);
+});
+
+/**
+ * Записи, положенные до v4.32.940, подписи не хранят: она была в запросе, а
+ * запрос давно отработан. Такое фото не выдаётся за доказанное — иначе смысл
+ * правки терялся бы ровно там, где он нужен.
+ */
+test('фото без сохранённой подписи не выдаётся за доказанное', async (t) => {
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const oleg = identity(81);
+  assert.equal((await send(base, '/v1/avatar', signed(oleg, { act: 'put', imageB64: JPEG.toString('base64') }))).status, 200);
+
+  const db = new DatabaseSync(path.join(dataDir, 'sync.sqlite'));
+  db.prepare('UPDATE public_avatars SET sig = NULL, nonce = NULL WHERE public_key = ?').run(oleg.publicKeyB64);
+  db.close();
+
+  const proof = await fetch(`${base}/v1/avatar/${oleg.urlKey}/signed`);
+  assert.equal(proof.status, 409);
+  assert.equal((await proof.json()).error, 'avatar_proof_missing');
+  // Байты при этом на месте: старые записи не пропадают, их просто некому
+  // подтвердить.
+  assert.equal((await fetch(`${base}/v1/avatar/${oleg.urlKey}/img`)).status, 200);
 });
