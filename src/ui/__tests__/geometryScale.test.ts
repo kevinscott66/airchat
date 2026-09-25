@@ -172,7 +172,7 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   'ui/components/CallOverlay.tsx': 1,
   'ui/components/RelaySettingsSection.tsx': 10,
   'ui/components/modals/chat/ChatForwardModal.tsx': 10,
-  'ui/components/modals/chat/ChatMessageInfoModal.tsx': 10,
+  'ui/components/modals/chat/ChatMessageInfoModal.tsx': 9,
   'ui/components/VpnSettingsSection.tsx': 8,
   'ui/components/modals/groups/GroupJoinRequestsModal.tsx': 8,
   'ui/components/modals/chat/ChatPollCreatorModal.tsx': 7,

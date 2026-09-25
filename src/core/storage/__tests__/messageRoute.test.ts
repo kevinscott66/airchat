@@ -151,8 +151,11 @@ describe('«Сведения о сообщении»', () => {
   it('без маршрута строка не рисуется вовсе — вместо догадки', () => {
     expect(MODAL).toContain('{msg.transport && ROUTE_LABELS[msg.transport] ? (');
     const row = MODAL.indexOf('{msg.transport &&');
-    const cid = MODAL.indexOf('{msg.cid ? (');
+    // v4.32.915: строкой ниже была `{msg.cid ? (` — теперь `{netCid ? (`.
+    // Проверяем то же самое: маршрут стоит выше отпечатка, а не наоборот.
+    const fingerprint = MODAL.indexOf('{netCid ? (');
     expect(row).toBeGreaterThan(0);
-    expect(row).toBeLessThan(cid);
+    expect(fingerprint).toBeGreaterThan(0);
+    expect(row).toBeLessThan(fingerprint);
   });
 });

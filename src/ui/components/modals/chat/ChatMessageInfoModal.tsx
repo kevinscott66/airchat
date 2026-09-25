@@ -8,6 +8,10 @@ import type { ChatMessageRow, MessageRoute } from '../../../../core/storage/loca
 import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
 import { ruPlural } from '../../../utils/plural';
+import { isPlainCid } from '../../../../core/cid';
+import { shortIdentity } from '../../../identity/shortId';
+import { copyText } from '../../../copyText';
+import { COPIED_TEXT, COPY_FINGERPRINT_ACTION } from '../../../clipboardText';
 
 /**
  * Как назвать маршрут человеку (v4.32.563).
@@ -34,8 +38,13 @@ const ROUTE_LABELS: Record<MessageRoute, { title: string; hint: string; icon: 'g
  * рядом в переписке горит красным и не ушло никуда, окно писало «Отправлено».
  *
  * Слова взяты те же, что у иконки, и поводы разделены так же: «отправлено» без
- * CID — это ещё очередь, а не отправка (строку CID окно показывает ниже, и без
- * этой развилки она противоречила бы подписи).
+ * ссылки на отправленное — это ещё очередь, а не отправка.
+ *
+ * v4.32.915: развилка осталась на `!!msg.cid` — на ЛЮБОЙ ссылке, которую вернул
+ * путь отправки, включая `fallback:`. Это и значит «ушло с устройства»: по
+ * локальной сети или через реле оно ушло не менее честно, чем в IPFS. Строка
+ * отпечатка ниже теперь показывается только для настоящего CID, поэтому
+ * прежняя оговорка «строку CID окно показывает ниже» больше не верна.
  */
 function statusView(
   status: string,
@@ -71,6 +80,16 @@ export function MessageInfoModal({
   if (!msg) return null;
   const fmtTime = dayMonthShortTimeSec;
   const view = statusView(msg.status, !!msg.cid);
+  /**
+   * Настоящий адрес содержимого — или ничего (v4.32.915).
+   *
+   * `msg.cid` хранит не только CID: путь отправки кладёт туда `local:<время>`
+   * для заметок себе и `fallback:<id сообщения>` для всего, что ушло по
+   * локальной сети, через WebRTC или через реле. На телефоне IPFS выключен,
+   * так что `fallback:` — обычный случай, а не редкий. Различать их дом умеет
+   * с v4.32.432: `isPlainCid`, один на девять прежних самодельных проверок.
+   */
+  const netCid: string | null = isPlainCid(msg.cid) ? msg.cid : null;
   const statusLabel = view.label;
   const statusIcon = view.icon;
   const statusColor =
@@ -118,11 +137,33 @@ export function MessageInfoModal({
               </View>
             </View>
           ) : null}
-          {msg.cid ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+          {netCid ? (
+            /* v4.32.915: было «CID: {msg.cid.slice(0, 32)}…» на любом значении.
+               Три беды в одной строке. Первая — слово: «CID» единственное во
+               всём окне не переведено, тогда как соседние строки переведены
+               нарочно (маршруты в v4.32.563, состояния в v4.32.886, счётчики в
+               v4.32.909). Вторая — ложь: у заметки себе там стоит
+               `local:1700000000000`, у сообщения, ушедшего по локальной сети, —
+               `fallback:<uuid>`, и ни то ни другое не CID и не адрес в сети;
+               на телефоне, где IPFS выключен, это как раз обычный случай.
+               Третья — строку нельзя унести: обрезана многоточием, не
+               выделяется, а именно за этим к идентификатору и приходят.
+               Теперь строка есть только у настоящего CID, зовётся по-русски и
+               копируется нажатием. Сокращение — общедомовое `shortIdentity`:
+               оно ставит многоточие, только если что-то правда выброшено, и
+               показывает оба конца, а не одну голову. */
+            <AppPressable
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}
+              accessibilityLabel={COPY_FINGERPRINT_ACTION}
+              onPress={() => { void copyText(netCid, COPIED_TEXT); }}
+            >
               <Ionicons name="cloud-done-outline" size={18} color={colors.textMuted} style={{ marginRight: 10 }} />
-              <Text style={{ color: colors.textMuted, fontSize: 12, flex: 1 }} numberOfLines={1}>CID: {msg.cid.slice(0, 32)}…</Text>
-            </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.textMuted, fontSize: font.xs }}>Отпечаток в сети</Text>
+                <Text style={{ color: colors.text, fontSize: font.sm }} numberOfLines={1}>{shortIdentity(netCid, 10)}</Text>
+              </View>
+              <Ionicons name="copy-outline" size={16} color={colors.textMuted} style={{ marginLeft: 10 }} />
+            </AppPressable>
           ) : null}
           {msg.text && msg.text.trim().length > 0 ? (() => {
             const t = msg.text.trim();
