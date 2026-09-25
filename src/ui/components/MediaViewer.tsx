@@ -227,11 +227,11 @@ function SingleImageView({
         mimeType = SHARE_MIME[ext];
         const dest = `${FileSystem.cacheDirectory}ac_share_${Date.now()}.${ext}`;
         const got = await downloadCapped(uri, dest);
-        if (!got) { Alert.alert('AirChat', 'Файл слишком большой для шаринга'); return; }
+        if (!got) { Alert.alert('AirChat', 'Файл слишком большой, чтобы им поделиться'); return; }
         localUri = got;
       }
       const canShare = await Sharing.isAvailableAsync();
-      if (!canShare) { Alert.alert('AirChat', 'Нет приложений для шаринга'); return; }
+      if (!canShare) { Alert.alert('AirChat', 'На этом устройстве нет приложения, которому можно передать файл'); return; }
       await Sharing.shareAsync(localUri, { mimeType });
     } catch (e) {
       showError(userErrorText(e, 'Не удалось поделиться файлом'));

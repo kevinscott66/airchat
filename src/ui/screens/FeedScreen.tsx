@@ -1240,7 +1240,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         const Sharing = await import('expo-sharing');
         const available = await Sharing.isAvailableAsync();
         if (!available) {
-          Alert.alert(t('feed.docTitle'), t('feed.docSavedTo', { uri }));
+          // v4.32.900: здесь говорили «Файл сохранён: file:///var/mobile/…».
+          // Сохранения не было: копия легла в кэш приложения, куда человеку
+          // не попасть, и система вычистит её когда захочет. Обещание
+          // сохранности снимало с него повод переслать документ себе другим
+          // путём — а больше этого файла у него нигде нет. В переписке та же
+          // ветка (DocBubble) давно говорит правду.
+          Alert.alert(t('feed.docTitle'), t('feed.docNoOpener'));
           return;
         }
         await Sharing.shareAsync(uri, { mimeType: mime, dialogTitle: name });
