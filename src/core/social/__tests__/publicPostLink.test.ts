@@ -66,6 +66,28 @@ function expiredPost(did: string): FeedEnvelopePayload {
   };
 }
 
+/**
+ * Ответ сервера с честной подписью автора — меняется только содержимое конверта.
+ *
+ * Нагрузка здесь `Record<string, unknown>`, а не `FeedEnvelopePayload`, и это
+ * не поблажка типам: враждебный сервер нашими типами не связан, а проверяется
+ * тут как раз то, что приходит из-за его края.
+ */
+async function frameFor(
+  pair: { secretKey: Uint8Array; publicKey: Uint8Array },
+  payload: Record<string, unknown>,
+): Promise<Uint8Array | null> {
+  const signed = await signJson(pair, payload);
+  globalThis.fetch = jest.fn(async () => new Response(JSON.stringify({
+    postId: payload.postId,
+    payload: signed.payload,
+    signature: signed.signature,
+    authorPublicKeyB64: Buffer.from(pair.publicKey).toString('base64'),
+    updatedAt: Date.now(),
+  }), { status: 200 })) as unknown as typeof fetch;
+  return getPublicPostFrame(payload.postId as string);
+}
+
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -292,6 +314,67 @@ describe('id поста из одних точек', () => {
       expect(await publicPostCopyExists(bad)).toBe(false);
     }
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * v4.32.942: по ссылке приходит запись, а не приказ.
+   *
+   * Дефект: кадр из публичного хранилища уходил на общий приёмный путь ленты,
+   * а тот разбирает девять видов конвертов. Подпись и номер сходились — вид не
+   * проверялся никем, и «открыть ссылку» значило «выполнить у себя то, что
+   * назовёт сервер».
+   *
+   * Цена: дороже всего обходился `feed_delete`, подписанный самим автором, —
+   * до v4.32.941 автор отдавал такой серверу при КАЖДОМ отзыве ссылки, не
+   * удаляя записи. По ссылке пост открывают тогда, когда его на устройстве
+   * нет, поэтому ветка удаления клала надгробие «на будущее», а `postWriteGuard`
+   * потом отказывал той же публикации, приехавшей от автора по сети. У
+   * прочитавшего запись пропадала навсегда, и сделать с этим он не мог ничего.
+   *
+   * Правка: вид конверта сверяется там же, где подпись, — по тому же списку,
+   * который сервер проверяет на выкладке.
+   *
+   * Границы: репост — такая же запись со своим номером, и он обязан проходить.
+   */
+  it('ПРОВЕРКА НЕ ПУСТАЯ: репост по ссылке открывается', async () => {
+    const { pair, did } = identity();
+    const payload = { ...expiredPost(did), type: 'feed_repost' };
+    expect(await frameFor(pair, payload)).not.toBeNull();
+  });
+
+  it('вместо публикации пришло удаление — кадра нет', async () => {
+    const { pair, did } = identity();
+    const payload = { ...expiredPost(did), type: 'feed_delete', data: { kind: 'delete' } };
+    expect(await frameFor(pair, payload)).toBeNull();
+    expect(mockWarns.some((w) => w.event === 'public_post_type_refused')).toBe(true);
+  });
+
+  it('комментарий, реакция и правка по ссылке тоже не выполняются', async () => {
+    const { pair, did } = identity();
+    for (const type of ['feed_comment', 'feed_reaction', 'feed_edit', 'feed_poll_vote']) {
+      const payload = { ...expiredPost(did), type, data: { kind: type } };
+      expect(await frameFor(pair, payload)).toBeNull();
+    }
+  });
+
+  it('источник: список видов назван одинаково на обеих сторонах', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const client = fs.readFileSync(path.join(__dirname, '../publicPost.ts'), 'utf8');
+    const server = fs.readFileSync(
+      path.join(__dirname, '../../../../server/cloud-vault/index.js'),
+      'utf8',
+    );
+    const code = (src: string) =>
+      src
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+    expect(code(client)).toContain("PUBLIC_POST_TYPES: readonly string[] = ['feed_post', 'feed_repost']");
+    expect(code(client)).toContain('PUBLIC_POST_TYPES.includes(parsed.type)');
+    // Сервер принимает на выкладку ровно эти же два вида — иначе в хранилище
+    // легло бы то, что чтение отказывается отдавать, и ссылка молча ломалась.
+    expect(code(server)).toContain("verifyPostEnvelope(req.body, postId, ['feed_post', 'feed_repost'])");
   });
 
   it('источник: правило живёт в одном месте и на обеих сторонах', () => {
