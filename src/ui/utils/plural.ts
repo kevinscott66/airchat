@@ -26,6 +26,11 @@ export function devicesLabel(n: number): string {
   return `${n} ${ruPlural(n, ['устройство', 'устройства', 'устройств'])}`;
 }
 
+/** «через 1 минуту» / «через 3 минуты» / «через 5 минут». */
+export function minutesLabel(n: number): string {
+  return `${n} ${ruPlural(n, ['минуту', 'минуты', 'минут'])}`;
+}
+
 /**
  * «1 запланированное сообщение» / «2 запланированных сообщения» (v4.32.614).
  *

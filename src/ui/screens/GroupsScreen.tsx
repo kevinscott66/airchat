@@ -4033,7 +4033,7 @@ function GroupChatScreen({
               ) : (
                 <Text style={[gcStyles.headerSub, { color: colors.textMuted }]}>
                   {slowModeSeconds > 0
-                    ? `🐢 ${group.type === 'channel' ? 'Канал' : `${headerMemberCount} уч.`}`
+                    ? `🐢 ${group.type === 'channel' ? 'Канал' : membersLabel(headerMemberCount)}`
                     : group.type === 'channel'
                     ? 'Канал'
                     : onlineMemberCount > 0

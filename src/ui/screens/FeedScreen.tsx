@@ -58,6 +58,7 @@ import * as ImagePicker from 'expo-image-picker';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { loadConfig } from '../../core/config';
 import { contactLabel } from '../../core/social/contactLabel';
+import { membersLabel, ruPlural, subscribersLabel } from '../utils/plural';
 import {
   loadFeedPosts,
   publishFeedPost,
@@ -4445,7 +4446,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }} numberOfLines={1}>{g.name}</Text>
                         {g.memberCount > 0 ? (
                           <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                            {g.type === 'channel' ? t('feed.groupSubs', { n: g.memberCount }) : t('feed.groupMembers', { n: g.memberCount })}
+                            {g.type === 'channel' ? subscribersLabel(g.memberCount) : membersLabel(g.memberCount)}
                           </Text>
                         ) : null}
                       </View>
@@ -4631,9 +4632,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                               runFeedOp(async () => {
                                 const reach = await deleteFeedPost(pair, p.id);
                                 const missed = reach.total - reach.success;
-                                const spread = missed > 0
-                                  ? t('feed.deletedPartly', { n: missed })
-                                  : t('feed.deletedEverywhere');
+                                const spread = missed === 0
+                                  ? t('feed.deletedEverywhere')
+                                  : missed === 1
+                                  ? t('feed.deletedPartlyOne')
+                                  : t('feed.deletedPartly', {
+                                      contacts: `${missed} ${ruPlural(missed, ['контакт', 'контакта', 'контактов'])}`,
+                                    });
                                 // v4.32.614: копию по ссылке открывает кто угодно,
                                 // а не только контакты, поэтому пока она на сервере
                                 // «удалена у всех» — неправда.

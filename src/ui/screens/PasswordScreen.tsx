@@ -30,6 +30,7 @@ import {
   lockoutDeadline,
   lockoutMinutesLeft,
 } from '../utils/lockScreen';
+import { minutesLabel } from '../utils/plural';
 
 type Props = {
   onSuccess: () => void;
@@ -243,7 +244,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
         shake();
         const { remaining, lockout } = await refreshStatus();
         if (lockout > 0) {
-          showError(`Слишком много попыток. Попробуйте через ${lockoutMinutesLeft(lockout)} мин.`);
+          showError(`Слишком много попыток. Попробуйте через ${minutesLabel(lockoutMinutesLeft(lockout))}`);
         } else {
           showError(`Неверный пароль. Осталось попыток: ${remaining}`);
         }
@@ -359,7 +360,7 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
         <View style={styles.container}>
           <Text style={styles.title}>Доступ заблокирован</Text>
           <Text style={styles.message}>
-            Слишком много неудачных попыток. Попробуйте через {lockoutMinutesLeft(lockoutMs)} мин.
+            Слишком много неудачных попыток. Попробуйте через {minutesLabel(lockoutMinutesLeft(lockoutMs))}
             или восстановите доступ.
           </Text>
           <AppPressable

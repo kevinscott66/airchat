@@ -61,6 +61,7 @@ import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import { safeExternalUrl } from '../../core/net/externalLink';
 import { openExternal, openTypedExternal } from '../utils/openExternal';
+import { ruPlural } from '../utils/plural';
 import { formatSpokenDuration } from '../time/durationLabel';
 import { shortIdentity } from '../identity/shortId';
 import { findEntities } from '../../core/text/entities';
@@ -227,11 +228,11 @@ function ProfileScreenImpl({
     const days = Math.floor(diffMs / 86_400_000);
     if (days < 1) return 'Сегодня';
     if (days === 1) return '1 день';
-    if (days < 30) return `${days} дн.`;
+    if (days < 30) return `${days} ${ruPlural(days, ['день', 'дня', 'дней'])}`;
     const months = Math.floor(days / 30);
-    if (months < 12) return `${months} мес.`;
+    if (months < 12) return `${months} ${ruPlural(months, ['месяц', 'месяца', 'месяцев'])}`;
     const years = Math.floor(months / 12);
-    return `${years} г.`;
+    return `${years} ${ruPlural(years, ['год', 'года', 'лет'])}`;
   }, [accountCreatedAt]);
 
   const loadDisplayName = useCallback(async (): Promise<void> => {

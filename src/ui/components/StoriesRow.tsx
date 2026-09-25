@@ -20,6 +20,7 @@ import {
   Animated,
 } from 'react-native';
 import { AppPressable } from './AppPressable';
+import { ruPlural } from '../utils/plural';
 // v4.32.27: Modal заменён на AppModal — автоматически оборачивает в
 // GestureHandlerRootView, чтобы RNGH Pressable внутри Modal получал касания.
 import { AppModal as Modal } from './AppModal';
@@ -349,7 +350,7 @@ function StoryViewer({
                         Alert.alert('Просмотры', UNREADABLE_VIEWERS_TEXT, [{ text: 'ОК' }]);
                       },
                     } : viewers.length > 0 ? {
-                      text: `👁 Просмотрело ${viewers.length} чел.`,
+                      text: `👁 Просмотрело ${viewers.length} ${ruPlural(viewers.length, ['человек', 'человека', 'человек'])}`,
                       onPress: () => {
                         Alert.alert(
                           'Просмотры',
