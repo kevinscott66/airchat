@@ -37,7 +37,11 @@ describe('resolveMentionTarget', () => {
     // открывался как «margarita». toEqual сверяет объект целиком, значит
     // вернувшийся displayName провалит проверку — что и требуется.
     const hit = await resolveMentionTarget('@Founder', 1);
-    expect(hit).toEqual({ status: 'stranger', peerPubB64: PUB, username: 'founder', peerName: null });
+    // v4.32.945: `keyChangedSince` — часть исхода, и toEqual сверяет объект
+    // целиком: забытое поле провалит проверку, а не проедет молча.
+    expect(hit).toEqual({
+      status: 'stranger', peerPubB64: PUB, username: 'founder', peerName: null, keyChangedSince: null,
+    });
     expect(hit).not.toHaveProperty('displayName');
     expect(remote).toHaveBeenCalledWith('founder');
   });
@@ -46,7 +50,7 @@ describe('resolveMentionTarget', () => {
     local.mockResolvedValue({ status: 'none' });
     remote.mockResolvedValue({ status: 'taken', subject: null, peerPubB64: PUB, peerName: 'Рита' });
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
-      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита',
+      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyChangedSince: null,
     });
   });
 

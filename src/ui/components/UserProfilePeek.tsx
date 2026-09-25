@@ -109,6 +109,8 @@ import {
 } from './profileHubModel';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
+import { dayMonthShortYearIfOther } from '../../core/time/ruDateTime';
+import { acceptUsernameKey } from '../../core/social/usernameKeyPin';
 import { rawErrorText, userErrorText } from './userErrorText';
 import { COPY_ACTION, COPY_FAILED, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
@@ -262,6 +264,15 @@ export interface UserProfilePeekProps {
    * @margarita открывался как человек по имени «margarita».
    */
   usernameHint?: string | null;
+  /**
+   * v4.32.945: за этим `@именем` раньше стоял другой ключ — с каких пор помним
+   * прежний. `null` — сошлось или сверять было не с чем.
+   *
+   * Карточка по имени открывается на слово сервера справочника, и это
+   * единственное место, где расхождение можно показать человеку. Молчать о нём
+   * нельзя: подмена ответа выглядит точно так же, как незнакомец.
+   */
+  keyChangedSince?: number | null;
   /** Мой pair — нужен для addContact (шлёт invite-пакет). */
   pair: KeyPairBytes | null;
   /**
@@ -297,6 +308,7 @@ export function UserProfilePeek({
   peerDid,
   fallbackName,
   usernameHint,
+  keyChangedSince,
   pair,
   onOpenChat,
   inChat,
@@ -715,10 +727,39 @@ export function UserProfilePeek({
     ]);
   }, [resolved, muted, activeProfileId, onMuteChanged]);
 
+  /**
+   * Написать тому, чей ключ за именем сменился, — только с ведома человека.
+   *
+   * Запомненное переписывается здесь, а не при сверке: сверка молчалива, и
+   * молчаливая запись означала бы, что предупреждение показывается ровно один
+   * раз, после чего подменённый ключ становится «тем самым». Отказ записи не
+   * отменяет переход: не запомнили — предупредим снова.
+   */
+  const openChatAfterKeyChange = useCallback((pubB64: string) => {
+    const since = keyChangedSince == null ? '' : ` Прежний известен с ${dayMonthShortYearIfOther(keyChangedSince)}.`;
+    Alert.alert(
+      'Ключ за этим именем сменился',
+      `Раньше @${usernameHint} открывался с другим ключом.${since} Так бывает, когда человек переставил приложение — но так же выглядит и подмена ответа сервером.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Всё равно написать',
+          style: 'destructive',
+          onPress: () => {
+            if (usernameHint) void acceptUsernameKey(usernameHint, pubB64);
+            onOpenChat?.(pubB64, displayName);
+            onClose();
+          },
+        },
+      ],
+    );
+  }, [keyChangedSince, usernameHint, displayName, onOpenChat, onClose]);
+
   const onQuickAction = useCallback((id: QuickActionId) => {
     if (!resolved) return;
     switch (id) {
       case 'message':
+        if (keyChangedSince != null) { openChatAfterKeyChange(resolved.pubB64); return; }
         onOpenChat?.(resolved.pubB64, displayName);
         onClose();
         return;
@@ -742,7 +783,7 @@ export function UserProfilePeek({
         setMoreOpen(true);
         return;
     }
-  }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute]);
+  }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute, keyChangedSince, openChatAfterKeyChange]);
 
   // ─── Разделы ────────────────────────────────────────────────────────────
   /**
@@ -1079,6 +1120,18 @@ export function UserProfilePeek({
                           <VerifiedMark size={15} label="Официальный аккаунт" />
                         ) : null}
                       </View>
+                    ) : null}
+                    {/* v4.32.945: карточка по @имени открывается на слово
+                        сервера справочника — проверить его нечем, кроме
+                        собственной памяти. Стоит прямо под адресом, потому что
+                        предупреждение именно про адрес, а не про человека. */}
+                    {keyChangedSince != null ? (
+                      <Text
+                        style={[styles.keyChanged, { color: colors.error }]}
+                        accessibilityRole="alert"
+                      >
+                        За этим именем теперь другой ключ
+                      </Text>
                     ) : null}
                     {/* v4.32.616: местоимения и статус — из того же
                         редактора профиля, что имя и «О себе». До этой версии
@@ -1451,6 +1504,12 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: font.sm,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  keyChanged: {
+    fontSize: font.sm,
+    fontWeight: '600',
     marginTop: 2,
     textAlign: 'center',
   },

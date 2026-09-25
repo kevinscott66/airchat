@@ -148,7 +148,7 @@ describe('единое пространство имён у людей, груп
     const PUB = 'Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyaGk=';
     remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: 'Рита', subject: null });
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
-      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита',
+      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyChangedSince: null,
     });
   });
 

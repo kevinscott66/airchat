@@ -22,6 +22,7 @@
 import { normalizeUsername } from '../identity/username';
 import { lookupSyncUsername } from '../sync/syncApi';
 import { lookupMention } from './mentionLookup';
+import { checkUsernameKeyPin } from './usernameKeyPin';
 
 export type MentionTarget =
   /** Свой контакт: адрес и подпись берутся с устройства. */
@@ -39,7 +40,21 @@ export type MentionTarget =
    * которым назвался (`peerName`). `null` — не опубликовал; тогда карточка
    * честно «Без имени», но юзернейм в имя по-прежнему не идёт.
    */
-  | { status: 'stranger'; peerPubB64: string; username: string; peerName: string | null }
+  | {
+      status: 'stranger';
+      peerPubB64: string;
+      username: string;
+      peerName: string | null;
+      /**
+       * v4.32.945: за этим именем раньше стоял ДРУГОЙ ключ — `since` говорит,
+       * с каких пор мы помним прежний. `null` — сошлось, встретили впервые или
+       * свериться не вышло; отличать эти три случая вызывающему незачем, а вот
+       * промолчать о четвёртом нельзя: переход по имени целиком верит серверу
+       * справочника, и смена ключа — единственное, чем подмена себя выдаёт.
+       * Подробности и границы — в usernameKeyPin.
+       */
+      keyChangedSince: number | null;
+    }
   /**
    * За именем стоит группа или канал (v4.32.937).
    *
@@ -85,7 +100,17 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
     return { status: 'space', kind: answer.subject.kind, publicId: answer.subject.id, username };
   }
   if (!answer.peerPubB64) return { status: 'unlisted' };
-  return { status: 'stranger', peerPubB64: answer.peerPubB64, username, peerName: answer.peerName };
+  // Сверка идёт ПОСЛЕ всех отказов: запоминать нечего у имени, по которому
+  // никуда не перешли, а запись в базу на каждый промах выдавала бы её объём
+  // за число знакомств.
+  const pin = await checkUsernameKeyPin(username, answer.peerPubB64);
+  return {
+    status: 'stranger',
+    peerPubB64: answer.peerPubB64,
+    username,
+    peerName: answer.peerName,
+    keyChangedSince: pin.status === 'changed' ? pin.since : null,
+  };
 }
 
 /** Что показать человеку, когда переходить некуда. */

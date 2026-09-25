@@ -1019,6 +1019,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [peekAuthorName, setPeekAuthorName] = useState<string | null>(null);
   /** v4.32.616: юзернейм перехода — адрес, а не имя (см. usernameDirectory). */
   const [peekAuthorUsername, setPeekAuthorUsername] = useState<string | null>(null);
+  /** v4.32.945: см. usernameKeyPin — за именем сменился ключ, и молчать нельзя. */
+  const [peekKeyChangedSince, setPeekKeyChangedSince] = useState<number | null>(null);
   /**
    * v4.32.605: упоминание в тексте адресует человека именем, а не DID —
    * находится он по адресной книге и открывается по открытому ключу. Та же
@@ -1028,6 +1030,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const openPeekAuthor = useCallback((did: string, name?: string | null) => {
     setPeekAuthorName(name?.trim() || null);
     setPeekAuthorUsername(null);
+    // Признак снимается вместе с юзернеймом: он про имя, а не про человека, и
+    // оставшись от прошлой карточки, он оболгал бы следующую — в ту сторону,
+    // в которую лгать хуже всего.
+    setPeekKeyChangedSince(null);
     setPeekAuthorPub(null);
     setPeekAuthorDid(did);
   }, []);
@@ -1215,11 +1221,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       onClose={() => {
         setPeekAuthorDid(null); setPeekAuthorPub(null);
         setPeekAuthorName(null); setPeekAuthorUsername(null);
+        setPeekKeyChangedSince(null);
       }}
       peerDid={peekAuthorDid}
       peerPubB64={peekAuthorPub}
       fallbackName={peekAuthorName}
       usernameHint={peekAuthorUsername}
+      keyChangedSince={peekKeyChangedSince}
       pair={pair}
       onOpenChat={
         onOpenChatWithPeer
@@ -2892,6 +2900,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       setPeekAuthorDid(null);
       setPeekAuthorName(hit.status === 'contact' ? hit.displayName : hit.peerName);
       setPeekAuthorUsername(hit.status === 'stranger' ? hit.username : null);
+      setPeekKeyChangedSince(hit.status === 'stranger' ? hit.keyChangedSince : null);
       setPeekAuthorPub(hit.peerPubB64);
     })();
   }, [t, myPubB64, onOpenOwnProfile]);

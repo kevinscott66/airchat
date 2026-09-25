@@ -1049,7 +1049,9 @@ function ChatThreadView({
    * означает «такого человека нет» — имя спрашивается в общем реестре, и по
    * незнакомцу открывается та же карточка, где есть «Добавить в контакты».
    */
-  const [mentionPeek, setMentionPeek] = useState<{ pub: string; name: string; username: string | null } | null>(null);
+  const [mentionPeek, setMentionPeek] = useState<
+    { pub: string; name: string; username: string | null; keyChangedSince: number | null } | null
+  >(null);
   const handleMentionPress = useCallback((mention: string) => {
     void (async () => {
       const bare = (mention.startsWith('@') ? mention.slice(1) : mention).trim();
@@ -1072,9 +1074,17 @@ function ChatThreadView({
       // адресом: подставлять его в имя значит называть человека не так, как
       // он назвал себя сам. v4.32.722: имя — то, что владелец опубликовал в
       // реестре; своя подпись из адресной книги карточка всё равно ставит выше.
+      // v4.32.945: смена ключа за именем — свойство ответа справочника, и
+      // донести её до карточки может только тот, кто этот ответ получил. У
+      // контакта ключ свой, сверять его не с чем и незачем.
       setMentionPeek(hit.status === 'contact'
-        ? { pub: hit.peerPubB64, name: hit.displayName, username: null }
-        : { pub: hit.peerPubB64, name: hit.peerName ?? '', username: hit.username });
+        ? { pub: hit.peerPubB64, name: hit.displayName, username: null, keyChangedSince: null }
+        : {
+            pub: hit.peerPubB64,
+            name: hit.peerName ?? '',
+            username: hit.username,
+            keyChangedSince: hit.keyChangedSince,
+          });
     })();
   }, [myPubB64, peerB64, onOpenOwnProfile]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);
@@ -4651,6 +4661,7 @@ function ChatThreadView({
         peerPubB64={mentionPeek?.pub ?? null}
         fallbackName={mentionPeek?.name || null}
         usernameHint={mentionPeek?.username ?? null}
+        keyChangedSince={mentionPeek?.keyChangedSince ?? null}
         pair={pair}
         onClose={() => setMentionPeek(null)}
         onOpenChat={(pub, name) => { setMentionPeek(null); onOpenPeer?.(pub, name); }}
