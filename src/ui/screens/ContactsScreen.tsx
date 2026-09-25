@@ -43,7 +43,7 @@ import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID, COPY_FAILED } from '../clipboardText';
 import { runGuardedOp } from '../components/runGuardedOp';
-import { CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
+import { CONTACT_ID_UNPARSED_TEXT, CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
 
 type Props = {
   onOpenChatWithPeer: (peerPublicKey: string) => void;
@@ -400,7 +400,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
 
   const validationError: string | null = useMemo(() => {
     if (!addIdInput.trim()) return null;
-    if (!parsedKey) return 'Это не похоже на ссылку или код AirChat. Попросите прислать их заново.';
+    if (!parsedKey) return CONTACT_ID_UNPARSED_TEXT;
     if (isSelf) return 'Это ваш собственный ID — нельзя добавить самого себя как контакт.';
     return null;
   }, [addIdInput, parsedKey, isSelf]);
@@ -847,10 +847,16 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             </AppPressable>
           </View>
           <View style={styles.modalBody}>
-            {/* Поле принимает и ссылку, и голый код, и deep-link — разбирает
+            {/* Поле принимает и ссылку, и голый ID, и deep-link — разбирает
                 их parseContactId. Называть его форматами («did:key», «base64»)
-                значило требовать от человека знать, что ему прислали. */}
-            <Text style={styles.label}>Ссылка или код контакта</Text>
+                значило требовать от человека знать, что ему прислали.
+
+                v4.32.911: «код» отсюда убран. Двумя строками ниже стоит кнопка
+                «Сканировать QR», а пустой список на этом же экране просит
+                «отсканируйте код или вставьте его ID», — то есть «код» на
+                одном экране означал и картинку, и строку. Строка в доме зовётся
+                ID (v4.32.469), кодом остаётся только QR. */}
+            <Text style={styles.label}>Ссылка или ID контакта</Text>
             <TextInput
               style={styles.input}
               value={addIdInput}

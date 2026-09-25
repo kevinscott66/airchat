@@ -28,6 +28,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { CONTACT_ID_UNPARSED_TEXT } from '../../commonText';
 
 const SRC = path.join(__dirname, '..', '..', '..');
 
@@ -94,7 +95,9 @@ describe('окно знакомства спрашивает только то, 
   it('в окне осталось ровно два поля ввода', () => {
     const modal = addContactModal();
     expect(modal.split('<TextInput').length - 1).toBe(2);
-    expect(modal).toContain('Ссылка или код собеседника');
+    // v4.32.911: подпись прежняя по смыслу, слово другое — «код» в доме
+    // означает QR-картинку, а вставляют сюда ID.
+    expect(modal).toContain('Ссылка или ID собеседника');
     expect(modal).toContain('Имя (необязательно)');
   });
 });
@@ -146,8 +149,11 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: знакомство остало�
   it('ссылка по-прежнему разбирается, а непонятная — отвергается словами', () => {
     const modal = addContactModal();
     expect(modal).toContain('const pk = parseContactId(key);');
-    expect(modal).toContain('Это не похоже на ссылку или код AirChat. Попросите прислать их заново.');
-    expect(modal).toContain('Вставьте ссылку или код собеседника');
+    // v4.32.911: отказ разбора переехал в commonText — он слово в слово стоял
+    // и в списке контактов, — а «код» в обеих надписях стал «ID».
+    expect(modal).toContain('CONTACT_ID_UNPARSED_TEXT');
+    expect(CONTACT_ID_UNPARSED_TEXT).toContain('не похоже на ссылку или ID AirChat');
+    expect(modal).toContain('Вставьте ссылку или ID собеседника');
   });
 
   it('себя в контакты и дубликат по-прежнему не пропускают', () => {
