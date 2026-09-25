@@ -51,7 +51,7 @@ import {
 } from './feedOrphanScan';
 import { gatewayUrl } from '../media/gatewayUrl';
 import { runWithConcurrency } from '../utils/runWithConcurrency';
-import { listContacts, listContactsReadFor } from './contacts';
+import { listContacts, listContactsReadDetailed } from './contacts';
 import { NO_ATTACH_LOSS, attachLostCount } from './feedAttachLoss';
 import type { FeedAttachLoss } from './feedAttachLoss';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
@@ -1309,8 +1309,18 @@ async function republishQueuedItem(
     // выбрасывалась из очереди, не дойдя ни до кого. Отказ чтения сюда не
     // бросается (kvTryGet гасит его внутри), так что catch ниже этого случая
     // не видел.
-    const contacts = await listContactsReadFor(ownerPid);
-    if (contacts === null) {
+    //
+    // v4.32.956: и чтение это теперь ПОДРОБНОЕ. `listContactsReadFor` отдаёт
+    // null только когда не открылся сам указатель; строку контакта, которую
+    // не удалось расшифровать этим проходом, оно молча выбрасывает из списка
+    // (`readContactsFor` считает её в `missing` и идёт дальше). Короткий
+    // справочник здесь неотличим от полного: круг адресатов сжимается,
+    // `remaining` сходится в ноль, и запись уходит из очереди, не дойдя до
+    // человека, который так и остался в контактах. Ровно то, ради чего
+    // заведён отдельный вход (см. докблок ContactsRead, v4.32.846) и чем уже
+    // пользуются рассылка ленты (feedTransport) и сторис.
+    const contactsRead = await listContactsReadDetailed(ownerPid);
+    if (contactsRead === null) {
       log.warn('feed_queue_contacts_unreadable_kept', {
         id: item.id,
         deliveredNow: res.delivered.success,
@@ -1318,6 +1328,19 @@ async function republishQueuedItem(
       });
       return { fullyDelivered: false };
     }
+    if (contactsRead.missing > 0) {
+      // Неполный справочник — это слепота, а не «контактов стало меньше».
+      // Запись остаётся в очереди и тратит попытку: их потолок и
+      // четырнадцатидневный срок не дадут ей висеть вечно, а вот потеря
+      // необратима.
+      log.warn('feed_queue_contacts_partial_kept', {
+        id: item.id,
+        missing: contactsRead.missing,
+        deliveredTotal: item.deliveredTo?.length ?? 0,
+      });
+      return { fullyDelivered: false };
+    }
+    const contacts = contactsRead.contacts;
     const allContactDids = new Set<string>();
     for (const c of contacts) {
       // v4.32.427: try/catch здесь был мёртвым — Buffer.from не бросает, а

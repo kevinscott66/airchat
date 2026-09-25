@@ -67,7 +67,7 @@ describe('сбой подсчёта контактов не теряет зап�
     // Именно поэтому оставить запись теперь дёшево: следующий повтор вычтет
     // уже получивших через skipDids и не разошлёт конверт им повторно.
     const acc = CODE.indexOf('item.deliveredTo = [...acc];');
-    const count = CODE.indexOf('const contacts = await listContactsReadFor(ownerPid);');
+    const count = CODE.indexOf('const contactsRead = await listContactsReadDetailed(ownerPid);');
     expect(acc).toBeGreaterThan(-1);
     expect(count).toBeGreaterThan(acc);
     expect(CODE).toContain('const skipDids = new Set(item.deliveredTo ?? []);');
@@ -81,7 +81,7 @@ describe('сбой подсчёта контактов не теряет зап�
     // может не быть вовсе, и ветка «контактов нет → пост локальный» отдавала
     // «доставлено всем»: запись снимали с очереди, не отдав никому.
     const owner = CODE.indexOf('const ownerPid = ownerPidForPublicKey(pair.publicKey);');
-    const count = CODE.indexOf('const contacts = await listContactsReadFor(ownerPid);');
+    const count = CODE.indexOf('const contactsRead = await listContactsReadDetailed(ownerPid);');
     expect(owner).toBeGreaterThan(-1);
     expect(count).toBeGreaterThan(owner);
     // Голого вызова в теле функции не осталось ни одного.
