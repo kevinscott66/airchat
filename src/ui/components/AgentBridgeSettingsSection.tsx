@@ -106,7 +106,32 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
           await loadOrCreateBridgeSecret();
           await refreshKey();
           await setBridgeEnabled(true);
-          await startAgentBridgeIfEnabled();
+          // v4.32.898: ответ этой записи выбрасывался. А она отвечает `false`
+          // не от нечего делать: либо чтение отметки с диска вернуло не то,
+          // что мы только что записали, либо ключа доступа в хранилище не
+          // оказалось. В обоих случаях подписка не поднялась — при том что
+          // рычажок уже стоит в «вкл», а на диске лежит «включено». Мост себя
+          // ничем не показывает: человек уходит с экрана в уверенности, что
+          // канал открыт, и узнаёт обратное, только когда с той стороны
+          // ничего не ответит.
+          if (!(await startAgentBridgeIfEnabled())) {
+            // Отметку возвращаем на место сами: оставить «включено» на диске
+            // значит поднять мост при следующем запуске — уже молча и без
+            // спроса. Если и это не записалось, слова другие: тогда мост
+            // действительно вернётся, и об этом надо предупредить.
+            let stuck = false;
+            try {
+              await setBridgeEnabled(false);
+            } catch {
+              stuck = true;
+            }
+            log.warn('agent_bridge_start_failed', { rollback: stuck ? 'failed' : 'ok' });
+            throw new Error(
+              stuck
+                ? 'Мост не запустился, но остался включённым — проверьте этот переключатель после перезапуска'
+                : 'Мост не запустился — попробуйте включить ещё раз',
+            );
+          }
         } else {
           await setBridgeEnabled(false);
           stopAgentBridge();
@@ -194,7 +219,16 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
       await rotateBridgeSecret();
       await refreshKey();
       setRevealed(false);
-      if (await isBridgeEnabled()) await startAgentBridgeIfEnabled();
+      // v4.32.898: ответ перезапуска здесь тоже выбрасывался. Смена ключа
+      // рвёт подписку по определению — прежний секрет больше не подходит, — и
+      // если поднять её обратно не вышло, «Выдан новый ключ» остаётся правдой
+      // ровно наполовину: ключ выдан, а моста нет. Отдельные слова, потому
+      // что «не удалось выдать новый ключ» было бы прямой неправдой.
+      if ((await isBridgeEnabled()) && !(await startAgentBridgeIfEnabled())) {
+        log.warn('agent_bridge_restart_failed');
+        showError('Новый ключ выдан, но мост не перезапустился — выключите и включите его');
+        return;
+      }
       showSuccess('Выдан новый ключ. Прежний больше не действует');
     } catch (e) {
       showError(userErrorText(e, 'Не удалось выдать новый ключ'));

@@ -170,11 +170,17 @@ describe('форма исходников: правка стоит там, гд�
 
   it('сокет рвётся только после удачной записи', () => {
     const body = codeOnly(read('ui/components/AgentBridgeSettingsSection.tsx'));
-    const write = body.indexOf('await setBridgeEnabled(false);');
+    // v4.32.898: якорь уточнён. «await setBridgeEnabled(false);» встречается
+    // теперь и в ветке включения — там им откатывают отметку, если подписка
+    // так и не поднялась. Берём ту запись, что стоит перед разрывом сокета.
     const stop = body.indexOf('stopAgentBridge();');
+    expect(stop).toBeGreaterThan(0);
+    const write = body.lastIndexOf('await setBridgeEnabled(false);', stop);
     expect(write).toBeGreaterThan(0);
     // Иначе сорвавшееся выключение оставило бы диск «вкл», а сокет — порванным:
-    // мост молчит до перезапуска и оживает после него.
-    expect(stop).toBeGreaterThan(write);
+    // мост молчит до перезапуска и оживает после него. Между ними не должно
+    // стоять ничего: любой шаг посередине — это окно, в котором диск и сокет
+    // расходятся.
+    expect(body.slice(write, stop).trim()).toBe('await setBridgeEnabled(false);');
   });
 });
