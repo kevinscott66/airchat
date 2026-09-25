@@ -50,7 +50,7 @@ import { ChatQuickReactModal } from '../components/modals/chat/ChatQuickReactMod
 import { DmPollCreatorModal } from '../components/modals/chat/ChatPollCreatorModal';
 import { SharedMediaModal } from '../components/modals/chat/ChatSharedMediaModal';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
+import { mentionMissTextFor, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -1063,7 +1063,7 @@ function ChatThreadView({
         return;
       }
       if (hit.status !== 'contact' && hit.status !== 'stranger') {
-        showError(mentionMissText(hit.status, bare));
+        showError(mentionMissTextFor(hit, bare));
         return;
       }
       if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }

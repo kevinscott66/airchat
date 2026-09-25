@@ -112,3 +112,21 @@ export function mentionMissText(
       return `Не удалось проверить @${name} — нет связи с сервером`;
   }
 }
+
+/**
+ * То же самое, но по самому исходу (v4.32.938).
+ *
+ * Три экрана — переписка, группа, лента — звали `mentionMissText(hit.status,
+ * bare)`, и вид предмета до текста не доезжал: канал, назвавшийся адресом,
+ * объявлялся группой. Забыть его там было нечем: аргумент необязательный, а
+ * `status` у исхода лежит прямо под рукой. Здесь забыть нечего — исход
+ * передаётся целиком.
+ */
+export function mentionMissTextFor(hit: MentionTarget, name: string): string {
+  if (hit.status === 'contact' || hit.status === 'stranger') {
+    // Промаха нет: сюда ходят только там, где переходить некуда. Молчать
+    // всё же нельзя — пустая строка на экране выглядит поломкой.
+    return `Не удалось открыть @${name}`;
+  }
+  return mentionMissText(hit.status, name, hit.status === 'space' ? hit.kind : undefined);
+}

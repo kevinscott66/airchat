@@ -38,7 +38,7 @@ import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT, UN
 import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
+import { mentionMissTextFor, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
 import { collectHashtags } from '../../core/text/entities';
 import { normalizeUsername } from '../../core/identity/username';
 import { showPermissionDeniedAlert } from '../permissionAlert';
@@ -2883,7 +2883,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         return;
       }
       if (hit.status !== 'contact' && hit.status !== 'stranger') {
-        showError(mentionMissText(hit.status, bare));
+        showError(mentionMissTextFor(hit, bare));
         return;
       }
       // v4.32.609: своё имя вело в собственную карточку — с «Добавить в

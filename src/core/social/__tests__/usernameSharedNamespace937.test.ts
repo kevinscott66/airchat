@@ -29,7 +29,7 @@ import { publicIdFor } from '../../identity/publicId';
 import { lookupMention } from '../mentionLookup';
 import { lookupSyncUsername } from '../../sync/syncApi';
 import { groupSubject } from '../groupHandleRegistry';
-import { mentionMissText, resolveMentionTarget } from '../usernameDirectory';
+import { mentionMissText, mentionMissTextFor, resolveMentionTarget } from '../usernameDirectory';
 
 const local = lookupMention as jest.MockedFunction<typeof lookupMention>;
 const remote = lookupSyncUsername as jest.MockedFunction<typeof lookupSyncUsername>;
@@ -150,6 +150,25 @@ describe('единое пространство имён у людей, груп
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
       status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита',
     });
+  });
+
+  it('вид предмета доезжает до текста на всех трёх экранах', () => {
+    // Дефект v4.32.938: экраны звали mentionMissText(hit.status, bare), и
+    // необязательный `kind` терялся — канал объявлялся группой. Забыть его
+    // теперь нечем: исход передаётся целиком.
+    const CHAT = read('src/ui/screens/ChatScreen.tsx');
+    const FEED = read('src/ui/screens/FeedScreen.tsx');
+    for (const src of [SCREEN, CHAT, FEED]) {
+      expect(src).toContain('showError(mentionMissTextFor(hit, bare));');
+      expect(src).not.toContain('mentionMissText(hit.status');
+    }
+    const group = mentionMissTextFor(
+      { status: 'space', kind: 'channel', publicId: 'CH-ABCDE-FGHJK', username: 'airnews' },
+      'airnews',
+    );
+    expect(group).toBe('@airnews — это адрес канала, а не человека');
+    // Прочие исходы ходят через ту же дверь и не меняются.
+    expect(mentionMissTextFor({ status: 'unclaimed' }, 'nobody')).toBe('Юзернейма @nobody не существует');
   });
 
   it('о промахе сказано честно: имя есть, но за ним не человек', () => {

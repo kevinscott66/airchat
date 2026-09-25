@@ -295,7 +295,12 @@ import { ruPlural, membersLabel, secondsLabel, subscribersLabel, scheduledLabel 
 import { ambiguityMessage, memberLabel, resolveMember } from '../utils/memberLookup';
 import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
-import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
+import {
+  mentionMissText,
+  mentionMissTextFor,
+  resolveMentionTarget,
+  type MentionTarget,
+} from '../../core/social/usernameDirectory';
 import { listContactsFor } from '../../core/social/contacts';
 import { normalizeUsername } from '../../core/identity/username';
 import { checkGroupHandle } from '../../core/social/groupHandle';
@@ -1718,7 +1723,7 @@ function GroupChatScreen({
           return;
         }
         if (hit.status !== 'contact' && hit.status !== 'stranger') {
-          showError(mentionMissText(hit.status, bare));
+          showError(mentionMissTextFor(hit, bare));
           return;
         }
         if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
