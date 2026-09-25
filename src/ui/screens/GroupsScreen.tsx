@@ -219,7 +219,7 @@ import {
   injectGrpDateSeparators,
 } from './groups-utils/dates';
 import { muteRemainingLabel } from '../time/durationLabel';
-import { formatListTime as formatTime, formatSearchTime } from '../time/listTime';
+import { formatListTime, formatSearchTime } from '../time/listTime';
 import { highlightSegments } from './groups-utils/highlight';
 import { isGrpBigEmoji } from './groups-utils/emoji';
 import {
@@ -311,7 +311,7 @@ import { shareTextExport } from '../../core/media/cacheFiles';
 import { getEmojiSuggestions } from './chat-utils/emoji';
 import { BubbleKindProvider } from '../BubbleKindContext';
 import { shortIdentity } from '../identity/shortId';
-import { dayMonthShortTime, fullDateTime } from '../../core/time/ruDateTime';
+import { clockTime, dayMonthShortTime, fullDateTime } from '../../core/time/ruDateTime';
 import { log } from '../../core/logger';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { runGuardedOp } from '../components/runGuardedOp';
@@ -445,7 +445,7 @@ function GroupListRow({
               </Text>
             ) : null}
           </View>
-          <Text style={[glStyles.time, { color: colors.textMuted }]}>{formatTime(item.lastMessageAt)}</Text>
+          <Text style={[glStyles.time, { color: colors.textMuted }]}>{formatListTime(item.lastMessageAt)}</Text>
         </View>
         <View style={glStyles.bottom}>
           <Text
@@ -3540,9 +3540,17 @@ function GroupChatScreen({
                 </Text>
               </>
             ) : null}
+            {/*
+              v4.32.920: под сообщением стоит час, а не «сколько прошло».
+              Здесь звали formatListTime — подпись для СПИСКА групп, где
+              «5 мин» и «вчера» на месте, потому что строка отвечает «когда
+              сюда в последний раз писали». Под самим сообщением тот же текст
+              врёт: время суток пропадает вовсе, а дату уже написал разделитель
+              дня над сообщением. В личной переписке здесь clockTime.
+            */}
             <AppPressable onLongPress={() => Alert.alert('', fullDateTime(item.createdAt))} hitSlop={6}>
               <Text style={[gcStyles.timeText, { color: outgoing ? meInk.secondary : colors.textMuted }]}>
-                {item.editedAt ? 'изм. ' : ''}{formatTime(item.createdAt)}
+                {item.editedAt ? 'изм. ' : ''}{clockTime(item.createdAt)}
               </Text>
             </AppPressable>
             {isMe ? (
