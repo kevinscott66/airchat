@@ -44,6 +44,10 @@ jest.mock('../../../core/social/publicPost', () => ({
 let mockStoredIds: Set<string> | null = new Set<string>();
 jest.mock('../../../core/social/postLinkState', () => ({
   listLinkPublishedPostIds: jest.fn(async () => (mockStoredIds === null ? null : new Set(mockStoredIds))),
+  // v4.32.917: подтверждённую сервером копию хук теперь записывает отметкой,
+  // чтобы следующий запуск не начинал с того же незнания. Здесь проверяется
+  // не запись, а поведение меню, — заглушки довольно.
+  setLinkPublished: jest.fn(async () => true),
 }));
 
 const mockCopy = jest.fn(async (_text: string) => true);

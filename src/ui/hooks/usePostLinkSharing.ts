@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { publishPostLinkCopy, revokePostLinkCopy } from '../../core/social/feedService';
 import { publicPostCopyExists, publicPostStoreAvailable } from '../../core/social/publicPost';
-import { listLinkPublishedPostIds } from '../../core/social/postLinkState';
+import { listLinkPublishedPostIds, setLinkPublished } from '../../core/social/postLinkState';
 import {
   createPostLinkFlow,
   mayPublishByLink,
@@ -38,9 +38,9 @@ export interface PostLinkSharing {
   /** Можно ли эту запись опубликовать по ссылке вообще (своя, облако есть). */
   mayPublish: (post: LinkablePost) => boolean;
   /**
-   * Уточнить у сервера, опубликована ли запись, — если отметки не прочитались
-   * (v4.32.902). В обычном случае не делает ничего; зовётся перед показом
-   * меню записи, чтобы «Отозвать ссылку» не пропало.
+   * Уточнить у сервера, опубликована ли своя запись, у которой отметки нет
+   * (v4.32.917; прежде — только когда не прочитался весь список, v4.32.902).
+   * Зовётся перед показом меню записи, чтобы «Отозвать ссылку» не пропало.
    */
   resolvePublished: (post: LinkablePost) => Promise<void>;
   copyLink: (post: LinkablePost) => Promise<PostLinkHandoffOutcome>;
@@ -72,12 +72,12 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   // Тот же набор, но без ожидания перерисовки: нажатие сразу после публикации
   // не должно снова спрашивать «опубликовать?» по устаревшему состоянию.
   const publishedRef = useRef<Set<string>>(new Set());
-  // v4.32.902: отметки не прочитались — про эти записи мы не знаем ничего.
-  // «Пусто» тут значило бы «наружу ничего не выложено», а это неправда:
-  // незашифрованная копия могла остаться на сервере, и «Отозвать ссылку»
-  // исчезло бы вместе с единственным способом её снять.
-  const unknownRef = useRef(false);
-  // У кого уже спрашивали сервер — второй раз за то же меню не ходим.
+  // v4.32.917: отдельного признака «список не прочитался» больше нет.
+  // Прочитанный пустой список и нечитаемый говорят одно и то же — «отметки у
+  // нас нет», — а «Отозвать ссылку» пропадает одинаково в обоих случаях.
+  // Разбирается это ниже, в resolvePublished, одним путём на оба.
+  //
+  // У кого уже спрашивали сервер — второй раз за ту же сессию не ходим.
   const askedRef = useRef<Set<string>>(new Set());
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const pairRef = useRef(pair);
@@ -89,12 +89,10 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   useEffect(() => {
     let alive = true;
     publishedRef.current = new Set();
-    unknownRef.current = false;
     askedRef.current = new Set();
     setPublishedIds(new Set());
     void listLinkPublishedPostIds().then((ids) => {
       if (!alive) return;
-      unknownRef.current = ids === null;
       publishedRef.current = new Set(ids ?? []);
       setPublishedIds(new Set(ids ?? []));
     });
@@ -139,15 +137,32 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   }), [did]);
 
   /**
-   * Дочитать состояние одной записи у сервера, когда отметки не прочитались.
+   * Дочитать у сервера состояние своей записи, за которой отметки не числится.
    *
-   * HEAD по копии отвечает «есть» только когда она действительно есть; отказ
-   * сети от «нет копии» здесь не отличается, но хуже прежнего не делает:
-   * раньше состояние всё равно считалось «не опубликовано». Зато при живой
-   * сети «Отозвать ссылку» возвращается на место.
+   * v4.32.902 спрашивал сервер только тогда, когда не прочитался ВЕСЬ список
+   * отметок. Но отметка пропадает и поодиночке, а последствие то же самое:
+   * «Отозвать ссылку» рисуется ровно по ней, и без неё незашифрованную копию
+   * нечем снять. Поодиночке отметка теряется не в теории:
+   *   • `refreshPublicPostCopy` ставит её задним числом, когда копия на
+   *     сервере есть, а отметки нет (старая сборка ссылок ещё не отмечала), и
+   *     отказ этой записи до v4.32.917 выбрасывался;
+   *   • `publishPostLinkCopy` при незаписавшейся отметке снимает копию, но
+   *     снять её удаётся не всегда — тогда копия остаётся, а отметки нет;
+   *   • профиль переносили на другое устройство, и отметки — память
+   *     устройства, а не слово сервера.
+   * Пустой прочитанный список поэтому такое же незнание, как и нечитаемый:
+   * он говорит «мы не отмечали», а не «на сервере ничего нет».
+   *
+   * Цена вопроса — один HEAD на свою запись за сессию, и только по долгому
+   * нажатию. Ответ «есть» тут же записывается отметкой: иначе следующий
+   * запуск начнёт с того же незнания, а человек — с того же пустого меню.
+   *
+   * HEAD отвечает «есть» только когда копия действительно есть; отказ сети от
+   * «копии нет» не отличается, но хуже прежнего не делает — раньше запись в
+   * обоих случаях считалась неопубликованной.
    */
   const resolvePublished = useCallback(async (post: LinkablePost) => {
-    if (!unknownRef.current) return;
+    if (!publicPostStoreAvailable()) return;
     if (post.authorDid !== did || publishedRef.current.has(post.id)) return;
     if (askedRef.current.has(post.id)) return;
     askedRef.current.add(post.id);
@@ -160,6 +175,10 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
     if (!exists) return;
     publishedRef.current.add(post.id);
     setPublishedIds(new Set(publishedRef.current));
+    // Отметка — то, по чему меню узнаёт о копии после перезапуска. Отказ
+    // записи ничего не отменяет: в этой сессии «Отозвать ссылку» уже на месте,
+    // а в следующей сервер спросят заново.
+    void setLinkPublished(post.id, true);
   }, [did]);
 
   /** Общий разбор исхода: что сказать человеку. */

@@ -2695,7 +2695,15 @@ export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string):
     // AC-04: копия на сервере есть — значит, запись опубликована по ссылке,
     // даже если отметку ставила версия, которая отметок ещё не вела. Без этого
     // отозвать такую ссылку было бы не из чего.
-    await setLinkPublished(postId, true);
+    //
+    // v4.32.917: исход этой записи выбрасывался. Снять копию в ответ, как это
+    // делает publishPostLinkCopy, здесь нельзя: копию выкладывали не сейчас, а
+    // ссылку человек уже кому-то отдал — правка текста не повод её отзывать.
+    // Поэтому обновление идёт своим чередом, а незаписанная отметка называется
+    // вслух: по ней и только по ней меню рисует «Отозвать ссылку».
+    if (!(await setLinkPublished(postId, true))) {
+      log.warn('public_post_backfill_mark_failed', { postId: postId.slice(0, 24) });
+    }
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
     const ok = await putPublicPostCopy(pair, payload);
