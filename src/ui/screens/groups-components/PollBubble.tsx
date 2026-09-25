@@ -20,6 +20,7 @@ import {
   type PollReadPhase,
 } from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
+import { pollIcon, pollResultsText } from '../../utils/pollResultsText';
 import { shortIdentity } from '../../identity/shortId';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
 import { copyText } from '../../copyText';
@@ -144,7 +145,7 @@ export function PollBubble({
   return (
     <View style={{ minWidth: 200 }}>
       <Text style={{ color: ink.text, fontWeight: '600', marginBottom: 8 }}>
-        {isQuiz ? '🧠 ' : allowMultiple ? '☑️ ' : '📊 '}{poll.question}
+        {pollIcon(isQuiz, allowMultiple)} {poll.question}
       </Text>
       {readPhase === 'failed' ? (
         <Text style={{ color: ink.muted, fontSize: font.xs, marginBottom: 6 }} testID="poll_read_failed">
@@ -219,15 +220,18 @@ export function PollBubble({
         {totalVotes > 0 ? (
           <AppPressable
             onPress={() => {
-              const lines2 = [`📊 ${poll.question}`, ''];
-              poll.options.forEach((opt, idx) => {
-                const cnt = optionVoterCounts[idx];
-                const pct = totalVotes > 0 ? Math.round(cnt / totalVotes * 100) : 0;
-                const bar = '█'.repeat(Math.round(pct / 10)) + '░'.repeat(10 - Math.round(pct / 10));
-                lines2.push(`${opt}: ${cnt} (${pct}%) ${bar}`);
-              });
-              lines2.push('', `Всего голосов: ${totalVotes}`);
-              void copyText(lines2.join('\n'), COPIED_POLL_RESULTS);
+              // v4.32.930: тот же текст собирал личный пузырь своим map.
+              void copyText(
+                pollResultsText({
+                  question: poll.question,
+                  options: poll.options,
+                  counts: optionVoterCounts,
+                  total: totalVotes,
+                  isQuiz,
+                  allowMultiple,
+                }),
+                COPIED_POLL_RESULTS
+              );
             }}
             hitSlop={8}
           >

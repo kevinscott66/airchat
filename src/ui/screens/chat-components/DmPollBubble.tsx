@@ -18,6 +18,7 @@ import {
   type PollReadPhase,
 } from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
+import { pollIcon, pollResultsText } from '../../utils/pollResultsText';
 import { COPIED_POLL_RESULTS } from '../../clipboardText';
 import { copyText } from '../../copyText';
 
@@ -130,7 +131,7 @@ export function DmPollBubble({
 
   return (
     <View style={{ minWidth: 200 }}>
-      <Text style={{ color: ink.text, fontWeight: '600', marginBottom: 8 }}>{isQuiz ? '🧠 ' : allowMultiple ? '☑️ ' : '📊 '}{poll.question}</Text>
+      <Text style={{ color: ink.text, fontWeight: '600', marginBottom: 8 }}>{pollIcon(isQuiz, allowMultiple)} {poll.question}</Text>
       {readPhase === 'failed' ? (
         <Text style={{ color: ink.muted, fontSize: font.xs, marginBottom: 6 }} testID="dm_poll_read_failed">
           {POLL_UNREADABLE_TEXT}
@@ -176,14 +177,18 @@ export function DmPollBubble({
         {total > 0 ? (
           <AppPressable
             onPress={() => {
-              const optCounts = poll.options.map((opt, idx) => {
-                const cnt = optionVoterCounts[idx];
-                const pct = total > 0 ? Math.round(cnt / total * 100) : 0;
-                const bar = '█'.repeat(Math.round(pct / 10)) + '░'.repeat(10 - Math.round(pct / 10));
-                return `${opt}: ${cnt} (${pct}%) ${bar}`;
-              });
-              const resultText = [`📊 ${poll.question}`, '', ...optCounts, '', `Всего голосов: ${total}`].join('\n');
-              void copyText(resultText, COPIED_POLL_RESULTS);
+              // v4.32.930: тот же текст собирал групповой пузырь своим циклом.
+              void copyText(
+                pollResultsText({
+                  question: poll.question,
+                  options: poll.options,
+                  counts: optionVoterCounts,
+                  total,
+                  isQuiz,
+                  allowMultiple,
+                }),
+                COPIED_POLL_RESULTS
+              );
             }}
             hitSlop={8}
           >
