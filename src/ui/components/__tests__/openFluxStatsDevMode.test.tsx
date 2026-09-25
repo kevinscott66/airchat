@@ -77,18 +77,26 @@ describe('OpenFluxSettingsSection: счётчик за режимом разра
 describe('OpenFluxSettingsSection: перехват не встал', () => {
   const layer = getOpenFluxHttpLayerActive as unknown as jest.Mock;
 
+  /**
+   * Опознаватель предупреждения. v4.32.953: надпись переписана — она говорит
+   * теперь следствие и действие, а не причину («их порт заняли раньше нас»).
+   * Предмет проверки прежний: три состояния перехвата и то, что предупреждение
+   * стоит вне режима разработчика.
+   */
+  const BYPASS = 'идут мимо него';
+
   afterEach(() => layer.mockReturnValue(true));
 
   it('молчит, пока перехват на месте', async () => {
     const r = await render(<OpenFluxSettingsSection />);
-    expect(textOf(r.root)).not.toContain('мимо туннеля');
+    expect(textOf(r.root)).not.toContain(BYPASS);
     await unmount(r);
   });
 
   it('предупреждает без всякого режима разработчика', async () => {
     layer.mockReturnValue(false);
     const r = await render(<OpenFluxSettingsSection />);
-    expect(textOf(r.root)).toContain('мимо туннеля');
+    expect(textOf(r.root)).toContain(BYPASS);
     await unmount(r);
   });
 
@@ -98,7 +106,7 @@ describe('OpenFluxSettingsSection: перехват не встал', () => {
     // там, где его нет.
     layer.mockReturnValue(null);
     const r = await render(<OpenFluxSettingsSection />);
-    expect(textOf(r.root)).not.toContain('мимо туннеля');
+    expect(textOf(r.root)).not.toContain(BYPASS);
     await unmount(r);
   });
 });
