@@ -3979,7 +3979,7 @@ function GroupChatScreen({
           часы теперь тоже здесь — оболочка его больше не отбивает. */}
       {searchVisible ? (
         <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" wash>
-          <AppPressable onPress={closeSearch} style={gcStyles.iconBtn}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть поиск" onPress={closeSearch} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
           <TextInput
@@ -4034,7 +4034,7 @@ function GroupChatScreen({
         </GlassSurface>
       ) : (
         <GlassSurface style={[gcStyles.glassHeader, { marginTop: insets.top + spacing.sm }]} variant="regular" wash>
-          <AppPressable onPress={onBack} style={gcStyles.iconBtn}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Назад" onPress={onBack} style={gcStyles.iconBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
           <AppPressable style={[gcStyles.headerInfo, { flexDirection: 'row', alignItems: 'center', gap: 10 }]} onPress={onOpenMembers}>
@@ -4199,7 +4199,7 @@ function GroupChatScreen({
           <Text style={[gcStyles.pinnedText, { color: activeTint.ink, flex: 1 }]}>
             {grpOpenUnread} непрочитанных — нажмите, чтобы перейти
           </Text>
-          <AppPressable onPress={() => setGrpOpenUnread(0)} hitSlop={8}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Скрыть" onPress={() => setGrpOpenUnread(0)} hitSlop={8}>
             <Ionicons name="close" size={14} color={activeTint.ink} />
           </AppPressable>
         </AppPressable>
@@ -4444,7 +4444,7 @@ function GroupChatScreen({
             <View style={[gcStyles.replyBar, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
               <Ionicons name="create-outline" size={14} color={colors.accent} style={{ marginRight: 4 }} />
               <Text style={[gcStyles.replyBarText, { color: colors.textMuted }]} numberOfLines={1}>Редактирование: {editingMsg.text}</Text>
-              <AppPressable onPress={cancelEdit} style={{ padding: 4 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Отменить редактирование" onPress={cancelEdit} style={{ padding: 4 }}>
                 <Ionicons name="close" size={16} color={colors.textMuted} />
               </AppPressable>
             </View>
@@ -4469,7 +4469,7 @@ function GroupChatScreen({
                     : replyTo.text}
                 </Text>
               </View>
-              <AppPressable onPress={() => setReplyTo(null)} style={{ padding: 4 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Отменить ответ" onPress={() => setReplyTo(null)} style={{ padding: 4 }}>
                 <Ionicons name="close" size={16} color={colors.textMuted} />
               </AppPressable>
             </View>
@@ -4482,6 +4482,8 @@ function GroupChatScreen({
                   <LinkPreview url={grpComposeLinkUrl} isOutgoing={false} fromPeer={false} />
                 </View>
                 <AppPressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Скрыть предпросмотр ссылки"
                   onPress={() => { setGrpComposeLinkDismissed(grpComposeLinkUrl); setGrpComposeLinkUrl(null); }}
                   style={{ padding: 8 }}
                   hitSlop={8}
@@ -4493,7 +4495,7 @@ function GroupChatScreen({
           ) : null}
           {isGrpSelecting ? (
             <View style={[gcStyles.selToolbar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-              <AppPressable style={gcStyles.selToolbarBtn} onPress={() => setSelectedGrpIds(new Set())}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Снять выделение" style={gcStyles.selToolbarBtn} onPress={() => setSelectedGrpIds(new Set())}>
                 <Ionicons name="close" size={22} color={colors.text} />
                 <Text style={[gcStyles.selToolbarLabel, { color: colors.text }]}>{selectedGrpIds.size}</Text>
               </AppPressable>
@@ -5731,7 +5733,7 @@ function GroupMembersScreen({
             placeholderTextColor={colors.textMuted}
           />
           {memberSearch ? (
-            <AppPressable onPress={() => setMemberSearch('')}><Ionicons name="close-circle" size={16} color={colors.textMuted} /></AppPressable>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Очистить поиск" onPress={() => setMemberSearch('')}><Ionicons name="close-circle" size={16} color={colors.textMuted} /></AppPressable>
           ) : null}
         </View>
         {memberSkipped !== null ? (

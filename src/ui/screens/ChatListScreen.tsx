@@ -1177,7 +1177,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
         <View style={{ flex: 1, backgroundColor: scrim.modal }}>
           <View style={{ flex: 1, marginTop: 60, backgroundColor: colors.background, borderTopLeftRadius: 18, borderTopRightRadius: 18 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
-              <AppPressable onPress={() => setBroadcastVisible(false)} style={{ marginRight: 12 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={() => setBroadcastVisible(false)} style={{ marginRight: 12 }}>
                 <Ionicons name="close" size={22} color={colors.text} />
               </AppPressable>
               <Text style={{ flex: 1, fontSize: 17, fontWeight: '700', color: colors.text }}>Рассылка</Text>
@@ -1318,11 +1318,11 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
           <Text style={s.title}>{showArchived ? 'Архив' : 'Чаты'}</Text>
           <View style={s.headerActions}>
             {showArchived ? (
-              <AppPressable style={s.headerBtn} onPress={() => setShowArchived(false)} accessibilityLabel="Назад">
+              <AppPressable style={s.headerBtn} onPress={() => setShowArchived(false)} accessibilityRole="button" accessibilityLabel="Назад">
                 <Ionicons name="arrow-back" size={22} color={colors.text} />
               </AppPressable>
             ) : null}
-            <AppPressable style={s.headerBtn} onPress={toggleSearch} accessibilityLabel={searchVisible ? 'Закрыть поиск' : 'Поиск'}>
+            <AppPressable style={s.headerBtn} onPress={toggleSearch} accessibilityRole="button" accessibilityLabel={searchVisible ? 'Закрыть поиск' : 'Поиск'}>
               <Ionicons name={searchVisible ? 'close' : 'search'} size={22} color={colors.text} />
             </AppPressable>
             {!showArchived && conversations.some((c) => c.unreadCount > 0) ? (

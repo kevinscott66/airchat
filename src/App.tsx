@@ -1767,6 +1767,8 @@ function MainTabs({
               <Text style={styles.inAppBannerPreview} numberOfLines={1}>{inAppBanner.preview}</Text>
             </View>
             <AppPressable
+              accessibilityRole="button"
+              accessibilityLabel="Скрыть"
               hitSlop={10}
               onPress={() => {
                 if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);

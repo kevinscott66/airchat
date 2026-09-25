@@ -4260,6 +4260,8 @@ function ChatThreadView({
                 <LinkPreview url={composeLinkUrl} isOutgoing={false} fromPeer={false} />
               </View>
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Скрыть предпросмотр ссылки"
                 onPress={() => { setComposeLinkDismissed(composeLinkUrl); setComposeLinkUrl(null); }}
                 style={{ padding: 8 }}
                 hitSlop={8}

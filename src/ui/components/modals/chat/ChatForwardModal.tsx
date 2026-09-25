@@ -231,7 +231,7 @@ export function ForwardModal({
             style={{ flex: 1, color: colors.text, fontSize: 15 }}
           />
           {fwdSearch ? (
-            <AppPressable onPress={() => setFwdSearch('')}><Ionicons name="close-circle" size={16} color={colors.textMuted} /></AppPressable>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Очистить поиск" onPress={() => setFwdSearch('')}><Ionicons name="close-circle" size={16} color={colors.textMuted} /></AppPressable>
           ) : null}
         </View>
         <FlatList
@@ -285,7 +285,7 @@ export function ForwardModal({
                 returnKeyType="default"
               />
               {fwdComment.length > 0 ? (
-                <AppPressable onPress={() => setFwdComment('')} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Очистить комментарий" onPress={() => setFwdComment('')} hitSlop={8}>
                   <Ionicons name="close-circle" size={16} color={colors.textMuted} />
                 </AppPressable>
               ) : null}

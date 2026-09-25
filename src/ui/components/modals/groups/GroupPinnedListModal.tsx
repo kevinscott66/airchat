@@ -47,7 +47,7 @@ function GroupPinnedListModalImpl({ visible, onClose, pinnedList, canPin, onJump
                 <Text style={[styles.title, { color: colors.text }]}>
                   Закреплённые ({pinnedList.length})
                 </Text>
-                <AppPressable onPress={onClose}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose}>
                   <Ionicons name="close" size={20} color={colors.textMuted} />
                 </AppPressable>
               </View>

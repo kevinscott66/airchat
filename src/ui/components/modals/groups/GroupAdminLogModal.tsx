@@ -31,7 +31,7 @@ function GroupAdminLogModalImpl({ visible, onClose, entries }: GroupAdminLogModa
               <View style={[styles.header, { borderBottomColor: colors.border }]}>
                 <Ionicons name="shield-checkmark-outline" size={18} color={colors.accent} style={styles.headerIcon} />
                 <Text style={[styles.title, { color: colors.text }]}>Журнал действий</Text>
-                <AppPressable onPress={onClose} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

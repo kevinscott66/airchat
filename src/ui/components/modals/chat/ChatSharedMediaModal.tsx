@@ -443,7 +443,7 @@ export function SharedMediaModal({
           полноэкранных модалок контактов (v4.32.42). */}
       <SafeScreen edges={['top', 'left', 'right']} backgroundColor={colors.background} style={smStyles.container}>
         <View style={[smStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-          <AppPressable style={smStyles.closeBtn} onPress={onClose}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Назад" style={smStyles.closeBtn} onPress={onClose}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
           <Text style={[smStyles.title, { color: colors.text }]}>Медиа и файлы</Text>

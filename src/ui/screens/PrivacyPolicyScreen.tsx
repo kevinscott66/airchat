@@ -43,7 +43,7 @@ export function PrivacyPolicyScreen({ onBack }: Props): React.ReactElement {
     <SafeScreen edges={['left', 'right']} style={{ flex: 1 }}>
       <View style={styles.header}>
         {onBack ? (
-          <AppPressable onPress={onBack} hitSlop={12} style={styles.backBtn}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Назад" onPress={onBack} hitSlop={12} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.accent} />
           </AppPressable>
         ) : null}

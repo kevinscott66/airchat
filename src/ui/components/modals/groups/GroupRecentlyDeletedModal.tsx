@@ -44,7 +44,7 @@ function GroupRecentlyDeletedModalImpl({ visible, onClose, items, onRestore }: G
               <View style={[styles.header, { borderColor: colors.border }]}>
                 <Ionicons name="trash-outline" size={18} color={colors.textMuted} style={styles.headerIcon} />
                 <Text style={[styles.title, { color: colors.text }]}>Недавно удалённые</Text>
-                <AppPressable onPress={onClose} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

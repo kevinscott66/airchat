@@ -332,7 +332,7 @@ export function ProfileSelector({
               >
                 <View style={styles.header}>
                   <Text style={styles.title}>Мои профили</Text>
-                  <AppPressable onPress={onClose} hitSlop={12}>
+                  <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} hitSlop={12}>
                     <Ionicons name="close" size={26} color={colors.text} />
                   </AppPressable>
                 </View>

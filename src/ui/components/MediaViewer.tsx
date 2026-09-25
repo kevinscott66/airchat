@@ -263,7 +263,7 @@ function SingleImageView({
 
       {/* Top bar */}
       <View style={[siv.topBar, { paddingTop: insets.top + 6 }]}>
-        <AppPressable style={siv.iconBtn} onPress={onClose} hitSlop={16}>
+        <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={siv.iconBtn} onPress={onClose} hitSlop={16}>
           <Ionicons name="close" size={26} color={mediaScrim.ink} />
         </AppPressable>
         {total > 1 ? (
@@ -287,10 +287,10 @@ function SingleImageView({
       {/* Gallery navigation arrows */}
       {showNav ? (
         <>
-          <AppPressable style={[siv.navBtn, { left: 8 }]} onPress={onPrev} hitSlop={12}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Предыдущее" style={[siv.navBtn, { left: 8 }]} onPress={onPrev} hitSlop={12}>
             <Ionicons name="chevron-back" size={32} color={mediaScrim.ink} />
           </AppPressable>
-          <AppPressable style={[siv.navBtn, { right: 8 }]} onPress={onNext} hitSlop={12}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Следующее" style={[siv.navBtn, { right: 8 }]} onPress={onNext} hitSlop={12}>
             <Ionicons name="chevron-forward" size={32} color={mediaScrim.ink} />
           </AppPressable>
         </>

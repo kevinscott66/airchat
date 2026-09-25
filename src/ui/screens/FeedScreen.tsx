@@ -3318,7 +3318,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             style={{ flex: 1, color: colors.text, fontSize: 15 }}
           />
           {feedSearch ? (
-            <AppPressable onPress={() => setFeedSearch('')}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Очистить поиск" onPress={() => setFeedSearch('')}>
               <Ionicons name="close-circle" size={16} color={colors.textMuted} />
             </AppPressable>
           ) : null}
@@ -3796,6 +3796,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                               <Text style={styles.previewIndexText}>{i + 1}</Text>
                             </View>
                             <AppPressable
+                              accessibilityRole="button"
+                              accessibilityLabel="Убрать изображение"
                               style={styles.removeImg}
                               onPress={() => setUris((u) => u.filter((_, j) => j !== i))}
                               hitSlop={8}
@@ -3847,6 +3849,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                             ) : null}
                           </View>
                           <AppPressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Убрать файл"
                             onPress={() => setPickedDocs((p) => p.filter((_, j) => j !== i))}
                             hitSlop={8}
                           >
@@ -4324,7 +4328,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                 <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text, flex: 1 }} numberOfLines={1}>
                   {viewersList.length > 0 ? t('feed.viewsN', { count: viewersList.length }) : t('feed.viewsTitle')}
                 </Text>
-                <AppPressable onPress={closeViewers} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={closeViewers} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>
@@ -4446,7 +4450,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
               <Ionicons name="paper-plane-outline" size={18} color={colors.accent} style={{ marginRight: 10 }} />
               <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text, flex: 1 }}>{t('feed.shareTitle')}</Text>
-              <AppPressable onPress={() => setShareToTarget(null)} hitSlop={8}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={() => setShareToTarget(null)} hitSlop={8}>
                 <Ionicons name="close" size={22} color={colors.textMuted} />
               </AppPressable>
             </View>

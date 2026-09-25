@@ -40,7 +40,7 @@ function GroupReactionsMoreModalImpl({ visible, onClose, onReact }: GroupReactio
           <AppPressable onPress={stopPropagation}>
             <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
               <Text style={[styles.title, { color: colors.text }]}>Выбрать реакцию</Text>
-              <AppPressable onPress={onClose}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose}>
                 <Ionicons name="close" size={22} color={colors.text} />
               </AppPressable>
             </View>

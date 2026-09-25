@@ -219,7 +219,7 @@ export function AttachSheet(props: AttachSheetProps) {
         <View style={styles.screen}>
           {/* Header */}
           <View style={styles.header}>
-            <AppPressable style={styles.closeBtn} onPress={onClose} hitSlop={8}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" style={styles.closeBtn} onPress={onClose} hitSlop={8}>
               <Ionicons name="close" size={22} color={colors.text} />
             </AppPressable>
             <Text style={styles.headerTitle}>{activeTabDef?.label ?? 'Вложение'}</Text>

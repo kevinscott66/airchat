@@ -394,7 +394,7 @@ function StoryViewer({
                 <Ionicons name="ellipsis-vertical" size={24} color={mediaScrim.ink} />
               </AppPressable>
             ) : null}
-            <AppPressable onPress={onClose} hitSlop={16}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} hitSlop={16}>
               <Ionicons name="close" size={28} color={mediaScrim.ink} />
             </AppPressable>
           </View>

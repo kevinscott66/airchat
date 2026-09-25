@@ -891,7 +891,7 @@ function ProfileScreenImpl({
               borderColor: colors.border,
               backgroundColor: colors.surface,
             }}>
-              <AppPressable onPress={() => setContactsVisible(false)} hitSlop={12} style={{ paddingRight: 10 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Назад" onPress={() => setContactsVisible(false)} hitSlop={12} style={{ paddingRight: 10 }}>
                 <Ionicons name="chevron-back" size={26} color={colors.text} />
               </AppPressable>
               <Text style={{ fontSize: scaleFont(18), fontWeight: '700', color: colors.text, flex: 1 }}>
@@ -921,7 +921,7 @@ function ProfileScreenImpl({
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                 <Ionicons name="star" size={18} color={colors.star} style={{ marginRight: 10 }} />
                 <Text style={{ fontSize: scaleFont(17), fontWeight: '700', color: colors.text, flex: 1 }}>Избранные сообщения</Text>
-                <AppPressable onPress={() => setStarredVisible(false)} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={() => setStarredVisible(false)} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>
@@ -993,7 +993,7 @@ function ProfileScreenImpl({
                     <Text style={{ color: colors.error, fontSize: scaleFont(13) }}>Очистить</Text>
                   </AppPressable>
                 ) : null}
-                <AppPressable onPress={() => setCallLogVisible(false)} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={() => setCallLogVisible(false)} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

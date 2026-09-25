@@ -664,7 +664,7 @@ export function ProfilePostsModal({
           полноэкранных модалок контактов (v4.32.42). */}
       <SafeScreen edges={['top', 'left', 'right']} backgroundColor={colors.background} style={styles.container}>
         <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-          <AppPressable style={styles.closeBtn} onPress={onClose} accessibilityLabel="Назад">
+          <AppPressable style={styles.closeBtn} onPress={onClose} accessibilityRole="button" accessibilityLabel="Назад">
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
           <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{title}</Text>

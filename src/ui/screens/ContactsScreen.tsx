@@ -945,6 +945,8 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         <SafeScreen edges={['top', 'left', 'right', 'bottom']} backgroundColor={mediaScrim.fill} style={{ flex: 1 }}>
           <View style={styles.scannerHeader}>
             <AppPressable
+              accessibilityRole="button"
+              accessibilityLabel="Закрыть сканер"
               onPress={() => setScannerVisible(false)}
               style={styles.scannerClose}
               testID="contacts_scanner_close"

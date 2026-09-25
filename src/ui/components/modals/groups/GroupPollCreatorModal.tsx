@@ -107,7 +107,7 @@ export function PollCreatorModal({
                 placeholderTextColor={colors.textMuted}
               />
               {options.length > 2 ? (
-                <AppPressable onPress={() => removeOption(i)} style={{ padding: 8 }}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Удалить вариант" onPress={() => removeOption(i)} style={{ padding: 8 }}>
                   <Ionicons name="close-circle" size={20} color={colors.textMuted} />
                 </AppPressable>
               ) : null}

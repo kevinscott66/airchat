@@ -42,7 +42,7 @@ export function HelpScreen({ onClose }: Props): React.ReactElement {
   return (
     <SafeScreen edges={['left', 'right', 'top']} style={{ flex: 1 }}>
       <View style={styles.header}>
-        <AppPressable onPress={onClose} hitSlop={12} testID="help_close">
+        <AppPressable accessibilityRole="button" accessibilityLabel="Назад" onPress={onClose} hitSlop={12} testID="help_close">
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </AppPressable>
         <Text style={styles.headerTitle}>О приложении</Text>

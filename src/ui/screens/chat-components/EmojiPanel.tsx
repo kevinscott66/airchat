@@ -127,7 +127,7 @@ export function EmojiPanel({
           returnKeyType="done"
         />
         {emojiSearchQ ? (
-          <AppPressable onPress={() => setEmojiSearchQ('')} hitSlop={8}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Очистить поиск" onPress={() => setEmojiSearchQ('')} hitSlop={8}>
             <Ionicons name="close-circle" size={15} color={colors.textMuted} />
           </AppPressable>
         ) : null}

@@ -25,7 +25,7 @@ function ChatReactionsPickerModalImpl({ visible, onClose, renderPanel }: ChatRea
           <AppPressable onPress={noop}>
             <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
               <Text style={[styles.title, { color: colors.text }]}>Выбрать реакцию</Text>
-              <AppPressable onPress={onClose}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose}>
                 <Ionicons name="close" size={22} color={colors.text} />
               </AppPressable>
             </View>

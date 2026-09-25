@@ -260,7 +260,7 @@ export function PollBubble({
               <Text style={{ flex: 1, fontSize: 16, fontWeight: '700', color: colors.text }} numberOfLines={1}>
                 {voterListOpt !== null ? poll.options[voterListOpt] : ''}
               </Text>
-              <AppPressable onPress={() => setVoterListOpt(null)}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={() => setVoterListOpt(null)}>
                 <Ionicons name="close" size={20} color={colors.textMuted} />
               </AppPressable>
             </View>

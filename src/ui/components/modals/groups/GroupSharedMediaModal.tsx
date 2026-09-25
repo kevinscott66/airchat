@@ -144,7 +144,7 @@ export function GroupSharedMediaModal({
           полноэкранных модалок контактов (v4.32.42). */}
       <SafeScreen edges={['top', 'left', 'right']} backgroundColor={colors.background} style={gsmStyles.container}>
         <View style={[gsmStyles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-          <AppPressable style={gsmStyles.closeBtn} onPress={onClose}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Назад" style={gsmStyles.closeBtn} onPress={onClose}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </AppPressable>
           <Text style={[gsmStyles.title, { color: colors.text }]}>Медиа и файлы</Text>

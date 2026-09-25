@@ -55,6 +55,8 @@ export function createSettingsChrome(
   const SubHeader = ({ title }: SubHeaderProps) => (
     <View style={styles.subHeader}>
       <AppPressable
+        accessibilityRole="button"
+        accessibilityLabel="Назад"
         onPress={onBack}
         style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
         hitSlop={{ top: 10, bottom: 10, left: 10, right: 20 }}

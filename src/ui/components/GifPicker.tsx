@@ -217,7 +217,7 @@ export function GifPickerModal({ visible, onClose, onSelect }: Props): React.Rea
           {/* Header */}
           <View style={s.header}>
             <Text style={s.title}>GIF</Text>
-            <AppPressable onPress={onClose} style={{ padding: 4 }}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} style={{ padding: 4 }}>
               <Ionicons name="close" size={24} color={c.text} />
             </AppPressable>
           </View>
@@ -252,7 +252,7 @@ export function GifPickerModal({ visible, onClose, onSelect }: Props): React.Rea
               autoCorrect={false}
             />
             {query ? (
-              <AppPressable onPress={() => { setQuery(''); void load(''); }} style={{ padding: 4 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Очистить поиск" onPress={() => { setQuery(''); void load(''); }} style={{ padding: 4 }}>
                 <Ionicons name="close-circle" size={16} color={c.textMuted} />
               </AppPressable>
             ) : null}

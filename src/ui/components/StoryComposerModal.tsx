@@ -216,7 +216,7 @@ export function StoryComposerModal({
 
           {/* Шапка */}
           <View style={[s.header, { top: insets.top + spacing.sm }]}>
-            <AppPressable onPress={onCancel} hitSlop={16}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Отменить" onPress={onCancel} hitSlop={16}>
               <GlassSurface tone="dark" variant="prominent" style={[s.iconPlate, isText ? { backgroundColor: textPlate } : null]}>
                 <Ionicons name="close" size={24} color={isText ? textPlateInk.text : mediaScrim.ink} />
               </GlassSurface>

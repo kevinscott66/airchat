@@ -41,7 +41,7 @@ function GroupStarredModalImpl({ visible, onClose, starredEntries, setStarredEnt
               <View style={[styles.header, { borderColor: colors.border }]}>
                 <Ionicons name="star" size={18} color={colors.star} style={styles.headerIcon} />
                 <Text style={[styles.title, { color: colors.text }]}>Избранные сообщения</Text>
-                <AppPressable onPress={onClose}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

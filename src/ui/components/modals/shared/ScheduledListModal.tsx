@@ -73,7 +73,7 @@ function ScheduledListModalImpl({ visible, onClose, scheduled, onDelete }: Sched
               <View style={[styles.header, { borderColor: colors.border }]}>
                 <Ionicons name="time-outline" size={20} color={colors.accent} style={styles.headerIcon} />
                 <Text style={[styles.title, { color: colors.text }]}>Запланированные</Text>
-                <AppPressable onPress={onClose}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

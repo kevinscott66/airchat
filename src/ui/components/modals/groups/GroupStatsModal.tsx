@@ -38,7 +38,7 @@ function GroupStatsModalImpl({ visible, onClose, grpStats, memberCount }: GroupS
               <View style={[styles.header, { borderColor: colors.border }]}>
                 <Ionicons name="stats-chart-outline" size={18} color={colors.accent} style={styles.headerIcon} />
                 <Text style={[styles.title, { color: colors.text }]}>Статистика группы</Text>
-                <AppPressable onPress={onClose} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={onClose} hitSlop={8}>
                   <Ionicons name="close" size={22} color={colors.textMuted} />
                 </AppPressable>
               </View>

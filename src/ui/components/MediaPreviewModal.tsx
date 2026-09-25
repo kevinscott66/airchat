@@ -104,7 +104,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
               borderBottomColor: colors.border,
             }}
           >
-            <AppPressable onPress={onCancel} style={{ marginRight: 16 }} hitSlop={8}>
+            <AppPressable accessibilityRole="button" accessibilityLabel="Отменить" onPress={onCancel} style={{ marginRight: 16 }} hitSlop={8}>
               <Ionicons name="close" size={22} color={colors.textMuted} />
             </AppPressable>
             <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', flex: 1 }} numberOfLines={1}>
@@ -251,6 +251,8 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
                 </View>
                 {/* Кнопка удаления ×  */}
                 <AppPressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Убрать"
                   style={{
                     position: 'absolute',
                     top: -6,
