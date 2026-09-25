@@ -2590,8 +2590,7 @@ async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<b
   if (await s.getPost(postId)) return false;
   log.warn('public_post_copy_outlived_post', { postId: postId.slice(0, 24) });
   await setLinkPublished(postId, false);
-  const myDid = publicKeyToDidKey(pair.publicKey);
-  if (!(await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId)))) {
+  if (!(await dropPublicPostCopy(pair, postId))) {
     await queueLinkCopyDelete(pair, postId);
   }
   return true;
@@ -2634,8 +2633,7 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
     // удалением записи.
     if (ok && !(await setLinkPublished(postId, true))) {
       log.warn('public_post_mark_failed', { postId: postId.slice(0, 24) });
-      const myDid = publicKeyToDidKey(pair.publicKey);
-      if (!(await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId)))) {
+      if (!(await dropPublicPostCopy(pair, postId))) {
         await queueLinkCopyDelete(pair, postId);
       }
       return false;
@@ -2663,8 +2661,7 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
 export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
   if (!publicPostStoreAvailable() || !isPublicPostId(postId)) return false;
   try {
-    const myDid = publicKeyToDidKey(pair.publicKey);
-    const gone = await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId));
+    const gone = await dropPublicPostCopy(pair, postId);
     if (!gone) return false;
     await setLinkPublished(postId, false);
     log.info('public_post_revoked', { postId: postId.slice(0, 24) });
@@ -4802,22 +4799,17 @@ function linkDeleteKey(it: LinkDeleteItem): string {
   return `${it.authorDid}\u0000${it.postId}`;
 }
 
-/** Конверт удаления — тот же, что уходит контактам, но нужен отдельно при повторе. */
-function linkDeletePayload(authorDid: string, postId: string): FeedEnvelopePayload {
-  return { type: 'feed_delete', postId, authorDid, ts: Date.now(), data: { kind: 'delete' } };
-}
-
 /**
  * Убрать копию с сервера. `true` — копии там больше нет (в том числе если её и
  * не было).
  */
-async function dropPublicPostCopy(pair: KeyPairBytes, payload: FeedEnvelopePayload): Promise<boolean> {
-  if (!publicPostStoreAvailable() || !isPublicPostId(payload.postId)) return true;
+async function dropPublicPostCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  if (!publicPostStoreAvailable() || !isPublicPostId(postId)) return true;
   try {
-    if (await deletePublicPostCopy(pair, payload)) return true;
+    if (await deletePublicPostCopy(pair, postId)) return true;
     // Отказ сервера ещё не значит, что копия осталась: запись могли не выкладывать
     // по ссылке вовсе или уже удалить с другого устройства. HEAD отвечает точно.
-    return !(await publicPostCopyExists(payload.postId));
+    return !(await publicPostCopyExists(postId));
   } catch { return false; }
 }
 
@@ -4860,7 +4852,7 @@ async function flushLinkDeleteOutbox(pair: KeyPairBytes): Promise<void> {
       continue;
     }
     if (it.authorDid !== myDid) continue;
-    if (await dropPublicPostCopy(pair, linkDeletePayload(myDid, it.postId))) {
+    if (await dropPublicPostCopy(pair, it.postId)) {
       log.info('feed_link_delete_done', { postId: it.postId.slice(0, 24) });
       settled.add(linkDeleteKey(it));
     }
@@ -4936,7 +4928,7 @@ export async function deleteFeedPost(pair: KeyPairBytes, postId: string): Promis
   // кому угодно, не только контактам. Теперь неудача попадает в очередь
   // повторов, а вызывающий узнаёт о ней и говорит правду.
   const [copyGone, res] = await Promise.all([
-    dropPublicPostCopy(pair, payload),
+    dropPublicPostCopy(pair, postId),
     signAndBroadcastFeedEnvelope(pair, payload),
   ]);
   if (!copyGone) await queueLinkCopyDelete(pair, postId);

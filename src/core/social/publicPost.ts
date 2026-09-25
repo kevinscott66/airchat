@@ -276,25 +276,32 @@ export async function publicPostCopyExists(postId: string): Promise<boolean> {
 /**
  * Снять копию. Зовётся из удаления поста: пока копия лежит, ссылка открывает
  * то, что автор уже стёр у себя и у контактов.
+ *
+ * v4.32.941: наружу уходит только намерение. Раньше запрос нёс подписанный
+ * `feed_delete` — тот самый конверт, которым запись стирается у всех, — и это
+ * было слишком щедро: отзыв ссылки оставлял у сервера бессрочное разрешение
+ * убить публикацию у каждого контакта, а вернуть её после надгробия нельзя.
+ * Намерение названо одним постом, гасится разовым числом и конвертом ленты не
+ * является, поэтому в рассылке ни на что не годится.
+ *
+ * Отсюда и аргумент: не конверт, а идентификатор записи. Собирать конверт,
+ * который никуда не поедет, было бы приглашением отправить его снова.
  */
 export async function deletePublicPostCopy(
   pair: KeyPairBytes,
-  payload: FeedEnvelopePayload,
+  postId: string,
 ): Promise<boolean> {
   const base = cloudBaseUrl();
   if (!base) return false;
-  if (!isPublicPostId(payload.postId)) return false;
+  if (!isPublicPostId(postId)) return false;
   try {
-    const signed = await signJson(pair, payload as unknown as Record<string, unknown>);
-    const intent = await buildPostIntent(pair, payload.postId, 'del');
+    const intent = await buildPostIntent(pair, postId, 'del');
     return await fetchPublicPost(
-      `${base}/v1/post/${encodeURIComponent(payload.postId)}/delete`,
+      `${base}/v1/post/${encodeURIComponent(postId)}/delete`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          payload: signed.payload,
-          signature: signed.signature,
           authorPublicKeyB64: publicKeyToB64(pair.publicKey),
           intent,
         }),
@@ -302,7 +309,7 @@ export async function deletePublicPostCopy(
       async (response) => {
         if (!response.ok) {
           log.warn('public_post_delete_failed', {
-            postId: payload.postId.slice(0, 24),
+            postId: postId.slice(0, 24),
             status: response.status,
             code: await refusalCode(response),
           });

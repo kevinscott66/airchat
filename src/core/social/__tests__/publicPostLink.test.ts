@@ -158,8 +158,11 @@ describe('публикация по ссылке', () => {
 
     expect(await putPublicPostCopy(pair, payload)).toBe(true);
     expect(await putPublicPostCopy(pair, payload)).toBe(true);
-    expect(await deletePublicPostCopy(pair, payload)).toBe(true);
+    expect(await deletePublicPostCopy(pair, payload.postId)).toBe(true);
     expect(bodies).toHaveLength(3);
+    // v4.32.941: снятие копии уходит без конверта ленты — одним намерением.
+    expect(bodies[2].payload).toBeUndefined();
+    expect(bodies[2].signature).toBeUndefined();
 
     const intents = bodies.map((body) => {
       const intent = body.intent as { payload?: unknown; signature?: unknown } | undefined;
@@ -221,7 +224,7 @@ describe('причина отказа сервера', () => {
     const { pair, did } = identity();
     refuse(400, 'invalid_post_intent');
     const payload: FeedEnvelopePayload = { ...expiredPost(did), type: 'feed_delete', data: { kind: 'delete' } };
-    expect(await deletePublicPostCopy(pair, payload)).toBe(false);
+    expect(await deletePublicPostCopy(pair, payload.postId)).toBe(false);
     const note = mockWarns.find((w) => w.event === 'public_post_delete_failed');
     expect(note).toBeDefined();
     expect(note?.data.status).toBe(400);
@@ -284,7 +287,7 @@ describe('id поста из одних точек', () => {
     for (const bad of ['.', '..', '...']) {
       const payload = { ...expiredPost(did), postId: bad };
       expect(await putPublicPostCopy(pair, payload)).toBe(false);
-      expect(await deletePublicPostCopy(pair, payload)).toBe(false);
+      expect(await deletePublicPostCopy(pair, payload.postId)).toBe(false);
       expect(await getPublicPostFrame(bad)).toBe(null);
       expect(await publicPostCopyExists(bad)).toBe(false);
     }

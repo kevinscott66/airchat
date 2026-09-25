@@ -983,6 +983,21 @@ class SyncDatabase {
     return { expired, evicted };
   }
 
+  /**
+   * Снять копию по ключу автора (v4.32.941).
+   *
+   * Тот же смысл, что у `deletePublicPost`, но автор опознаётся ключом, а не
+   * did. Ключ и did — одно и то же лицо, только did выводится из ключа, а
+   * здесь, на сервере, выводить его нечем. Ключ же лежит прямо в строке: его
+   * записали при выкладке и им же проверили подпись.
+   */
+  deletePublicPostByKey(postId, authorPublicKeyB64) {
+    const row = this.db.prepare('SELECT author_public_key FROM public_posts WHERE post_id = ?').get(postId);
+    if (!row || row.author_public_key !== authorPublicKeyB64) return false;
+    this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(postId);
+    return true;
+  }
+
   /** Снять копию. Возвращает false, если её нет либо просит не автор. */
   deletePublicPost(postId, authorDid) {
     const row = this.db.prepare('SELECT author_did FROM public_posts WHERE post_id = ?').get(postId);

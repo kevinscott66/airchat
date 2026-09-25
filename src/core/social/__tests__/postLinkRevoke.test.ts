@@ -61,7 +61,7 @@ jest.mock('../../storage/local', () => ({
 }));
 
 const mockServer = { copies: new Set<string>(), putWorks: true, deleteWorks: true };
-const mockDeleteTypes: string[] = [];
+const mockDeleteIds: string[] = [];
 
 jest.mock('../publicPost', () => ({
   publicPostStoreAvailable: () => true,
@@ -73,10 +73,10 @@ jest.mock('../publicPost', () => ({
     return true;
   }),
   getPublicPostFrame: jest.fn(async () => null),
-  deletePublicPostCopy: jest.fn(async (_p: unknown, payload: { postId: string; type: string }) => {
-    mockDeleteTypes.push(payload.type);
+  deletePublicPostCopy: jest.fn(async (_p: unknown, postId: string) => {
+    mockDeleteIds.push(postId);
     if (!mockServer.deleteWorks) return false;
-    mockServer.copies.delete(payload.postId);
+    mockServer.copies.delete(postId);
     return true;
   }),
 }));
@@ -110,7 +110,7 @@ beforeEach(() => {
   mockServer.putWorks = true;
   mockServer.deleteWorks = true;
   mockKvWrites.markOk = true;
-  mockDeleteTypes.length = 0;
+  mockDeleteIds.length = 0;
   mockPosts.set('p1', { id: 'p1', authorDid: myDid, text: 'запись', timestamp: 1000 });
 });
 
@@ -136,7 +136,7 @@ describe('отметка «опубликовано по ссылке»', () => 
     mockKvWrites.markOk = false;
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
     expect(mockServer.copies.has('p1')).toBe(false);
-    expect(mockDeleteTypes).toEqual(['feed_delete']);
+    expect(mockDeleteIds).toEqual(['p1']);
     expect((await publishedIds()).size).toBe(0);
   });
 
@@ -152,7 +152,7 @@ describe('отметка «опубликовано по ссылке»', () => 
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(true);
     expect(mockServer.copies.has('p1')).toBe(true);
     // Копию никто не снимал — ни запроса к серверу, ни записи в очередь.
-    expect(mockDeleteTypes).toEqual([]);
+    expect(mockDeleteIds).toEqual([]);
     expect(mockKv.has('feed_link_delete_outbox_v1')).toBe(false);
   });
 
@@ -175,8 +175,8 @@ describe('отзыв ссылки', () => {
     expect(mockServer.copies.has('p1')).toBe(false);
     expect((await publishedIds()).size).toBe(0);
     expect(mockPosts.has('p1')).toBe(true);
-    // Сервер принимает для снятия копии подписанный feed_delete.
-    expect(mockDeleteTypes).toEqual(['feed_delete']);
+    // v4.32.941: снятие названо самим постом — конверт ленты для этого не нужен.
+    expect(mockDeleteIds).toEqual(['p1']);
   });
 
   it('отказ сервера — отметка остаётся, отзыв не выдаётся за удавшийся', async () => {

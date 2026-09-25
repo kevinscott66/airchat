@@ -104,14 +104,14 @@ jest.mock('../publicPost', () => ({
   publicPostCopyExists: jest.fn(async (postId: string) => mockCopyOnServer.has(postId)),
   putPublicPostCopy: jest.fn(async () => true),
   getPublicPostFrame: jest.fn(async () => null),
-  deletePublicPostCopy: jest.fn(async (_pair: unknown, payload: { postId: string }) => {
+  deletePublicPostCopy: jest.fn(async (_pair: unknown, postId: string) => {
     if (mockDuringDelete.fn) {
       const f = mockDuringDelete.fn;
       mockDuringDelete.fn = null;
       f();
     }
-    if (mockRefuse.has(payload.postId)) return false;
-    mockCopyOnServer.delete(payload.postId);
+    if (mockRefuse.has(postId)) return false;
+    mockCopyOnServer.delete(postId);
     return true;
   }),
 }));

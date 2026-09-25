@@ -1410,19 +1410,48 @@ app.get('/v1/post/:postId', (req, res) => {
  * Снять копию. Удаление поста у автора обязано убирать и его — иначе ссылка
  * продолжала бы открывать то, что человек уже стёр.
  */
+/**
+ * Снять копию по ссылке (v4.32.941).
+ *
+ * До этой версии запрос требовал подписанный конверт `feed_delete` — ровно
+ * тот, которым запись стирают у всех. Человек, всего лишь отзывающий ссылку,
+ * отдавал серверу бессрочное разрешение убить свою же публикацию у каждого
+ * контакта: конверт действителен всегда, рассылке его хватит, а надгробие
+ * необратимо. Отзыв ссылки и удаление записи — разные действия, и разрешение
+ * у них теперь тоже разное.
+ *
+ * Хватает намерения: оно подписано автором, названо этим постом, действием
+ * `del` и разовым числом, которое гасится здесь же. Конвертом ленты намерение
+ * не является, и в рассылке оно бесполезно.
+ *
+ * Конверт по-прежнему принимается: с ним ходят сборки до v4.32.941.
+ */
 app.post('/v1/post/:postId/delete', (req, res) => {
   noStore(res);
   const postId = req.params.postId;
   if (!isValidPostId(postId)) return res.status(400).json({ error: 'invalid_post_id' });
-  const envelope = verifyPostEnvelope(req.body, postId, ['feed_delete']);
-  if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
-  const intent = verifyPostIntent(req.body, postId, 'del', envelope.authorPublicKeyB64);
+  const hasEnvelope = req.body && typeof req.body === 'object' && req.body.payload !== undefined;
+  const envelope = hasEnvelope ? verifyPostEnvelope(req.body, postId, ['feed_delete']) : null;
+  if (hasEnvelope && !envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
+  // Ключ, названный в запросе, ничего сам по себе не разрешает: намерение
+  // проверяется им же, и подписать его можно только своим ключом.
+  const claimed = req.body && typeof req.body === 'object' && typeof req.body.authorPublicKeyB64 === 'string'
+    ? req.body.authorPublicKeyB64
+    : null;
+  const authorKey = envelope ? envelope.authorPublicKeyB64 : claimed;
+  if (!authorKey) return res.status(400).json({ error: 'invalid_post_author' });
+  const intent = verifyPostIntent(req.body, postId, 'del', authorKey);
   if (!intent) return res.status(400).json({ error: 'invalid_post_intent' });
   try {
-    if (!syncDb.consumeNonce(postNonceScope(envelope.parsed.authorDid), intent.nonce)) {
+    // Области разовых чисел у двух путей разные, и это то, что нужно: повтор
+    // ловится в той же области, в какой запрос пришёл.
+    const scope = envelope ? postNonceScope(envelope.parsed.authorDid) : postNonceScope(`key:${authorKey}`);
+    if (!syncDb.consumeNonce(scope, intent.nonce)) {
       return res.status(409).json({ error: 'replayed_post_intent' });
     }
-    const removed = syncDb.deletePublicPost(postId, envelope.parsed.authorDid);
+    const removed = envelope
+      ? syncDb.deletePublicPost(postId, envelope.parsed.authorDid)
+      : syncDb.deletePublicPostByKey(postId, authorKey);
     // Нечего удалять и удаляет не автор — снаружи одно и то же: иначе по коду
     // ответа можно было бы перебором узнавать, чей это пост.
     return res.json({ ok: true, removed });
