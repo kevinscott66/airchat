@@ -16,7 +16,7 @@ import {
   profileKvDelete,
   notifyChatStorageChanged,
 } from '../storage/local';
-import { scopedKvTryGetFor } from '../storage/profileScopedKv';
+import { scopedKvSetCheckedFor, scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { profileScopedKey } from '../storage/kvKeys';
 import { cellTextOrNull, mayOverwrite, type AtRestCell } from '../storage/atRestCell';
 import { isPlainCid } from '../cid';
@@ -315,6 +315,12 @@ export const CONTACT_ROW_UNREADABLE_MESSAGE = 'Не удалось прочит�
 /** v4.32.660: запись не легла на диск. Тоже видит человек — по-русски. */
 export const CONTACT_ROW_WRITE_FAILED_MESSAGE = 'Не удалось сохранить запись контакта';
 
+/** v4.32.958: строка легла, а указатель — нет. Тоже видит человек. */
+export const CONTACT_INDEX_WRITE_FAILED_MESSAGE = 'Не удалось сохранить список контактов';
+
+/** v4.32.958: потолок указателя выбран, дописывать некуда. */
+export const CONTACTS_INDEX_FULL_MESSAGE = 'Список контактов переполнен';
+
 export async function addContact(
   pair: KeyPairBytes,
   peerPublicKey: Uint8Array,
@@ -375,7 +381,19 @@ export async function addContact(
     // в указатель контактов без самой строки: человек видел «контакт добавлен»,
     // а в списке появлялась пустая позиция, которую самолечение потом убирало.
     if (!stored) throw new Error(CONTACT_ROW_WRITE_FAILED_MESSAGE);
-    await rememberContactIdUnlocked(pid, b64);
+    // v4.32.958: вторая половина той же правки — и обратная ей. Строка легла, а
+    // указатель мог не лечь: список контактов строится ИСКЛЮЧИТЕЛЬНО из него
+    // (`readContactsFor`), а самолечение умеет только вычёркивать — дописать
+    // потерянное ему нечем. Человек видел «Контакт «Имя» добавлен», а контакта
+    // не было нигде: ни в записной книжке, ни в присутствии, ни в выборе
+    // получателя, и заданное им имя пропадало вместе с записью.
+    //
+    // Строку при отказе не снимаем: повтор добавления перезапишет её поверх
+    // (`mayOverwrite` разрешает читаемую) и заново попробует указатель, а имя
+    // и ключ тем временем целы.
+    const indexed = await rememberContactIdUnlocked(pid, b64);
+    if (indexed === 'full') throw new Error(CONTACTS_INDEX_FULL_MESSAGE);
+    if (indexed === 'failed') throw new Error(CONTACT_INDEX_WRITE_FAILED_MESSAGE);
   });
   cacheSymKey(pid, b64, sym);
   emitContactsChanged();
@@ -459,7 +477,26 @@ export async function ensureImplicitContact(
       log.warn('implicit_contact_write_failed', { peer: b64.slice(0, 12) });
       return 'failed';
     }
-    await rememberContactIdUnlocked(pid, b64);
+    // v4.32.958: у неявной строки повтора «поверх» не бывает — быстрый проход
+    // в начале отвечает 'exists' на любую существующую строку и до указателя
+    // уже не доходит. Поэтому здесь, в отличие от addContact, несостоявшийся
+    // указатель откатывает и строку: иначе контакт, которого нет в списке,
+    // остаётся таким навсегда. Отказ проходящий — кадр перезапросят, и
+    // следующий заход попробует обе половины заново.
+    if ((await rememberContactIdUnlocked(pid, b64)) !== 'ok') {
+      log.warn('implicit_contact_index_failed', { peer: b64.slice(0, 12) });
+      try {
+        await profileKvDelete(pid, `${PREFIX}${b64}`);
+      } catch (e) {
+        // Не откатилось — строка осталась без указателя, как и было до правки.
+        // Сказать об этом всё равно надо: сама по себе она не исправится.
+        log.warn('implicit_contact_rollback_failed', {
+          peer: b64.slice(0, 12),
+          err: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return 'failed';
+    }
     return 'created';
   });
   if (created !== 'created') return created;
@@ -702,13 +739,25 @@ async function readContactsFor(ownerProfileId: number): Promise<ContactsRead | n
   }
 }
 
-export async function rememberContactId(peerPublicKeyB64: string): Promise<void> {
+/**
+ * Чем кончилась попытка дописать ключ в указатель контактов (v4.32.958).
+ *
+ * `ok` — ключ лежит в указателе на диске. Остальные два означают, что его там
+ * нет, и различаются они только тем, что сказать человеку: переполнение
+ * пройдёт, лишь если он кого-то удалит, а отказ базы пройдёт сам.
+ */
+type ContactIndexWrite = 'ok' | 'full' | 'failed';
+
+export async function rememberContactId(peerPublicKeyB64: string): Promise<ContactIndexWrite> {
   const pid = activeProfileId();
-  await withContactLock(pid, () => rememberContactIdUnlocked(pid, peerPublicKeyB64));
+  return withContactLock(pid, () => rememberContactIdUnlocked(pid, peerPublicKeyB64));
 }
 
 /** v4.32.115: unlocked inner — callers already holding withContactLock use this. */
-async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string): Promise<void> {
+async function rememberContactIdUnlocked(
+  pid: number,
+  peerPublicKeyB64: string,
+): Promise<ContactIndexWrite> {
   // v4.32.659: указатель здесь перечитывается, меняется и кладётся обратно —
   // поэтому сорванное чтение стоило дороже всего. Прежде оно давало '[]', и на
   // диск ложился указатель из одной записи: один недоступный момент базы стирал
@@ -717,7 +766,7 @@ async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string):
   const read = await scopedKvTryGetFor(pid, 'contacts_index');
   if (read === null) {
     log.warn('contacts_index_read_failed', { pid, op: 'remember' });
-    return;
+    return 'failed';
   }
   const raw = read.value ?? '[]';
   try {
@@ -730,13 +779,22 @@ async function rememberContactIdUnlocked(pid: number, peerPublicKeyB64: string):
       // неё всё равно не дошёл. Дальше идёт разговор про то, чем указатель
       // забит, — вытеснять здесь наугад нечего.
       log.warn('contacts_index_full', { pid, size: ids.size });
-      return;
+      return 'full';
     }
     ids.add(peerPublicKeyB64);
-    await profileKvSet(pid, 'contacts_index', JSON.stringify([...ids]));
+    // v4.32.958: `profileKvSet` гасит отказ базы и отдаёт void — «не влезло на
+    // диск» приходило сюда неотличимо от «легло». Проверенная запись называет
+    // исход, и дальше он едет вызывающему: указатель — единственный источник
+    // списка контактов, потерянная запись в нём не восстанавливается ничем.
+    if (!(await scopedKvSetCheckedFor(pid, 'contacts_index', JSON.stringify([...ids])))) {
+      log.warn('contacts_index_write_failed', { pid, size: ids.size });
+      return 'failed';
+    }
     notifyChatStorageChanged();
+    return 'ok';
   } catch (e) {
     log.warn('contacts_index_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'failed';
   }
 }
 
