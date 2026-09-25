@@ -143,8 +143,8 @@ describe('стык записи и чтения — тот самый дефек
   test('список «Заглушённые» отдаёт did — то же, что снимает заглушение', async () => {
     await setMuted('chat', PEER);
     const list = await listMuted('chat');
-    expect(list.map((e) => e.id)).toEqual([PEER_DID]);
-    await unmute('chat', list[0].id);
+    expect(list?.entries.map((e) => e.id)).toEqual([PEER_DID]);
+    await unmute('chat', list!.entries[0].id);
     expect(await isMuted('chat', PEER)).toBe(false);
   });
 });
@@ -163,8 +163,8 @@ describe('записи прежней сборки', () => {
     mockKv.set(`p1:mute:chat:${PEER}`, `until:${until}`);
     await sweepExpiredMutes();
     const state = await getMuteState('chat', PEER_DID);
-    expect(state.muted).toBe(true);
-    expect(state.untilMs).toBe(until);
+    expect(state?.muted).toBe(true);
+    expect(state?.untilMs).toBe(until);
   });
 
   test('истёкшая старая запись убирается, а не переезжает', async () => {
@@ -178,7 +178,7 @@ describe('записи прежней сборки', () => {
     mockKv.set(`p1:mute:chat:${PEER}`, '1');
     await sweepExpiredMutes();
     const state = await getMuteState('chat', PEER_DID);
-    expect(state.untilMs).not.toBeNull();
+    expect(state?.untilMs).not.toBeNull();
     expect(mockKv.has(`p1:mute:chat:${PEER}`)).toBe(false);
   });
 
@@ -193,8 +193,8 @@ describe('записи прежней сборки', () => {
   test('старую запись можно снять из «Заглушённых» до всякой уборки', async () => {
     mockKv.set(`p1:mute:chat:${PEER}`, '1');
     const list = await listMuted('chat');
-    expect(list.map((e) => e.id)).toEqual([PEER]);
-    await unmute('chat', list[0].id);
+    expect(list?.entries.map((e) => e.id)).toEqual([PEER]);
+    await unmute('chat', list!.entries[0].id);
     expect(mockKv.size).toBe(0);
   });
 

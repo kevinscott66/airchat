@@ -121,9 +121,13 @@ describe('отказ доходит до человека', () => {
 
   it('лента не переключает значок поста без записи', () => {
     const src = read('screens/FeedScreen.tsx');
-    const at = src.indexOf("const currently = await isMuted('post', postId);");
+    // v4.32.959: спрашивают уже не `isMuted`, а `getMuteState` — тремя
+    // состояниями, потому что по этому ответу ПИШУТ. Само правило v4.32.630
+    // осталось тем же: значок переключается после записи, а не до неё.
+    const at = src.indexOf("const state = await getMuteState('post', postId);");
     expect(at).toBeGreaterThan(0);
     const block = src.slice(at, at + 1200);
+    expect(block).toContain("if (state === null)");
     expect(block).toContain("showError('Не удалось включить уведомления'); return;");
     expect(block).toContain("showError('Не удалось отключить уведомления'); return;");
   });

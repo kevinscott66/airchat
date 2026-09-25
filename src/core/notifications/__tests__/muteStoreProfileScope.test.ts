@@ -93,9 +93,9 @@ describe('заглушение принадлежит аккаунту', () => {
     await setMuted('chat', PEER);
     await setMuted('group', GROUP);
     mockActiveId = 5;
-    expect(await listMuted()).toEqual([]);
+    expect(await listMuted()).toEqual({ entries: [], unreadable: 0 });
     mockActiveId = 3;
-    expect((await listMuted()).map((e) => e.id).sort()).toEqual([GROUP, PEER_DID].sort());
+    expect((await listMuted())?.entries.map((e) => e.id).sort()).toEqual([GROUP, PEER_DID].sort());
   });
 
   it('снятие в одном аккаунте не снимает во втором', async () => {
@@ -128,7 +128,7 @@ describe('заглушение принадлежит аккаунту', () => {
   it('старые записи попадают и в список — вместе с переездом', async () => {
     mockKv.set(`mute:group:${GROUP}`, '1');
     const list = await listMuted('group');
-    expect(list).toEqual([{ kind: 'group', id: GROUP, untilMs: null }]);
+    expect(list).toEqual({ entries: [{ kind: 'group', id: GROUP, untilMs: null }], unreadable: 0 });
     expect(mockKv.get(`p1:mute:group:${GROUP}`)).toBe('1');
     expect(mockKv.has(`mute:group:${GROUP}`)).toBe(false);
   });
@@ -154,7 +154,7 @@ describe('срок отсрочки', () => {
 
   it('порченый срок не попадает в список «Заглушённые»', async () => {
     mockKv.set(`p1:mute:chat:${PEER_DID}`, 'until:99999999999999');
-    expect(await listMuted()).toEqual([]);
+    expect(await listMuted()).toEqual({ entries: [], unreadable: 0 });
   });
 
   it('истёкшая отсрочка снимается лениво', async () => {
@@ -177,9 +177,9 @@ describe('срок отсрочки', () => {
   it('слишком далёкий срок подрезается при записи — и потом истекает', async () => {
     await setMuted('chat', PEER, { untilMs: Date.now() + 50 * 365 * 24 * HOUR });
     const state = await getMuteState('chat', PEER);
-    expect(state.muted).toBe(true);
-    expect(state.untilMs).not.toBeNull();
-    expect(state.untilMs as number).toBeLessThanOrEqual(Date.now() + 366 * 24 * HOUR);
+    expect(state?.muted).toBe(true);
+    expect(state?.untilMs).not.toBeNull();
+    expect(state?.untilMs as number).toBeLessThanOrEqual(Date.now() + 366 * 24 * HOUR);
   });
 
   it('запись неизвестного формата считается порченой', async () => {

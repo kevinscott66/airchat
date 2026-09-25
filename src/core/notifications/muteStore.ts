@@ -32,10 +32,10 @@
 import {
   scopedKvDelete,
   scopedKvDeleteChecked,
-  scopedKvGet,
   scopedKvListKeysByPrefix,
   scopedKvSetChecked,
   scopedKvTryGet,
+  scopedKvTryListKeysByPrefix,
 } from '../storage/profileScopedKv';
 import { log } from '../logger';
 import {
@@ -88,17 +88,40 @@ function keyFor(kind: MuteKind, id: string): string {
 /**
  * Проверить, замьючен ли identifier.
  * Lazy-expire: если snooze истёк — удаляет ключ и возвращает false.
+ *
+ * v4.32.959: запись не прочиталась — отвечаем «не заглушено», и теперь это
+ * выбор, а не слепота. Зовут отсюда только заслонки уведомлений (App.tsx,
+ * pushNotifications), а у них цена ошибки несимметрична: лишний звук человек
+ * переживёт, беззвучно потерянное сообщение — нет. То же соображение записано
+ * у {@link scopedKvTryListKeysByPrefix} и в MUTE_MAX_MS. Догадка позволена
+ * ровно здесь; тому, кто по ответу ПИШЕТ, положен getMuteState с его третьим
+ * состоянием.
  */
 export async function isMuted(kind: MuteKind, id: string): Promise<boolean> {
   if (!id) return false;
-  const state = await getMuteState(kind, id);
-  return state.muted;
+  return (await getMuteState(kind, id))?.muted ?? false;
 }
 
-export async function getMuteState(kind: MuteKind, id: string): Promise<{ muted: boolean; untilMs: number | null }> {
+/**
+ * Состояние записи «без звука». `null` — не прочитали (отказ базы).
+ *
+ * v4.32.959: читала `scopedKvGet`, и отказ базы приходил сюда неотличимо от
+ * «записи нет» — ответом `{ muted: false }`. Заслонке уведомлений такой ответ
+ * годится, переключателю — нет: `toggleMutePost` на нём читал «не заглушено» и
+ * ПИСАЛ бессрочное глушение — поверх отсрочки, поставленной до утра, и в ответ
+ * на просьбу уведомления ВЕРНУТЬ. Правило «не прочитали — не пишем» записано
+ * рядом дважды: в уборке (v4.32.696) и в списке заглушённых авторов
+ * (v4.32.699); здесь его недоставало.
+ */
+export async function getMuteState(
+  kind: MuteKind,
+  id: string,
+): Promise<{ muted: boolean; untilMs: number | null } | null> {
   if (!id) return { muted: false, untilMs: null };
   const now = Date.now();
-  const parsed = parseMuteValue(await scopedKvGet(keyFor(kind, id)), now);
+  const read = await scopedKvTryGet(keyFor(kind, id));
+  if (read === null) return null;
+  const parsed = parseMuteValue(read.value, now);
   if (muteExpired(parsed, now)) {
     // Отсрочка истекла (или запись порченая) — чистим и возвращаем unmuted.
     try { await scopedKvDelete(keyFor(kind, id)); } catch { /* noop */ }
@@ -186,22 +209,48 @@ export async function unmute(kind: MuteKind, id: string): Promise<boolean> {
   return ok;
 }
 
+/** Чем кончился поход за списком «Заглушённые» (v4.32.959). */
+export type MutedList = {
+  /** Записи, которые удалось прочитать. Только НЕ истёкшие. */
+  entries: MuteEntry[];
+  /** Сколько записей не открылось: они есть, но что в них — неизвестно. */
+  unreadable: number;
+};
+
 /**
- * Список всех активных mute-записей.
+ * Список всех активных mute-записей. `null` — не прочитался сам перечень имён.
  * @param kind — опционально фильтр. Без него — все kinds.
  *
- * Возвращает только НЕ истёкшие записи. Истёкшие автоматически чистит
- * (инвариант совместимости с isMuted/getMuteState).
+ * Истёкшие записи чистит по дороге (инвариант совместимости с
+ * isMuted/getMuteState).
+ *
+ * v4.32.959: и перечень имён, и каждое значение спрашиваются тремя
+ * состояниями. Прежде отказ базы на любом из двух шагов приходил сюда как
+ * пустота: запись молча выпадала из списка, а экран настроек писал «Список
+ * пуст — уведомления включены везде». Снять глушение можно ТОЛЬКО отсюда
+ * (`SettingsScreen` → «Заглушённые»), то есть исчезнувшая строка — это
+ * замолчавший навсегда собеседник без единой кнопки, чтобы его вернуть. Ровно
+ * этими словами запрещено считать непрочитанный список пустым в v4.32.699,
+ * только там речь шла о заглушённых авторах.
  */
-export async function listMuted(kind?: MuteKind): Promise<MuteEntry[]> {
-  const keys = await scopedKvListKeysByPrefix(muteKeyPrefix(kind));
+export async function listMuted(kind?: MuteKind): Promise<MutedList | null> {
+  const keys = await scopedKvTryListKeysByPrefix(muteKeyPrefix(kind));
+  if (keys === null) return null;
   const now = Date.now();
   const out: MuteEntry[] = [];
+  let unreadable = 0;
   for (const k of keys) {
     const parsedKey = parseMuteKey(k);
     if (!parsedKey) continue;
     const { kind: entryKind, id } = parsedKey;
-    const parsed = parseMuteValue(await scopedKvGet(k), now);
+    // Ключ пришёл из скана, значит запись существует: null означает здесь
+    // только отказ базы, и «не заглушено» из него не следует.
+    const read = await scopedKvTryGet(k);
+    if (read === null) {
+      unreadable += 1;
+      continue;
+    }
+    const parsed = parseMuteValue(read.value, now);
     if (muteExpired(parsed, now)) {
       try { await scopedKvDelete(k); } catch { /* noop */ }
       continue;
@@ -209,7 +258,7 @@ export async function listMuted(kind?: MuteKind): Promise<MuteEntry[]> {
     if (!parsed.muted) continue;
     out.push({ kind: entryKind, id, untilMs: parsed.untilMs });
   }
-  return out;
+  return { entries: out, unreadable };
 }
 
 /**

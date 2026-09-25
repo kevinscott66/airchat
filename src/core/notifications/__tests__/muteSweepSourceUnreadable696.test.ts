@@ -44,7 +44,13 @@ import { canonicalMuteId } from '../muteChatId';
 
 const SRC = readFileSync(join(__dirname, '..', 'muteStore.ts'), 'utf8');
 
-/** Тело уборки: в listMuted чтение осталось прежним намеренно — там ничего не стирается. */
+/**
+ * Тело уборки. В v4.32.696 чтение в listMuted осталось прежним намеренно: там
+ * непрочитанная запись ничего не стирала, вред был только у уборки. Вред у
+ * списка нашёлся позже и оказался другого рода — не порча записи, а ложь
+ * экрану, — и закрыт он в v4.32.959; помощник остаётся, чтобы пин этой версии
+ * держался за уборку, а не за весь файл.
+ */
 function sweepBody(): string {
   const from = SRC.indexOf('export async function sweepExpiredMutes(');
   expect(from).toBeGreaterThan(0);

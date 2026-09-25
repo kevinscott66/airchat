@@ -1349,19 +1349,31 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     let alive = true;
     void (async () => {
       const { listMuted } = await import('../../core/notifications/muteStore');
-      const entries = await listMuted('post');
-      if (!alive) return;
-      setMutedPosts(new Set(entries.map((e) => e.id)));
+      const res = await listMuted('post');
+      // v4.32.959: список не прочитался — оставляем набор пустым, но молча.
+      // Значка «без звука» на карточке не будет; сказать об этом здесь некуда
+      // (лента — не экран настроек), и врать набор не заставляем: сам
+      // переключатель ниже спрашивает запись заново и на непрочитанной
+      // отказывается, так что промолчавший значок ничего не испортит.
+      if (!alive || res === null) return;
+      setMutedPosts(new Set(res.entries.map((e) => e.id)));
     })();
     return () => { alive = false; };
   }, []);
   const toggleMutePost = useCallback(async (postId: string) => {
-    const { isMuted, setMuted, unmute } = await import('../../core/notifications/muteStore');
-    const currently = await isMuted('post', postId);
+    const { getMuteState, setMuted, unmute } = await import('../../core/notifications/muteStore');
+    // v4.32.959: спрашиваем тремя состояниями. `isMuted` на отказе базы
+    // отвечает «не заглушено» — заслонке уведомлений этого хватает, а здесь
+    // ответ уходил в ветку ЗАПИСИ: человек просил уведомления вернуть, а
+    // получал бессрочное глушение поверх отсрочки, которую сам ставил до
+    // утра. Не прочитали — не пишем; ровно это правило соблюдает соседний
+    // toggleMuteAuthor (v4.32.699).
+    const state = await getMuteState('post', postId);
+    if (state === null) { showError('Не удалось прочитать, отключены ли уведомления'); return; }
     // v4.32.630: оба вызова гасят отказ базы, а список отключённых постов
     // переключался безусловно — значок «без звука» показывал не то, что
     // записано, и уведомления о комментариях приходили дальше.
-    if (currently) {
+    if (state.muted) {
       if (!(await unmute('post', postId))) { showError('Не удалось включить уведомления'); return; }
       setMutedPosts((prev) => { const n = new Set(prev); n.delete(postId); return n; });
     } else {

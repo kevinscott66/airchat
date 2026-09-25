@@ -2433,12 +2433,20 @@ function SettingsScreenImpl({
   // forgotten mutes accumulated invisibly.
 
   const [mutedList, setMutedList] = useState<MuteEntry[]>([]);
+  // v4.32.959: 'no' — список полный; 'partial' — часть записей не открылась;
+  // 'all' — не прочитался сам перечень имён. Разница не косметическая: снять
+  // глушение можно только с этого экрана, и «Список пуст» вместо непрочитанной
+  // строки — это замолчавший навсегда собеседник без единой кнопки вернуть его.
+  const [mutedRead, setMutedRead] = useState<'no' | 'partial' | 'all'>('no');
   useEffect(() => {
     if (subScreen !== 'muted') return;
     let cancelled = false;
     void (async () => {
-      const list = await listMuted();
-      if (!cancelled) setMutedList(list);
+      const res = await listMuted();
+      if (cancelled) return;
+      if (res === null) { setMutedList([]); setMutedRead('all'); return; }
+      setMutedList(res.entries);
+      setMutedRead(res.unreadable > 0 ? 'partial' : 'no');
     })();
     return () => { cancelled = true; };
   }, [subScreen]);
@@ -2466,10 +2474,19 @@ function SettingsScreenImpl({
           </Text>
         </View>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingTop: 0 }}>
-          {mutedList.length === 0 ? (
-            <Text style={[styles.hint, { textAlign: 'center', marginTop: 40 }]}>
-              Список пуст — уведомления включены везде.
+          {mutedRead !== 'no' && (
+            <Text style={[styles.hint, { textAlign: 'center', marginBottom: 16 }]}>
+              {mutedRead === 'all'
+                ? 'Не удалось прочитать список заглушённых. Откройте экран ещё раз.'
+                : 'Часть записей не прочиталась — список неполный.'}
             </Text>
+          )}
+          {mutedList.length === 0 ? (
+            mutedRead === 'no' ? (
+              <Text style={[styles.hint, { textAlign: 'center', marginTop: 40 }]}>
+                Список пуст — уведомления включены везде.
+              </Text>
+            ) : null
           ) : (
             mutedList.map((m) => {
               const idShort = shortIdentity(m.id, 10);
