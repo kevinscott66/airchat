@@ -272,7 +272,7 @@ function SingleImageView({
           <View />
         )}
         {allowShare ? (
-          <AppPressable style={siv.iconBtn} onPress={() => void share()} hitSlop={16} disabled={sharing}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Поделиться" style={siv.iconBtn} onPress={() => void share()} hitSlop={16} disabled={sharing}>
             {sharing ? (
               <ActivityIndicator color={mediaScrim.ink} size="small" />
             ) : (

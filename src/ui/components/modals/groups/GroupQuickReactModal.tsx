@@ -76,7 +76,7 @@ function GroupQuickReactModalImpl(props: GroupQuickReactModalProps) {
                       <Text style={styles.emoji}>{e}</Text>
                     </AppPressable>
                   ))}
-                  <AppPressable style={styles.pickerBtn} onPress={onOpenMore}>
+                  <AppPressable accessibilityRole="button" accessibilityLabel="Ещё эмодзи" style={styles.pickerBtn} onPress={onOpenMore}>
                     <View style={[styles.moreBtn, { borderColor: colors.border, backgroundColor: colors.surfaceHigh }]}>
                       <Ionicons name="add" size={20} color={colors.text} />
                     </View>

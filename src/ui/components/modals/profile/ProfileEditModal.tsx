@@ -467,6 +467,7 @@ export function ProfileEditModal({
           >
             <View style={styles.avatarBox}>
               <AppPressable
+                accessibilityRole="button"
                 style={[styles.avatar, { backgroundColor: colors.surface, borderColor: colors.border }]}
                 onPress={() => void pickAvatar()}
                 testID="profile_edit_avatar"

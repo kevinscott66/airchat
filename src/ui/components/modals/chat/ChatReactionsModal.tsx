@@ -52,6 +52,8 @@ export function ReactionsModal({
             ))}
             {onMoreEmojis ? (
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Ещё эмодзи"
                 style={[rmStyles.emojiBtn, rmStyles.moreBtnWrapper]}
                 onPress={() => { onClose(); onMoreEmojis(); }}
               >

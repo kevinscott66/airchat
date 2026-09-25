@@ -754,6 +754,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
             </AppPressable>
             {!isSelf ? (
               <AppPressable
+                accessibilityRole="button"
                 style={styles.reactionAddBtn}
                 onPress={() => onRepostPress(item)}
                 onLongPress={() => onRepostLongPress(item)}
@@ -789,6 +790,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
               </AppPressable>
             ) : null}
             <AppPressable
+              accessibilityRole="button"
               style={styles.reactionAddBtn}
               onPress={() => onBookmarkToggle(item)}
               hitSlop={8}
@@ -797,6 +799,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
               <Ionicons name={item.bookmarked ? 'bookmark' : 'bookmark-outline'} size={15} color={item.bookmarked ? colors.accent : colors.textSecondary} />
             </AppPressable>
             <AppPressable
+              accessibilityRole="button"
               style={styles.reactionAddBtn}
               onPress={() => onShareToChat(item)}
               hitSlop={8}
@@ -820,6 +823,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
               </View>
             ) : null}
             <AppPressable
+              accessibilityRole="button"
               style={[styles.reactionAddBtn, linkBusy ? { opacity: 0.5 } : null]}
               onPress={() => onNativeShare(item)}
               disabled={linkBusy}
@@ -3283,6 +3287,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         <View style={styles.topRow}>
           <Text style={[styles.h1, { flex: 1 }]}>{t('feed.title')}</Text>
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel="Только закладки"
+            accessibilityState={{ selected: bookmarkFilter }}
             onPress={() => { setBookmarkFilter((v) => !v); setArchiveFilter(false); setActiveHashtag(null); setFeedSearch(''); }}
             style={[styles.composeBtn, bookmarkFilter && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
             hitSlop={8}
@@ -3291,6 +3298,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
           </AppPressable>
           {/* v4.32.34: вход в Архив — иконка «archive», визуально подсвечена когда режим активен. */}
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel="Архив"
+            accessibilityState={{ selected: archiveFilter }}
             onPress={() => { setArchiveFilter((v) => !v); setBookmarkFilter(false); setActiveHashtag(null); setFeedSearch(''); }}
             style={[styles.composeBtn, archiveFilter && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
             hitSlop={8}
@@ -3299,6 +3309,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             <Ionicons name={archiveFilter ? 'archive' : 'archive-outline'} size={22} color={archiveFilter ? activeTint.ink : colors.textSecondary} />
           </AppPressable>
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel="Новая публикация"
             onPress={() => setModalOpen(true)}
             style={styles.composeBtn}
             testID="btn_new_post"
@@ -3644,6 +3656,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                           />
                           {pollOptions.length > 2 ? (
                             <AppPressable
+                              accessibilityRole="button"
+                              accessibilityLabel="Удалить вариант"
                               style={{ padding: 6 }}
                               onPress={() => setPollOptions((prev) => prev.filter((_, j) => j !== i))}
                             >
@@ -4229,6 +4243,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         </AppPressable>
                         {isOwn ? (
                           <AppPressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Удалить комментарий"
                             hitSlop={8}
                             onPress={() => {
                               // v4.32.908: тела не было вовсе, и вопрос
@@ -4275,6 +4291,8 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   }}
                 />
                 <AppPressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Отправить комментарий"
                   style={[cmStyles.sendBtn, (!commentText.trim() || commentSending) && { opacity: 0.4 }]}
                   onPress={() => void submitComment()}
                   disabled={!commentText.trim() || commentSending}

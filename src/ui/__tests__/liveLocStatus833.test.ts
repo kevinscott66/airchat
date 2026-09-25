@@ -101,9 +101,12 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: цена подмены видна
     const s = ICON();
     const at = s.indexOf("case 'failed':");
     expect(at).toBeGreaterThan(0);
-    const arm = s.slice(at, at + 400);
+    const arm = s.slice(at, at + 600);
     expect(arm).toContain('onPress={onRetry}');
-    expect(arm).toContain('accessibilityLabel="Нажмите для повтора"');
+    // v4.32.935: имя переехало со значка на саму нажимаемую область — внутри
+    // значка озвучка его не видела, потому что фокус берёт область.
+    expect(arm).toContain('accessibilityRole="button"');
+    expect(arm).toContain('accessibilityLabel="Отправить ещё раз"');
   });
 
   it('иконка рисуется у любого исходящего, включая живую геолокацию', () => {

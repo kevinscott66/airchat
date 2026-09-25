@@ -103,7 +103,7 @@ function PinnedRowImpl({ pin, idx, canPin, onJumpTo, onUnpin, textColor, mutedCo
         </Text>
       </View>
       {canPin ? (
-        <AppPressable hitSlop={10} onPress={handleUnpin} style={styles.unpinBtn}>
+        <AppPressable accessibilityRole="button" accessibilityLabel="Открепить" hitSlop={10} onPress={handleUnpin} style={styles.unpinBtn}>
           <Ionicons name="close-circle-outline" size={20} color={mutedColor} />
         </AppPressable>
       ) : null}

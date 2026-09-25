@@ -167,7 +167,7 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
                     {reactionEmojis.slice(0, 6).map((e) => (
                       <EmojiTile key={e} emoji={e} onPress={onPickReaction} />
                     ))}
-                    <AppPressable style={styles.emojiBtn} onPress={onOpenMore}>
+                    <AppPressable accessibilityRole="button" accessibilityLabel="Ещё эмодзи" style={styles.emojiBtn} onPress={onOpenMore}>
                       <View style={[styles.moreBtn, { borderColor: colors.border, backgroundColor: colors.surfaceHigh }]}>
                         <Ionicons name="add" size={font.xl} color={colors.text} />
                       </View>

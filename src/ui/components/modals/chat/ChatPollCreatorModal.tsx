@@ -83,7 +83,7 @@ export function DmPollCreatorModal({
           {options.map((opt, i) => (
             <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
               {isQuiz ? (
-                <AppPressable onPress={() => setCorrectAnswer(i)} style={{ marginRight: 8 }}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Правильный ответ" accessibilityState={{ selected: correctAnswer === i }} onPress={() => setCorrectAnswer(i)} style={{ marginRight: 8 }}>
                   <Ionicons name={correctAnswer === i ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={correctAnswer === i ? colors.success : colors.textMuted} />
                 </AppPressable>
               ) : null}
@@ -95,7 +95,7 @@ export function DmPollCreatorModal({
                 style={{ flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, borderWidth: isQuiz && correctAnswer === i ? 1 : 0, borderColor: colors.success }}
               />
               {options.length > 2 ? (
-                <AppPressable onPress={() => removeOption(i)} style={{ marginLeft: 8 }}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Удалить вариант" onPress={() => removeOption(i)} style={{ marginLeft: 8 }}>
                   <Ionicons name="remove-circle-outline" size={20} color={colors.textMuted} />
                 </AppPressable>
               ) : null}

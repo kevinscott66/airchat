@@ -64,8 +64,11 @@ export function MessageStatusIcon({
       return <ActivityIndicator size="small" color={idle} style={{ width: 14, height: 14, marginLeft: 4 }} accessibilityLabel="Отправляется…" />;
     case 'failed':
       return (
-        <AppPressable onPress={onRetry} hitSlop={8}>
-          <Ionicons name="alert-circle-outline" size={14} color={failed} style={{ marginLeft: 2 }} accessibilityLabel="Нажмите для повтора" />
+        // v4.32.935: имя стояло на значке внутри, а нажимается наружная
+        // область — и озвучка объявляла её кнопкой без имени. Заодно ушло
+        // слово «нажмите»: о том, что это кнопка, говорит роль.
+        <AppPressable accessibilityRole="button" accessibilityLabel="Отправить ещё раз" onPress={onRetry} hitSlop={8}>
+          <Ionicons name="alert-circle-outline" size={14} color={failed} style={{ marginLeft: 2 }} />
         </AppPressable>
       );
     default:

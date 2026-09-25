@@ -2617,18 +2617,21 @@ function SettingsScreenImpl({
               numberOfLines={2}
             >{templateReadable(qr) ? qr.text : UNREADABLE_TEMPLATE_TEXT}</Text>
           </View>
-          <AppPressable onPress={() => { setEditingQR(qr); setEditingQRText(qr.text); }} style={{ padding: 6 }}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Изменить шаблон" onPress={() => { setEditingQR(qr); setEditingQRText(qr.text); }} style={{ padding: 6 }}>
             <Ionicons name="pencil-outline" size={18} color={colors.textMuted} />
           </AppPressable>
-          <AppPressable onPress={() => {
-            // v4.32.812: список перечитывается в любом случае — он и покажет
-            // оставшийся шаблон. Но молчать об этом нельзя: удаляют шаблон
-            // тогда, когда в нём написано лишнее, а открыт он в каждом чате.
-            void deleteQuickReply(qr.id).then((ok) => {
-              loadQuickReplies();
-              if (!ok) showError('Шаблон не удалился: хранилище занято. Попробуйте ещё раз.');
-            });
-          }} style={{ padding: 6 }}>
+          <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel="Удалить шаблон"
+            onPress={() => {
+              // v4.32.812: список перечитывается в любом случае — он и покажет
+              // оставшийся шаблон. Но молчать об этом нельзя: удаляют шаблон
+              // тогда, когда в нём написано лишнее, а открыт он в каждом чате.
+              void deleteQuickReply(qr.id).then((ok) => {
+                loadQuickReplies();
+                if (!ok) showError('Шаблон не удалился: хранилище занято. Попробуйте ещё раз.');
+              });
+            }} style={{ padding: 6 }}>
             <Ionicons name="trash-outline" size={18} color={colors.error} />
           </AppPressable>
         </View>
@@ -2645,6 +2648,8 @@ function SettingsScreenImpl({
           maxLength={200}
         />
         <AppPressable
+          accessibilityRole="button"
+          accessibilityLabel="Добавить шаблон"
           onPress={() => {
             if (!quickReplyInput.trim()) return;
             const text = quickReplyInput;

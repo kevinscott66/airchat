@@ -22,7 +22,7 @@ import {
 import { votesLabel } from '../../utils/plural';
 import { pollIcon, pollResultsText } from '../../utils/pollResultsText';
 import { shortIdentity } from '../../identity/shortId';
-import { COPIED_POLL_RESULTS } from '../../clipboardText';
+import { COPIED_POLL_RESULTS, COPY_POLL_RESULTS_ACTION } from '../../clipboardText';
 import { copyText } from '../../copyText';
 import { PersonAvatar } from '../../components/PersonAvatar';
 
@@ -219,6 +219,8 @@ export function PollBubble({
         </Text>
         {totalVotes > 0 ? (
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel={COPY_POLL_RESULTS_ACTION}
             onPress={() => {
               // v4.32.930: тот же текст собирал личный пузырь своим map.
               void copyText(

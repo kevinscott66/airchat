@@ -19,7 +19,7 @@ import {
 } from '../../../core/social/pollRead';
 import { votesLabel } from '../../utils/plural';
 import { pollIcon, pollResultsText } from '../../utils/pollResultsText';
-import { COPIED_POLL_RESULTS } from '../../clipboardText';
+import { COPIED_POLL_RESULTS, COPY_POLL_RESULTS_ACTION } from '../../clipboardText';
 import { copyText } from '../../copyText';
 
 // ─── Poll bubble (DM chats) ───────────────────────────────────────────────────
@@ -176,6 +176,8 @@ export function DmPollBubble({
         <Text style={{ color: ink.muted, fontSize: font.xs, flex: 1 }}>{isQuiz ? 'Викторина · ' : ''}{allowMultiple ? '☑️ Несколько · ' : ''}{poll.anonymous ? '🔒 Без имён · ' : ''}{votesLabel(total)}</Text>
         {total > 0 ? (
           <AppPressable
+            accessibilityRole="button"
+            accessibilityLabel={COPY_POLL_RESULTS_ACTION}
             onPress={() => {
               // v4.32.930: тот же текст собирал групповой пузырь своим циклом.
               void copyText(

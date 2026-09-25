@@ -3878,6 +3878,8 @@ function ChatThreadView({
               onLongPress={() => total > 1 ? setPinnedListVisible(true) : undefined}
             >
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Закреплённые сообщения"
                 hitSlop={8}
                 onPress={() => total > 1 ? setPinnedListVisible(true) : undefined}
                 style={{ marginRight: 6 }}
@@ -3896,19 +3898,26 @@ function ChatThreadView({
                   numberOfLines={1}
                 >{displayPinUnreadable ? UNREADABLE_MESSAGE_TEXT : displayPin?.text ?? ''}</Text>
               </View>
-              <AppPressable hitSlop={12} onPress={() => {
-                if (total > 1) {
-                  setPinnedListVisible(true);
-                } else {
-                  void (async () => {
-                    const res = await clearDmPinnedAndSync(peerB64);
-                    if (!res.ok) { showError(dmPinRefusalText(res.reason)); return; }
-                    announceDmPin(res.sync);
-                    setPinnedMsgList(res.entries);
-                    setPinnedMsg(null);
-                  })();
-                }
-              }}>
+              <AppPressable
+                accessibilityRole="button"
+                // Один и тот же значок: при нескольких закреплённых он
+                // открывает список, при одном — открепляет. Слово поэтому
+                // тоже разное.
+                accessibilityLabel={total > 1 ? 'Все закреплённые' : 'Открепить'}
+                hitSlop={12}
+                onPress={() => {
+                  if (total > 1) {
+                    setPinnedListVisible(true);
+                  } else {
+                    void (async () => {
+                      const res = await clearDmPinnedAndSync(peerB64);
+                      if (!res.ok) { showError(dmPinRefusalText(res.reason)); return; }
+                      announceDmPin(res.sync);
+                      setPinnedMsgList(res.entries);
+                      setPinnedMsg(null);
+                    })();
+                  }
+                }}>
                 <Ionicons name={total > 1 ? 'list' : 'close'} size={16} color={colors.textMuted} />
               </AppPressable>
             </AppPressable>
@@ -4002,10 +4011,10 @@ function ChatThreadView({
                 <Text style={{ fontSize: 12, color: colors.textMuted, minWidth: 44, textAlign: 'right' }}>
                   {hitLabel(searchHitIdx, searchHitIndices.length)}
                 </Text>
-                <AppPressable onPress={() => jumpToHit(stepHitIndex(searchHitIdx, searchHitIndices.length, -1))} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Предыдущее совпадение" onPress={() => jumpToHit(stepHitIndex(searchHitIdx, searchHitIndices.length, -1))} hitSlop={8}>
                   <Ionicons name="chevron-up" size={20} color={colors.accent} />
                 </AppPressable>
-                <AppPressable onPress={() => jumpToHit(stepHitIndex(searchHitIdx, searchHitIndices.length, 1))} hitSlop={8}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Следующее совпадение" onPress={() => jumpToHit(stepHitIndex(searchHitIdx, searchHitIndices.length, 1))} hitSlop={8}>
                   <Ionicons name="chevron-down" size={20} color={colors.accent} />
                 </AppPressable>
               </View>

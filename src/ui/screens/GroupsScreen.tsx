@@ -3597,6 +3597,8 @@ function GroupChatScreen({
               </AppPressable>
             ))}
             <AppPressable
+              accessibilityRole="button"
+              accessibilityLabel="Добавить реакцию"
               style={[gcStyles.reactionChip, { backgroundColor: colors.surfaceHigh, borderColor: colors.border }]}
               onPress={() => Platform.OS === 'ios' ? showMsgMenu(item) : setQuickReact(item)}
             >
@@ -4008,6 +4010,8 @@ function GroupChatScreen({
                 {hitLabel(searchIdx, searchResults.length)}
               </Text>
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Следующее совпадение"
                 style={gcStyles.iconBtn}
                 onPress={() => {
                   const next = stepHitIndex(searchIdx, searchResults.length, 1);
@@ -4018,6 +4022,8 @@ function GroupChatScreen({
                 <Ionicons name="chevron-down" size={22} color={colors.text} />
               </AppPressable>
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Предыдущее совпадение"
                 style={gcStyles.iconBtn}
                 onPress={() => {
                   const prev = stepHitIndex(searchIdx, searchResults.length, -1);
@@ -4068,10 +4074,10 @@ function GroupChatScreen({
               )}
             </View>
           </AppPressable>
-          <AppPressable style={gcStyles.iconBtn} onPress={openSearch}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Поиск" style={gcStyles.iconBtn} onPress={openSearch}>
             <Ionicons name="search-outline" size={22} color={colors.text} />
           </AppPressable>
-          <AppPressable style={gcStyles.iconBtn} onPress={() => setMediaGalleryVisible(true)}>
+          <AppPressable accessibilityRole="button" accessibilityLabel="Фото и файлы" style={gcStyles.iconBtn} onPress={() => setMediaGalleryVisible(true)}>
             <Ionicons name="images-outline" size={22} color={colors.text} />
           </AppPressable>
           <AppPressable style={[gcStyles.iconBtn, { position: 'relative' }]} onPress={onOpenMembers}>
@@ -4138,34 +4144,38 @@ function GroupChatScreen({
               </View>
             </View>
             {canPin ? (
-              <AppPressable onPress={() => {
-                if (total > 1) { setGrpPinnedListVisible(true); return; }
-                requestAnimationFrame(() => { void (async () => {
-                  // Единственное закреплённое — обычное открепление с рассылкой.
-                  // Пустой currentPinId бывает только у групп с наследием, где
-                  // текст баннера лежал в groups без id: там чистим локально.
-                  if (currentPinId) {
-                    const res = await togglePinAndSync({ groupId: group.id, msgId: currentPinId, on: false, actorName: myDisplayName });
-                    if (!res.ok) { Alert.alert('AirChat', groupPinRefusalText(res.reason)); return; }
-                    announceCtl(res.sync);
-                    const left = res.entries;
-                    setGrpPinnedList(left);
-                    setPinnedMsgId(left[0]?.id ?? null);
-                    setPinnedMsgText(left[0]?.text ?? null);
-                    return;
-                  }
-                  // v4.32.758: не легло — баннер не стираем. Иначе в шапке
-                  // пусто, в kv список цел, и он «сам вернётся» при следующем
-                  // открытии группы.
-                  if (!(await clearPinned(group.id, pid))) {
-                    Alert.alert('AirChat', groupPinRefusalText('write_failed'));
-                    return;
-                  }
-                  setGrpPinnedList([]);
-                  setPinnedMsgId(null);
-                  setPinnedMsgText(null);
-                })(); });
-              }} style={{ padding: 4 }}>
+              <AppPressable
+                accessibilityRole="button"
+                // См. ту же кнопку в личном чате: значок один, действий два.
+                accessibilityLabel={total > 1 ? 'Все закреплённые' : 'Открепить'}
+                onPress={() => {
+                  if (total > 1) { setGrpPinnedListVisible(true); return; }
+                  requestAnimationFrame(() => { void (async () => {
+                    // Единственное закреплённое — обычное открепление с рассылкой.
+                    // Пустой currentPinId бывает только у групп с наследием, где
+                    // текст баннера лежал в groups без id: там чистим локально.
+                    if (currentPinId) {
+                      const res = await togglePinAndSync({ groupId: group.id, msgId: currentPinId, on: false, actorName: myDisplayName });
+                      if (!res.ok) { Alert.alert('AirChat', groupPinRefusalText(res.reason)); return; }
+                      announceCtl(res.sync);
+                      const left = res.entries;
+                      setGrpPinnedList(left);
+                      setPinnedMsgId(left[0]?.id ?? null);
+                      setPinnedMsgText(left[0]?.text ?? null);
+                      return;
+                    }
+                    // v4.32.758: не легло — баннер не стираем. Иначе в шапке
+                    // пусто, в kv список цел, и он «сам вернётся» при следующем
+                    // открытии группы.
+                    if (!(await clearPinned(group.id, pid))) {
+                      Alert.alert('AirChat', groupPinRefusalText('write_failed'));
+                      return;
+                    }
+                    setGrpPinnedList([]);
+                    setPinnedMsgId(null);
+                    setPinnedMsgText(null);
+                  })(); });
+                }} style={{ padding: 4 }}>
                 <Ionicons name={total > 1 ? 'list' : 'close'} size={14} color={colors.textMuted} />
               </AppPressable>
             ) : null}

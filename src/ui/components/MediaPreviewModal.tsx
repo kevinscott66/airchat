@@ -112,6 +112,9 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
             </Text>
             {viewOnceAvailable && onViewOnceChange ? (
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Показать один раз"
+                accessibilityState={{ selected: viewOnce }}
                 onPress={() => onViewOnceChange(!viewOnce)}
                 style={{
                   marginRight: 10,

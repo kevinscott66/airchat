@@ -790,15 +790,16 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         <View style={styles.headerRow}>
           <Text style={styles.title}>Контакты</Text>
           <View style={styles.headerActions}>
-            <AppPressable style={styles.iconBtn} onPress={refreshBtn.onPress} testID="contacts_refresh">
+            <AppPressable accessibilityRole="button" accessibilityLabel="Обновить список" style={styles.iconBtn} onPress={refreshBtn.onPress} testID="contacts_refresh">
               <Ionicons name="refresh" size={20} color={colors.text} />
             </AppPressable>
             {myDid ? (
-              <AppPressable style={styles.iconBtn} onPress={() => void shareMyId()} testID="contacts_share_my_id">
+              <AppPressable accessibilityRole="button" accessibilityLabel="Поделиться своим кодом" style={styles.iconBtn} onPress={() => void shareMyId()} testID="contacts_share_my_id">
                 <Ionicons name="share-outline" size={20} color={colors.text} />
               </AppPressable>
             ) : null}
             <AppPressable
+              accessibilityRole="button"
               style={styles.iconBtnPrimary}
               onPress={openAddModal}
               testID="contacts_add"

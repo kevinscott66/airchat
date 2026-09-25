@@ -99,7 +99,7 @@ function PinnedRowImpl({ pin, idx, onJumpTo, onUnpin, textColor, mutedColor, bor
           {unreadable ? UNREADABLE_MESSAGE_TEXT : pin.text}
         </Text>
       </View>
-      <AppPressable hitSlop={10} onPress={handleUnpin} style={styles.unpinBtn}>
+      <AppPressable accessibilityRole="button" accessibilityLabel="Открепить" hitSlop={10} onPress={handleUnpin} style={styles.unpinBtn}>
         <Ionicons name="close-circle-outline" size={20} color={mutedColor} />
       </AppPressable>
     </AppPressable>

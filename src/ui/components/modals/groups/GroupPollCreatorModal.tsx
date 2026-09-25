@@ -95,7 +95,7 @@ export function PollCreatorModal({
           {options.map((opt, i) => (
             <View key={i} style={pollStyles.optionRow}>
               {isQuiz ? (
-                <AppPressable onPress={() => setCorrectAnswer(i)} style={{ padding: 6 }}>
+                <AppPressable accessibilityRole="button" accessibilityLabel="Правильный ответ" accessibilityState={{ selected: correctAnswer === i }} onPress={() => setCorrectAnswer(i)} style={{ padding: 6 }}>
                   <Ionicons name={correctAnswer === i ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={correctAnswer === i ? colors.success : colors.textMuted} />
                 </AppPressable>
               ) : null}

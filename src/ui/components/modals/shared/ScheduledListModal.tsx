@@ -140,7 +140,7 @@ function ScheduledRowImpl({ item, onDelete, textColor, mutedColor, borderColor, 
           {dayMonthShortTime(item.sendAt)}
         </Text>
       </View>
-      <AppPressable style={styles.delBtn} onPress={handlePress}>
+      <AppPressable accessibilityRole="button" accessibilityLabel="Удалить отложенное" style={styles.delBtn} onPress={handlePress}>
         <Ionicons name="trash-outline" size={20} color={dangerColor} />
       </AppPressable>
     </View>

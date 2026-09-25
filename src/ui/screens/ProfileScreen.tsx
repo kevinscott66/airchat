@@ -532,6 +532,7 @@ function ProfileScreenImpl({
 
         <View style={styles.avatarSection}>
           <AppPressable
+            accessibilityRole="button"
             style={styles.avatarCircle}
             onPress={pickAvatarBtn.onPress}
             testID="avatar_picker"

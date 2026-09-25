@@ -324,6 +324,8 @@ function StoryViewer({
           <View style={sv.headerActions}>
             {isOwn ? (
               <AppPressable
+                accessibilityRole="button"
+                accessibilityLabel="Действия со сторис"
                 hitSlop={16}
                 onPress={() => {
                   Alert.alert('Сторис', undefined, [
@@ -449,7 +451,7 @@ function StoryViewer({
               onSubmitEditing={sendReply}
             />
             {replyText.trim() ? (
-              <AppPressable onPress={sendReply} style={{ marginLeft: 8, padding: 8 }}>
+              <AppPressable accessibilityRole="button" accessibilityLabel="Отправить ответ" onPress={sendReply} style={{ marginLeft: 8, padding: 8 }}>
                 {/* Значок лежит на затемнённой полосе поверх фото — тёмная палитра. */}
                 <Ionicons name="send" size={22} color={darkColors.accent} />
               </AppPressable>

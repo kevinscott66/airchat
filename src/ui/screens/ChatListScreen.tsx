@@ -1233,6 +1233,8 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   multiline
                 />
                 <AppPressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Отправить рассылку"
                   style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: broadcastFill, alignItems: 'center', justifyContent: 'center' }}
                   disabled={!broadcastMsg.trim() || broadcastSelected.size === 0 || broadcastSending}
                   onPress={() => {
@@ -1336,6 +1338,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             </AppPressable>
             {!showArchived && conversations.some((c) => c.unreadCount > 0) ? (
               <AppPressable
+                accessibilityRole="button"
                 style={s.headerBtn}
                 onPress={() => {
                   const pid = activeProfileId();
@@ -1383,6 +1386,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             ) : null}
             {!showArchived ? (
               <AppPressable
+                accessibilityRole="button"
                 style={s.headerBtn}
                 onPress={() => setAddContactVisible(true)}
                 onLongPress={() => { setBroadcastSelected(new Set()); setBroadcastMsg(''); setBroadcastVisible(true); }}
