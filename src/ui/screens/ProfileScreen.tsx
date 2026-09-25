@@ -49,6 +49,7 @@ import { broadcastMyProfile, markProfileChanged } from '../../core/social/profil
 import { VerifiedMark } from '../components/VerifiedMark';
 import { GlassSurface } from '../components/GlassSurface';
 import { ProfileEditModal } from '../components/modals/profile/ProfileEditModal';
+import { profileCompletionPct } from '../components/modals/profile/ownProfileEditModel';
 import { ProfilePostsModal } from '../components/modals/profile/ProfilePostsModal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { SafeScreen } from '../components/SafeScreen';
@@ -207,19 +208,34 @@ function ProfileScreenImpl({
 
   const shortDid = shortIdentity(did);
 
-  /** 0-100 profile completion score */
-  const completionPct = useMemo(() => {
-    const fields = [
-      !!displayName.trim(),
-      !!bio.trim(),
-      !!avatarUri,
-      !!handle.trim(),
-      !!customStatus.trim(),
-      !!pronouns.trim(),
-      !!(website || twitterHandle || githubHandle),
-    ];
-    return Math.round((fields.filter(Boolean).length / fields.length) * 100);
-  }, [displayName, bio, avatarUri, handle, customStatus, pronouns, website, twitterHandle, githubHandle]);
+  /**
+   * Заполненность профиля, 0–100 (v4.32.921).
+   *
+   * Здесь стоял второй счёт теми же семью полями, набранный отдельно от того,
+   * что живёт в ownProfileEditModel и показывается в самом редакторе. Два
+   * счёта одного и того же успели разойтись: ссылки экран проверял без
+   * `trim`, поэтому поле из одних пробелов он считал заполненным, а редактор
+   * — нет. Полоса на экране обещала на седьмую часть больше, чем показывал
+   * редактор, в который по этой полосе и идут дозаполнять.
+   *
+   * Осталась одна разница, и она не про счёт: имя экран берёт с запасным
+   * вариантом из profileManager, а редактор — только из getOwnDisplayName.
+   * Это вопрос о том, какое имя считать именем профиля, и решать его надо
+   * там, где имя сохраняется, а не в счётчике процентов.
+   */
+  const completionPct = useMemo(
+    () =>
+      profileCompletionPct({
+        name: displayName,
+        bio,
+        avatar: !!avatarUri,
+        handle,
+        status: customStatus,
+        pronouns,
+        links: `${website}${twitterHandle}${githubHandle}`,
+      }),
+    [displayName, bio, avatarUri, handle, customStatus, pronouns, website, twitterHandle, githubHandle]
+  );
 
   const accountAgeLabel = useMemo(() => {
     if (!accountCreatedAt) return null;
