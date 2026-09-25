@@ -265,7 +265,7 @@ export function GroupSharedMediaModal({
                   <Ionicons name="document-outline" size={20} color={docTint.ink} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1}>{doc.name}</Text>
+                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1} ellipsizeMode="middle">{doc.name}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 12 }}>{doc.size} · {numericDate(doc.createdAt)}</Text>
                 </View>
               </View>

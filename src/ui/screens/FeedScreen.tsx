@@ -695,7 +695,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
             >
               <Ionicons name="document-outline" size={22} color={colors.accent} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text numberOfLines={1} style={{ fontSize: 14, color: colors.text, fontWeight: '500' }}>
+                <Text numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 14, color: colors.text, fontWeight: '500' }}>
                   {doc.name}
                 </Text>
                 <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>
@@ -3862,7 +3862,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         >
                           <Ionicons name="document-outline" size={22} color={colors.accent} />
                           <View style={{ flex: 1, minWidth: 0 }}>
-                            <Text numberOfLines={1} style={{ fontSize: 14, color: colors.text, fontWeight: '500' }}>
+                            <Text numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 14, color: colors.text, fontWeight: '500' }}>
                               {doc.name}
                             </Text>
                             {formatByteSize(doc.size) ? (

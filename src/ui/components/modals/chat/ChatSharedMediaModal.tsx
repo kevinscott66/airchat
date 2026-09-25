@@ -369,7 +369,7 @@ export function SharedMediaPane({
                 <Ionicons name={icon} size={20} color={docTint.ink} />
               </View>
               <View style={paneStyles.rowBody}>
-                <Text style={[paneStyles.rowName, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
+                <Text style={[paneStyles.rowName, { color: colors.text }]} numberOfLines={1} ellipsizeMode="middle">{doc.name}</Text>
                 <Text style={[paneStyles.rowSub, { color: colors.textMuted }]}>{doc.size} · {numericDate(doc.createdAt)}</Text>
               </View>
             </View>

@@ -149,7 +149,7 @@ export function DocBubble({
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingBottom: 8, gap: 6 }}>
           <Ionicons name="videocam-outline" size={14} color={mutedColor} />
-          <Text style={{ color: textColor, fontSize: 12, flex: 1 }} numberOfLines={1}>{meta.name}</Text>
+          <Text style={{ color: textColor, fontSize: 12, flex: 1 }} numberOfLines={1} ellipsizeMode="middle">{meta.name}</Text>
           <Text style={{ color: mutedColor, fontSize: font.xs }}>{sizeStr}</Text>
         </View>
       </AppPressable>
