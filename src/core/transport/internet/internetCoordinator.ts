@@ -8,7 +8,6 @@ import { loadConfig } from '../../config';
 import { publicKeyToDidKey } from '../../identity/did';
 import { log } from '../../logger';
 import { getMessagingService } from '../../social/messaging';
-import { getGroupMessagingService } from '../../social/groupMessaging';
 import { isFeedFrame } from '../../social/feedTransport';
 import { receiveFeedEnvelope } from '../../social/feedService';
 import type { EnvelopeIntake } from '../envelopeIntake';
@@ -30,19 +29,6 @@ let started = false;
  * десяти секунд принятого пришлось бы разбирать заново при следующем запуске.
  */
 let pendingWatermark: { myDid: string; atMs: number } | null = null;
-
-/**
- * Определяет тип envelope по первым байтам JSON (копия из lanCoordinator; держим
- * локально, чтобы не создавать циклическую зависимость LAN ↔ internet).
- */
-function isGroupEnvelope(payload: Uint8Array): boolean {
-  try {
-    const preview = new TextDecoder().decode(payload.slice(0, 200));
-    return /"type"\s*:\s*"group/.test(preview);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Запуск InternetTransport (WebSocket sub + HTTP pub через ntfy.sh или
@@ -187,11 +173,13 @@ export async function startInternetTransportIfEnabled(
         try {
           if (isFeedFrame(payload)) {
             intake = await receiveFeedEnvelope(payload, senderDid);
-          } else if (isGroupEnvelope(payload)) {
-            // Службы может не быть вовсе — до её появления кадр не разобран.
-            intake =
-              (await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid)) ??
-              'deferred';
+            // v4.32.922: ветки «групповой конверт» здесь больше нет — она была
+            // копией такой же ветки в `lanCoordinator`, и убраны обе. Кадр
+            // уходил в разбор группы мимо расшифровки, а отправителем считался
+            // DID из незаверенного заголовка, так что в группу писал кто
+            // угодно. Своих кадров ветка не ловила никогда: и сообщение
+            // группы, и управляющий конверт идут внутри зашифрованного DM, а
+            // поля `type`, на которое она смотрела, нет ни в одном из них.
           } else {
             intake =
               (await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)) ??

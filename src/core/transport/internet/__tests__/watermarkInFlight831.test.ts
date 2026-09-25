@@ -62,7 +62,6 @@ jest.mock('../../../logger', () => ({
 
 jest.mock('../../../social/feedTransport', () => ({ isFeedFrame: () => false }));
 jest.mock('../../../social/feedService', () => ({ receiveFeedEnvelope: jest.fn() }));
-jest.mock('../../../social/groupMessaging', () => ({ getGroupMessagingService: () => null }));
 
 /**
  * Разбор, который не заканчивается сам.

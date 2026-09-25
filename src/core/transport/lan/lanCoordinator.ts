@@ -4,7 +4,6 @@ import { loadConfig } from '../../config';
 import { publicKeyToDidKey } from '../../identity/did';
 import { log } from '../../logger';
 import { getMessagingService } from '../../social/messaging';
-import { getGroupMessagingService } from '../../social/groupMessaging';
 import { isFeedFrame } from '../../social/feedTransport';
 import { receiveFeedEnvelope, flushFeedQueueForPeer } from '../../social/feedService';
 import { runSyncIfOnline } from '../../storage/sync';
@@ -12,20 +11,6 @@ import { getLanTransportSingleton } from './lanTransport';
 import { isLanBlobFrame, receiveLanBlobFrame } from './lanBlob';
 
 let started = false;
-
-/**
- * Определяет тип envelope по первым байтам JSON (без полного парсинга).
- * Групповые envelope имеют поле "type" со значением "group*".
- */
-function isGroupEnvelope(payload: Uint8Array): boolean {
-  try {
-    // Быстрая проверка: ищем "type":"group в первых 200 байт
-    const preview = new TextDecoder().decode(payload.slice(0, 200));
-    return /"type"\s*:\s*"group/.test(preview);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Разбор кадра из локальной сети под ловушкой (v4.32.780).
@@ -90,10 +75,23 @@ export async function startLanTransportIfEnabled(pair: KeyPairBytes, cfg?: AppCo
         intakeLanFrame('blob', senderDid, () => receiveLanBlobFrame(payload));
       } else if (isFeedFrame(payload)) {
         intakeLanFrame('feed', senderDid, () => receiveFeedEnvelope(payload, senderDid));
-      } else if (isGroupEnvelope(payload)) {
-        intakeLanFrame('group', senderDid, () =>
-          getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid)
-        );
+        // v4.32.922: отдельной ветки «групповой конверт» здесь больше нет, и
+        // это правка безопасности, а не уборка. Она уводила кадр в
+        // `receiveGroupEnvelope` мимо единственной проверки, какая на этом
+        // входе вообще есть, — расшифровки общим ключом внутри
+        // `receiveDirectLanEnvelope`. Отправителем считался DID из заголовка
+        // кадра, который никто не подписывает, а `handleIncomingGroupEnvelope`
+        // сверял его с полем `senderPubB64` из того же кадра, то есть
+        // заявленное с заявленным. Любой, кто дотянулся до порта в этой же
+        // сети, писал в группу от имени любого её участника.
+        //
+        // Своих кадров эта ветка не ловила никогда. И сообщение группы
+        // ('\x02grp:'), и управляющий конверт ('\x0egctl:') уходят через
+        // `svc.sendMessage`, то есть внутри зашифрованного DM, и приходят в
+        // `messaging.ts` уже после расшифровки. Поля `type`, на которое ветка
+        // смотрела, нет ни в одном из них — ни во внешнем конверте провода.
+        // Поэтому удалять нечего отключать: сырой групповой кадр разбирается
+        // ниже наравне с прочими и отсеивается расшифровкой, раз подделан.
       } else {
         intakeLanFrame('direct', senderDid, () =>
           getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)

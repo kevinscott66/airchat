@@ -16,17 +16,19 @@
  * Теперь каждый разбор идёт через `intakeLanFrame`: потеря остаётся потерей, но
  * она названа. Ловушка берёт работу замыканием, так что ловит и брошенное
  * синхронно — до первого `await` внутри разбора.
+ *
+ * v4.32.922: разборов стало три, а не четыре — ветку «групповой конверт»
+ * убрали как дыру (кадр шёл в разбор группы мимо расшифровки). Проверки,
+ * стоявшие на ней, переставлены на прямой конверт: ловушка у всех одна.
  */
-/** Что бросает разбор группового конверта (null — не бросает). */
-let mockGroupThrow: Error | null = null;
 /** Что бросает разбор прямого конверта. */
 let mockDirectThrow: Error | null = null;
 /** Что бросает разбор куска блоба. */
 let mockBlobThrow: Error | null = null;
 /** Что бросает разбор конверта ленты. */
 let mockFeedThrow: Error | null = null;
-/** Бросает ли сама выдача службы группы — то есть синхронно, до обещания. */
-let mockGroupSvcThrow: Error | null = null;
+/** Бросает ли сама выдача службы переписки — то есть синхронно, до обещания. */
+let mockSvcThrow: Error | null = null;
 /** Пойманный координатором обработчик кадра. */
 let mockOnFrame: ((senderDid: string, payload: Uint8Array) => void) | null = null;
 
@@ -57,25 +59,16 @@ jest.mock('../../../social/feedService', () => ({
   flushFeedQueueForPeer: async () => {},
 }));
 
-jest.mock('../../../social/groupMessaging', () => ({
-  getGroupMessagingService: () => {
-    if (mockGroupSvcThrow) throw mockGroupSvcThrow;
+jest.mock('../../../social/messaging', () => ({
+  getMessagingService: () => {
+    if (mockSvcThrow) throw mockSvcThrow;
     return {
-      receiveGroupEnvelope: async () => {
-        if (mockGroupThrow) throw mockGroupThrow;
+      receiveDirectLanEnvelope: async () => {
+        if (mockDirectThrow) throw mockDirectThrow;
         return 'consumed';
       },
     };
   },
-}));
-
-jest.mock('../../../social/messaging', () => ({
-  getMessagingService: () => ({
-    receiveDirectLanEnvelope: async () => {
-      if (mockDirectThrow) throw mockDirectThrow;
-      return 'consumed';
-    },
-  }),
 }));
 
 jest.mock('../../../storage/sync', () => ({ runSyncIfOnline: async () => {} }));
@@ -103,9 +96,7 @@ const PAIR = {
 
 const SENDER = 'did:key:zPeerAbcdefghijklmnop';
 
-/** Кадр группового конверта: regex координатора ищет `"type":"group`. */
-const GROUP = new TextEncoder().encode('{"type":"groupMsg","groupId":"g"}');
-/** Кадр прямого конверта: ни блоб, ни лента, ни группа. */
+/** Кадр прямого конверта: ни блоб, ни лента. */
 const DIRECT = new TextEncoder().encode('{"type":"dm"}');
 /** Кусок блоба: первый байт 0xB1. */
 const BLOB = new Uint8Array([0xb1, 1, 2, 3]);
@@ -141,11 +132,10 @@ const codeOnly = (src: string) =>
 const LAN = codeOnly(readFileSync(join(__dirname, '..', 'lanCoordinator.ts'), 'utf8'));
 
 beforeEach(() => {
-  mockGroupThrow = null;
   mockDirectThrow = null;
   mockBlobThrow = null;
   mockFeedThrow = null;
-  mockGroupSvcThrow = null;
+  mockSvcThrow = null;
   jest.clearAllMocks();
 });
 
@@ -154,18 +144,7 @@ afterEach(() => {
 });
 
 describe('отказ разбора кадра попадает в журнал, а не в пустоту', () => {
-  it('групповой конверт: причина названа вместе с видом кадра', async () => {
-    mockGroupThrow = new Error('database is locked');
-    const onFrame = await frameHandler();
-
-    onFrame(SENDER, GROUP);
-    await settle();
-
-    expect(failures()).toHaveLength(1);
-    expect(failures()[0][1]).toMatchObject({ kind: 'group', err: 'database is locked' });
-  });
-
-  it('прямой конверт разбирается под той же ловушкой', async () => {
+  it('прямой конверт: причина названа вместе с видом кадра', async () => {
     mockDirectThrow = new Error('contacts unreadable');
     const onFrame = await frameHandler();
 
@@ -199,10 +178,10 @@ describe('отказ разбора кадра попадает в журнал,
   });
 
   it('отправитель назван обрезанным, целиком ключ в журнал не уходит', async () => {
-    mockGroupThrow = new Error('database is locked');
+    mockDirectThrow = new Error('contacts unreadable');
     const onFrame = await frameHandler();
 
-    onFrame(SENDER, GROUP);
+    onFrame(SENDER, DIRECT);
     await settle();
 
     expect(failures()[0][1].from).toBe(SENDER.slice(0, 24));
@@ -210,24 +189,24 @@ describe('отказ разбора кадра попадает в журнал,
   });
 
   it('брошенное синхронно — до первого ожидания — ловится той же ловушкой', async () => {
-    mockGroupSvcThrow = new Error('service not ready');
+    mockSvcThrow = new Error('service not ready');
     const onFrame = await frameHandler();
 
-    expect(() => onFrame(SENDER, GROUP)).not.toThrow();
+    expect(() => onFrame(SENDER, DIRECT)).not.toThrow();
     await settle();
 
     expect(failures()).toHaveLength(1);
-    expect(failures()[0][1]).toMatchObject({ kind: 'group', err: 'service not ready' });
+    expect(failures()[0][1]).toMatchObject({ kind: 'direct', err: 'service not ready' });
   });
 
   it('отказ одного кадра не мешает разобрать следующий', async () => {
-    mockGroupThrow = new Error('database is locked');
+    mockDirectThrow = new Error('database is locked');
     const onFrame = await frameHandler();
 
-    onFrame(SENDER, GROUP);
+    onFrame(SENDER, DIRECT);
     await settle();
-    mockGroupThrow = null;
-    onFrame(SENDER, GROUP);
+    mockDirectThrow = null;
+    onFrame(SENDER, DIRECT);
     await settle();
 
     expect(failures()).toHaveLength(1);
@@ -235,19 +214,19 @@ describe('отказ разбора кадра попадает в журнал,
 });
 
 describe('ПРОВЕРКА НЕ ПУСТАЯ: удачный разбор в журнале не шумит', () => {
-  it('разобранный групповой конверт записи об отказе не оставляет', async () => {
+  it('разобранный прямой конверт записи об отказе не оставляет', async () => {
     const onFrame = await frameHandler();
 
-    onFrame(SENDER, GROUP);
+    onFrame(SENDER, DIRECT);
     await settle();
 
     expect(failures()).toEqual([]);
   });
 
-  it('разобранный прямой конверт тоже', async () => {
+  it('разобранный кусок блоба тоже', async () => {
     const onFrame = await frameHandler();
 
-    onFrame(SENDER, DIRECT);
+    onFrame(SENDER, BLOB);
     await settle();
 
     expect(failures()).toEqual([]);
@@ -260,7 +239,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(at).toBeGreaterThan(0);
     const block = LAN.slice(at, LAN.indexOf('onPeerDiscovered:', at));
     expect(block).not.toContain('void ');
-    expect(block.match(/intakeLanFrame\(/g)).toHaveLength(4);
+    expect(block.match(/intakeLanFrame\(/g)).toHaveLength(3);
   });
 
   it('ловушка берёт работу замыканием, а не готовым обещанием', () => {

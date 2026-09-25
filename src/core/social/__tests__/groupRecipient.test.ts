@@ -112,15 +112,6 @@ describe('groupMessaging — приёмники больше не спрашив
     expect(GM).not.toContain('readReceiptsAllowed()');
     expect(GM).toContain('readReceiptsAllowedFor((await svc.groupRecipient()).pid)');
   });
-
-  it('прямой транспорт без службы переписки не угадывает профиль, а роняет конверт', () => {
-    const lan = GM.slice(GM.indexOf('receiveGroupEnvelope: async'));
-    expect(lan).toContain('group_envelope_no_service_drop');
-    expect(lan.indexOf('group_envelope_no_service_drop')).toBeLessThan(
-      lan.indexOf('await handleIncomingGroupEnvelope(')
-    );
-    expect(lan).toContain('await svc.groupRecipient()');
-  });
 });
 
 describe('messaging — получателя строит тот, кто его знает', () => {

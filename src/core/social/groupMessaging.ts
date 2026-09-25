@@ -2542,54 +2542,18 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   return 'consumed';
 }
 
-// ── GroupMessagingService singleton ──────────────────────────────────────────
-
-/**
- * v4.32.234: сервис ужат до единственного метода, который кто-то вызывает.
- * sendGroupMessage / editGroupMessage / deleteGroupMessage / sendReadReceipt
- * не звал никто (весь UI работает через fanoutGroupMessage и fanoutGroupControl
- * напрямую), но именно в sendGroupMessage жила «проверка прав на отправку» —
- * и создавала полную иллюзию, что режимы группы кем-то форсируются. Проверка
- * переехала в fanoutGroupMessage, мёртвые методы удалены.
- */
-export type GroupMessagingService = {
-  /** Отвечает, разобран ли конверт: по нему двигается отметка на relay. */
-  receiveGroupEnvelope: (payload: Uint8Array, senderDid: string) => Promise<EnvelopeIntake>;
-};
-
-let _groupSvc: GroupMessagingService | null = null;
-
-export function getGroupMessagingService(): GroupMessagingService {
-  if (!_groupSvc) {
-    _groupSvc = {
-      receiveGroupEnvelope: async (payload, senderDid) => {
-        const text = new TextDecoder().decode(payload);
-        // v4.32.188 (Round-18 #2): LAN/Internet direct transports pass the
-        // DID (did:key:z...) as sender, but handleIncomingGroupEnvelope's
-        // anti-spoof check compares against `env.senderPubB64` which is
-        // raw base64(pubkey). Convert here so the spoof check actually
-        // runs — otherwise every LAN/Internet group envelope was dropped.
-        let senderPubB64 = senderDid;
-        try {
-          const { parseDidKey } = await import('../identity/did');
-          const pub = parseDidKey(senderDid);
-          if (pub) senderPubB64 = Buffer.from(pub).toString('base64');
-        } catch { /* fall through — handleIncomingGroupEnvelope will reject on mismatch */ }
-        // v4.32.465: чей это конверт, знает только служба переписки — у неё
-        // пара ключей, которой он расшифрован. Без неё писать некуда: раньше
-        // здесь молча брался активный профиль, и сообщение группы «Личного»
-        // ложилось (или терялось) в «Рабочем».
-        const svc = getMessagingService();
-        if (!svc) {
-          // v4.32.730: служба поднимается на старте, и на холодном запуске
-          // накопленное с relay успевает прийти раньше неё. Это «ещё не», а не
-          // «мусор»: конверт надо перезапросить.
-          log.warn('group_envelope_no_service_drop', { from: senderPubB64.slice(0, 12) });
-          return 'deferred';
-        }
-        return await handleIncomingGroupEnvelope(text, await svc.groupRecipient(), senderPubB64);
-      },
-    };
-  }
-  return _groupSvc;
-}
+// ── Приём группового конверта: только через расшифрованный DM ────────────────
+//
+// v4.32.922: здесь жил `getGroupMessagingService()` с единственным методом
+// `receiveGroupEnvelope`, и звали его два координатора транспорта — по кадру,
+// пришедшему из сети как есть. Отправителем в нём считался DID из заголовка
+// кадра, который никто не подписывает, а дальше `handleIncomingGroupEnvelope`
+// сверял этот DID с полем `senderPubB64` внутри того же кадра: заявленное с
+// заявленным. Расшифровки на этом пути не было вовсе, так что подделать
+// сообщение от любого участника группы мог всякий, кто дотянулся до порта.
+//
+// Штатной отправки этим путём не было никогда: и сообщение группы, и
+// управляющий конверт уходят через `svc.sendMessage`, то есть внутри
+// зашифрованного DM, и приходят в `messaging.ts` уже после расшифровки — там и
+// вызывается `handleIncomingGroupEnvelope`. Это теперь единственный вход, и
+// службы-обёртки вокруг него больше нет, чтобы её не подключили обратно.

@@ -87,13 +87,12 @@ describe('отметка двигается только по разобранн
     expect(src.indexOf('markDone(frameAtMs);', consumedAt)).toBeGreaterThan(consumedAt);
   });
 
-  it('все три ветки приёма дожидаются разбора и читают его исход', () => {
+  it('обе ветки приёма дожидаются разбора и читают его исход', () => {
     // v4.32.730: приёмник отвечает словом, а не молчанием. Присваивание в
     // `intake` — и есть то, что раньше выбрасывалось.
+    // v4.32.922: веток стало две — третья, «групповой конверт», уводила кадр
+    // в разбор группы мимо расшифровки, и её больше нет.
     expect(src).toContain('intake = await receiveFeedEnvelope(payload, senderDid);');
-    expect(src).toContain(
-      'await getGroupMessagingService()?.receiveGroupEnvelope(payload, senderDid)) ??',
-    );
     expect(src).toContain(
       'await getMessagingService()?.receiveDirectLanEnvelope(payload, senderDid)) ??',
     );
@@ -103,7 +102,7 @@ describe('отметка двигается только по разобранн
     // Холодный старт: накопленное приходит раньше, чем поднялась переписка.
     // `?? 'deferred'` — единственное, что отличает «некому разбирать» от
     // «разобрано». Без него кадр терялся навсегда.
-    expect(src.match(/\?\?\n?\s*'deferred';/g) ?? []).toHaveLength(2);
+    expect(src.match(/\?\?\n?\s*'deferred';/g) ?? []).toHaveLength(1);
   });
 
   it('упавший кадр держит отметку, но не навсегда', () => {

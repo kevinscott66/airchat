@@ -53,29 +53,22 @@ jest.mock('../../../logger', () => ({
   log: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-/** Кадр — личный конверт: ни feed-magic, ни «type»:«group». */
+/** Кадр — личный конверт: feed-magic в нём нет. */
 jest.mock('../../../social/feedTransport', () => ({ isFeedFrame: () => false }));
 jest.mock('../../../social/feedService', () => ({ receiveFeedEnvelope: jest.fn() }));
 
 /** Чем ответит приёмник на следующий кадр. Это и есть предмет проверки. */
 let mockDmIntake: EnvelopeIntake = 'consumed';
 let mockDmService = true;
-let mockGroupService = true;
 
 jest.mock('../../../social/messaging', () => ({
   getMessagingService: () =>
     mockDmService ? { receiveDirectLanEnvelope: async () => mockDmIntake } : null,
 }));
-jest.mock('../../../social/groupMessaging', () => ({
-  getGroupMessagingService: () =>
-    mockGroupService ? { receiveGroupEnvelope: async () => mockDmIntake } : null,
-}));
-
 import { startInternetTransportIfEnabled, stopInternetTransportStack } from '../internetCoordinator';
 
 const PAIR = { publicKey: new Uint8Array(32), secretKey: new Uint8Array(64) };
 const DM = new TextEncoder().encode('{"type":"dm"}');
-const GROUP = new TextEncoder().encode('{"type":"group_msg"}');
 
 /** Ранний и поздний кадры одной пачки накопленного. */
 const EARLY = 1_700_000_000_000;
@@ -108,7 +101,6 @@ beforeEach(async () => {
   saved.mockClear();
   mockDmIntake = 'consumed';
   mockDmService = true;
-  mockGroupService = true;
   await startInternetTransportIfEnabled(PAIR);
 });
 
@@ -134,9 +126,11 @@ describe('отметка идёт только по разобранному', (
     expect(watermark()).toBeNull();
   });
 
-  it('группового приёмника ещё нет — то же самое', async () => {
-    mockGroupService = false;
-    await frame(EARLY, GROUP);
+  it('кадр, назвавшийся групповым, идёт тем же путём и той же проверкой', async () => {
+    // v4.32.922: отдельной ветки для «type»:«group» больше нет — такой кадр
+    // разбирается как личный, то есть с расшифровкой. Службы нет — отложен.
+    mockDmService = false;
+    await frame(EARLY, new TextEncoder().encode('{"type":"group_msg"}'));
     expect(watermark()).toBeNull();
   });
 });
