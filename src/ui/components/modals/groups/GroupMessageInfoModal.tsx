@@ -9,6 +9,7 @@ import { isVoiceMessage } from '../../../../core/social/voiceEnvelope';
 import { isDocMessage } from '../../../../core/social/docEnvelope';
 import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
+import { ruPlural } from '../../../utils/plural';
 import { UNREADABLE_VIEWERS_TEXT } from '../../../../core/storage/unreadableText';
 
 export function GrpMessageInfoModal({
@@ -74,13 +75,19 @@ export function GrpMessageInfoModal({
 
           {charCount !== null && wordCount !== null ? (
             <View style={{ flexDirection: 'row', gap: 20, marginTop: 4, marginBottom: 12 }}>
+              {/* v4.32.909: то же самое, что в личной переписке, — окно у них
+                  общее по смыслу и различалось только числами. */}
               <View style={{ alignItems: 'center' }}>
                 <Text style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>{charCount}</Text>
-                <Text style={{ fontSize: font.xs, color: colors.textMuted }}>символов</Text>
+                <Text style={{ fontSize: font.xs, color: colors.textMuted }}>
+                  {ruPlural(charCount, ['символ', 'символа', 'символов'])}
+                </Text>
               </View>
               <View style={{ alignItems: 'center' }}>
                 <Text style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>{wordCount}</Text>
-                <Text style={{ fontSize: font.xs, color: colors.textMuted }}>слов</Text>
+                <Text style={{ fontSize: font.xs, color: colors.textMuted }}>
+                  {ruPlural(wordCount, ['слово', 'слова', 'слов'])}
+                </Text>
               </View>
             </View>
           ) : null}

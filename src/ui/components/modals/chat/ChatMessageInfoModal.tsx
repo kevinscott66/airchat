@@ -7,6 +7,7 @@ import { useTheme } from '../../../ThemeContext';
 import type { ChatMessageRow, MessageRoute } from '../../../../core/storage/local';
 import { font, primaryInk, radius, scrim } from '../../../theme';
 import { dayMonthShortTimeSec } from '../../../../core/time/ruDateTime';
+import { ruPlural } from '../../../utils/plural';
 
 /**
  * Как назвать маршрут человеку (v4.32.563).
@@ -129,13 +130,20 @@ export function MessageInfoModal({
             const chars = t.length;
             return (
               <View style={{ flexDirection: 'row', gap: 16, marginTop: 8, marginBottom: 4 }}>
+                {/* v4.32.909: число и слово под ним стоят столбиком и читаются
+                    одной строкой — «1 символов», «2 слов». Формы в доме уже
+                    есть (ruPlural, v4.32.421), и соседние счётчики их зовут. */}
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{chars}</Text>
-                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>символов</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>
+                    {ruPlural(chars, ['символ', 'символа', 'символов'])}
+                  </Text>
                 </View>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{words}</Text>
-                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>слов</Text>
+                  <Text style={{ fontSize: font.xs, color: colors.textMuted }}>
+                    {ruPlural(words, ['слово', 'слова', 'слов'])}
+                  </Text>
                 </View>
               </View>
             );
