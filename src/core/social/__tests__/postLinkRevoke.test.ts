@@ -28,11 +28,22 @@ jest.mock('../../storage/feedStorage', () => ({
 }));
 
 const mockKv = new Map<string, string>();
+/**
+ * v4.32.895: отдельный выключатель на запись ОТМЕТКИ «опубликовано по ссылке».
+ * Именно на неё, а не на базу целиком: очередь повторов удаления пишется тем
+ * же `kvSetChecked`, и общий отказ не дал бы отличить «отметка не легла» от
+ * «ничего вообще не пишется».
+ */
+const mockKvWrites = { markOk: true };
 jest.mock('../../storage/local', () => ({
   kvGet: jest.fn(async (k: string) => mockKv.get(k) ?? null),
   kvTryGet: jest.fn(async (k: string) => ({ value: mockKv.get(k) ?? null })),
   kvSet: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
-  kvSetChecked: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    if (!mockKvWrites.markOk && k.includes('feed_link_published:')) return false;
+    mockKv.set(k, v);
+    return true;
+  }),
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
@@ -85,6 +96,7 @@ beforeEach(() => {
   mockServer.copies.clear();
   mockServer.putWorks = true;
   mockServer.deleteWorks = true;
+  mockKvWrites.markOk = true;
   mockDeleteTypes.length = 0;
   mockPosts.set('p1', { id: 'p1', authorDid: myDid, text: 'запись', timestamp: 1000 });
 });
@@ -99,6 +111,36 @@ describe('отметка «опубликовано по ссылке»', () => 
     mockServer.putWorks = false;
     expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
     expect((await listLinkPublishedPostIds()).size).toBe(0);
+  });
+
+  /**
+   * v4.32.895. Отметка — единственный след публикации, переживающий
+   * перезапуск: «Отозвать ссылку» строится из `listLinkPublishedPostIds`.
+   * Копия без отметки открыта всем, у кого есть ссылка, и убрать её изнутри
+   * приложения нечем.
+   */
+  it('отметка не легла — копия снимается, а не остаётся открытой навсегда', async () => {
+    mockKvWrites.markOk = false;
+    expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
+    expect(mockServer.copies.has('p1')).toBe(false);
+    expect(mockDeleteTypes).toEqual(['feed_delete']);
+    expect((await listLinkPublishedPostIds()).size).toBe(0);
+  });
+
+  it('отметка не легла и снять не вышло — отзыв ушёл в очередь повторов', async () => {
+    mockKvWrites.markOk = false;
+    mockServer.deleteWorks = false;
+    expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
+    const queued = JSON.parse(mockKv.get('feed_link_delete_outbox_v1') ?? '[]') as { postId: string }[];
+    expect(queued.map((it) => it.postId)).toEqual(['p1']);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: с рабочей записью отметки всё идёт как прежде', async () => {
+    expect(await publishPostLinkCopy(pair, 'p1')).toBe(true);
+    expect(mockServer.copies.has('p1')).toBe(true);
+    // Копию никто не снимал — ни запроса к серверу, ни записи в очередь.
+    expect(mockDeleteTypes).toEqual([]);
+    expect(mockKv.has('feed_link_delete_outbox_v1')).toBe(false);
   });
 
   it('копия, выложенная старой версией, находится при правке и получает отметку', async () => {

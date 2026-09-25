@@ -2605,6 +2605,9 @@ async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<b
  * Молча ничего не делает, если облако не настроено или публикация чужая:
  * ссылка в этом случае остаётся такой же, какой была до v4.32.612, —
  * работающей внутри устройства.
+ *
+ * `true` — копия на сервере И устройство о ней помнит, то есть ссылку есть чем
+ * отозвать. Одно без другого успехом не считается.
  */
 export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
   if (!publicPostStoreAvailable()) return false;
@@ -2615,8 +2618,28 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
     // Пока копия шла на сервер, публикацию могли удалить — тогда она не «выложена».
     if (ok && await dropCopyIfPostGone(pair, postId)) return false;
     // AC-04: отметка «опубликовано по ссылке» — только после ответа сервера.
-    // Не легла — публикация от этого не отменяется, об этом говорит журнал.
-    if (ok) await setLinkPublished(postId, true);
+    //
+    // v4.32.895: ответ этой записи выбрасывался, а рядом стояло «публикация
+    // от этого не отменяется». Отменяется, и по существу. Отметка —
+    // единственное, по чему устройство после перезапуска узнаёт, что копия
+    // лежит на сервере: «Отозвать ссылку» показывается ровно по ней (список
+    // строит `listLinkPublishedPostIds`). Не легла — открытая всем копия
+    // остаётся на сервере, а убрать её в приложении нечем: пункта меню не
+    // будет ни у этой записи, ни где-либо ещё. До перезапуска отзыв ещё
+    // возможен (набор держится и в памяти экрана), дальше — нет.
+    //
+    // Поэтому копия снимается сразу: «не опубликовалось» человек повторит
+    // одним нажатием, «опубликовалось навсегда» не исправить никак. Если снять
+    // не вышло, отзыв уходит в ту же очередь повторов, что и при гонке с
+    // удалением записи.
+    if (ok && !(await setLinkPublished(postId, true))) {
+      log.warn('public_post_mark_failed', { postId: postId.slice(0, 24) });
+      const myDid = publicKeyToDidKey(pair.publicKey);
+      if (!(await dropPublicPostCopy(pair, linkDeletePayload(myDid, postId)))) {
+        await queueLinkCopyDelete(pair, postId);
+      }
+      return false;
+    }
     return ok;
   } catch (e) {
     log.warn('public_post_share_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
