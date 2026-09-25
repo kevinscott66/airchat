@@ -290,7 +290,7 @@ const MEMBERS_UNREADABLE = 'Не удалось прочитать состав 
 // v4.32.227 (BUG-11): корректная русская плюрализация. Раньше всегда выводилось
 // «N участников» → «1 участников». Единый источник правды теперь в
 // ../utils/plural; реэкспортируем здесь для обратной совместимости.
-import { ruPlural, membersLabel, subscribersLabel, scheduledLabel } from '../utils/plural';
+import { ruPlural, membersLabel, secondsLabel, subscribersLabel, scheduledLabel } from '../utils/plural';
 import { ambiguityMessage, memberLabel, resolveMember } from '../utils/memberLookup';
 import { isMentionOfAny } from '../../core/social/mentions';
 import { resolveMention } from '../../core/social/mentionResolve';
@@ -948,7 +948,7 @@ function GroupChatScreen({
    * v4.32.271: раньше отсчёт заводился прямо в обработчике отправки условием
    * `slowModeSeconds > 0` — без взгляда на роль. Сам запрет администрацию не
    * трогает (slowModeRemaining возвращает 0 для owner/admin), а вот плашка и
-   * подпись поля ввода «Подождите N с…» показывались администратору тоже:
+   * подпись поля ввода «Подождите N секунд…» показывались администратору тоже:
    * поле выглядело заблокированным, хотя писать было можно. Одно правило,
    * записанное дважды, — одна из копий разошлась.
    */
@@ -2886,7 +2886,12 @@ function GroupChatScreen({
         now: Date.now(),
       });
       if (remaining > 0) {
-        Alert.alert('Медленный режим', `Подождите ещё ${remaining} сек перед следующим сообщением.`);
+        // v4.32.912: одно и то же оставшееся время писалось на одном экране
+        // тремя способами — «5 сек» здесь, «5 с…» в подписи поля и «через 5 с»
+        // в плашке над ним. Ни одно из сокращений не склоняется, а фраза вокруг
+        // склоняется: «Подождите ещё 1 сек». Форма теперь одна и та же, что у
+        // отсчёта блокировки входа («Попробуйте через 5 минут»).
+        Alert.alert('Медленный режим', `Подождите ещё ${secondsLabel(remaining)} перед следующим сообщением.`);
         return;
       }
     }
@@ -4598,7 +4603,7 @@ function GroupChatScreen({
           {slowCooldownLeft > 0 ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surfaceHigh, gap: 6 }}>
               <Ionicons name="time-outline" size={15} color={colors.textMuted} />
-              <Text style={{ fontSize: 13, color: colors.textMuted }}>Медленный режим: следующее через {slowCooldownLeft} с</Text>
+              <Text style={{ fontSize: 13, color: colors.textMuted }}>Медленный режим: следующее через {secondsLabel(slowCooldownLeft)}</Text>
             </View>
           ) : null}
           {grpEmojiSuggestions.length > 0 ? (
@@ -4693,7 +4698,7 @@ function GroupChatScreen({
                 onSelectionChange={(e) => { grpSelRef.current = e.nativeEvent.selection; }}
                 onFocus={() => setShowGrpFormatBar(true)}
                 onBlur={() => setShowGrpFormatBar(false)}
-                placeholder={slowCooldownLeft > 0 ? `Подождите ${slowCooldownLeft} с…` : group.type === 'channel' ? 'Новый пост…' : 'Сообщение'}
+                placeholder={slowCooldownLeft > 0 ? `Подождите ${secondsLabel(slowCooldownLeft)}…` : group.type === 'channel' ? 'Новый пост…' : 'Сообщение'}
                 placeholderTextColor={colors.textMuted}
                 multiline
                 maxLength={MAX_MESSAGE_TEXT}
