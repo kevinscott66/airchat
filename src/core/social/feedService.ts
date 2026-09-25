@@ -55,6 +55,7 @@ import { listContacts, listContactsReadFor } from './contacts';
 import { NO_ATTACH_LOSS, attachLostCount } from './feedAttachLoss';
 import type { FeedAttachLoss } from './feedAttachLoss';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
+import { FEED_MAX_DOC_BYTES, FEED_MAX_DOCS, FEED_POST_MAX_BYTES } from './composeDraft';
 import { isAuthorMuted } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
 import { reactionAddRefusal } from './reactionMapPolicy';
@@ -169,6 +170,9 @@ const FEED_IMAGE_READ_CONCURRENCY = 4;
 // снижением picker.quality до 0.6 в composers это покрывает подавляющее большинство
 // фото с 12MP+ камер без ресайза. Лимит держит envelope < 2MB даже при 2 фото.
 const FEED_MEDIA_MAX_BASE64_BYTES = 800 * 1024;
+// v4.32.919: предел всей записи живёт рядом с остальными пределами сборки —
+// в composeDraft, откуда его берёт и экран. Тянуть его из feedService экран не
+// может задёшево: этот модуль поднимает за собой хранилище и rateLimiter.
 
 type QueuedFeedItem = {
   id: string;
@@ -466,11 +470,9 @@ async function readMediaAsBase64(
   }
 }
 
-/** v4.32.48: максимальный размер одного документа в байтах (до base64).
- *  Envelope лимит 2MB → 1.5MB raw → ~2MB base64; запас на текст/подпись. */
-const FEED_DOC_MAX_RAW_BYTES = 1.2 * 1024 * 1024; // 1.2 MB
-/** Сколько документов максимум можно прикрепить к одному посту. */
-const FEED_DOC_MAX_PER_POST = 3;
+// v4.32.919: здесь стояли свои FEED_DOC_MAX_RAW_BYTES и FEED_DOC_MAX_PER_POST
+// с теми же значениями, что FEED_MAX_DOC_BYTES и FEED_MAX_DOCS в composeDraft.
+// Отбор в экране шёл по одной паре, проверка при публикации — по другой.
 
 /** Вход: { uri, name, mime, size }. Возврат: base64 + реальный size, либо названная причина отказа. */
 export type FeedDocumentInput = { uri: string; name: string; mime: string; size?: number };
@@ -485,8 +487,8 @@ async function readDocumentAsBase64(
       return { ok: false, reason: 'failed' };
     }
     const size = (info as { size?: number }).size ?? input.size ?? 0;
-    if (size > FEED_DOC_MAX_RAW_BYTES) {
-      log.warn('feed_doc_too_large', { size, limit: FEED_DOC_MAX_RAW_BYTES, name: input.name });
+    if (size > FEED_MAX_DOC_BYTES) {
+      log.warn('feed_doc_too_large', { size, limit: FEED_MAX_DOC_BYTES, name: input.name });
       return { ok: false, reason: 'oversize' };
     }
     const b64 = await FileSystem.readAsStringAsync(input.uri, {
@@ -1719,7 +1721,7 @@ async function tryPublishFeedPostComplete(
     log.warn('feed_try_publish_empty');
     return { postId: null };
   }
-  // v4.32.65: явный лимит на длину текста поста. Хотя envelope pre-check (SAFE_LIMIT=1.84MB)
+  // v4.32.65: явный лимит на длину текста поста. Хотя envelope pre-check (FEED_POST_MAX_BYTES)
   // ловит гиганты, cap в 10K символов даёт юзеру понятную ошибку до I/O.
   if (text.length > FEED_POST_MAX_CHARS) {
     log.warn('feed_try_publish_text_too_long', { len: text.length, limit: FEED_POST_MAX_CHARS });
@@ -1746,18 +1748,18 @@ async function tryPublishFeedPostComplete(
     }
   }
 
-  // v4.32.48: чтение документов. Ограничение FEED_DOC_MAX_PER_POST + per-doc size guard.
+  // v4.32.48: чтение документов. Ограничение FEED_MAX_DOCS + per-doc size guard.
   // v4.32.843: раньше не сложившийся документ исчезал вообще без счёта — ни
   // цифры наверх, ни слова человеку: запись выходила без него, и узнать об этом
   // было неоткуда.
   const docs: { name: string; mime: string; size: number; b64: string }[] = [];
   if (opts.documents && opts.documents.length > 0) {
-    const limited = opts.documents.slice(0, FEED_DOC_MAX_PER_POST);
+    const limited = opts.documents.slice(0, FEED_MAX_DOCS);
     // v4.32.843: отрезанные `slice` документы тоже потеряны. Раньше они не
     // попадали даже в журнал: человек прикреплял пять файлов, доезжали три.
     loss.docTooMany = opts.documents.length - limited.length;
     if (loss.docTooMany > 0) {
-      log.warn('feed_docs_over_limit', { picked: opts.documents.length, limit: FEED_DOC_MAX_PER_POST });
+      log.warn('feed_docs_over_limit', { picked: opts.documents.length, limit: FEED_MAX_DOCS });
     }
     for (const input of limited) {
       const read = await readDocumentAsBase64(input);
@@ -1784,18 +1786,16 @@ async function tryPublishFeedPostComplete(
 
   // v4.32.47: pre-check размера envelope ДО сохранения + подписи (экономия CPU на
   // сигнатуре и UX — понятная ошибка пользователю, не silent «ок, но не доставлено»).
-  // FEED_ENVELOPE_MAX_BYTES = 2MB; оценка грубая (base64 уже считается в байтах,
-  // +overhead JSON/signature ~512B). Если превышаем 90% лимита — отклоняем.
-  const SAFE_LIMIT = Math.floor(2 * 1024 * 1024 * 0.9); // 1.84 MB
+  // Оценка грубая: base64 уже считается в байтах, +overhead JSON/signature ~512B.
   const estimatedBytes =
     text.length * 2 /* UTF-8 worst case для кириллицы */ +
     media.reduce((acc, b) => acc + b.length, 0) /* base64 ≈ байт */ +
     docs.reduce((acc, d) => acc + d.b64.length, 0) /* v4.32.48: документы */ +
     1024; /* overhead подписи + JSON-обвязки */
-  if (estimatedBytes > SAFE_LIMIT) {
+  if (estimatedBytes > FEED_POST_MAX_BYTES) {
     log.warn('feed_publish_payload_too_large', {
       estimatedBytes,
-      limit: SAFE_LIMIT,
+      limit: FEED_POST_MAX_BYTES,
       mediaN: media.length,
       docsN: docs.length,
     });

@@ -24,7 +24,8 @@
  * приведён к тому же виду. Числа не тронуты: «1,8 МБ» и «1,2 МБ» — округление
  * вниз от настоящих пределов (1 887 436 Б и 1 258 291 Б), то есть подпись
  * по-прежнему не обещает больше, чем пропустит проверка. Само же то, что эти
- * два числа набраны руками, а не посчитаны из констант, — отдельный хвост.
+ * два числа набраны руками, а не посчитаны из констант, — отдельный хвост;
+ * он закрыт в v4.32.919, и проверки ниже подправлены под подстановку.
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -32,6 +33,7 @@ import { join } from 'path';
 import { formatByteSize } from '../byteSize';
 import { MAX_BLOB_BYTES } from '../blobRef';
 import { formatLimit } from '../uploadRoute';
+import { FEED_MAX_DOC_BYTES, FEED_POST_MAX_BYTES } from '../../social/composeDraft';
 
 const RU = JSON.parse(
   readFileSync(join(__dirname, '..', '..', '..', 'i18n', 'ru.json'), 'utf8')
@@ -43,10 +45,11 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
     expect(formatByteSize(1_500_000).length).toBeGreaterThan(3);
   });
 
-  it('оба рукописных предела в ru.json на месте', () => {
-    // Иначе проверки на их вид молча пусты.
-    expect(RU.feed.postTooLargeDetail).toContain('МБ');
-    expect(RU.feed.docSkippedTooBig).toContain('МБ');
+  it('оба текста предела в ru.json на месте', () => {
+    // Иначе проверки на их вид молча пусты. v4.32.919: число в них больше не
+    // набрано руками, поэтому спрашиваем про подстановку, а не про «МБ».
+    expect(RU.feed.postTooLargeDetail).toContain('{{limit}}');
+    expect(RU.feed.docSkippedTooBig).toContain('{{limit}}');
   });
 });
 
@@ -76,8 +79,9 @@ describe('дробь отделяется запятой', () => {
     }
   });
 
-  it('рукописный предел в отказе записи — с запятой, как и соседний', () => {
-    expect(RU.feed.postTooLargeDetail).toContain('лимит 1,8 МБ');
+  it('предел в отказе записи подставляется с запятой', () => {
+    // v4.32.919: в самой строке число больше не стоит — подставляется отсюда.
+    expect(formatLimit(FEED_POST_MAX_BYTES)).toBe('1,8 МБ');
     expect(RU.feed.postTooLargeDetail).not.toContain('1.8');
   });
 });
@@ -107,7 +111,7 @@ describe('до правки было верно и осталось верно',
     expect(formatByteSize(1_500_000)).toMatch(/^[0-9][0-9.,]* (Б|КБ|МБ|ГБ)$/);
   });
 
-  it('вторую рукописную строку не трогали — она и была с запятой', () => {
-    expect(RU.feed.docSkippedTooBig).toContain('Тяжелее 1,2 МБ');
+  it('предел документа — тоже с запятой, и это то же число, что и было', () => {
+    expect(formatLimit(FEED_MAX_DOC_BYTES)).toBe('1,2 МБ');
   });
 });

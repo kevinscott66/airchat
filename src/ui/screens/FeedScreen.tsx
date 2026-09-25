@@ -131,8 +131,10 @@ import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { fanoutGroupMessage } from '../../core/social/groupMessaging';
 import { announceGroupSend } from '../groupSendAnnounce';
 import {
+  FEED_MAX_DOC_BYTES,
   FEED_MAX_DOCS,
   FEED_MAX_IMAGES,
+  FEED_POST_MAX_BYTES,
   clearComposeDraft as clearPersistedComposeDraft,
   loadComposeDraft,
   planComposeRestore,
@@ -160,6 +162,7 @@ import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/soci
 import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
 import { calendarDaysAgo, isSameCalendarDay } from '../../core/time/calendarTime';
 import { formatByteSize } from '../../core/media/byteSize';
+import { formatLimit } from '../../core/media/uploadRoute';
 import { Buffer } from 'buffer';
 import { v4 as uuidv4 } from 'uuid';
 import { shortIdentity } from '../identity/shortId';
@@ -2043,7 +2046,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
             announcePublishResult(result, t);
             void loadFeed();
           } else if (result.reason === 'too_large') {
-            showError(t('feed.postTooLargeDetail'));
+            showError(t('feed.postTooLargeDetail', { limit: formatLimit(FEED_POST_MAX_BYTES) }));
           } else if (result.reason !== 'empty') {
             showError(t('feed.publishFailed'));
           }
@@ -2138,7 +2141,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
               const why = result.attachLoss ? feedAttachLossText(result.attachLoss, false) : null;
               Alert.alert(t('feed.attachAllLost'), why ?? t('feed.publishFailedDetail'));
             } else {
-              Alert.alert(t('feed.postTooLarge'), t('feed.postTooLargeDetail'));
+              Alert.alert(
+                t('feed.postTooLarge'),
+                t('feed.postTooLargeDetail', { limit: formatLimit(FEED_POST_MAX_BYTES) })
+              );
             }
             // Возвращаем черновик и URIs, чтобы пользователь мог скорректировать.
             setDraft(textSnap);
@@ -2275,7 +2281,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       // Одним окном, а не двумя подряд: на Android второй Alert встаёт поверх
       // первого и первый человек не успевает прочитать.
       const skipped: string[] = [];
-      if (tooBig > 0) skipped.push(t('feed.docSkippedTooBig', { count: tooBig }));
+      if (tooBig > 0) {
+        skipped.push(
+          t('feed.docSkippedTooBig', { count: tooBig, limit: formatLimit(FEED_MAX_DOC_BYTES) })
+        );
+      }
       if (noRoom > 0) skipped.push(t('feed.docSkippedNoRoom', { count: noRoom, max: FEED_MAX_DOCS }));
       if (skipped.length) {
         Alert.alert(
