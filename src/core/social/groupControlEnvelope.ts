@@ -27,7 +27,7 @@ import { MIN_AUTO_DELETE_MS, MAX_AUTO_DELETE_MS } from '../storage/autoDeletePol
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { sanitizeDisplayName as sanitizeName, sanitizeParagraphText, stripSpoofedSysPrefix } from './sysLineGuard';
 import { isInviteToken } from './groupInviteToken';
-import { normalizeGroupHandle } from './groupHandle';
+import { parseGroupHandleFromEnvelope } from './groupHandle';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX } from './groupNameRule';
 import { withinMessageTextLimit } from './messageTextLimit';
 import { isAssignableRole, type AssignableRole } from './groupRolePolicy';
@@ -238,10 +238,17 @@ export function decodeGroupCtlEnvelope(text: string): GroupCtlEnvelope | null {
     // собачки); мусор отбрасывает конверт целиком, а не «подрезается»: адрес
     // рисуется обычным <Text> в шапке, то есть мимо отрисовщика тела
     // сообщения, и обрезок чужой строки выглядел бы там как настоящий адрес.
+    // v4.32.936: а вот занять адрес, который занять нельзя, конверт больше не
+    // может. Раньше здесь стояла только проверка формы, и изменённый клиент
+    // ставил своей группе адрес `@support` — чужие приложения показывали его
+    // в шапке как настоящий. Конверт при этом не отбрасывается: название и
+    // описание в нём законны, и отправитель вправе их менять, — выпадает одно
+    // поле, а применяющая сторона его уже пропускает (`env.username != null`).
     if (env.username != null && env.username !== '') {
-      const handle = normalizeGroupHandle(env.username);
-      if (handle == null) return null;
-      env.username = handle;
+      const parsed = parseGroupHandleFromEnvelope(env.username);
+      if (parsed.kind === 'malformed') return null;
+      if (parsed.kind === 'refused') delete (env as { username?: unknown }).username;
+      else env.username = parsed.handle;
     }
     if (env.slowModeSeconds != null) {
       if (typeof env.slowModeSeconds !== 'number' || !Number.isFinite(env.slowModeSeconds)) return null;

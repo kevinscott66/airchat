@@ -10,6 +10,8 @@
  * клиента и сверяет оба множества.
  */
 const USERNAME_MIN_SELF_SERVICE = 5;
+/** Нижняя граница протокола (`src/core/identity/username.ts`). */
+const USERNAME_MIN = 3;
 const USERNAME_MAX = 32;
 
 const RESERVED_USERNAMES = new Set([
@@ -57,23 +59,40 @@ function normalizeClaimableUsername(value, unlocked) {
   // по бумаге — цифровое имя не выдаётся и ею.
   if (/^\d+$/.test(raw)) return null;
   if (raw.length > USERNAME_MAX) return null;
+  // v4.32.936: нижняя граница протокола — абсолютная, бумага её не открывает.
+  // До этой версии её здесь не было совсем, и имя из одной-двух букв,
+  // выписанное бумагой, сервер принимал. Клиент такое имя не разрешает нигде:
+  // и `resolveMentionTarget`, и разбор чужого профиля проходят через
+  // `normalizeUsername` с порогом в три символа. Строка в реестре была бы, а
+  // дойти по ней до аккаунта было бы нельзя.
+  if (raw.length < USERNAME_MIN) return null;
   const granted = typeof unlocked === 'string' && unlocked.trim().toLowerCase() === raw;
   if (!granted && raw.length < USERNAME_MIN_SELF_SERVICE) return null;
   if (!granted && RESERVED_USERNAMES.has(raw)) return null;
   return raw;
 }
 
-/** Имя для справочного запроса: занятость можно спросить и про короткое имя. */
+/**
+ * Имя для справочного запроса.
+ *
+ * v4.32.936: граница та же, что у занятия, — 3 символа. Раньше здесь стояла
+ * единица, и это был второй канон имени на одном сервере: спросить можно было
+ * про то, что занять нельзя. Клиент короче трёх не спрашивает никогда
+ * (`normalizeUsername`), так что смысла у послабления не было, а расхождение
+ * было.
+ */
 function normalizeLookupUsername(value) {
   if (typeof value !== 'string') return null;
   const raw = value.trim().replace(/^@+/, '').toLowerCase();
-  if (!/^[a-z0-9_]{1,32}$/.test(raw)) return null;
+  if (!/^[a-z0-9_]+$/.test(raw)) return null;
+  if (raw.length < USERNAME_MIN || raw.length > USERNAME_MAX) return null;
   return raw;
 }
 
 module.exports = {
   RESERVED_USERNAMES,
   USERNAME_MIN_SELF_SERVICE,
+  USERNAME_MIN,
   USERNAME_MAX,
   normalizeClaimableUsername,
   normalizeLookupUsername,

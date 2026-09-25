@@ -6,7 +6,7 @@
  * Иначе канал мог бы назваться @support или @official — то есть перехватывать
  * доверие, которое человек оказывает системным адресам.
  */
-import { checkGroupHandle, normalizeGroupHandle, formatGroupHandle } from '../groupHandle';
+import { checkGroupHandle, parseGroupHandleFromEnvelope, formatGroupHandle } from '../groupHandle';
 import { RESERVED_USERNAMES, USERNAME_MIN_SELF_SERVICE } from '../../identity/reservedUsernames';
 
 describe('публичный адрес группы: правила общие с аккаунтами', () => {
@@ -73,7 +73,7 @@ describe('публичный адрес группы: правила общие 
   it('не строка — не адрес', () => {
     for (const bad of [null, undefined, 42, {}, []]) {
       expect(checkGroupHandle(bad, 'group').ok).toBe(false);
-      expect(normalizeGroupHandle(bad)).toBeNull();
+      expect(parseGroupHandleFromEnvelope(bad).kind).toBe('malformed');
     }
   });
 
@@ -81,13 +81,19 @@ describe('публичный адрес группы: правила общие 
     expect(formatGroupHandle('aircafe')).toBe('@aircafe');
   });
 
-  it('протокольная нормализация мягче ввода администратора', () => {
-    // Конверт с чужого устройства мог быть собран версией, где порог был
-    // другим; отбрасывать из-за этого весь конверт нельзя.
+  // v4.32.936: раньше здесь стояло обратное — «протокольная нормализация мягче
+  // ввода администратора». Послабление было списано с аккаунтов, где короткое
+  // имя может быть выдано бумагой; у группы бумаги нет, её адрес ставит рукой
+  // администратор, и единственным, кто пользовался послаблением, оказывался
+  // изменённый клиент: он ставил своей группе `@support`.
+  it('входящий конверт судится тем же правилом, что и своё поле ввода', () => {
     const shortName = 'a'.repeat(USERNAME_MIN_SELF_SERVICE - 1);
     expect(checkGroupHandle(shortName, 'group').ok).toBe(false);
-    expect(normalizeGroupHandle(shortName)).toBe(shortName);
-    // …но мусор не проходит и здесь.
-    expect(normalizeGroupHandle('air cafe')).toBeNull();
+    expect(parseGroupHandleFromEnvelope(shortName).kind).toBe('refused');
+    expect(parseGroupHandleFromEnvelope('support').kind).toBe('refused');
+    // Отказ и мусор — разные вещи: по первому выпадает поле, по второму весь
+    // конверт (см. groupControlEnvelope).
+    expect(parseGroupHandleFromEnvelope('air cafe').kind).toBe('malformed');
+    expect(parseGroupHandleFromEnvelope(' @AirCafe ')).toEqual({ kind: 'ok', handle: 'aircafe' });
   });
 });
