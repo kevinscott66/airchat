@@ -108,11 +108,11 @@ describe('поиск юзернейма', () => {
   it('имя владельца приходит очищенным и только вместе с ключом', async () => {
     const pub = Buffer.alloc(32, 1).toString('base64');
     serveJson({ taken: true, pub, name: '\u202EРита' });
-    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: pub, peerName: 'Рита' });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', subject: null, peerPubB64: pub, peerName: 'Рита' });
     serveJson({ taken: true, pub: null, name: 'Рита' });
-    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: null, peerName: null });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', subject: null, peerPubB64: null, peerName: null });
     serveJson({ taken: true, pub });
-    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', peerPubB64: pub, peerName: null });
+    expect(await settleWithin(lookupSyncUsername('margarita'))).toEqual({ status: 'taken', subject: null, peerPubB64: pub, peerName: null });
   });
 });
 

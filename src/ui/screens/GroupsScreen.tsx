@@ -299,6 +299,11 @@ import { mentionMissText, resolveMentionTarget, type MentionTarget } from '../..
 import { listContactsFor } from '../../core/social/contacts';
 import { normalizeUsername } from '../../core/identity/username';
 import { checkGroupHandle } from '../../core/social/groupHandle';
+import {
+  releaseGroupHandleGlobally,
+  retryPendingGroupHandleReleases,
+  saveGroupHandleGlobally,
+} from '../../core/social/groupHandleRegistry';
 import { collectHashtags } from '../../core/text/entities';
 import { UserProfilePeek } from '../components/UserProfilePeek';
 import { canModerate } from '../../core/social/groupModerationPolicy';
@@ -5431,10 +5436,16 @@ function GroupMembersScreen({
   /**
    * v4.32.681: публичный адрес группы или канала.
    *
-   * Реестра у него нет (см. groupHandle.ts): это ярлык, который ставит
-   * администратор и который едет тем же конвертом 'meta'. Правила самого имени
-   * — общие с аккаунтами, поэтому канал не может назваться @official или
-   * @support. Опознают группу по-прежнему по GR…/CH… ниже.
+   * Правила самого имени — общие с аккаунтами, поэтому канал не может
+   * назваться @official или @support. Опознают группу по-прежнему по GR…/CH…
+   * ниже.
+   *
+   * v4.32.937: адрес занимается в ОБЩЕМ реестре имён — там же, где юзернеймы
+   * людей. Прежде реестра у него не было вовсе: это был ярлык, который каждый
+   * писал себе сам, и `@x` одновременно носили человек, группа и канал.
+   * Занимается он до записи и до рассылки конверта: наоборот означало бы
+   * разослать участникам адрес, который уже за кем-то. Недоступный реестр
+   * адрес не запрещает — он оставляет его местным, и человеку это сказано.
    */
   const saveHandle = useCallback(async () => {
     const raw = handleInput.trim();
@@ -5457,11 +5468,31 @@ function GroupMembersScreen({
       return;
     }
     if (!handleGate.begin(next)) { setEditingHandle(false); return; }
+    const kind = group.type === 'channel' ? 'channel' : 'group';
+    let scope: 'global' | 'local' = 'local';
     try {
+      if (next) {
+        const claimed = await saveGroupHandleGlobally(kind, group.id, next);
+        if (!claimed.ok) {
+          handleGate.rollback();
+          setHandleInput(group.username ?? '');
+          showError(claimed.reason === 'taken'
+            ? `Адрес @${next} уже занят`
+            : `Адрес @${next} не принят реестром имён`);
+          return;
+        }
+        scope = claimed.scope;
+      } else {
+        // Снятый адрес освобождается в реестре, иначе он остался бы занятым
+        // навсегда: своего повода сходить туда у него больше не будет.
+        await releaseGroupHandleGlobally(kind, group.id);
+      }
       await updateGroupMeta(group.id, pid, { username: next || null });
       handleGate.commit(next);
       setHandleInput(next);
-      showSuccess(next ? 'Публичный адрес обновлён' : 'Публичный адрес убран');
+      showSuccess(next
+        ? (scope === 'global' ? 'Публичный адрес обновлён' : 'Адрес поставлен, но занять его в реестре не вышло')
+        : 'Публичный адрес убран');
       announceCtl(fanoutGroupControl(group.id, pid, myPubB64, { op: 'meta', username: next }, myName));
     } catch {
       handleGate.rollback();
@@ -6069,6 +6100,11 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
   }, [loadGroups]);
 
   useEffect(() => { void loadGroups(); }, [loadGroups]);
+
+  // v4.32.937: адреса, которые не вышло отпустить с первого раза (сеть легла
+  // на снятии адреса). Свой повод сходить в сеть у них не появится, а экран
+  // групп — единственное место, откуда человек к адресам вообще попадает.
+  useEffect(() => { void retryPendingGroupHandleReleases(); }, []);
 
   /**
    * Выход из группы: сначала сказать группе, потом стереть у себя.

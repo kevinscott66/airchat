@@ -40,6 +40,15 @@ export type MentionTarget =
    * честно «Без имени», но юзернейм в имя по-прежнему не идёт.
    */
   | { status: 'stranger'; peerPubB64: string; username: string; peerName: string | null }
+  /**
+   * За именем стоит группа или канал (v4.32.937).
+   *
+   * Пространство имён общее, и это его видимая сторона: одно и то же `@имя`
+   * может принадлежать человеку ИЛИ каналу, но не обоим сразу. Открывать
+   * карточку человека по такому имени нельзя — за ним человека нет; опознаётся
+   * группа публичным идентификатором, как и везде.
+   */
+  | { status: 'space'; kind: 'group' | 'channel'; publicId: string; username: string }
   /** Имя носят несколько контактов — открывать наугад нельзя. */
   | { status: 'ambiguous' }
   /** Такого имени нет ни у кого. */
@@ -69,16 +78,28 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
   if (answer.status === 'unconfigured') return { status: 'unconfigured' };
   if (answer.status === 'unknown') return { status: 'unknown' };
   if (answer.status === 'free') return { status: 'unclaimed' };
+  // Предмет проверяется ДО ключа: у группы своего ключа переписки нет, и без
+  // этой ветки её адрес читался бы как «владелец не открыл переход по имени»
+  // — то есть как имя человека, до которого не достучаться.
+  if (answer.subject) {
+    return { status: 'space', kind: answer.subject.kind, publicId: answer.subject.id, username };
+  }
   if (!answer.peerPubB64) return { status: 'unlisted' };
   return { status: 'stranger', peerPubB64: answer.peerPubB64, username, peerName: answer.peerName };
 }
 
 /** Что показать человеку, когда переходить некуда. */
 export function mentionMissText(
-  status: 'ambiguous' | 'unclaimed' | 'unlisted' | 'unconfigured' | 'unknown',
+  status: 'ambiguous' | 'space' | 'unclaimed' | 'unlisted' | 'unconfigured' | 'unknown',
   name: string,
+  /** Вид предмета — только для `space`: «группы» и «канала» это разные слова. */
+  kind?: 'group' | 'channel',
 ): string {
   switch (status) {
+    case 'space':
+      // Переход сюда ещё не сделан, и обещать его текстом нельзя. Сказать при
+      // этом надо честно: имя существует, просто за ним не человек.
+      return `@${name} — это адрес ${kind === 'channel' ? 'канала' : 'группы'}, а не человека`;
     case 'ambiguous':
       return `Имя «${name}» носят несколько контактов — откройте нужного в списке`;
     case 'unclaimed':

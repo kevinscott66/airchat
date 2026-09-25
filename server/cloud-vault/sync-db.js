@@ -240,6 +240,20 @@ class SyncDatabase {
       -- владелец имени мог бы направить своё @name на чужой ключ — запрос
       -- подписан ключом аккаунта, а ключ переписки у дополнительных профилей
       -- другой.
+      --
+      -- v4.32.937: за именем стоит не обязательно человек. Группа и канал
+      -- занимают имя ЗДЕСЬ ЖЕ, одной таблицей с аккаунтами, — и только так
+      -- пространство имён одно: пока у групп был свой (а точнее, никакой)
+      -- список, канал брал себе @имя живого человека, и упоминание вело
+      -- туда, куда человек не соглашался. subject_kind/subject_id говорят,
+      -- ЧТО стоит за именем: пусто — аккаунт (все записи до этой версии),
+      -- 'group'/'channel' — публичный идентификатор GR…/CH….
+      --
+      -- Чего эта запись НЕ доказывает. Что заявитель — владелец той группы.
+      -- Своей ключевой пары у группы нет, подписать заявку ей нечем, и
+      -- сервер может удостоверить только одно: имя занято этим аккаунтом и
+      -- больше никем. Опознают группу по-прежнему по GR…/CH…, а полномочия
+      -- того, кто назначил адрес, проверяет сторона-получатель конверта.
       CREATE TABLE IF NOT EXISTS sync_usernames (
         username_key TEXT PRIMARY KEY NOT NULL,
         account_id TEXT NOT NULL,
@@ -247,6 +261,8 @@ class SyncDatabase {
         claimed_at INTEGER NOT NULL,
         profile_public_key TEXT,
         display_name TEXT,
+        subject_kind TEXT,
+        subject_id TEXT,
         FOREIGN KEY (account_id) REFERENCES sync_accounts(account_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_sync_usernames_owner
@@ -459,6 +475,14 @@ class SyncDatabase {
     if (!columns.has('display_name')) {
       this.db.exec('ALTER TABLE sync_usernames ADD COLUMN display_name TEXT');
     }
+    // v4.32.937: что стоит за именем. Пустые колонки у старых записей читаются
+    // как «аккаунт» — до этой версии за именем и не стояло ничего другого.
+    if (!columns.has('subject_kind')) {
+      this.db.exec('ALTER TABLE sync_usernames ADD COLUMN subject_kind TEXT');
+    }
+    if (!columns.has('subject_id')) {
+      this.db.exec('ALTER TABLE sync_usernames ADD COLUMN subject_id TEXT');
+    }
   }
 
   ensureDeviceMetadataColumns() {
@@ -609,22 +633,40 @@ class SyncDatabase {
    *
    * Прежнее имя того же профиля освобождается здесь же — иначе брошенные
    * имена копились бы за каждым, кто хоть раз переименовался.
+   *
+   * v4.32.937: `subject` — что стоит за именем: `null` для самого профиля,
+   * `{ kind: 'group'|'channel', id: 'GR…' }` для группы или канала. Держатель
+   * имени определяется тройкой «аккаунт, профиль, предмет»: иначе адрес
+   * группы освобождал бы собственное имя её администратора, ведь занимает их
+   * один и тот же профиль. Занято ли имя, при этом решает ОДНА строка на всех
+   * — в том и смысл общего пространства.
    */
-  claimUsername(accountId, profileId, username, profilePublicKeyB64 = null, displayName = null) {
+  claimUsername(accountId, profileId, username, profilePublicKeyB64 = null, displayName = null, subject = null) {
     const now = Date.now();
     const key = this.usernameKey(username);
+    const subjectKind = subject ? subject.kind : null;
+    const subjectId = subject ? subject.id : null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db.prepare(
-        'SELECT account_id AS accountId, profile_id AS profileId FROM sync_usernames WHERE username_key = ?',
+        `SELECT account_id AS accountId, profile_id AS profileId, subject_id AS subjectId
+         FROM sync_usernames WHERE username_key = ?`,
       ).get(key);
-      if (row && (row.accountId !== accountId || row.profileId !== profileId)) {
+      if (row && (
+        row.accountId !== accountId
+        || row.profileId !== profileId
+        || (row.subjectId || null) !== subjectId
+      )) {
         this.db.exec('COMMIT');
         return { ok: false, reason: 'username_taken' };
       }
+      // Освобождается прежнее имя ЭТОГО ЖЕ предмета. `IS` вместо `=`: в SQL
+      // сравнение с NULL не истинно никогда, и профиль с адресом группы
+      // остался бы со своим прежним именем навсегда.
       this.db.prepare(
-        'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND username_key <> ?',
-      ).run(accountId, profileId, key);
+        `DELETE FROM sync_usernames
+         WHERE account_id = ? AND profile_id = ? AND subject_id IS ? AND username_key <> ?`,
+      ).run(accountId, profileId, subjectId, key);
       // Потолок на аккаунт. Жёсткий отказ на пределе запер бы честного
       // человека с брошенными записями удалённых профилей, поэтому имя
       // занимается всегда, а лишнее — своё же самое старое — уходит.
@@ -636,17 +678,22 @@ class SyncDatabase {
         this.db.prepare('DELETE FROM sync_usernames WHERE username_key = ?').run(held[i].usernameKey);
       }
       this.db.prepare(`
-        INSERT INTO sync_usernames (username_key, account_id, profile_id, claimed_at, profile_public_key, display_name)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO sync_usernames (
+          username_key, account_id, profile_id, claimed_at, profile_public_key, display_name,
+          subject_kind, subject_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (username_key) DO UPDATE SET
           claimed_at = excluded.claimed_at,
+          subject_kind = excluded.subject_kind,
+          subject_id = excluded.subject_id,
           -- Ключ переписывается только когда он предъявлен: повтор захвата без
           -- подписи не должен стирать уже опубликованный.
           profile_public_key = COALESCE(excluded.profile_public_key, sync_usernames.profile_public_key),
           -- Так же и имя: клиент старше v4.32.722 его не шлёт, и его повтор
           -- захвата не должен стирать имя, опубликованное новым.
           display_name = COALESCE(excluded.display_name, sync_usernames.display_name)
-      `).run(key, accountId, profileId, now, profilePublicKeyB64, displayName);
+      `).run(key, accountId, profileId, now, profilePublicKeyB64, displayName, subjectKind, subjectId);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -655,11 +702,16 @@ class SyncDatabase {
     return { ok: true, username };
   }
 
-  /** Отпустить имя профиля. Возвращает `true`, если запись была. */
-  releaseUsername(accountId, profileId) {
+  /**
+   * Отпустить имя. Возвращает `true`, если запись была.
+   *
+   * v4.32.937: тот же предмет, что и у захвата. Без него удаление группы
+   * снимало бы и собственное имя администратора: занимает их один профиль.
+   */
+  releaseUsername(accountId, profileId, subjectId = null) {
     const result = this.db.prepare(
-      'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ?',
-    ).run(accountId, profileId);
+      'DELETE FROM sync_usernames WHERE account_id = ? AND profile_id = ? AND subject_id IS ?',
+    ).run(accountId, profileId, subjectId);
     return (result.changes || 0) > 0;
   }
 
@@ -674,7 +726,8 @@ class SyncDatabase {
     const row = this.db.prepare(
       `SELECT account_id AS accountId, profile_id AS profileId,
               profile_public_key AS profilePublicKeyB64,
-              display_name AS displayName
+              display_name AS displayName,
+              subject_kind AS subjectKind, subject_id AS subjectId
        FROM sync_usernames WHERE username_key = ?`,
     ).get(this.usernameKey(username));
     return row || null;

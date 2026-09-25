@@ -31,7 +31,7 @@ describe('resolveMentionTarget', () => {
 
   it('незнакомец из реестра открывается без добавления в контакты', async () => {
     local.mockResolvedValue({ status: 'none' });
-    remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: null });
+    remote.mockResolvedValue({ status: 'taken', subject: null, peerPubB64: PUB, peerName: null });
     // v4.32.616: юзернейм едет юзернеймом. Раньше он же уезжал в displayName,
     // и карточка выдавала адрес за имя: человек, назвавшийся у себя «Ритой»,
     // открывался как «margarita». toEqual сверяет объект целиком, значит
@@ -44,7 +44,7 @@ describe('resolveMentionTarget', () => {
 
   it('имя, опубликованное владельцем в реестре, едет в карточку незнакомца', async () => {
     local.mockResolvedValue({ status: 'none' });
-    remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: 'Рита' });
+    remote.mockResolvedValue({ status: 'taken', subject: null, peerPubB64: PUB, peerName: 'Рита' });
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
       status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита',
     });
@@ -75,7 +75,7 @@ describe('resolveMentionTarget', () => {
 
   it('занятое имя без опубликованного ключа — отдельный исход', async () => {
     local.mockResolvedValue({ status: 'none' });
-    remote.mockResolvedValue({ status: 'taken', peerPubB64: null, peerName: null });
+    remote.mockResolvedValue({ status: 'taken', subject: null, peerPubB64: null, peerName: null });
     await expect(resolveMentionTarget('oldtimer', 1)).resolves.toEqual({ status: 'unlisted' });
   });
 

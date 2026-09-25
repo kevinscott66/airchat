@@ -13,6 +13,7 @@ import { MAX_DOWNLOAD_B64_CHARS } from '../media/blobRef';
 import { signBytes, signJson } from '../crypto/signature';
 import { isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sanitizeDisplayName } from '../social/sysLineGuard';
+import { readPublicId } from '../identity/publicId';
 import { browserDeviceModel, browserOsVersion } from './browserAgent';
 import { bytesToBase64Url } from '../utils/base64url';
 import type { KeyPairBytes } from '../crypto/keyManager';
@@ -503,6 +504,16 @@ export type UsernameClaimResult =
   | { ok: false; reason: 'taken' | 'rejected' | 'offline' };
 
 /**
+ * За именем стоит не человек, а группа или канал (v4.32.937).
+ *
+ * `id` — публичный идентификатор (`publicIdFor`), GR…/CH…: он и есть ответ,
+ * к кому ведёт такое имя. Ключевой пары у группы нет, так что подтвердить
+ * серверу ПРАВО на этот адрес нечем — реестр даёт здесь только одно, зато
+ * главное: имя занято кем-то одним, и человек с каналом за него не спорят.
+ */
+export type UsernameSubject = { kind: 'group' | 'channel'; id: string };
+
+/**
  * Занять имя за профилем. Отказ сервера не бросается наружу исключением:
  * «занято» — обычный ответ, а не сбой, и экрану нужен именно он, а не текст
  * ошибки сети. Недоступный сервер отдаётся отдельной причиной `offline`,
@@ -526,9 +537,16 @@ export async function claimSyncUsername(
    * пришёл по `@имени`, — иначе незнакомец до первой переписки был «Без имени».
    */
   displayName?: string | null,
+  /**
+   * v4.32.937: чьё это имя, если не самого профиля. Пространство имён общее:
+   * заявка ложится в тот же реестр и спорит за ту же строку.
+   */
+  subject?: UsernameSubject | null,
 ): Promise<UsernameClaimResult> {
   try {
-    const directory = profilePair ? await usernameDirectoryProof(mnemonic, username, ownerProfileId, profilePair) : null;
+    const directory = profilePair
+      ? await usernameDirectoryProof(mnemonic, username, ownerProfileId, profilePair, subject ?? null)
+      : null;
     const response = await request<{ ok: boolean; username: string }>(
       mnemonic,
       pair,
@@ -544,6 +562,7 @@ export async function claimSyncUsername(
         ...(badge ? { badge } : {}),
         ...(directory || {}),
         ...(displayName ? { displayName } : {}),
+        ...(subject ? { subjectKind: subject.kind, subjectId: subject.id } : {}),
       },
       'username/claim',
     );
@@ -560,13 +579,25 @@ export async function claimSyncUsername(
   }
 }
 
-/** Отпустить имя профиля — при удалении профиля или смене владельца. */
+/**
+ * Отпустить имя — при удалении профиля, смене владельца или снятии адреса
+ * группы. Предмет обязателен там, где он был при захвате (v4.32.937): без
+ * него удаление группы сняло бы имя самого администратора — занимает их один
+ * и тот же профиль.
+ */
 export function releaseSyncUsername(
   mnemonic: string,
   pair: KeyPairBytes,
   ownerProfileId: number,
+  subject?: UsernameSubject | null,
 ): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(mnemonic, pair, 'release_username', { ownerProfileId }, 'username/release');
+  return request<{ ok: boolean }>(
+    mnemonic,
+    pair,
+    'release_username',
+    { ownerProfileId, ...(subject ? { subjectKind: subject.kind, subjectId: subject.id } : {}) },
+    'username/release',
+  );
 }
 
 /**
@@ -582,9 +613,16 @@ async function usernameDirectoryProof(
   username: string,
   ownerProfileId: number,
   profilePair: KeyPairBytes,
+  /**
+   * v4.32.937: предмет дописывается к строке и только когда он есть — иначе
+   * подпись под адресом канала годилась бы для имени самого человека, а
+   * заявки прежних версий перестали бы сходиться побайтово.
+   */
+  subject: UsernameSubject | null = null,
 ): Promise<{ profilePublicKeyB64: string; profileProof: string }> {
   const accountId = accountIdFromPublicKey(deriveKeyPairFromMnemonic(mnemonic).publicKey);
-  const bound = `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+  const base = `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+  const bound = subject ? `${base}:${subject.kind}:${subject.id}` : base;
   const signature = await signBytes(profilePair.secretKey, new TextEncoder().encode(bound));
   return {
     profilePublicKeyB64: publicKeyToB64(profilePair.publicKey),
@@ -609,7 +647,17 @@ export type UsernameDirectoryAnswer =
    * `peerName` — имя, которым владелец назвался сам (v4.32.722). `null` —
    * не опубликовано: запись старше или владелец не назван вовсе.
    */
-  | { status: 'taken'; peerPubB64: string | null; peerName: string | null }
+  | {
+      status: 'taken';
+      peerPubB64: string | null;
+      peerName: string | null;
+      /**
+       * v4.32.937: за именем стоит группа или канал, а не человек. `null` —
+       * аккаунт (и все записи до этой версии). Вызывающий обязан различать:
+       * открыть карточку человека по адресу канала нельзя.
+       */
+      subject: UsernameSubject | null;
+    }
   /** Сервер в сборке не задан — спрашивать некого. */
   | { status: 'unconfigured' }
   /** Сервер задан, но не ответил. */
@@ -640,7 +688,9 @@ export async function lookupSyncUsername(username: string): Promise<UsernameDire
           return null;
         }
         return response.ok
-          ? (await response.json()) as { taken?: unknown; pub?: unknown; name?: unknown }
+          ? (await response.json()) as {
+            taken?: unknown; pub?: unknown; name?: unknown; kind?: unknown; id?: unknown;
+          }
           : null;
       },
     );
@@ -651,7 +701,19 @@ export async function lookupSyncUsername(username: string): Promise<UsernameDire
     // Имя чистится и здесь: сервер его чистит сам, но пришло оно по сети, и
     // метка направления письма в нём развернула бы строку на экране.
     const peerName = peerPubB64 ? sanitizeDisplayName(body.name, 40) || null : null;
-    return { status: 'taken', peerPubB64, peerName };
+    // Вид и идентификатор — только парой и только в известном виде: по ним
+    // открывается экран, и «канал» с непонятным идентификатором увёл бы
+    // вызывающего в пустоту. Форму идентификатора проверяет тот же разбор,
+    // что и набранный рукой (`readPublicId`).
+    const kind: UsernameSubject['kind'] | null = body.kind === 'group' || body.kind === 'channel'
+      ? body.kind
+      : null;
+    const id = kind ? readPublicId(body.id) : null;
+    // Приставка обязана совпасть с видом: `GR-` у канала значит, что ответ
+    // собран не нашим сервером, и верить в нём нечему.
+    const prefixed = id != null && id.startsWith(kind === 'channel' ? 'CH-' : 'GR-');
+    const subject = kind && id && prefixed ? { kind, id } : null;
+    return { status: 'taken', peerPubB64, peerName, subject };
   } catch {
     return { status: 'unknown' };
   }

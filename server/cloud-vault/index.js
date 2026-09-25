@@ -448,8 +448,39 @@ function accountAccessDenied(reason, requestedAccountId) {
  * того же аккаунта; без аккаунта — чужую подпись можно было бы предъявить как
  * свою; без номера профиля два профиля одного аккаунта менялись бы именами.
  */
-function usernameDirectoryBinding(username, accountId, ownerProfileId) {
-  return `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+function usernameDirectoryBinding(username, accountId, ownerProfileId, subject = null) {
+  const base = `airchat-username-directory:v1:${username}:${accountId}:${ownerProfileId}`;
+  // v4.32.937: предмет дописывается к строке, а не встраивается в неё, и
+  // только когда он есть. Так подпись аккаунта, сделанная клиентом любой
+  // прежней версии, сходится побайтово, а подпись под адресом группы не
+  // переносится на имя самого человека — и наоборот.
+  return subject ? `${base}:${subject.kind}:${subject.id}` : base;
+}
+
+/**
+ * Публичный идентификатор группы или канала (`publicIdFor` на клиенте): две
+ * буквы вида и десять знаков алфавита Крокфорда. Проверяется здесь потому,
+ * что уходит он наружу в ответе справочника — по нему открывают канал.
+ */
+const SUBJECT_ID_RE = /^(GR|CH)-[0-9A-Z]{5}-[0-9A-Z]{5}$/;
+
+/**
+ * Предмет заявки: за именем стоит группа или канал, а не профиль.
+ *
+ * `undefined` — предмета нет (обычное имя аккаунта). `null` — предмет есть, но
+ * заявка испорчена: один из двух признаков без второго, чужой вид, не тот
+ * алфавит. Разводить их обязательно: молчаливое «считаем, что аккаунт»
+ * означало бы, что сломанный клиент занимает имя человека под адрес канала.
+ */
+function readClaimSubject(payload) {
+  if (payload.subjectKind == null && payload.subjectId == null) return undefined;
+  if (payload.subjectKind !== 'group' && payload.subjectKind !== 'channel') return null;
+  if (typeof payload.subjectId !== 'string' || !SUBJECT_ID_RE.test(payload.subjectId)) return null;
+  // Вид и приставка обязаны сойтись: иначе канал CH… заявлялся бы группой, и
+  // ответ справочника отправил бы вызывающего не на тот экран.
+  const prefix = payload.subjectKind === 'channel' ? 'CH' : 'GR';
+  if (!payload.subjectId.startsWith(`${prefix}-`)) return null;
+  return { kind: payload.subjectKind, id: payload.subjectId };
 }
 
 /** Предел имени в справочнике — тот же, что у имени в приложении. */
@@ -597,6 +628,9 @@ function validateSyncRequest(payload, accountId, op) {
       !Number.isSafeInteger(payload.ownerProfileId) ||
       payload.ownerProfileId < 0 || payload.ownerProfileId > 1_000_000
     ) return null;
+    // v4.32.937: за именем может стоять группа или канал.
+    const subject = readClaimSubject(payload);
+    if (subject === null) return null;
     if (op === 'claim_username') {
       // v4.32.548: имя из списка оставленных приложению открывает только
       // подписанная бумага на галочку. Она едет в том же payload, а значит
@@ -629,7 +663,7 @@ function validateSyncRequest(payload, accountId, op) {
           ? decodeBase64(payload.profileProof, 64)
           : null;
         if (!profileKey || profileKey.length !== 32 || !proof || proof.length !== 64) return null;
-        const bound = usernameDirectoryBinding(username, accountId, payload.ownerProfileId);
+        const bound = usernameDirectoryBinding(username, accountId, payload.ownerProfileId, subject || null);
         let ok = false;
         try {
           ok = ed25519.verify(proof, Buffer.from(bound, 'utf8'), profileKey);
@@ -649,11 +683,17 @@ function validateSyncRequest(payload, accountId, op) {
         username,
         profilePublicKeyB64,
         displayName,
+        subject: subject || null,
         accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64,
         deviceInfo,
       };
     }
-    return { ...payload, accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64, deviceInfo };
+    return {
+      ...payload,
+      subject: subject || null,
+      accountPublicKeyB64: payload.accountPublicKeyB64 || payload.publicKeyB64,
+      deviceInfo,
+    };
   }
   if (op === 'media_put' || op === 'media_get' || op === 'media_delete' || op === 'media_reference') {
     if (typeof payload.mediaId !== 'string' || !MEDIA_ID_RE.test(payload.mediaId)) return null;
@@ -1183,6 +1223,7 @@ app.post('/v1/sync/:accountId/username/claim', (req, res) => {
       auth.payload.username,
       auth.payload.profilePublicKeyB64 || null,
       auth.payload.displayName || null,
+      auth.payload.subject || null,
     );
     if (!result.ok) return res.status(409).json({ error: result.reason });
     return res.json({ ok: true, username: result.username });
@@ -1197,7 +1238,13 @@ app.post('/v1/sync/:accountId/username/release', (req, res) => {
   const auth = authenticateSyncRequest(req, accountId, 'release_username');
   if (auth.error) return res.status(auth.status || 401).json({ error: auth.error });
   try {
-    return res.json({ ok: syncDb.releaseUsername(auth.accountId, auth.payload.ownerProfileId) });
+    return res.json({
+      ok: syncDb.releaseUsername(
+        auth.accountId,
+        auth.payload.ownerProfileId,
+        auth.payload.subject ? auth.payload.subject.id : null,
+      ),
+    });
   } catch {
     return res.status(500).json({ error: 'username_release_failed' });
   }
@@ -1406,6 +1453,11 @@ app.get('/v1/username/:username', (req, res) => {
   if (!username) return res.status(400).json({ error: 'invalid_username' });
   try {
     const row = syncDb.lookupUsername(username);
+    // v4.32.937: за именем может стоять группа или канал. Вид и публичный
+    // идентификатор отдаются только парой: одно без другого никуда не ведёт.
+    const subject = row && row.subjectKind && row.subjectId
+      ? { kind: row.subjectKind, id: row.subjectId }
+      : null;
     return res.json({
       username,
       taken: row !== null,
@@ -1413,6 +1465,8 @@ app.get('/v1/username/:username', (req, res) => {
       // Имя без ключа не отдаётся: карточка открывается по ключу, и имя,
       // которому не к кому прилагаться, только путало бы вызывающего.
       name: row?.profilePublicKeyB64 ? row.displayName || null : null,
+      kind: subject ? subject.kind : (row ? 'account' : null),
+      id: subject ? subject.id : null,
     });
   } catch {
     return res.status(500).json({ error: 'username_lookup_failed' });

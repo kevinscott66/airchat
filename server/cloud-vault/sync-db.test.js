@@ -522,7 +522,7 @@ test('имя в реестре не хранится открытым текст
   // от имени нужно.
   assert.deepEqual(
     { ...db.lookupUsername('founder') },
-    { accountId: account, profileId: 1, profilePublicKeyB64: null, displayName: null },
+    { accountId: account, profileId: 1, profilePublicKeyB64: null, displayName: null, subjectKind: null, subjectId: null },
   );
   assert.equal(db.lookupUsername('somebody-else'), null);
 
@@ -567,7 +567,7 @@ test('старый реестр с открытыми именами перее�
   // пока владелец не подтвердит имя заново уже с подписью своего ключа.
   assert.deepEqual(
     { ...db.lookupUsername('founder') },
-    { accountId: 'r'.repeat(32), profileId: 1, profilePublicKeyB64: null, displayName: null },
+    { accountId: 'r'.repeat(32), profileId: 1, profilePublicKeyB64: null, displayName: null, subjectKind: null, subjectId: null },
   );
   assert.deepEqual(db.claimUsername('s'.repeat(32), 1, 'founder'), { ok: false, reason: 'username_taken' });
   assert.equal(
@@ -681,7 +681,7 @@ test('один аккаунт не может занять больше вось
   // записями удалённых профилей не смог бы переименоваться.
   assert.deepEqual(
     { ...db.lookupUsername('squat19') },
-    { accountId: account, profileId: 19, profilePublicKeyB64: null, displayName: null },
+    { accountId: account, profileId: 19, profilePublicKeyB64: null, displayName: null, subjectKind: null, subjectId: null },
   );
 
   // Уходит самое старое. Двадцать захватов выше уложились в одну миллисекунду,

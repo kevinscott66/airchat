@@ -85,7 +85,7 @@ test('username registry claims globally and refuses a name held by another accou
 
   const free = await fetch(`${base}/v1/username/kevin_s`);
   assert.equal(free.status, 200);
-  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false, pub: null, name: null });
+  assert.deepEqual(await free.json(), { username: 'kevin_s', taken: false, pub: null, name: null, kind: null, id: null });
 
   const claim = await post(alice, signed(alice, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
   assert.equal(claim.status, 200);
@@ -93,7 +93,7 @@ test('username registry claims globally and refuses a name held by another accou
 
   const taken = await fetch(`${base}/v1/username/KEVIN_S`);
   // Имя занято, но ключа при захвате не предъявляли — владелец не назван.
-  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true, pub: null, name: null });
+  assert.deepEqual(await taken.json(), { username: 'kevin_s', taken: true, pub: null, name: null, kind: 'account', id: null });
 
   // Чужой аккаунт то же имя не получает.
   const conflict = await post(bob, signed(bob, 'claim_username', { username: 'kevin_s', ownerProfileId: 0 }));
@@ -195,7 +195,7 @@ test('username registry claims globally and refuses a name held by another accou
   }));
   assert.equal(published.status, 200);
   assert.deepEqual(await (await lookupDir('ALICE_DIR')).json(), {
-    username: 'alice_dir', taken: true, pub: profilePublicKeyB64, name: null,
+    username: 'alice_dir', taken: true, pub: profilePublicKeyB64, name: null, kind: 'account', id: null,
   });
 
   // v4.32.722: имя владельца. Приходит очищенным от меток направления письма
@@ -284,4 +284,120 @@ test('справка по имени описана у своего маршру
   assert.ok(doc > 0, 'комментарий на месте');
   assert.ok(route > doc, 'маршрут ниже комментария');
   assert.ok(!src.slice(doc, route).includes('app.'), 'между ними нет другого маршрута');
+});
+
+/**
+ * Дефект: пространств имён было два. Юзернейм человека лежал в реестре, а
+ * «публичный адрес» группы — нигде: его писал себе каждый сам, конвертом
+ * `meta`. Поэтому `@x` одновременно носили человек, группа и канал, и
+ * приглашение «пиши на @x» не значило ничего.
+ *
+ * Цена: адрес — единственная человекочитаемая вывеска, по которой в
+ * приложение приходят снаружи. Канал, назвавшийся адресом чужого канала,
+ * ничем от него не отличался.
+ *
+ * Правка (v4.32.937): адрес занимается тем же `claimUsername`, в том же
+ * реестре, с предметом — публичным идентификатором `GR-…`/`CH-…`.
+ *
+ * Границы: предмет НЕ доказывает, что заявитель владеет группой — своей
+ * ключевой пары у группы нет. Он даёт уникальность и отделяет слот адреса от
+ * слота личного имени: занимает их один и тот же профиль.
+ */
+test('пространство имён одно: человек, группа и канал спорят за одну строку', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-username-space-'));
+  const { SyncDatabase } = require('./sync-db');
+  const db = new SyncDatabase(path.join(dir, 'sync.sqlite'));
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const alice = accountFor(41);
+  const bob = accountFor(42);
+  db.ensureAccount(alice.accountId, alice.publicKeyB64);
+  db.ensureAccount(bob.accountId, bob.publicKeyB64);
+
+  const cafe = { kind: 'group', id: 'GR-ABCDE-FGHJK' };
+  const news = { kind: 'channel', id: 'CH-ABCDE-FGHJK' };
+
+  // ПРОВЕРКА НЕ ПУСТАЯ: реестр вообще принимает заявку с предметом.
+  assert.deepEqual(
+    db.claimUsername(alice.accountId, 0, 'aircafe', null, null, cafe),
+    { ok: true, username: 'aircafe' },
+  );
+  assert.deepEqual(
+    { ...db.lookupUsername('aircafe') },
+    {
+      accountId: alice.accountId, profileId: 0, profilePublicKeyB64: null,
+      displayName: null, subjectKind: 'group', subjectId: cafe.id,
+    },
+  );
+
+  // Чужому аккаунту то же имя не достаётся — ни человеку, ни каналу.
+  assert.deepEqual(
+    db.claimUsername(bob.accountId, 0, 'aircafe'),
+    { ok: false, reason: 'username_taken' },
+  );
+  assert.deepEqual(
+    db.claimUsername(bob.accountId, 0, 'aircafe', null, null, news),
+    { ok: false, reason: 'username_taken' },
+  );
+
+  // ПОВОД ДЛЯ ПРАВКИ ЖИВ: слот адреса отдельный от слота личного имени.
+  // Тот же профиль занимает своё имя — адрес группы при этом остаётся.
+  assert.deepEqual(
+    db.claimUsername(alice.accountId, 0, 'margarita'),
+    { ok: true, username: 'margarita' },
+  );
+  assert.equal(db.lookupUsername('aircafe').subjectId, cafe.id);
+  assert.equal(db.lookupUsername('margarita').subjectKind, null);
+
+  // И наоборот: переименование группы не трогает имя человека.
+  assert.deepEqual(
+    db.claimUsername(alice.accountId, 0, 'aircafe2', null, null, cafe),
+    { ok: true, username: 'aircafe2' },
+  );
+  assert.equal(db.lookupUsername('aircafe'), null, 'прежний адрес группы освобождён');
+  assert.equal(db.lookupUsername('margarita').accountId, alice.accountId, 'имя человека на месте');
+
+  // Два разных предмета одного профиля живут порознь.
+  assert.deepEqual(
+    db.claimUsername(alice.accountId, 0, 'airnews', null, null, news),
+    { ok: true, username: 'airnews' },
+  );
+  assert.equal(db.lookupUsername('aircafe2').subjectId, cafe.id);
+  assert.equal(db.lookupUsername('airnews').subjectId, news.id);
+
+  // Освобождение адресное: снятие адреса канала не снимает ни адрес группы,
+  // ни личное имя. Без этого удаление группы стирало бы юзернейм владельца.
+  db.releaseUsername(alice.accountId, 0, news.id);
+  assert.equal(db.lookupUsername('airnews'), null);
+  assert.equal(db.lookupUsername('aircafe2').subjectId, cafe.id);
+  assert.equal(db.lookupUsername('margarita').accountId, alice.accountId);
+
+  // Освобождение без предмета снимает ровно личное имя.
+  db.releaseUsername(alice.accountId, 0);
+  assert.equal(db.lookupUsername('margarita'), null);
+  assert.equal(db.lookupUsername('aircafe2').subjectId, cafe.id);
+
+  // Освобождённое имя достаётся другому — и человеку тоже.
+  assert.deepEqual(
+    db.claimUsername(bob.accountId, 0, 'margarita'),
+    { ok: true, username: 'margarita' },
+  );
+});
+
+/**
+ * Предмет заявки приходит по сети, и доверять ему на слово нельзя: он уезжает
+ * в ответ справочника, по которому открывается экран. Форма проверяется на
+ * входе, а вид и приставка обязаны совпасть — «канал» с идентификатором
+ * группы значит, что заявку собрали не нашим клиентом.
+ */
+test('предмет заявки принимается только в известном виде', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  assert.match(src, /const SUBJECT_ID_RE = \/\^\(GR\|CH\)-\[0-9A-Z\]\{5\}-\[0-9A-Z\]\{5\}\$\//);
+  assert.ok(src.includes('function readClaimSubject('), 'разбор предмета на месте');
+  // Строка привязки дописывается ТОЛЬКО при наличии предмета: иначе подписи
+  // прежних версий перестали бы сходиться побайтово.
+  assert.ok(
+    src.includes('subject ? `${base}:${subject.kind}:${subject.id}` : base'),
+    'привязка расширяется условно',
+  );
 });
