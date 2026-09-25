@@ -14,6 +14,7 @@ import { ownerPidByDid, storageIsOwn } from '../identity/ownerProfile';
 import { publicKeyFromB64 } from '../crypto/pubKeyFormat';
 import {
   FeedStorage,
+  COMMENTS_MAX_PER_AUTHOR_PER_POST,
   deleteFeedDbForProfile,
   listFeedDbProfileIds,
   type FeedPostRow,
@@ -23,6 +24,7 @@ import {
   type FeedSyncTombstone,
 } from '../storage/feedStorage';
 import { isPlainCid } from '../cid';
+import { ruPlural } from '../text/ruPlural';
 import { log } from '../logger';
 import {
   scopedKvDelete,
@@ -4176,7 +4178,20 @@ export async function addAndBroadcastComment(
   const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const timestamp = Date.now();
   const row: FeedCommentRow = { id, postId, authorDid: myDid, authorName: safeName, text: trimmed, timestamp };
-  await s.addComment(row);
+  // v4.32.894: исход записи выбрасывался. `addComment` при отказе не бросает —
+  // он отдаёт `false`, и экран показывал комментарий в треде и очищал поле
+  // ввода, хотя текст не сохранился и никуда не ушёл. `id` выдан случайным
+  // строкой выше, поэтому ни надгробия, ни повтора здесь быть не может:
+  // единственный достижимый отказ — потолок на автора под этим постом.
+  const wrote = await s.addCommentChecked(row);
+  if (wrote !== 'inserted') {
+    log.warn('feed_own_comment_not_stored', { postId: postId.slice(0, 12), why: wrote });
+    throw new Error(
+      wrote === 'author_limit'
+        ? `Под этой публикацией уже ${COMMENTS_MAX_PER_AUTHOR_PER_POST} ваших ${ruPlural(COMMENTS_MAX_PER_AUTHOR_PER_POST, ['комментарий', 'комментария', 'комментариев'])} — новый не сохранён`
+        : 'Комментарий не сохранился — попробуйте ещё раз'
+    );
+  }
   emitFeedUpdate();
 
   const data: FeedCommentData = { kind: 'comment', commentId: id, text: trimmed, authorName: safeName };

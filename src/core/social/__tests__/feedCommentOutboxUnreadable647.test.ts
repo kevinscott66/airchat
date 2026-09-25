@@ -58,6 +58,8 @@ jest.mock('../../storage/feedStorage', () => ({
     async getPost(id: string): Promise<unknown> { return mockPosts.get(id) ?? null; }
     async deletePost(id: string): Promise<void> { mockPosts.delete(id); }
     async addComment(row: CommentRow): Promise<boolean> { mockComments.set(row.id, row); return true; }
+    // v4.32.894: свой комментарий пишется через вариант с причиной отказа.
+    async addCommentChecked(row: CommentRow): Promise<string> { mockComments.set(row.id, row); return 'inserted'; }
     async deleteComment(id: string): Promise<void> { mockComments.delete(id); }
     async getComments(postId: string): Promise<CommentRow[]> {
       return [...mockComments.values()].filter((c) => c.postId === postId);

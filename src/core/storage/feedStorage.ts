@@ -210,6 +210,9 @@ function toPost(r: FeedDbRow, dek: Uint8Array): FeedPostRow {
  */
 export const COMMENTS_MAX_PER_AUTHOR_PER_POST = 50;
 
+/** Исход записи комментария: записался, надгробие, потолок автора, повтор. */
+export type FeedCommentWrite = 'inserted' | 'tombstoned' | 'author_limit' | 'duplicate';
+
 export class FeedStorage {
   private db: SQLite.SQLiteDatabase | null = null;
   private readonly profileId: number;
@@ -992,6 +995,25 @@ export class FeedStorage {
    * нажатию человек не находил ничего.
    */
   async addComment(row: FeedCommentRow): Promise<boolean> {
+    return (await this.addCommentChecked(row)) === 'inserted';
+  }
+
+  /**
+   * Тот же ответ, но с причиной отказа (v4.32.894).
+   *
+   * `addComment` отвечает одним `boolean`, и `false` значит сразу три разные
+   * вещи: надгробие, потолок на автора и повтор по `id`. Приёмнику конвертов
+   * этого хватает — он в любом из трёх случаев просто не поднимает баннер. А
+   * вот своему только что написанному комментарию не хватало: `id` выдаётся
+   * случайным прямо перед записью, так что ни надгробия, ни повтора у него
+   * быть не может, и единственный достижимый отказ — потолок
+   * COMMENTS_MAX_PER_AUTHOR_PER_POST. Человеку об этом не говорили: текст не
+   * сохранялся и никуда не уходил, а в треде висел как отправленный — до
+   * первой перерисовки ленты.
+   *
+   * Отказ базы сюда по-прежнему не попадает: он остаётся исключением.
+   */
+  async addCommentChecked(row: FeedCommentRow): Promise<FeedCommentWrite> {
     const d = await this.ensureDb();
     // v4.32.163 P2#3 fix: проверяем tombstone. Если envelope `feed_comment_delete`
     // пришёл раньше самого `feed_comment` (out-of-order доставка через разные
@@ -1002,7 +1024,7 @@ export class FeedStorage {
       'SELECT comment_id FROM feed_comment_tombstones WHERE comment_id = ?',
       [row.id]
     );
-    if (tombstone) return false;
+    if (tombstone) return 'tombstoned';
     // v4.32.663: потолок на автора под этим постом — см.
     // COMMENTS_MAX_PER_AUTHOR_PER_POST. Считаем ДО расшифровки ключом и до
     // записи: дорого именно то, что каждая лишняя строка потом читается и
@@ -1019,7 +1041,7 @@ export class FeedStorage {
         author: row.authorDid.slice(0, 12),
         have: mine?.count ?? 0,
       });
-      return false;
+      return 'author_limit';
     }
     const dek = await getOrCreateDataEncryptionKey();
     const res = await d.runAsync(
@@ -1035,7 +1057,7 @@ export class FeedStorage {
         encryptAtRestNullable(row.reactions ? JSON.stringify(row.reactions) : null, dek),
       ]
     );
-    return (res.changes ?? 0) > 0;
+    return (res.changes ?? 0) > 0 ? 'inserted' : 'duplicate';
   }
 
   async getComments(postId: string): Promise<FeedCommentRow[]> {
