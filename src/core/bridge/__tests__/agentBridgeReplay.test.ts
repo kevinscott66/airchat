@@ -16,6 +16,12 @@ jest.mock('../../storage/local', () => ({
   kvSet: jest.fn(async (k: string, v: string) => {
     kv[k] = v;
   }),
+  // v4.32.961: настройки устройства мост пишет проверенной записью — иначе
+  // отказ базы уезжал к агенту как `ok: true`.
+  kvSetChecked: jest.fn(async (k: string, v: string) => {
+    kv[k] = v;
+    return true;
+  }),
 }));
 
 const secureStore: Record<string, string> = {};

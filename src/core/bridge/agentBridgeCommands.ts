@@ -27,7 +27,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 import { log } from '../logger';
-import { kvGet, kvSet } from '../storage/local';
+import { kvGet, kvSetChecked } from '../storage/local';
 import { loadConfig, saveConfigOverride, type AppConfig } from '../config';
 import { restartInternetTransport } from '../transport/internet/restartInternetTransport';
 import {
@@ -308,7 +308,35 @@ async function cmdSettingsSet(arg: unknown): Promise<BridgeReply> {
       `Значение должно быть строкой не длиннее ${MAX_SETTING_VALUE_CHARS} символов: ${bad.join(', ')}.`,
     );
   }
-  for (const k of keys) await kvSet(k, values[k] as string);
+  // v4.32.961: здесь стоял `kvSet`, а он гасит отказ базы и отдаёт void —
+  // ровно то, из-за чего в соседнем `agentBridge` (v4.32.801) запись решения о
+  // мосте уже проверяется. Разница в том, кому мост врёт: он отвечает не
+  // человеку, а агенту, и агент по `ok: true` докладывает «сделано». Человек
+  // просил вернуть уведомления, база в ту секунду была занята — не легло
+  // ничего, а узнает он об этом, только когда сообщения перестанут приходить,
+  // и искать будет где угодно, только не в настройке, которую ему подтвердили.
+  // Отдельно про середину списка: отказ на втором ключе из трёх оставлял
+  // половину записанной, а в ответе всё равно стоял весь список — по такому
+  // ответу нечего даже повторить.
+  const applied: string[] = [];
+  const failed: string[] = [];
+  for (const k of keys) {
+    if (await kvSetChecked(k, values[k] as string)) applied.push(k);
+    else failed.push(k);
+  }
+  if (failed.length > 0) {
+    log.warn('bridge_settings_set_write_failed', { applied: applied.length, failed: failed.length });
+    // Отказной ответ моста не носит `result` — поэтому что успело лечь,
+    // называем словами: без этого агент не отличит «не записалось ничего» от
+    // «записалось половину» и будет повторять вслепую.
+    return fail(
+      'settings.set',
+      'write_failed',
+      applied.length > 0
+        ? `Записано: ${applied.join(', ')}. Не записано: ${failed.join(', ')}. База была занята, повторите.`
+        : `Не записано: ${failed.join(', ')}. База была занята, повторите.`,
+    );
+  }
   // Честно про отложенность: оформление читается при запуске (ThemeContext), и
   // запущенное приложение перекрашивается не от записи, а от перезапуска.
   // Уведомления читаются в момент показа, они действуют сразу.
@@ -317,7 +345,7 @@ async function cmdSettingsSet(arg: unknown): Promise<BridgeReply> {
     ok: true,
     cmd: 'settings.set',
     result: {
-      applied: keys,
+      applied,
       note: appearanceTouched
         ? 'Оформление запущенное приложение перечитает при следующем запуске.'
         : undefined,
