@@ -117,7 +117,25 @@ export class LanTransport {
     const peer = this.peers.get(targetDid);
     if (!peer || Date.now() - peer.lastSeen > PEER_TTL_MS) return false;
     const frame = encodeLanFrame(this.myDid, data);
-    return tcpSend(loadTcp(), peer.host, peer.port, frame);
+    const ok = await tcpSend(loadTcp(), peer.host, peer.port, frame);
+    // v4.32.954: адрес, по которому не отправилось, больше не считается
+    // рабочим — и перестаёт закрывать дверь перед новым объявлением того же
+    // DID. Иначе защита от подмены (см. обработчик 'resolved') держала бы
+    // честно переехавшее устройство недостижимым по локальной сети две минуты.
+    if (!ok) this.forgetUnreachable(targetDid, peer);
+    return ok;
+  }
+
+  /**
+   * Забыть адрес, по которому отправка не прошла.
+   *
+   * Снимается только ТА САМАЯ запись: пока шла отправка, объявление могло
+   * принести другой адрес, и стирать его нельзя — отказом он не проверен.
+   */
+  private forgetUnreachable(did: string, stale: LanPeer): void {
+    if (this.peers.get(did) !== stale) return;
+    this.peers.delete(did);
+    log.info('lan_peer_unreachable_forgotten', { did: did.slice(0, 24), host: stale.host });
   }
 
   start(opts: {
@@ -225,8 +243,19 @@ export class LanTransport {
           if (!host || !port) return;
           // Drop overlapping (potentially spoofed) DID advertisements from a
           // different host within the TTL window.
+          //
+          // v4.32.954: окном защиты тут стояло PEER_DISCOVERY_DEBOUNCE_MS —
+          // тридцать секунд, — а запись остаётся годной для отправки все
+          // PEER_TTL_MS, сто двадцать: так считают и `canReach`, и `send`.
+          // Между тридцатой и сто двадцатой секундой чужой host:port молча
+          // подменял адрес живого пира. Плановый resolve идёт раз в сорок пять
+          // секунд, то есть дверь открывалась на пятнадцать секунд из каждых
+          // сорока пяти — и открывалась снова и снова. Теперь окно защиты
+          // равно окну годности: пока записью пользуются, адрес не меняет
+          // никто. Отпускает её только отказ отправки (см. `send`) — так
+          // защищён РАБОТАЮЩИЙ адрес, а не любой занятый.
           const existing = this.peers.get(did);
-          if (existing && Date.now() - existing.lastSeen < PEER_DISCOVERY_DEBOUNCE_MS &&
+          if (existing && Date.now() - existing.lastSeen < PEER_TTL_MS &&
               (existing.host !== host || existing.port !== port)) {
             log.warn('lan_peer_conflict_drop', { did: did.slice(0, 24), existing: existing.host, newHost: host });
             return;
