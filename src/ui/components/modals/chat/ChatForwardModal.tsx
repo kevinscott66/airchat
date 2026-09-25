@@ -147,7 +147,16 @@ export function ForwardModal({
             continue;
           }
           const row = { id: uuidv4(), groupId: group.id, senderPubB64: myPub, senderName: myName, text: msgText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
-          await insertGroupMessage(row);
+          // v4.32.893: исход записи выбрасывался, и группа с отказавшей базой
+          // попадала в «Переслано в N чатов» наравне с остальными — при том
+          // что рассылка ниже уже ушла участникам. Бросать отсюда нельзя:
+          // исключение оборвёт перебор и потеряет то, что уже посчитано в
+          // `sent` и `denied`, — поэтому отказ идёт в тот же список причин,
+          // что и «нет прав» и «дошло не всем».
+          if (!(await insertGroupMessage(row))) {
+            denied.push(`«${group.name}» — не удалось сохранить на устройстве`);
+            continue;
+          }
           await touchGroupConversation(group.id, pid, msgText.slice(0, 120), false, myName, false, myPub);
           // v4.32.450: вердикт выше отвечает на «можно ли», а рассылка — на
           // «ушло ли». Между ними связь могла пропасть, и «Переслано в 3 чата»

@@ -124,7 +124,7 @@ import { useTabBarInset } from '../TabBarInset';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { StoriesRow } from '../components/StoriesRow';
 import { useMediaViewer } from '../components/MediaViewer';
-import { makePollText, parsePollText, POLL_PREFIX, setPollVote, deletePollVote, getPollVotes, listGroups, insertGroupMessage, touchGroupConversation, type GroupRow } from '../../core/storage/local';
+import { makePollText, parsePollText, POLL_PREFIX, setPollVote, deletePollVote, getPollVotes, listGroups, insertGroupMessageOrThrow, touchGroupConversation, type GroupRow } from '../../core/storage/local';
 import { scopedKvGet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { fanoutGroupMessage } from '../../core/social/groupMessaging';
@@ -1464,13 +1464,16 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         createdAt: Date.now(),
         ownerProfileId: pid,
       };
-      await insertGroupMessage(row);
+      await insertGroupMessageOrThrow(row);
       await touchGroupConversation(grp.id, pid, msg.slice(0, 60), false, myName, false, myPubB64);
       announceGroupSend(fanoutGroupMessage(grp.id, msg, myName, myPubB64, row.id));
       showSuccess(t('feed.forwardedToGroup', { name: grp.name }));
       setShareToTarget(null);
-    } catch {
-      showError(t('feed.sendFailed'));
+      // v4.32.893: перехват был глухой — `catch {}` без разбора выводил одно
+      // «не отправилось» на любую причину. Теперь запись в базу сообщает свою
+      // словами, и прятать их незачем.
+    } catch (e) {
+      showError(userErrorText(e, t('feed.sendFailed')));
     } finally {
       setShareSending(false);
     }

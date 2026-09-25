@@ -52,6 +52,7 @@ import {
   listAllGroupMessages,
   listGroupMembersRead,
   insertGroupMessage,
+  insertGroupMessageOrThrow,
   touchGroupConversation,
   markGroupRead,
   markGroupUnread,
@@ -1928,7 +1929,7 @@ function GroupChatScreen({
             const cid = up.cid;
             const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? va.fileSize ?? 0, cid);
             const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
-            await insertGroupMessage(row);
+            await insertGroupMessageOrThrow(row);
             await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
             announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
             sentCount++;
@@ -2038,7 +2039,7 @@ function GroupChatScreen({
         createdAt: Date.now(),
         ownerProfileId: pid,
       };
-      await insertGroupMessage(row);
+      await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, viewOnce ? '👁 Одноразовое фото' : (cids.length > 1 ? `📷 ${cids.length} фото` : '📷 Фото'), false, myDisplayName, false, myPubB64);
       // v4.32.244: cids не передавались вообще — снимок оставался только у
       // отправителя, у остальных приходил пустой текст.
@@ -2104,7 +2105,7 @@ function GroupChatScreen({
         createdAt: Date.now(),
         ownerProfileId: pid,
       };
-      await insertGroupMessage(row);
+      await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, `📎 ${asset.name ?? 'Документ'}`, false, myDisplayName, false, myPubB64);
       announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
       await loadMessages();
@@ -2148,7 +2149,7 @@ function GroupChatScreen({
         createdAt: Date.now(),
         ownerProfileId: pid,
       };
-      await insertGroupMessage(row);
+      await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, '📍 Геолокация', false, myDisplayName, false, myPubB64);
       announceGroupSend(fanoutGroupMessage(group.id, locText, myDisplayName, myPubB64, row.id));
       await loadMessages();
@@ -2213,7 +2214,7 @@ function GroupChatScreen({
             // показывался как «0 Б», хотя он уже загружен и открывается.
             const docText = makeDocText(name.includes('.') ? name : `${name}.mp4`, up.sizeBytes ?? 0, cid);
             const row: GroupMessageRow = { id: uuidv4(), groupId: group.id, senderPubB64: myPubB64, senderName: myDisplayName, text: docText, mediaCids: null, replyToId: null, replyToPreview: null, reactions: null, createdAt: Date.now(), ownerProfileId: pid };
-            await insertGroupMessage(row);
+            await insertGroupMessageOrThrow(row);
             await touchGroupConversation(group.id, pid, '🎬 Видео', false, myDisplayName, false, myPubB64);
             announceGroupSend(fanoutGroupMessage(group.id, docText, myDisplayName, myPubB64, row.id));
             sentCount++;
@@ -2260,7 +2261,14 @@ function GroupChatScreen({
       createdAt: Date.now(),
       ownerProfileId: pid,
     };
-    await insertGroupMessage(row);
+    // v4.32.893: здесь, в отличие от соседей, обработчик не обёрнут в try —
+    // бросать нечему поймать, поэтому исход проверяется на месте. Выйти надо
+    // ДО рассылки: иначе карточка контакта уходит всем, а у отправителя её
+    // после перезапуска нет.
+    if (!(await insertGroupMessage(row))) {
+      showError('Не удалось сохранить карточку на устройстве — отправка отменена');
+      return;
+    }
     await touchGroupConversation(group.id, pid, `📇 ${c.displayName ?? ''}`, false, myDisplayName, false, myPubB64);
     announceGroupSend(fanoutGroupMessage(group.id, cardText, myDisplayName, myPubB64, row.id));
     await loadMessages();
@@ -2286,7 +2294,7 @@ function GroupChatScreen({
         createdAt: Date.now(),
         ownerProfileId: pid,
       };
-      await insertGroupMessage(row);
+      await insertGroupMessageOrThrow(row);
       await touchGroupConversation(group.id, pid, '🎞 GIF', false, myDisplayName, false, myPubB64);
       announceGroupSend(fanoutGroupMessage(group.id, gifText, myDisplayName, myPubB64, row.id));
       await loadMessages();
@@ -2941,7 +2949,7 @@ function GroupChatScreen({
           createdAt: Date.now(),
           ownerProfileId: pid,
         };
-        await insertGroupMessage(row);
+        await insertGroupMessageOrThrow(row);
         await touchGroupConversation(group.id, pid, t.slice(0, 120), false, myDisplayName, false, myPubB64);
         // Рассылка участникам. Ответа не ждём, но и не выбрасываем: строка
         // уже в переписке, и отказ обязан быть назван (v4.32.450).
@@ -4754,7 +4762,7 @@ function GroupChatScreen({
                         createdAt: Date.now(),
                         ownerProfileId: pid,
                       };
-                      await insertGroupMessage(row);
+                      await insertGroupMessageOrThrow(row);
                       await touchGroupConversation(group.id, pid, '🎤 Голосовое сообщение', false, myDisplayName, false, myPubB64);
                       announceGroupSend(fanoutGroupMessage(group.id, voiceText, myDisplayName, myPubB64, row.id));
                       await loadMessages();
@@ -4957,7 +4965,7 @@ function GroupChatScreen({
                 createdAt: Date.now(),
                 ownerProfileId: pid,
               };
-              await insertGroupMessage(row);
+              await insertGroupMessageOrThrow(row);
               await touchGroupConversation(group.id, pid, isQuizPoll ? '🧠 Викторина' : allowMultiple ? '☑️ Опрос' : '📊 Опрос', false, myDisplayName, false, myPubB64);
               announceGroupSend(fanoutGroupMessage(group.id, pollText, myDisplayName, myPubB64, row.id));
               await loadMessages();

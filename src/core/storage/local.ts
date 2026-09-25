@@ -7605,6 +7605,33 @@ export async function insertGroupMessage(msg: GroupMessageRow): Promise<boolean>
  */
 export type GroupMessageWrite = 'inserted' | 'duplicate' | 'failed';
 
+/**
+ * Запись своего только что составленного сообщения в группу — или исключение.
+ *
+ * v4.32.893. Тринадцать экранных мест писали `await insertGroupMessage(row)` и
+ * выбрасывали ответ, а `false` здесь — не исключение, и вокруг стоящий `catch`
+ * на него не срабатывал. После непрошедшей записи шли дальше: `fanout`
+ * отправлял сообщение участникам, `touchGroupConversation` двигал строку
+ * переписки, экран показывал сообщение из своего состояния. У всех остальных
+ * сообщение появлялось, у автора после перезапуска его не было — и наоборот,
+ * если следом отказывала и рассылка, не оставалось ничего, а человеку
+ * показывали успех.
+ *
+ * В личных чатах этот класс закрыт с `saveChatMessageChecked`. Здесь исход
+ * отдаётся исключением, потому что все тринадцать мест уже стоят в `try` с
+ * человеческим `showError` — им нужно не различать исходы, а прерваться ДО
+ * рассылки. Текст исключения кириллический и однострочный: `userErrorText`
+ * пропускает такой на экран как есть.
+ *
+ * `'duplicate'` отказом не считается: строка с таким `id` уже лежит, то есть
+ * сообщение на устройстве есть — а это всё, о чём спрашивает вызывающий.
+ */
+export async function insertGroupMessageOrThrow(msg: GroupMessageRow): Promise<void> {
+  if ((await insertGroupMessageChecked(msg)) === 'failed') {
+    throw new Error('Не удалось сохранить сообщение на устройстве — отправка отменена');
+  }
+}
+
 export async function insertGroupMessageChecked(msg: GroupMessageRow): Promise<GroupMessageWrite> {
   try {
     const d = await db();

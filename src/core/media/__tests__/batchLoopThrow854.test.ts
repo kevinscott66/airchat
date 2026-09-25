@@ -179,7 +179,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('к моменту броска часть уже доставлена — рассылка идёт внутри цикла', () => {
     const sends = mediaLoops(GROUPS).filter((l) => l.body.includes('announceGroupSend('));
     expect(sends).toHaveLength(2);
-    for (const l of sends) expect(l.body).toContain('await insertGroupMessage(row);');
+    // v4.32.893: запись переведена на бросающую обёртку — сама по себе она
+    // здесь ничего не меняет (отказ ловит тот же `catch` и считает видео
+    // несостоявшимся), но имя вызова служит меткой «строка пишется в цикле».
+    for (const l of sends) expect(l.body).toContain('await insertGroupMessageOrThrow(row);');
   });
 
   it('у фотографий в группе цена другая: сообщение собирается после цикла', () => {
