@@ -1735,21 +1735,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Сообщения только от контактов</Text>
             <Text style={styles.desc}>Незнакомцы не смогут написать вам</Text>
           </View>
-          <AppSwitch value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_msg', String(v)), () => setOnlyContactsCanMsg(!v)); }} />
+          <AppSwitch accessibilityLabel="Сообщения только от контактов" value={onlyContactsCanMsg} onValueChange={(v) => { setOnlyContactsCanMsg(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_msg', String(v)), () => setOnlyContactsCanMsg(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Добавление в группы — только контакты</Text>
             <Text style={styles.desc}>Незнакомцы не смогут добавить вас в группу</Text>
           </View>
-          <AppSwitch value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_group', String(v)), () => setOnlyContactsCanAddToGroup(!v)); }} />
+          <AppSwitch accessibilityLabel="Добавление в группы — только контакты" value={onlyContactsCanAddToGroup} onValueChange={(v) => { setOnlyContactsCanAddToGroup(v); void applyPref(() => privacyPrefSet('privacy_only_contacts_group', String(v)), () => setOnlyContactsCanAddToGroup(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Не отправлять уведомления о прочтении</Text>
             <Text style={styles.desc}>Отправители не будут видеть, что вы прочли их сообщения</Text>
           </View>
-          <AppSwitch value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void applyPref(() => privacyPrefSet('privacy_disable_read_receipts', String(v)), () => setDisableReadReceipts(!v)); }} />
+          <AppSwitch accessibilityLabel="Не отправлять уведомления о прочтении" value={disableReadReceipts} onValueChange={(v) => { setDisableReadReceipts(v); void applyPref(() => privacyPrefSet('privacy_disable_read_receipts', String(v)), () => setDisableReadReceipts(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
@@ -1763,14 +1763,14 @@ function SettingsScreenImpl({
             */}
             <Text style={styles.desc}>Включено: приложение само открывает чужую ссылку, чтобы показать заголовок и картинку, — и хозяин ссылки узнаёт ваш IP-адрес. Выключено: не открывает. Свои ссылки в поле ввода показываются всегда</Text>
           </View>
-          <AppSwitch value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void applyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v)); }} />
+          <AppSwitch accessibilityLabel="Предпросмотр ссылок из входящих" value={incomingLinkPreview} onValueChange={(v) => { setIncomingLinkPreview(v); void applyPref(() => privacyPrefSet(LINK_PREVIEW_INCOMING_KEY, String(v)), () => setIncomingLinkPreview(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Облачный перевод</Text>
             <Text style={styles.desc}>Выключено: перевод не работает, зато текст не покидает устройство. Включённый отправляет переводимое сообщение на сторонний сервис api.mymemory.translated.net в открытом виде — шифрование до него не доходит. Решение своё у каждого аккаунта</Text>
           </View>
-          <AppSwitch value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void applyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v)); }} />
+          <AppSwitch accessibilityLabel="Облачный перевод" value={allowCloudTranslate} onValueChange={(v) => { setAllowCloudTranslate(v); void applyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v)); }} />
         </View>
       </View>
 
@@ -1814,21 +1814,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Личные сообщения</Text>
             <Text style={styles.desc}>Уведомлять о новых сообщениях</Text>
           </View>
-          <AppSwitch value={notifyDm} onValueChange={(v) => { setNotifyDm(v); applyKvPref('notify_dm', String(v), () => setNotifyDm(!v)); }} />
+          <AppSwitch accessibilityLabel="Личные сообщения" value={notifyDm} onValueChange={(v) => { setNotifyDm(v); applyKvPref('notify_dm', String(v), () => setNotifyDm(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Группы и каналы</Text>
             <Text style={styles.desc}>Уведомлять о новых сообщениях в группах</Text>
           </View>
-          <AppSwitch value={notifyGroups} onValueChange={(v) => { setNotifyGroups(v); applyKvPref('notify_groups', String(v), () => setNotifyGroups(!v)); }} />
+          <AppSwitch accessibilityLabel="Группы и каналы" value={notifyGroups} onValueChange={(v) => { setNotifyGroups(v); applyKvPref('notify_groups', String(v), () => setNotifyGroups(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Звонки</Text>
             <Text style={styles.desc}>Показывать входящий звонок при закрытом приложении</Text>
           </View>
-          <AppSwitch value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); applyKvPref('notify_calls', String(v), () => setNotifyCalls(!v)); }} />
+          <AppSwitch accessibilityLabel="Звонки" value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); applyKvPref('notify_calls', String(v), () => setNotifyCalls(!v)); }} />
         </View>
         {Platform.OS === 'ios' ? (
           <View style={styles.switchRow}>
@@ -1837,6 +1837,7 @@ function SettingsScreenImpl({
               <Text style={styles.desc}>Без неё звонок в свёрнутое приложение не придёт. Расходует батарею</Text>
             </View>
             <AppSwitch
+              accessibilityLabel="Связь в фоне"
               value={bgKeepalive}
               onValueChange={(v) => {
                 setBgKeepalive(v);
@@ -1862,6 +1863,7 @@ function SettingsScreenImpl({
               </Text>
             </View>
             <AppSwitch
+              accessibilityLabel="Уведомления в браузере"
               value={webPushOn}
               onValueChange={(v) => {
                 if (!v) {
@@ -1889,14 +1891,14 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Лента</Text>
             <Text style={styles.desc}>Уведомлять о новых публикациях контактов</Text>
           </View>
-          <AppSwitch value={notifyFeed} onValueChange={(v) => { setNotifyFeed(v); applyKvPref('notify_feed', String(v), () => setNotifyFeed(!v)); }} />
+          <AppSwitch accessibilityLabel="Лента" value={notifyFeed} onValueChange={(v) => { setNotifyFeed(v); applyKvPref('notify_feed', String(v), () => setNotifyFeed(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Упоминания (@имя)</Text>
             <Text style={styles.desc}>Отдельное уведомление при упоминании в группе</Text>
           </View>
-          <AppSwitch value={notifyMentions} onValueChange={(v) => { setNotifyMentions(v); applyKvPref('notify_mentions', String(v), () => setNotifyMentions(!v)); }} />
+          <AppSwitch accessibilityLabel="Упоминания (@имя)" value={notifyMentions} onValueChange={(v) => { setNotifyMentions(v); applyKvPref('notify_mentions', String(v), () => setNotifyMentions(!v)); }} />
         </View>
       </View>
 
@@ -1907,21 +1909,21 @@ function SettingsScreenImpl({
             <Text style={styles.label}>Показывать содержимое</Text>
             <Text style={styles.desc}>Текст сообщений в уведомлениях</Text>
           </View>
-          <AppSwitch value={notifyPreview} onValueChange={(v) => { setNotifyPreview(v); applyKvPref('notify_preview', String(v), () => setNotifyPreview(!v)); }} />
+          <AppSwitch accessibilityLabel="Показывать содержимое" value={notifyPreview} onValueChange={(v) => { setNotifyPreview(v); applyKvPref('notify_preview', String(v), () => setNotifyPreview(!v)); }} />
         </View>
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Вибрация</Text>
             <Text style={styles.desc}>Вибросигнал при получении уведомления</Text>
           </View>
-          <AppSwitch value={notifyVibrate} onValueChange={(v) => { setNotifyVibrate(v); applyKvPref('notify_vibrate', String(v), () => setNotifyVibrate(!v)); }} />
+          <AppSwitch accessibilityLabel="Вибрация" value={notifyVibrate} onValueChange={(v) => { setNotifyVibrate(v); applyKvPref('notify_vibrate', String(v), () => setNotifyVibrate(!v)); }} />
         </View>
         <View style={[styles.switchRow, styles.switchRowLast]}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Звук уведомления</Text>
             <Text style={styles.desc}>Воспроизводить звук при новом сообщении</Text>
           </View>
-          <AppSwitch value={notifySound} onValueChange={(v) => { setNotifySound(v); applyKvPref('notify_sound', String(v), () => setNotifySound(!v)); }} />
+          <AppSwitch accessibilityLabel="Звук уведомления" value={notifySound} onValueChange={(v) => { setNotifySound(v); applyKvPref('notify_sound', String(v), () => setNotifySound(!v)); }} />
         </View>
       </View>
 
@@ -1933,6 +1935,7 @@ function SettingsScreenImpl({
             <Text style={styles.desc}>Уведомления отключены в заданные часы</Text>
           </View>
           <AppSwitch
+            accessibilityLabel="Тихие часы"
             value={dndEnabled}
             onValueChange={(v) => { setDndEnabled(v); applyKvPref('dnd_enabled', String(v), () => setDndEnabled(!v)); }}
           />
@@ -2005,6 +2008,7 @@ function SettingsScreenImpl({
             </Text>
           </View>
           <AppSwitch
+            accessibilityLabel="Автоматически"
             value={autoNightEnabled}
             onValueChange={(v) => {
               if (v) { setNightStartTmp(autoNightStart); setNightEndTmp(autoNightEnd); setNightTimeModal(true); }
@@ -2252,6 +2256,7 @@ function SettingsScreenImpl({
               </Text>
             </View>
             <AppSwitch
+              accessibilityLabel={Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}
               value={bioEnabled}
               onValueChange={handleToggleBiometric}
               disabled={bioBusy}
@@ -2314,7 +2319,7 @@ function SettingsScreenImpl({
               <Text style={styles.label}>Блокировать при выходе</Text>
               <Text style={styles.desc}>Требовать пароль при следующем открытии</Text>
             </View>
-            <AppSwitch value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); applyKvPref('auto_lock_on_exit', String(v), () => setAutoLockEnabled(!v)); }} />
+            <AppSwitch accessibilityLabel="Блокировать при выходе" value={autoLockEnabled} onValueChange={(v) => { setAutoLockEnabled(v); applyKvPref('auto_lock_on_exit', String(v), () => setAutoLockEnabled(!v)); }} />
           </View>
           {autoLockEnabled ? (
             <View style={[styles.switchRow, styles.switchRowLast]}>

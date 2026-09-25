@@ -350,6 +350,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
         <View style={styles.switchRow}>
           <Text style={styles.switchLabel}>Вести трафик в обход ограничений</Text>
           <AppSwitch
+            accessibilityLabel="Вести трафик в обход ограничений"
             value={enabled}
             onValueChange={(v) => {
               void onToggle(v);

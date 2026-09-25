@@ -282,6 +282,7 @@ export function RelaySettingsSection(): React.ReactElement {
         <View style={styles.switchRow}>
           <Text style={styles.switchLabel}>Доставка через интернет</Text>
           <AppSwitch
+            accessibilityLabel="Доставка через интернет"
             value={enabled}
             onValueChange={onToggleEnabled}
           />

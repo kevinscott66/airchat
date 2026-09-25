@@ -381,6 +381,7 @@ export function VpnSettingsSection(): React.ReactElement {
         <View style={styles.switchRow}>
           <Text style={styles.label}>Подключать автоматически при запуске</Text>
           <AppSwitch
+            accessibilityLabel="Подключать автоматически при запуске"
             value={autoStart}
             onValueChange={setAutoStart}
           />

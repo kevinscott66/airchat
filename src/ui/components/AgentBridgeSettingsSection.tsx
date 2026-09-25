@@ -317,6 +317,7 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
         <View style={styles.switchRow}>
           <Text style={styles.switchLabel}>Разрешить управление извне</Text>
           <AppSwitch
+            accessibilityLabel="Разрешить управление извне"
             value={enabled}
             onValueChange={(v) => {
               void onToggle(v);
