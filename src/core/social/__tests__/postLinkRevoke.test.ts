@@ -23,6 +23,8 @@ jest.mock('../../storage/feedStorage', () => ({
   deleteFeedDbForProfile: jest.fn(async () => undefined),
   FeedStorage: class {
     async init(): Promise<void> { /* база в тесте не нужна */ }
+    // v4.32.973: закрытие базы — часть штатного выключения ленты.
+    async close(): Promise<void> { /* закрывать нечего */ }
     async getPost(id: string): Promise<unknown> { return mockPosts.get(id) ?? null; }
   },
 }));
@@ -47,6 +49,21 @@ jest.mock('../../storage/local', () => ({
   kvDelete: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteChecked: jest.fn(async (k: string) => { mockKv.delete(k); }),
   kvDeleteByPrefix: jest.fn(async () => undefined),
+  /**
+   * Полки ленты лежат шифртекстом: `kvSetSecret` кладёт, `kvGetSecretCell`
+   * открывает (v4.32.973). Без этой пары `loadPublishQueue` падал прямо
+   * посреди прогона — «kvGetSecretCell is not a function», — а падение
+   * доставалось таймеру повторов и всплывало уже после конца набора.
+   */
+  kvSetSecret: jest.fn(async (k: string, v: string) => { mockKv.set(k, v); return true; }),
+  kvGetSecretCell: jest.fn(async (k: string) => {
+    const v = mockKv.get(k);
+    return v == null ? { state: 'absent' } : { state: 'plain', text: v };
+  }),
+  kvGetSecretCellUpgrading: jest.fn(async (k: string) => {
+    const v = mockKv.get(k);
+    return v == null ? { state: 'absent' } : { state: 'plain', text: v };
+  }),
   kvGetInlineAttachment: jest.fn(async () => null),
   kvTryGetInlineAttachment: jest.fn(async () => ({ value: null })),
   kvSetInlineAttachment: jest.fn(async () => true),
@@ -84,7 +101,7 @@ jest.mock('../publicPost', () => ({
 import { ed25519 } from '@noble/curves/ed25519.js';
 
 import { publicKeyToDidKey } from '../../identity/did';
-import { publishPostLinkCopy, refreshPublicPostCopy, revokePostLinkCopy, setFeedProfileContext } from '../feedService';
+import { closeFeedStorage, publishPostLinkCopy, refreshPublicPostCopy, revokePostLinkCopy, setFeedProfileContext } from '../feedService';
 import { listLinkPublishedPostIds } from '../postLinkState';
 
 /**
@@ -103,6 +120,16 @@ const pair = { secretKey: keys.secretKey, publicKey: keys.publicKey };
 const myDid = publicKeyToDidKey(keys.publicKey);
 
 beforeAll(async () => { await setFeedProfileContext(1); });
+
+/**
+ * v4.32.973: набор заводит профиль ленты, а значит и таймер повторов. Тот
+ * переживал конец прогона, просыпался на уже разобранном окружении и ронял
+ * сам процесс jest. `closeFeedStorage` — штатный выключатель продукта, тот
+ * же, что зовут «выйти» и «стереть данные»; здесь он просто парный к
+ * `setFeedProfileContext` выше.
+ */
+afterAll(async () => { await closeFeedStorage(); });
+
 beforeEach(() => {
   mockPosts.clear();
   mockKv.clear();

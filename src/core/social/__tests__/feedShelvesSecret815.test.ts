@@ -50,6 +50,8 @@ jest.mock('../../storage/feedStorage', () => ({
   deleteFeedDbForProfile: jest.fn(async () => undefined),
   FeedStorage: class {
     async init(): Promise<void> { /* база в тесте не нужна */ }
+    // v4.32.973: закрытие базы — часть штатного выключения ленты.
+    async close(): Promise<void> { /* закрывать нечего */ }
     async postWriteGuard(): Promise<string> { return 'ok'; }
     async savePost(row: Row): Promise<void> { mockPosts.set(row.id, row); }
     async getPost(id: string): Promise<Row | null> { return mockPosts.get(id) ?? null; }
@@ -114,6 +116,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 
 import { publicKeyToDidKey } from '../../identity/did';
 import {
+  closeFeedStorage,
   flushFeedPublishQueue,
   receiveFeedEnvelope,
   resumeCommentOutbox,
@@ -210,6 +213,16 @@ async function settle(): Promise<void> {
 }
 
 beforeAll(async () => { await setFeedProfileContext(1); });
+
+/**
+ * v4.32.973: набор заводит профиль ленты, а значит и таймер повторов. Тот
+ * переживал конец прогона, просыпался на уже разобранном окружении и ронял
+ * сам процесс jest. `closeFeedStorage` — штатный выключатель продукта, тот
+ * же, что зовут «выйти» и «стереть данные»; здесь он просто парный к
+ * `setFeedProfileContext` выше.
+ */
+afterAll(async () => { await closeFeedStorage(); });
+
 
 beforeEach(() => {
   mockKv.clear();
