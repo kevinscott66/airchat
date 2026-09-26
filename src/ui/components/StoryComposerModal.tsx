@@ -273,6 +273,7 @@ export function StoryComposerModal({
                   />
                 </GlassSurface>
                 <AppPressable
+                  accessibilityRole="button"
                   style={s.replaceRow}
                   onPress={() => runGalleryPick(() => pick(mode === 'video' ? 'video' : 'photo'))}
                 >

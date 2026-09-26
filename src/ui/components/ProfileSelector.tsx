@@ -411,6 +411,7 @@ export function ProfileSelector({
                       editable={!isCreating}
                     />
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.createButton, isCreating && styles.disabledButton]}
                       onPress={() => void handleAddProfile()}
                       disabled={isCreating}

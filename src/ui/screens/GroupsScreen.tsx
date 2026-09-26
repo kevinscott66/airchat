@@ -3407,6 +3407,7 @@ function GroupChatScreen({
           ) : item.mediaCids ? (
             item.text && item.text.startsWith('\x09vo:') ? (
               <AppPressable
+                accessibilityRole="button"
                 style={{ alignItems: 'center', justifyContent: 'center', width: 220, height: 120, borderRadius: radius.lg, backgroundColor: outgoing ? meTile : colors.surfaceHigh, margin: 4 }}
                 onPress={() => handleGrpViewOnceTap(item)}
               >
@@ -3552,6 +3553,7 @@ function GroupChatScreen({
               // «0» здесь было бы неправдой, а исправить её нельзя: писать в
               // непрочитанный столбец запрещено с v4.32.544.
               <AppPressable
+                accessibilityRole="button"
                 onPress={() => setSeenByMsg(item)}
                 hitSlop={6}
                 style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}
@@ -3561,6 +3563,7 @@ function GroupChatScreen({
               </AppPressable>
             ) : isMe && (item.seenBy?.length ?? 0) > 0 ? (
               <AppPressable
+                accessibilityRole="button"
                 onPress={() => setSeenByMsg(item)}
                 hitSlop={6}
                 style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}
@@ -4552,6 +4555,7 @@ function GroupChatScreen({
               </AppPressable>
               <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 4 }}>
                 <AppPressable
+                  accessibilityRole="button"
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
                     const ids = [...selectedGrpIds];
@@ -4614,6 +4618,7 @@ function GroupChatScreen({
                   <Text style={[gcStyles.selToolbarLabel, { color: colors.error }]}>Удалить</Text>
                 </AppPressable>
                 <AppPressable
+                  accessibilityRole="button"
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
                     // v4.32.240: пересылалось только первое из выделенных
@@ -4637,6 +4642,7 @@ function GroupChatScreen({
                   <Text style={[gcStyles.selToolbarLabel, { color: colors.accent }]}>Переслать</Text>
                 </AppPressable>
                 <AppPressable
+                  accessibilityRole="button"
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
                     const ids = [...selectedGrpIds];
@@ -4657,6 +4663,7 @@ function GroupChatScreen({
                   <Text style={[gcStyles.selToolbarLabel, { color: colors.accent }]}>Звезда</Text>
                 </AppPressable>
                 <AppPressable
+                  accessibilityRole="button"
                   style={gcStyles.selToolbarBtn}
                   onPress={() => {
                     // v4.32.872: см. тот же пункт в переписке — сюда шёл
@@ -4737,6 +4744,7 @@ function GroupChatScreen({
           ) : null}
           {grpScheduledMsgs.length > 0 ? (
             <AppPressable
+              accessibilityRole="button"
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surfaceHigh, gap: 8 }}
               onPress={() => setGrpScheduledListVisible(true)}
             >

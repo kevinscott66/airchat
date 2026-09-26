@@ -237,6 +237,7 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
         </View>
 
         <AppPressable
+          accessibilityRole="button"
           style={[styles.button, busy && styles.buttonDisabled]}
           onPress={() => void run()}
           disabled={busy}

@@ -291,6 +291,7 @@ export function ForwardModal({
               ) : null}
             </View>
             <AppPressable
+              accessibilityRole="button"
               style={{ backgroundColor: colors.primary, borderRadius: radius.lg, paddingVertical: 14, alignItems: 'center' }}
               onPress={() => void sendToSelected()}
               disabled={sending}

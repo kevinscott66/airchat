@@ -586,7 +586,7 @@ function ProfileScreenImpl({
               переслать строку, кому-то навести камеру. Пока QR жил отдельной
               карточкой ниже, связь между ним и адресом приходилось угадывать. */}
           <View style={styles.userIdRow}>
-            <AppPressable style={styles.userIdBox} onPress={copyDidBtn.onPress} testID="user_did">
+            <AppPressable accessibilityRole="button" style={styles.userIdBox} onPress={copyDidBtn.onPress} testID="user_did">
               <Text style={styles.userIdText} numberOfLines={1}>
                 {shortDid}
               </Text>
@@ -652,6 +652,7 @@ function ProfileScreenImpl({
                 // v4.32.183 (Round-13 #10): enforce Twitter handle charset to avoid
                 // open-redirect via `foo/../../evil`.
                 <AppPressable
+                  accessibilityRole="link"
                   onPress={() => openExternal(`https://twitter.com/${twitterHandle}`, 'profile_twitter')}
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
                 >
@@ -663,6 +664,7 @@ function ProfileScreenImpl({
               ) : null}
               {githubHandle && /^[A-Za-z0-9-]{1,39}$/.test(githubHandle) ? (
                 <AppPressable
+                  accessibilityRole="link"
                   onPress={() => openExternal(`https://github.com/${githubHandle}`, 'profile_github')}
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
                 >
@@ -758,7 +760,7 @@ function ProfileScreenImpl({
           </View>
         ) : null}
 
-        <AppPressable style={styles.exportBtn} onPress={() => setExportModal(true)} testID="btn_export_backup">
+        <AppPressable accessibilityRole="button" style={styles.exportBtn} onPress={() => setExportModal(true)} testID="btn_export_backup">
           <Ionicons name="archive-outline" size={20} color={colors.text} style={{ marginRight: 8 }} />
           <Text style={styles.exportBtnText}>Сохранить зашифрованную копию</Text>
         </AppPressable>

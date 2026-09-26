@@ -114,13 +114,13 @@ export function PollCreatorModal({
             </View>
           ))}
           {options.length < 10 ? (
-            <AppPressable onPress={addOption} style={pollStyles.addOption}>
+            <AppPressable accessibilityRole="button" onPress={addOption} style={pollStyles.addOption}>
               <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
               <Text style={{ color: colors.accent, marginLeft: 4 }}>Добавить вариант</Text>
             </AppPressable>
           ) : null}
           {/* Quiz mode toggle */}
-          <AppPressable onPress={() => setIsQuiz((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, marginBottom: 4 }}>
+          <AppPressable accessibilityRole="checkbox" accessibilityState={{ checked: isQuiz }} onPress={() => setIsQuiz((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, marginBottom: 4 }}>
             <Ionicons name={isQuiz ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={isQuiz ? colors.accent : colors.textMuted} style={{ marginRight: 8 }} />
             <Text style={{ color: isQuiz ? colors.accent : colors.textMuted, fontSize: 14 }}>Режим викторины</Text>
           </AppPressable>
@@ -129,13 +129,13 @@ export function PollCreatorModal({
           ) : null}
           {/* Multiple answers toggle */}
           {!isQuiz ? (
-            <AppPressable onPress={() => setAllowMultiple((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <AppPressable accessibilityRole="checkbox" accessibilityState={{ checked: allowMultiple }} onPress={() => setAllowMultiple((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
               <Ionicons name={allowMultiple ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={allowMultiple ? colors.accent : colors.textMuted} style={{ marginRight: 8 }} />
               <Text style={{ color: allowMultiple ? colors.accent : colors.textMuted, fontSize: 14 }}>Несколько вариантов ответа</Text>
             </AppPressable>
           ) : null}
           {/* Anonymous mode toggle */}
-          <AppPressable onPress={() => setAnonymous((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+          <AppPressable accessibilityRole="checkbox" accessibilityState={{ checked: anonymous }} onPress={() => setAnonymous((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
             <Ionicons name={anonymous ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={anonymous ? colors.accent : colors.textMuted} style={{ marginRight: 8 }} />
             <Text style={{ color: anonymous ? colors.accent : colors.textMuted, fontSize: 14 }}>Скрыть имена голосовавших</Text>
           </AppPressable>

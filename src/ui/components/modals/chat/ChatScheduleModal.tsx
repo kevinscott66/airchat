@@ -59,6 +59,7 @@ export function ScheduleModal({
           <Text style={[schStyles.title, { color: colors.text }]}>Запланировать отправку</Text>
           {presets.map((p) => (
             <AppPressable
+              accessibilityRole="button"
               key={p.label}
               style={[schStyles.preset, { borderBottomColor: colors.border }]}
               onPress={() => { onSchedule(Date.now() + p.ms); onClose(); }}

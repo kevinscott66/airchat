@@ -389,6 +389,7 @@ export function VpnSettingsSection(): React.ReactElement {
 
         <View style={styles.btnRow}>
           <Pressable
+            accessibilityRole="button"
             style={styles.secondaryBtn}
             onPress={saveBtn.onPress}
             disabled={saveBtn.loading}

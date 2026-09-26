@@ -86,6 +86,7 @@ function GroupMemberSheetModalImpl({
               <Text style={{ color: colors.textMuted, fontSize: font.xs, textAlign: 'center', fontFamily: mono, marginBottom: 16 }}>{shortIdentity(member.peerPubB64, 12)}</Text>
               <View style={{ gap: 8, paddingHorizontal: 16, paddingBottom: 24 }}>
                 <AppPressable
+                  accessibilityRole="button"
                   style={[styles.sheetBtn, { backgroundColor: colors.primary }]}
                   onPress={() => {
                     const name = member.displayName ?? shortIdentity(member.peerPubB64);
@@ -103,6 +104,7 @@ function GroupMemberSheetModalImpl({
                 {canModerateThis ? (
                   <>
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.actionRow, { backgroundColor: colors.surfaceHigh }]}
                       onPress={() => onToggleAdmin(member)}
                     >
@@ -116,6 +118,7 @@ function GroupMemberSheetModalImpl({
                       </Text>
                     </AppPressable>
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.actionRow, { backgroundColor: colors.surfaceHigh }]}
                       onPress={() => onToggleMute(member)}
                     >
@@ -129,6 +132,7 @@ function GroupMemberSheetModalImpl({
                       </Text>
                     </AppPressable>
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.actionRow, { backgroundColor: colors.surfaceHigh }]}
                       onPress={() => { onKick(member); onClose(); }}
                     >

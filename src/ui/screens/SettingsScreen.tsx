@@ -2927,7 +2927,7 @@ function SettingsScreenImpl({
                   testID="set_password_input"
                 />
               )}
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(false)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(false)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
                 {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
                   <Text style={styles.pwdPrimaryBtnText}>
                     {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
@@ -2958,7 +2958,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="backup_unlock_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy} accessibilityState={{ disabled: backupUnlockBusy, busy: backupUnlockBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => { void submitBackupUnlock(); }} disabled={backupUnlockBusy} accessibilityState={{ disabled: backupUnlockBusy, busy: backupUnlockBusy }}>
                 {backupUnlockBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Открыть</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setBackupUnlockModal(false); setBackupPwdInput(''); }} accessibilityRole="button">
@@ -2985,7 +2985,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="biometric_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy} accessibilityState={{ disabled: bioBusy, busy: bioBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => { void submitEnableBiometric(); }} disabled={bioBusy} accessibilityState={{ disabled: bioBusy, busy: bioBusy }}>
                 {bioBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Включить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setBioModal(false); setBioPwdInput(''); }} accessibilityRole="button">
@@ -3014,7 +3014,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="apple_binding_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy} accessibilityState={{ disabled: appleBindBusy, busy: appleBindBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => { void submitBindApple(); }} disabled={appleBindBusy} accessibilityState={{ disabled: appleBindBusy, busy: appleBindBusy }}>
                 {appleBindBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Продолжить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setAppleBindModal(false); setAppleBindPwd(''); }} accessibilityRole="button">
@@ -3073,7 +3073,7 @@ function SettingsScreenImpl({
                   testID="change_password_repeat"
                 />
               )}
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(true)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => advancePwdStep(true)} disabled={pwdBusy} accessibilityState={{ disabled: pwdBusy, busy: pwdBusy }}>
                 {pwdBusy ? <ActivityIndicator color={primaryOn} /> : (
                   <Text style={styles.pwdPrimaryBtnText}>
                     {pwdStep === 'repeat' ? 'Сохранить' : 'Далее'}
@@ -3206,7 +3206,7 @@ function SettingsScreenImpl({
                     placeholder="Пароль приложения"
                     testID="seed_password_input"
                   />
-                  <AppPressable style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy} accessibilityState={{ disabled: seedBusy, busy: seedBusy }}>
+                  <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={showSeedBtn.onPress} disabled={seedBusy} accessibilityState={{ disabled: seedBusy, busy: seedBusy }}>
                     {seedBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Показать</Text>}
                   </AppPressable>
                 </>
@@ -3235,7 +3235,7 @@ function SettingsScreenImpl({
                 placeholder="Пароль приложения"
                 testID="cloud_password_input"
               />
-              <AppPressable style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy} accessibilityState={{ disabled: cloudBusy, busy: cloudBusy }}>
+              <AppPressable accessibilityRole="button" style={styles.pwdPrimaryBtn} onPress={() => { void handleCloudUpload(); }} disabled={cloudBusy} accessibilityState={{ disabled: cloudBusy, busy: cloudBusy }}>
                 {cloudBusy ? <ActivityIndicator color={primaryOn} /> : <Text style={styles.pwdPrimaryBtnText}>Зашифровать и отправить</Text>}
               </AppPressable>
               <AppPressable onPress={() => { setCloudPasswordModal(false); setCloudPasswordInput(''); }} accessibilityRole="button">

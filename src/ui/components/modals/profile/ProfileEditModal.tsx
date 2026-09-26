@@ -623,6 +623,7 @@ export function ProfileEditModal({
                 в приглашение сменить подтверждение, а такого действия нет. */}
             {badge ? null : (
               <AppPressable
+                accessibilityRole="button"
                 style={[styles.badgeRow, { borderColor: colors.border }]}
                 onPress={() => void pasteBadge()}
                 testID="profile_edit_badge_paste"

@@ -571,7 +571,7 @@ function AddContactModal({
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[acStyles.title, { color: colors.text }]}>Новый чат</Text>
-            <AppPressable onPress={() => void submit()} style={acStyles.doneBtn} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
+            <AppPressable accessibilityRole="button" onPress={() => void submit()} style={acStyles.doneBtn} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
               {busy ? <ActivityIndicator color={colors.accent} /> : (
                 <Text style={{ color: colors.accent, fontSize: 16, fontWeight: '600' }}>Готово</Text>
               )}

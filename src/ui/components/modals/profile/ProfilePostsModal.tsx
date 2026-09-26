@@ -517,6 +517,7 @@ export function ProfilePostsPane({
               );
             })}
             <AppPressable
+              accessibilityRole="button"
               style={[styles.chip, { borderColor: colors.border }]}
               onPress={() => startDraft({ kind: 'create', story: null }, '')}
               accessibilityLabel="Новый альбом"

@@ -671,6 +671,7 @@ const MessageRow = React.memo(
           ) : item.mediaCids || (item.text && isVoiceMessage(item.text)) || (item.text && isViewOnceMessage(item.text)) ? (
             isViewOnceMessage(item.text ?? '') ? (
               <AppPressable
+                accessibilityRole="button"
                 onPress={() => onViewOnceTap?.(item)}
                 style={{ alignItems: 'center', justifyContent: 'center', height: 120, borderRadius: radius.lg, backgroundColor: bubble.plate.fill, marginTop: 4 }}
               >
@@ -4049,6 +4050,7 @@ function ChatThreadView({
             </AppPressable>
             <View style={s.selToolbarActions}>
               <AppPressable
+                accessibilityRole="button"
                 style={s.selToolbarBtn}
                 onPress={() => {
                   const ids = [...selectedIds];
@@ -4107,6 +4109,7 @@ function ChatThreadView({
               </AppPressable>
               {copyBlocked ? null : (
               <AppPressable
+                accessibilityRole="button"
                 style={s.selToolbarBtn}
                 onPress={() => {
                   const ids = [...selectedIds];
@@ -4134,6 +4137,7 @@ function ChatThreadView({
               )}
               {copyBlocked ? null : (
               <AppPressable
+                accessibilityRole="button"
                 style={s.selToolbarBtn}
                 onPress={() => {
                   // v4.32.872: сюда шёл `m.text` как есть. Голосовое уезжало в
@@ -4154,6 +4158,7 @@ function ChatThreadView({
               </AppPressable>
               )}
               <AppPressable
+                accessibilityRole="button"
                 style={s.selToolbarBtn}
                 onPress={() => {
                   const ids = [...selectedIds];

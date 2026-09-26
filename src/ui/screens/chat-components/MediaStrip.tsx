@@ -89,7 +89,7 @@ export function MediaStrip({
   // запускает загрузку, дальше снимок открывается как обычно.
   if (holdBack) {
     return (
-      <AppPressable onPress={() => setWanted(true)}>
+      <AppPressable accessibilityRole="button" onPress={() => setWanted(true)}>
         <View style={{ width: 220, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: bubble.plate.fill }}>
           <Text style={{ fontSize: 13, color: bubble.plate.ink.text }}>📷 Медиа ({entries.length}) — нажмите, чтобы загрузить</Text>
         </View>

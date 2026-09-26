@@ -766,6 +766,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
               </AppPressable>
             ) : null}
             <AppPressable
+              accessibilityRole="button"
               style={[styles.reactionAddBtn, { flexDirection: 'row', width: 'auto', paddingHorizontal: 8, gap: 4 }]}
               onPress={() => onCommentsPress(item)}
               hitSlop={8}
@@ -778,6 +779,7 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
             </AppPressable>
             {isSelf ? (
               <AppPressable
+                accessibilityRole="button"
                 style={[styles.reactionAddBtn, { flexDirection: 'row', width: 'auto', paddingHorizontal: 8, gap: 4 }]}
                 onPress={() => onViewersPress(item.id)}
                 hitSlop={8}
@@ -3694,6 +3696,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       ))}
                       {pollOptions.length < 4 ? (
                         <AppPressable
+                          accessibilityRole="button"
                           style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 }}
                           onPress={() => setPollOptions((prev) => [...prev, ''])}
                         >
@@ -3702,6 +3705,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         </AppPressable>
                       ) : null}
                       <AppPressable
+                        accessibilityRole="checkbox" accessibilityState={{ checked: pollAnonymous }}
                         style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, marginTop: 4 }}
                         onPress={() => setPollAnonymous((v) => !v)}
                       >
@@ -3709,6 +3713,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         <Text style={{ color: colors.text, fontSize: 14 }}>{t('feed.pollAnonymousLabel')}</Text>
                       </AppPressable>
                       <AppPressable
+                        accessibilityRole="checkbox" accessibilityState={{ checked: pollMultiSelect }}
                         style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 }}
                         onPress={() => setPollMultiSelect((v) => !v)}
                       >
@@ -3811,6 +3816,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         <View style={{ flex: 1 }} />
                         {uris.length > 1 ? (
                           <AppPressable
+                            accessibilityRole="button"
                             onPress={() => setUris([])}
                             hitSlop={8}
                             style={styles.previewClearBtn}
@@ -3849,6 +3855,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                         {/* "Добавить ещё"-плитка в конце, если лимит не достигнут. Telegram-style. */}
                         {uris.length < FEED_MAX_IMAGES ? (
                           <AppPressable
+                            accessibilityRole="button"
                             style={styles.previewAddTile}
                             onPress={() => void pickImages()}
                             hitSlop={4}
@@ -3987,6 +3994,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                 >
                   {!isPollMode && !editingPost ? (
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.iconAction, uris.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => void pickImages()}
                       onLongPress={() => {
@@ -4006,6 +4014,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   ) : null}
                   {!editingPost ? (
                     <AppPressable
+                      accessibilityRole="button" accessibilityState={{ selected: isPollMode }}
                       style={[styles.iconAction, isPollMode && { backgroundColor: activeTint.fill, borderRadius: radius.md }]}
                       onPress={() => {
                         setIsPollMode((v) => !v);
@@ -4019,6 +4028,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   ) : null}
                   {!isPollMode && !editingPost ? (
                     <AppPressable
+                      accessibilityRole="button" accessibilityState={{ selected: postLocationTag != null }}
                       style={[styles.iconAction, postLocationTag ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => {
                         if (postLocationTag) {
@@ -4051,6 +4061,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   ) : null}
                   {!isPollMode && !editingPost ? (
                     <AppPressable
+                      accessibilityRole="button"
                       style={[styles.iconAction, pickedDocs.length > 0 ? { backgroundColor: activeTint.fill, borderRadius: radius.md } : null]}
                       onPress={() => void pickDocs()}
                     >
@@ -4249,6 +4260,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                       <View style={{ alignItems: 'center', gap: 4 }}>
                         {/* Heart like button */}
                         <AppPressable
+                          accessibilityRole="button" accessibilityState={{ selected: iHearted }}
                           hitSlop={8}
                           onPress={() => {
                             void toggleCommentReaction(pair, c.id, c.postId, '❤️')
@@ -4613,6 +4625,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
               opts?: { destructive?: boolean; iconColor?: string; disabled?: boolean }
             ) => (
               <AppPressable
+                accessibilityRole="button"
                 key={label}
                 onPress={() => { close(); onPress(); }}
                 disabled={opts?.disabled}

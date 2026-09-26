@@ -826,7 +826,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
               <Text style={styles.emptyText}>
                 Добавьте первый контакт — попросите друга открыть «Профиль» → «Мой QR-код», отсканируйте код или вставьте его ID.
               </Text>
-              <AppPressable style={styles.emptyBtn} onPress={openAddModal} testID="contacts_empty_add">
+              <AppPressable accessibilityRole="button" style={styles.emptyBtn} onPress={openAddModal} testID="contacts_empty_add">
                 <Ionicons name="person-add" size={18} color={contrastingInk(colors.primary)} />
                 <Text style={styles.emptyBtnText}>Добавить контакт</Text>
               </AppPressable>
@@ -892,11 +892,11 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             />
             {/* v4.32.43: две кнопки в ряд — вставить из буфера и сканировать QR. */}
             <View style={styles.helperRow}>
-              <AppPressable style={styles.pasteBtn} onPress={() => void pasteFromClipboard()} testID="contacts_add_paste">
+              <AppPressable accessibilityRole="button" style={styles.pasteBtn} onPress={() => void pasteFromClipboard()} testID="contacts_add_paste">
                 <Ionicons name="clipboard-outline" size={14} color={colors.accent} />
                 <Text style={styles.pasteBtnText}>Вставить из буфера</Text>
               </AppPressable>
-              <AppPressable style={styles.pasteBtn} onPress={() => void openScanner()} testID="contacts_add_scan">
+              <AppPressable accessibilityRole="button" style={styles.pasteBtn} onPress={() => void openScanner()} testID="contacts_add_scan">
                 <Ionicons name="qr-code-outline" size={14} color={colors.accent} />
                 <Text style={styles.pasteBtnText}>Сканировать QR</Text>
               </AppPressable>

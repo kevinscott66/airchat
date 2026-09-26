@@ -293,6 +293,7 @@ export function AttachSheet(props: AttachSheetProps) {
               const isActive = t.id === activeTab;
               return (
                 <AppPressable
+                  accessibilityRole="tab" accessibilityState={{ selected: isActive }}
                   key={t.id}
                   style={[styles.tabItem, isActive && styles.tabItemActive]}
                   onPress={() => setActiveTab(t.id)}

@@ -151,7 +151,7 @@ export function GroupSharedMediaModal({
         </View>
         <View style={{ flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surface }}>
           {GRP_SM_TABS.map((tab) => (
-            <AppPressable key={tab.id} style={{ flex: 1, alignItems: 'center', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: activeTab === tab.id ? colors.primary : 'transparent' }} onPress={() => setActiveTab(tab.id)}>
+            <AppPressable accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab.id }} key={tab.id} style={{ flex: 1, alignItems: 'center', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: activeTab === tab.id ? colors.primary : 'transparent' }} onPress={() => setActiveTab(tab.id)}>
               <Ionicons name={tab.icon} size={18} color={activeTab === tab.id ? colors.accent : colors.textMuted} />
               <Text style={{ fontSize: font.xs, color: activeTab === tab.id ? colors.accent : colors.textMuted, marginTop: 2, fontWeight: activeTab === tab.id ? '600' : '400' }}>{tab.label}</Text>
             </AppPressable>

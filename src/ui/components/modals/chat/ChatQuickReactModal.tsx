@@ -182,6 +182,7 @@ function ChatQuickReactModalImpl(props: ChatQuickReactModalProps) {
                   {menu.more.length > 0 ? (
                     <>
                       <AppPressable
+                        accessibilityRole="button"
                         style={styles.action}
                         onPress={toggleExpanded}
                         accessibilityState={{ expanded }}
@@ -243,7 +244,7 @@ interface ActionRowProps {
 }
 function ActionRowImpl({ icon, iconColor, label, onPress, textColor }: ActionRowProps) {
   return (
-    <AppPressable style={styles.action} onPress={onPress}>
+    <AppPressable accessibilityRole="button" style={styles.action} onPress={onPress}>
       <Ionicons name={icon} size={font.lg} color={iconColor ?? textColor} style={styles.actionIcon} />
       <Text style={[styles.actionLabel, { color: textColor }]}>{label}</Text>
     </AppPressable>

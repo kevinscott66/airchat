@@ -106,11 +106,11 @@ export function DmPollCreatorModal({
               <Text style={{ color: colors.accent, fontSize: 14 }}>+ Добавить вариант</Text>
             </AppPressable>
           ) : null}
-          <AppPressable onPress={() => setIsQuiz((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8 }}>
+          <AppPressable accessibilityRole="checkbox" accessibilityState={{ checked: isQuiz }} onPress={() => setIsQuiz((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8 }}>
             <Ionicons name={isQuiz ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={isQuiz ? colors.accent : colors.textMuted} style={{ marginRight: 8 }} />
             <Text style={{ color: isQuiz ? colors.accent : colors.textMuted, fontSize: 14 }}>Режим викторины</Text>
           </AppPressable>
-          <AppPressable onPress={() => setAnonymous((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginBottom: 4 }}>
+          <AppPressable accessibilityRole="checkbox" accessibilityState={{ checked: anonymous }} onPress={() => setAnonymous((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginBottom: 4 }}>
             <Ionicons name={anonymous ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={anonymous ? colors.accent : colors.textMuted} style={{ marginRight: 8 }} />
             <Text style={{ color: anonymous ? colors.accent : colors.textMuted, fontSize: 14 }}>Скрыть имена голосовавших</Text>
           </AppPressable>

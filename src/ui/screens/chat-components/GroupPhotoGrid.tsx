@@ -62,7 +62,7 @@ export function GroupPhotoGrid({
 
   if (holdBack) {
     return (
-      <AppPressable onPress={() => setWanted(true)}>
+      <AppPressable accessibilityRole="button" onPress={() => setWanted(true)}>
         <View style={{ width: TOTAL_W, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: tileBackground }}>
           <Text style={{ fontSize: 13, color: mutedColor }}>
             📷 Медиа ({entries.length}) — нажмите, чтобы загрузить

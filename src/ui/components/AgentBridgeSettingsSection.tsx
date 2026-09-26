@@ -356,11 +356,11 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
             ) : null}
 
             <View style={styles.rowBtns}>
-              <Pressable style={styles.btn} onPress={onCopyPress} testID="agent_bridge_copy">
+              <Pressable accessibilityRole="button" style={styles.btn} onPress={onCopyPress} testID="agent_bridge_copy">
                 <Ionicons name="copy-outline" size={16} color={styles.accent.color} />
                 <Text style={styles.btnText}>{COPY_ACTION}</Text>
               </Pressable>
-              <Pressable style={styles.btn} onPress={onRevokePress} testID="agent_bridge_revoke">
+              <Pressable accessibilityRole="button" style={styles.btn} onPress={onRevokePress} testID="agent_bridge_revoke">
                 <Ionicons name="refresh" size={16} color={styles.errColor.color} />
                 <Text style={styles.revokeText}>Новый ключ</Text>
               </Pressable>

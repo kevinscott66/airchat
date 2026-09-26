@@ -185,7 +185,7 @@ export function CreateGroupModal({
               <Text style={{ color: colors.accent, fontSize: 16 }}>Отмена</Text>
             </AppPressable>
             <Text style={[cgStyles.title, { color: colors.text }]}>Новая группа</Text>
-            <AppPressable onPress={() => void submit()} style={[cgStyles.side, { alignItems: 'flex-end' }]} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
+            <AppPressable accessibilityRole="button" onPress={() => void submit()} style={[cgStyles.side, { alignItems: 'flex-end' }]} disabled={busy} accessibilityState={{ disabled: busy, busy: busy }}>
               {busy ? <ActivityIndicator color={colors.accent} /> : (
                 <Text style={{ color: colors.accent, fontSize: 16, fontWeight: '600' }}>Создать</Text>
               )}
@@ -196,6 +196,7 @@ export function CreateGroupModal({
             <View style={[cgStyles.typeRow, { borderColor: colors.border }]}>
               {(['group', 'channel'] as GroupType[]).map((t) => (
                 <AppPressable
+                  accessibilityRole="button" accessibilityState={{ selected: type === t }}
                   key={t}
                   style={[cgStyles.typeBtn, { borderColor: colors.mutedFill }, type === t && { backgroundColor: colors.primary, borderColor: colors.primary }]}
                   onPress={() => setType(t)}

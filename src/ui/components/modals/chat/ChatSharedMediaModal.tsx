@@ -452,6 +452,7 @@ export function SharedMediaModal({
         <View style={[smStyles.tabs, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           {TABS.map((tab) => (
             <AppPressable
+              accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab.id }}
               key={tab.id}
               style={[
                 smStyles.tab,

@@ -76,7 +76,7 @@ export function AppToastLayer({ overlay = false }: {
         },
       ]}
     >
-      <AppPressable style={[styles.toast, { backgroundColor: toastSurface.fill }]} onPress={hide}>
+      <AppPressable accessibilityRole="button" style={[styles.toast, { backgroundColor: toastSurface.fill }]} onPress={hide}>
         <Ionicons
           name={ok ? 'checkmark-circle' : 'alert-circle'}
           size={font.xl}

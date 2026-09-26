@@ -85,44 +85,44 @@ function GroupQuickReactModalImpl(props: GroupQuickReactModalProps) {
               ) : null}
               {isSys ? <View style={styles.sysSpacer} /> : null}
               {!isSys ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onReply}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onReply}>
                   <Ionicons name="return-down-back-outline" size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>Ответить</Text>
                 </AppPressable>
               ) : null}
               {isTextLike && canCopy ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onCopy}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onCopy}>
                   <Ionicons name="copy-outline" size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>{COPY_ACTION}</Text>
                 </AppPressable>
               ) : null}
               {isTextLike ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onForward}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onForward}>
                   <Ionicons name="arrow-redo-outline" size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>Переслать</Text>
                 </AppPressable>
               ) : null}
               {canPin ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onPin}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onPin}>
                   <Ionicons name={isPinned ? 'pin' : 'pin-outline'} size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>{isPinned ? 'Открепить' : 'Закрепить'}</Text>
                 </AppPressable>
               ) : null}
               {canEdit ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onEdit}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onEdit}>
                   <Ionicons name="create-outline" size={16} color={colors.text} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.text }]}>Редактировать</Text>
                 </AppPressable>
               ) : null}
               {canDelete ? (
-                <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onDelete}>
+                <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onDelete}>
                   {/* v4.32.383: '#ff3b30' — заливочный красный Apple, а здесь
                       им пишут текст: 3.2:1 на белом фоне светлой темы. */}
                   <Ionicons name="trash-outline" size={16} color={colors.error} style={styles.actionIcon} />
                   <Text style={[styles.actionLabel, { color: colors.error }]}>Удалить</Text>
                 </AppPressable>
               ) : null}
-              <AppPressable style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onCopyLink}>
+              <AppPressable accessibilityRole="button" style={[styles.replyBtn, { borderTopColor: colors.border }]} onPress={onCopyLink}>
                 <Ionicons name="link-outline" size={16} color={colors.text} style={styles.actionIcon} />
                 <Text style={[styles.actionLabel, { color: colors.text }]}>{COPY_LINK_ACTION}</Text>
               </AppPressable>

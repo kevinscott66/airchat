@@ -185,6 +185,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
             <View style={{ flex: 1 }} />
             {uris.length > 1 ? (
               <AppPressable
+                accessibilityRole="button"
                 onPress={onClearAll}
                 hitSlop={8}
                 style={{
@@ -273,6 +274,7 @@ export function MediaPreviewModal(props: MediaPreviewModalProps) {
             {/* "+ Добавить" плитка в конце, если лимит не достигнут */}
             {canAddMore ? (
               <AppPressable
+                accessibilityRole="button"
                 style={{
                   width: THUMB,
                   height: THUMB,

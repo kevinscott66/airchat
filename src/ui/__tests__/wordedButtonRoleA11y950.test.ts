@@ -176,7 +176,9 @@ describe('выбор отличён от команды', () => {
   });
 
   it('переключатель «Завтра» сообщает, включён ли он', () => {
-    const s = at(join('components', 'modals', 'chat', 'ChatScheduleModal.tsx'), 90);
+    // v4.32.982: строка уехала на 91 — выше по файлу списку заготовок
+    // («Через 10 минут», «Через час») добавили роль.
+    const s = at(join('components', 'modals', 'chat', 'ChatScheduleModal.tsx'), 91);
     expect(s?.tag).toContain('accessibilityState={{ selected: customTomorrow }}');
   });
 });
