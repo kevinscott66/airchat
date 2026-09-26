@@ -142,7 +142,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('остальные уведомления оба запрета спрашивают — напоминание было исключением', () => {
     expect(PUSH).toContain('async function previewAllowed()');
-    expect(PUSH).toContain("kvGet('notify_preview')");
+    expect(PUSH).toContain("kvTryGet('notify_preview')"); // v4.32.976
     expect(PUSH).toContain('authGuard.isSessionUnlocked()');
     expect((PUSH.match(/await previewAllowed\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });

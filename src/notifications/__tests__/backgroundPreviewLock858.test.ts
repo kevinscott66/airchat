@@ -157,7 +157,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 
   it('содержимое всех баннеров решает одно место', () => {
-    expect(PUSH.match(/kvGet\('notify_preview'\)/g)).toHaveLength(1);
+    // v4.32.976: читает настройку `kvTryGet` — нечитаемость здесь не «нет настройки».
+    expect(PUSH.match(/kvTryGet\('notify_preview'\)/g)).toHaveLength(1);
     expect(PUSH.match(/const preview = await previewAllowed\(\);/g)).toHaveLength(3);
   });
 });

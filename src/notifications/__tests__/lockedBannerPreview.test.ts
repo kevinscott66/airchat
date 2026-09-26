@@ -115,7 +115,8 @@ describe('содержимое баннера при запертом прило
 
 describe('один ответ на все три места показа', () => {
   it('настройка читается ровно в одном месте', () => {
-    expect(PUSH.match(/kvGet\('notify_preview'\)/g)).toHaveLength(1);
+    // v4.32.976: читает настройку `kvTryGet` — нечитаемость здесь не «нет настройки».
+    expect(PUSH.match(/kvTryGet\('notify_preview'\)/g)).toHaveLength(1);
   });
 
   it('и это место спрашивает замок', () => {

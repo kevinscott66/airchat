@@ -64,11 +64,32 @@ const CHANNEL_FEED = 'airchat_feed_v2';
  * открытой, а баннеры приходят именно тогда. Человек включал автоблокировку,
  * сворачивал приложение — и следующее сообщение выкладывало имя и текст на
  * заблокированный экран; замок срабатывал потом, когда читать было уже поздно.
+ *
+ * v4.32.976: правило «спорное решаем в пользу закрытого баннера» держалось на
+ * всём, кроме самой настройки. Её читал `kvGet`, а он складывает три ответа в
+ * два: «настройки нет» и «прочитать не смогли» приходят одинаковым `null`, и
+ * сравнение со строкой `'false'` в обоих случаях ложно — то есть содержимое
+ * разрешено. Человек, выключивший «Показывать содержимое» и не заводивший
+ * пароль, при осечке SQLite получал имя отправителя и текст сообщения на
+ * экране блокировки — при выключенной на вид настройке, без возможности
+ * понять, что произошло, и повторить: следующее сообщение снова безлично.
+ * Соседи это правило соблюдали и до того: `lockAwaitsReturn` ниже и
+ * `reminderPreviewAllowed` в напоминаниях спрашивают `kvTryGet`.
  */
 async function previewAllowed(): Promise<boolean> {
-  if ((await kvGet('notify_preview')) === 'false') return false;
-  if (!authGuard.isSessionUnlocked()) return false;
-  return !(await lockAwaitsReturn());
+  try {
+    const cell = await kvTryGet('notify_preview');
+    // Не прочитали — не показываем: цена ошибки здесь чужой текст на чужом экране.
+    if (!cell) return false;
+    if (cell.value === 'false') return false;
+    if (!authGuard.isSessionUnlocked()) return false;
+    return !(await lockAwaitsReturn());
+  } catch (e) {
+    // `kvTryGet` ловит сама и наружу не бросает, но бросок отсюда съел бы не
+    // содержимое, а всё уведомление целиком: показ обёрнут общим catch'ем.
+    log.warn('preview_setting_unreadable', { err: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
 }
 
 /**
