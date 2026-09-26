@@ -32,8 +32,8 @@ import {
   exportEncryptedBackup,
   hasStoredMnemonic,
 } from '../../core/backup/seedPhrase';
-import { listStarredMessages, setMessageStarred, setGroupMessageStarred, type StarredMessageEntry } from '../../core/storage/local';
-import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage/unreadableText';
+import { listStarredMessagesRead, setMessageStarred, setGroupMessageStarred, type StarredMessageEntry } from '../../core/storage/local';
+import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../core/storage/unreadableText';
 import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
 import { profileManager } from '../../core/identity/profileManager';
 import { republishOwnUsernameToDirectory } from '../../core/identity/usernameRegistry';
@@ -168,6 +168,12 @@ function ProfileScreenImpl({
   const [showQrModal, setShowQrModal] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
+  /**
+   * Избранное не прочиталось (v4.32.996). Без этого признака отказ чтения
+   * приходил пустым списком, и окно отвечало «Нет избранных сообщений» —
+   * при целых на диске отметках.
+   */
+  const [starredReadFailed, setStarredReadFailed] = useState(false);
   const [hasSeed, setHasSeed] = useState<SeedPresence>('asking');
   const [exportPwd, setExportPwd] = useState('');
   const [exportModal, setExportModal] = useState(false);
@@ -746,8 +752,9 @@ function ProfileScreenImpl({
               hint: null,
               onPress: () => {
                 const pid = profileManager.getActiveProfile()?.id ?? 1;
-                void listStarredMessages(pid).then((entries) => {
-                  setStarredEntries(entries);
+                void listStarredMessagesRead(pid).then((entries) => {
+                  setStarredReadFailed(entries === null);
+                  if (entries !== null) setStarredEntries(entries);
                   setStarredVisible(true);
                 });
               },
@@ -945,7 +952,11 @@ function ProfileScreenImpl({
               </View>
               <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
                 {starredEntries.length === 0 ? (
-                  <Text style={{ textAlign: 'center', marginTop: 40, color: colors.textMuted, fontSize: scaleFont(15) }}>Нет избранных сообщений</Text>
+                  <Text style={{ textAlign: 'center', marginTop: 40, color: colors.textMuted, fontSize: scaleFont(15) }}>
+                    {starredReadFailed
+                      ? `${UNREADABLE_STARRED_TEXT}. Отметки на месте — откройте список заново.`
+                      : 'Нет избранных сообщений'}
+                  </Text>
                 ) : starredEntries.map((entry) => (
                   <View key={entry.message.id} style={{ paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>

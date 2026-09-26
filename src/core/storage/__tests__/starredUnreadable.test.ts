@@ -14,6 +14,10 @@
  * рядом со значением (см. unreadableText), в карту имён попадают только
  * прочитанные непустые имена, а все три места показа — модалка личных чатов,
  * модалка групп и врезка в профиле — печатают курсивом честную пометку.
+ *
+ * v4.32.996: тело переехало в listStarredMessagesRead (под прежним именем
+ * осталась обёртка `?? []`), и якорь среза переехал вместе с ним. Проверяется
+ * то же самое место кода, что и раньше.
  */
 
 import fs from 'fs';
@@ -65,27 +69,27 @@ describe('признак непрочитанного у избранной ст
 });
 
 describe('форма исходников: чтение избранного', () => {
-  it('listStarredMessages не читает тексты через decryptAtRestString', () => {
-    const body = slice(LOCAL(), 'export async function listStarredMessages', '\n}\n');
+  it('чтение избранного не берёт тексты через decryptAtRestString', () => {
+    const body = slice(LOCAL(), 'export async function listStarredMessagesRead', '\n}\n');
     expect(body).not.toContain('decryptAtRestString(r.text, dek)');
   });
 
   it('оба текста избранного читаются ячейкой и несут признак', () => {
-    const body = slice(LOCAL(), 'export async function listStarredMessages', '\n}\n');
+    const body = slice(LOCAL(), 'export async function listStarredMessagesRead', '\n}\n');
     expect(body.match(/readAtRestCell\(r\.text, dek\)/g)?.length).toBe(2);
     expect(body.match(/unreadable: unreadableFromCellState\(cell\.state\)/g)?.length).toBe(2);
     expect(body.match(/text: cellTextOrNull\(cell\) \?\? ''/g)?.length).toBe(2);
   });
 
   it('в карту имён групп попадают только прочитанные непустые имена', () => {
-    const body = slice(LOCAL(), 'export async function listStarredMessages', '\n}\n');
+    const body = slice(LOCAL(), 'export async function listStarredMessagesRead', '\n}\n');
     expect(body).not.toContain('decryptAtRestString(g.name, dek)');
     expect(body).toContain('const name = cellTextOrNull(readAtRestCell(g.name, dek));');
     expect(body).toContain('if (name) groupNames.set(g.id, name);');
   });
 
   it('запасной короткий id группы остался на месте', () => {
-    const body = slice(LOCAL(), 'export async function listStarredMessages', '\n}\n');
+    const body = slice(LOCAL(), 'export async function listStarredMessagesRead', '\n}\n');
     expect(body).toContain("groupNames.get(r.group_id) ?? r.group_id.slice(0, 8)");
   });
 });
@@ -93,7 +97,7 @@ describe('форма исходников: чтение избранного', (
 describe('форма исходников: показ избранного', () => {
   it('модалка личных чатов печатает пометку вместо пустого текста', () => {
     const src = CHAT_MODAL();
-    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';");
+    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../../../core/storage/unreadableText';");
     expect(src).toContain('const unreadable = isUnreadableMessage(msg);');
     expect(src).toContain('{unreadable ? UNREADABLE_MESSAGE_TEXT : msg.text}');
     expect(src).toContain("rowTextUnreadable: { fontStyle: 'italic' },");
@@ -106,7 +110,7 @@ describe('форма исходников: показ избранного', () 
 
   it('модалка групп печатает пометку вместо пустого текста', () => {
     const src = GROUP_MODAL();
-    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';");
+    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../../../core/storage/unreadableText';");
     expect(src).toContain('const unreadable = isUnreadableMessage(grpMsg);');
     expect(src).toContain('{unreadable ? UNREADABLE_MESSAGE_TEXT : grpMsg.text}');
     expect(src).toContain("rowTextUnreadable: { fontStyle: 'italic' },");
@@ -114,7 +118,7 @@ describe('форма исходников: показ избранного', () 
 
   it('врезка избранного в профиле печатает пометку', () => {
     const src = PROFILE();
-    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../core/storage/unreadableText';");
+    expect(src).toContain("import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../core/storage/unreadableText';");
     expect(src).toContain('{isUnreadableMessage(entry.message) ? UNREADABLE_MESSAGE_TEXT : entry.message.text}');
   });
 

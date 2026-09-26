@@ -7,7 +7,7 @@ import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { font, scrim } from '../../../theme';
 import { dayMonthShortYear } from '../../../../core/time/ruDateTime';
-import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
+import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../../../core/storage/unreadableText';
 
 export interface StarredMessage {
   id: string;
@@ -25,6 +25,12 @@ export interface ChatStarredModalProps {
   visible: boolean;
   onClose: () => void;
   entries: Array<{ message: StarredMessage }>;
+  /**
+   * Список не прочитался (v4.32.996). Пустой список без этого признака
+   * означал и «звёздочкой ничего не отмечено», и отказ чтения, а окно
+   * отвечало «Нет избранных сообщений» — при целых на диске отметках.
+   */
+  readFailed?: boolean;
   selfLabel: string;
   peerLabel: string;
   onUnstar: (id: string) => void;
@@ -32,7 +38,7 @@ export interface ChatStarredModalProps {
 
 const noop = () => {};
 
-function ChatStarredModalImpl({ visible, onClose, entries, selfLabel, peerLabel, onUnstar }: ChatStarredModalProps) {
+function ChatStarredModalImpl({ visible, onClose, entries, readFailed = false, selfLabel, peerLabel, onUnstar }: ChatStarredModalProps) {
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
 
@@ -54,7 +60,11 @@ function ChatStarredModalImpl({ visible, onClose, entries, selfLabel, peerLabel,
               </View>
               <ScrollView contentContainerStyle={styles.scrollContent}>
                 {entries.length === 0 ? (
-                  <Text style={[styles.empty, { color: colors.textMuted }]}>Нет избранных сообщений</Text>
+                  <Text style={[styles.empty, { color: colors.textMuted }]}>
+                    {readFailed
+                      ? `${UNREADABLE_STARRED_TEXT}. Отметки на месте — откройте список заново.`
+                      : 'Нет избранных сообщений'}
+                  </Text>
                 ) : entries.map((entry) => (
                   <StarredRow
                     key={entry.message.id}

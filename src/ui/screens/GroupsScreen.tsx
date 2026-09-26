@@ -87,7 +87,7 @@ import {
   setGroupDraft,
   setGroupDisappearTimer,
   purgeDisappearedMessages,
-  listStarredMessages,
+  listStarredMessagesRead,
   listGroupScheduledMessages,
   deleteScheduledMessage,
   getGroupStats,
@@ -645,6 +645,12 @@ function GroupChatScreen({
   const [mediaGalleryVisible, setMediaGalleryVisible] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
+  /**
+   * Избранное не прочиталось (v4.32.996). Без этого признака отказ чтения
+   * приходил пустым списком, и окно отвечало «Нет избранных сообщений» —
+   * при целых на диске отметках.
+   */
+  const [starredReadFailed, setStarredReadFailed] = useState(false);
   const [reactionDetailGrp, setReactionDetailGrp] = useState<{ activeEmoji: string; map: Record<string, string[]> } | null>(null);
   const [grpMsgInfoTarget, setGrpMsgInfoTarget] = useState<GroupMessageRow | null>(null);
   const [grpEmojiPanelVisible, setGrpEmojiPanelVisible] = useState(false);
@@ -3784,8 +3790,11 @@ function GroupChatScreen({
         setMediaGalleryVisible(true);
         return;
       case 'starred':
-        void listStarredMessages(pid).then((entries) => {
-          setStarredEntries(entries.filter((e) => e.kind === 'group' && e.contextId === group.id));
+        void listStarredMessagesRead(pid).then((entries) => {
+          setStarredReadFailed(entries === null);
+          if (entries !== null) {
+            setStarredEntries(entries.filter((e) => e.kind === 'group' && e.contextId === group.id));
+          }
           setStarredVisible(true);
         });
         return;
@@ -5021,6 +5030,7 @@ function GroupChatScreen({
         visible={starredVisible}
         onClose={closeStarred}
         starredEntries={starredEntries}
+        readFailed={starredReadFailed}
         setStarredEntries={setStarredEntries}
         onReload={reloadStarred}
       />

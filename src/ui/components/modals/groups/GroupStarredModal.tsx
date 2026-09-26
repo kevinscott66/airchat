@@ -14,17 +14,23 @@ import {
 } from '../../../../core/storage/local';
 import { shortIdentity } from '../../../identity/shortId';
 import { dayMonthShortYear } from '../../../../core/time/ruDateTime';
-import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
+import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../../../core/storage/unreadableText';
 
 export interface GroupStarredModalProps {
   visible: boolean;
   onClose: () => void;
   starredEntries: StarredMessageEntry[];
+  /**
+   * Список не прочитался (v4.32.996). Пустой список без этого признака
+   * означал и «звёздочкой ничего не отмечено», и отказ чтения, а окно
+   * отвечало «Нет избранных сообщений» — при целых на диске отметках.
+   */
+  readFailed?: boolean;
   setStarredEntries: React.Dispatch<React.SetStateAction<StarredMessageEntry[]>>;
   onReload: () => void;
 }
 
-function GroupStarredModalImpl({ visible, onClose, starredEntries, setStarredEntries, onReload }: GroupStarredModalProps) {
+function GroupStarredModalImpl({ visible, onClose, starredEntries, readFailed = false, setStarredEntries, onReload }: GroupStarredModalProps) {
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
   const stopPropagation = useCallback((e: { stopPropagation?: () => void }) => { e.stopPropagation?.(); }, []);
@@ -47,7 +53,11 @@ function GroupStarredModalImpl({ visible, onClose, starredEntries, setStarredEnt
               </View>
               <ScrollView contentContainerStyle={styles.scrollContent}>
                 {starredEntries.length === 0 ? (
-                  <Text style={[styles.empty, { color: colors.textMuted }]}>Нет избранных сообщений</Text>
+                  <Text style={[styles.empty, { color: colors.textMuted }]}>
+                    {readFailed
+                      ? `${UNREADABLE_STARRED_TEXT}. Отметки на месте — откройте список заново.`
+                      : 'Нет избранных сообщений'}
+                  </Text>
                 ) : starredEntries.map((entry) => (
                   <StarredRow
                     key={(entry.message as GroupMessageRow).id}

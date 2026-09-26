@@ -18,8 +18,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { font, spacing } from '../../../theme';
-import { listStarredMessages, type StarredMessageEntry } from '../../../../core/storage/local';
-import { UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
+import { listStarredMessagesRead, type StarredMessageEntry } from '../../../../core/storage/local';
+import { UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../../../core/storage/unreadableText';
 import { dayMonthShortTime } from '../../../../core/time/ruDateTime';
 import { log } from '../../../../core/logger';
 import { rawErrorText } from '../../userErrorText';
@@ -43,14 +43,30 @@ export function ProfileStarredPane({
   // Пока не дочитали — это «ещё не знаем», а не «пусто»: подпись под пустым
   // списком появляется только после чтения.
   const [loaded, setLoaded] = useState(false);
+  /**
+   * Избранное не прочиталось (v4.32.996).
+   *
+   * Третье состояние рядом с «читаем» и «прочитано»: отказ чтения приходил
+   * сюда пустым списком, и панель отвечала «Здесь пусто» — при целых на диске
+   * отметках. Заново их не соберёшь: какие именно сообщения отмечены,
+   * человек не помнит.
+   */
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
     setLoaded(false);
-    void listStarredMessages(ownerProfileId)
+    void listStarredMessagesRead(ownerProfileId)
       .then((all) => {
         if (cancelled) return;
+        if (all === null) {
+          // Показанное остаётся как было: отказ уже записан слоем чтения.
+          setReadFailed(true);
+          setLoaded(true);
+          return;
+        }
+        setReadFailed(false);
         setRows(contactPubB64
           ? all.filter((e) => e.kind === 'chat' && e.contextId === contactPubB64)
           : all);
@@ -67,7 +83,9 @@ export function ProfileStarredPane({
       <View style={styles.empty}>
         <Ionicons name="star-outline" size={44} color={colors.textMuted} />
         <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-          {loaded
+          {readFailed
+            ? `${UNREADABLE_STARRED_TEXT}. Отметки на месте — откройте панель заново.`
+            : loaded
             ? 'Здесь пусто. Отмеченные звёздочкой сообщения собираются сюда.'
             : 'Читаем…'}
         </Text>

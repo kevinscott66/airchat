@@ -9729,7 +9729,31 @@ export type StarredMessageEntry = {
   contextId: string;
 };
 
+/**
+ * Отмеченные звёздочкой сообщения профиля.
+ *
+ * Пустой список означает и «звёздочкой ничего не отмечено», и «прочитать не
+ * вышло». Кому разница важна — берёт `listStarredMessagesRead`.
+ */
 export async function listStarredMessages(ownerProfileId: number): Promise<StarredMessageEntry[]> {
+  return (await listStarredMessagesRead(ownerProfileId)) ?? [];
+}
+
+/**
+ * То же избранное, но отличающее «ничего не отмечено» от «прочитать не вышло»
+ * (v4.32.996).
+ *
+ * Чтений здесь три — личные сообщения, групповые и названия групп, — и любое
+ * могло не состояться; сюда же попадает `getOrCreateDataEncryptionKey`. Всё
+ * это сводилось к пустому списку, а четыре экрана избранного отвечали на него
+ * «Нет избранных сообщений» и «Здесь пусто. Отмеченные звёздочкой сообщения
+ * собираются сюда». Избранное человек собирает годами и держит вместо
+ * закладок: сказать ему, что собранного нет, когда оно цело, — значит соврать
+ * ровно про то, ради чего он сюда и зашёл.
+ */
+export async function listStarredMessagesRead(
+  ownerProfileId: number
+): Promise<StarredMessageEntry[] | null> {
   try {
     const d = await db();
     const chatRows = await d.getAllAsync<{
@@ -9810,7 +9834,7 @@ export async function listStarredMessages(ownerProfileId: number): Promise<Starr
     return result;
   } catch (e) {
     log.warn('list_starred_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    return null;
   }
 }
 

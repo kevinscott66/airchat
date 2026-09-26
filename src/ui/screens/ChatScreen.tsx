@@ -80,7 +80,7 @@ import {
   listAllScheduledMessages,
   deleteScheduledMessage,
   setMessageStarred,
-  listStarredMessages,
+  listStarredMessagesRead,
   makePollText,
   POLL_PREFIX,
   type ScheduledMessage,
@@ -966,6 +966,20 @@ function ChatThreadView({
   const [mediaGalleryVisible, setMediaGalleryVisible] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
+  /**
+   * Избранное не прочиталось (v4.32.996). Без этого признака отказ чтения
+   * приходил пустым списком, и окно отвечало «Нет избранных сообщений» —
+   * при целых на диске отметках.
+   */
+  const [starredReadFailed, setStarredReadFailed] = useState(false);
+  /** Одно правило на все три двери в избранное: список либо отказ. */
+  const openStarred = useCallback((entries: StarredMessageEntry[] | null): void => {
+    setStarredReadFailed(entries === null);
+    if (entries !== null) {
+      setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
+    }
+    setStarredVisible(true);
+  }, [peerB64]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const isSelecting = selectedIds.size > 0;
   const typingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1023,11 +1037,8 @@ function ChatThreadView({
       return;
     }
     if (initialIntent !== 'starred') return;
-    void listStarredMessages(activeProfileId)
-      .then((entries) => {
-        setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
-        setStarredVisible(true);
-      })
+    void listStarredMessagesRead(activeProfileId)
+      .then(openStarred)
       .catch((e: unknown) => {
         log.warn('ui_chat_starred_intent_failed', { err: rawErrorText(e) });
       });
@@ -3601,10 +3612,7 @@ function ChatThreadView({
                   {
                     text: 'Избранные сообщения',
                     onPress: () => {
-                      void listStarredMessages(activeProfileId).then((entries) => {
-                        setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
-                        setStarredVisible(true);
-                      });
+                      void listStarredMessagesRead(activeProfileId).then(openStarred);
                     },
                   },
                   {
@@ -4693,11 +4701,8 @@ function ChatThreadView({
             // попросить поднять поверх неё поиск или избранное.
             if (intent === 'search') { setSearchVisible(true); return; }
             if (intent !== 'starred') return;
-            void listStarredMessages(activeProfileId)
-              .then((entries) => {
-                setStarredEntries(entries.filter((e) => e.kind === 'chat' && e.contextId === peerB64));
-                setStarredVisible(true);
-              })
+            void listStarredMessagesRead(activeProfileId)
+              .then(openStarred)
               .catch((e: unknown) => {
                 log.warn('ui_chat_starred_peek_failed', { err: rawErrorText(e) });
               });
@@ -4710,6 +4715,7 @@ function ChatThreadView({
         visible={starredVisible}
         onClose={closeStarred}
         entries={starredEntries as Array<{ message: ChatMessageRow }>}
+        readFailed={starredReadFailed}
         selfLabel="Вы"
         peerLabel={localDisplayName}
         onUnstar={unstarFromModal}
