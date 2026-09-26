@@ -39,6 +39,17 @@ const MAX_IMAGE_BYTES = 400 * 1024;
 const LOOKUP_BATCH = 64;
 /** Сколько помнить ответ «фото есть/нет», прежде чем спросить снова. */
 const LOOKUP_TTL_MS = 30 * 60 * 1000;
+/**
+ * Через сколько вернуться к снимку, который справочник обещал, а забрать не
+ * вышло (v4.32.972).
+ *
+ * Полчаса — это выдержка на ОТВЕТ СПРАВОЧНИКА: «есть фото или нет» меняется
+ * редко, и переспрашивать чаще незачем. Сорвавшаяся загрузка — совсем другое:
+ * ответ справочника мы знаем, знаем даже версию, и не хватает ровно одного
+ * похода за байтами. Держать из-за моргнувшей связи букву в кружке полчаса
+ * не за что.
+ */
+const RETRY_TTL_MS = 60 * 1000;
 /** Пауза, за которую набирается пачка: экран рисует десяток лиц разом. */
 const LOOKUP_DEBOUNCE_MS = 60;
 /**
@@ -151,6 +162,15 @@ const inFlight = new Set<string>();
 /** Ключи, чьё фото прямо сейчас качается и проверяется: `<ключ>:<версия>`. */
 const materializing = new Set<string>();
 /**
+ * Версии, за которыми возвращаться незачем: `<ключ>:<версия>` (v4.32.972).
+ *
+ * Сюда попадает только то, что разобрано и отвергнуто: подпись не сошлась,
+ * подписано не тем ключом, свёртка не та, внутри не снимок. Связь тут ни при
+ * чём — второй поход принесёт те же байты. Снимут фото или выложат заново —
+ * справочник назовёт другую версию, и ключ будет другой.
+ */
+const hopeless = new Set<string>();
+/**
  * Какую версию фото справка назвала последней для каждого ключа.
  *
  * Отдельно от `known.ver` (там лежит версия того, что уже проверено и
@@ -232,6 +252,13 @@ async function verifiedAvatarFile(
   } catch { /* файла нет или не прочесть — сходим на сервер */ }
   const publicKey = publicKeyFromB64(pubB64);
   if (!publicKey) return null;
+  // Разобранный и отвергнутый ответ — приговор этой версии, а не сбой связи:
+  // запоминаем, чтобы не ходить за ней снова (v4.32.972).
+  const reject = (reason: string): null => {
+    hopeless.add(`${pubB64}:${version}`);
+    log.warn('public_avatar_proof_rejected', { reason });
+    return null;
+  };
   const envelope = await fetchWithDeadline(
     `${base}/v1/avatar/${urlKey}/signed`,
     {},
@@ -246,25 +273,20 @@ async function verifiedAvatarFile(
   );
   if (!envelope) return null;
   const claim = await verifySignedJson(publicKey, envelope, MAX_SIGNED_PAYLOAD);
-  if (!claim) {
-    log.warn('public_avatar_proof_rejected', { reason: 'signature' });
-    return null;
-  }
+  if (!claim) return reject('signature');
   // Подпись сошлась — но подписать могли и снятие фото, и чужой ключ.
   if (claim.act !== 'put' || claim.publicKeyB64 !== publicKeyToB64(publicKey)) {
-    log.warn('public_avatar_proof_rejected', { reason: 'subject' });
-    return null;
+    return reject('subject');
   }
   const imageB64 = claim.imageB64;
-  if (typeof imageB64 !== 'string' || imageB64.length === 0) return null;
+  if (typeof imageB64 !== 'string' || imageB64.length === 0) return reject('payload');
   const bytes = Buffer.from(imageB64, 'base64');
-  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return null;
+  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return reject('payload');
   // Справка назвала свёртку — это те же байты или другие. Обе половины ответа
   // приходят с одного сервера, и сговориться им ничто не мешает; проверка
   // ловит не злой умысел, а расхождение справки с выдачей.
   if (Buffer.from(sha256(bytes)).toString('hex').slice(0, 32) !== version) {
-    log.warn('public_avatar_proof_rejected', { reason: 'version' });
-    return null;
+    return reject('version');
   }
   try {
     await FileSystem.writeAsStringAsync(path, imageB64, { encoding: FileSystem.EncodingType.Base64 });
@@ -282,6 +304,32 @@ async function verifiedAvatarFile(
  * их разом незачем. Лицо появляется по мере проверки, подписчики будятся
  * после каждого.
  */
+/**
+ * Снимок не доехал: вернуться к нему через минуту, а не через полчаса
+ * (v4.32.972).
+ *
+ * Справочник, узнав версию, уже проставил ключу отметку «спрашивали только
+ * что» — до того, как стало известно, доедет ли снимок. Отметка эта про
+ * ОТВЕТ справочника, и она честная; нечестно только то, что по ней же
+ * `requestPublicAvatar` полчаса отказывается спрашивать снова. Для ключа, у
+ * которого фото на устройстве так и не появилось, это значит букву в кружке
+ * на полчаса из-за одного моргнувшего запроса — при том что сервер снимок
+ * отдаёт, а версию его мы знаем.
+ *
+ * Поэтому отметку сдвигаем назад ровно настолько, чтобы до следующего похода
+ * осталась минута. Сдвиг всегда в прошлое: свежее, чем поставил справочник,
+ * она стать не может.
+ */
+function retryLater(pubB64: string, version: string): void {
+  // Отвергнутую версию повторять нечем: принесут те же байты.
+  if (hopeless.has(`${pubB64}:${version}`)) return;
+  const prev = known.get(pubB64);
+  // Ответ уже не про то, что показывается: справочник назвал другую версию
+  // или сменился аккаунт. Торопить нечего.
+  if (!prev || wanted.get(pubB64) !== version) return;
+  known.set(pubB64, { ...prev, at: Date.now() - LOOKUP_TTL_MS + RETRY_TTL_MS });
+}
+
 async function materialize(
   base: string,
   pending: { pubB64: string; urlKey: string; version: string }[],
@@ -307,11 +355,15 @@ async function materialize(
       // Просто ничего не делаем. Прежнее лицо остаётся, версия в `known`
       // остаётся прежней — и следующий поход в справочник снова увидит версию
       // как новую и сходит за снимком.
-      if (uri === null) continue;
+      if (uri === null) {
+        retryLater(pubB64, version);
+        continue;
+      }
       known.set(pubB64, { uri, ver: version, at: prev.at });
       wake();
     } catch (e) {
       log.info('public_avatar_fetch_failed', { err: e instanceof Error ? e.message : String(e) });
+      retryLater(pubB64, version);
     } finally {
       materializing.delete(tag);
     }
@@ -394,6 +446,7 @@ export function resetPublicAvatars(): void {
   queued.clear();
   published.clear();
   materializing.clear();
+  hopeless.clear();
   wanted.clear();
   if (timer) { clearTimeout(timer); timer = null; }
 }
