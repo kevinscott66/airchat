@@ -133,7 +133,10 @@ describe('соседние дома правила', () => {
   });
 
   it('маркер «мы сами просились» пишется в свой профиль', () => {
-    expect(APP).toContain('profileKvSet(pid, INVITE_PENDING_KEY_PREFIX + payload.id, payload.adminPub)');
+    // v4.32.989: номер профиля на месте, а запись стала проверяемой —
+    // выброшенный ответ означал отметку, которой нет, при словах «запрос
+    // отправлен». Прежний вход читался как удачный всегда.
+    expect(APP).toContain('scopedKvSetCheckedFor(pid, INVITE_PENDING_KEY_PREFIX + payload.id, payload.adminPub)');
     expect(APP).not.toContain('setKv(INVITE_PENDING_KEY_PREFIX');
   });
 });

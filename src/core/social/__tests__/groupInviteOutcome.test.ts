@@ -139,7 +139,11 @@ describe('ни один вызов не выбрасывает ответ', () =
 
   it('вход по ссылке не обещает отправленную заявку', () => {
     expect(APP).toContain('const asked = await sendGroupJoinRequest(');
-    expect(APP).toContain("joinRequestProblem(asked) ?? 'Запрос на вступление отправлен администратору'");
+    // v4.32.989: обещание стало ещё осторожнее — «отправлен» говорится
+    // только когда легла и отметка «я сам просился»: без неё принятое
+    // администратором приглашение отбрасывается на этой стороне.
+    expect(APP).toContain('joinRequestProblem(asked)');
+    expect(APP).toContain("?? (remembered ? 'Запрос на вступление отправлен администратору' : JOIN_REQUEST_NOT_REMEMBERED));");
     expect(APP).not.toContain("Alert.alert('AirChat', 'Запрос на вступление отправлен администратору')");
   });
 });

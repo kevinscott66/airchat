@@ -1155,13 +1155,19 @@ function MainTabs({
                       // который об этой группе не просил: в нём могло быть
                       // включено «в группы добавляют только контакты», а
                       // администратора там нет в контактах вовсе.
-                      const { profileKvSet } = await import('./core/storage/local');
-                      await profileKvSet(pid, INVITE_PENDING_KEY_PREFIX + payload.id, payload.adminPub);
+                      // v4.32.989: ответ записи больше не выбрасывается. Отметку
+                      // читают на приёме приглашения, и её отсутствие там —
+                      // полноценный отказ: «мы об этой группе не просили».
+                      // Запись же идёт на холодном старте по ссылке, то есть в
+                      // самый занятый момент, а profileKvSet отвечал void.
+                      const { scopedKvSetCheckedFor } = await import('./core/storage/profileScopedKv');
+                      const remembered = await scopedKvSetCheckedFor(pid, INVITE_PENDING_KEY_PREFIX + payload.id, payload.adminPub);
                       // v4.32.451: «Запрос отправлен» говорилось безусловно —
                       // в том числе когда конверт никуда не ушёл. Группы у
                       // заявителя нет, повторить неоткуда: он просто ждал.
-                      const { joinRequestProblem } = await import('./core/social/groupControlOutcome');
-                      Alert.alert('AirChat', joinRequestProblem(asked) ?? 'Запрос на вступление отправлен администратору');
+                      const { joinRequestProblem, JOIN_REQUEST_NOT_REMEMBERED } = await import('./core/social/groupControlOutcome');
+                      Alert.alert('AirChat', joinRequestProblem(asked)
+                        ?? (remembered ? 'Запрос на вступление отправлен администратору' : JOIN_REQUEST_NOT_REMEMBERED));
                     } else {
                       // isAdmin=false: вступивший по ссылке — обычный участник,
                       // а не администратор (см. createGroup в local.ts).
