@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Appearance, StyleSheet } from 'react-native';
 import { log } from '../core/logger';
 import { kvTryGet, kvSetChecked } from '../core/storage/local';
-import { parseHourOfDay } from '../core/time/hourOfDay';
+import { isWithinHourWindow, parseHourOfDay } from '../core/time/hourOfDay';
 import { showError } from './components/userFeedback';
 import { applyAccent, colorsForScheme, normalizeAccent, resolveScheme, type AppColors, type ColorScheme, type ThemeMode } from './theme';
 
@@ -81,13 +81,6 @@ const ThemeContext = createContext<ThemeContextValue>({
   setAccentColor: async () => true,
 });
 
-/** Returns whether the current hour falls within [start, end) wrapping midnight. */
-function isInNightWindow(hour: number, start: number, end: number): boolean {
-  if (start <= end) return hour >= start && hour < end;
-  // wraps midnight: e.g. 21 → 7
-  return hour >= start || hour < end;
-}
-
 export function ThemeProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [mode, setModeState] = useState<ThemeMode>('dark');
   const [scheme, setScheme] = useState<ColorScheme>('dark');
@@ -124,7 +117,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     // значения не существовало вовсе — узнать «что сейчас нарисовано» можно было
     // только сравнив объект палитры с эталоном.
     const effective: ThemeMode = nightEnabled
-      ? (isInNightWindow(new Date().getHours(), nStart, nEnd) ? 'dark' : 'light')
+      ? (isWithinHourWindow(nStart, nEnd, new Date().getHours()) ? 'dark' : 'light')
       : baseMode;
     const next = resolveScheme(effective);
     setScheme(next);

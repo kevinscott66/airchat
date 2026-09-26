@@ -7,7 +7,13 @@
  * контексте и тянуть в него слой уведомлений целиком нельзя. Вторая: окно с
  * переходом через полночь — единственное место здесь, где легко ошибиться, а
  * проверить его в приложении можно только дождавшись нужного часа.
+ *
+ * v4.32.975: сама формула окна переехала в `core/time/hourOfDay` — та же
+ * проверка нужна ночной теме, и копия жила там отдельной строкой. Имя и место
+ * вызова здесь прежние: фоновому обработчику по-прежнему хватает этого модуля,
+ * а у нового импортов нет.
  */
+import { isWithinHourWindow } from '../core/time/hourOfDay';
 
 /** Час границы окна: 0…23, всё остальное (мусор в kv, NaN) — запасное значение. */
 export function parseDndHour(raw: string | null | undefined, fallback: number): number {
@@ -23,8 +29,5 @@ export function parseDndHour(raw: string | null | undefined, fallback: number): 
  * скорее ничего, чем выключить уведомления навсегда.
  */
 export function isWithinDndWindow(start: number, end: number, hour: number): boolean {
-  if (start === end) return false;
-  if (start < end) return hour >= start && hour < end;
-  // Переход через полночь: 22–8 — это 22, 23, 0…7.
-  return hour >= start || hour < end;
+  return isWithinHourWindow(start, end, hour);
 }
