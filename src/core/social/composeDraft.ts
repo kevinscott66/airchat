@@ -26,7 +26,8 @@
 import { profileManager } from '../identity/profileManager';
 import { log } from '../logger';
 import { profileScopedKey } from '../storage/kvKeys';
-import { kvDelete, kvGet, kvGetSecret, kvSetSecret } from '../storage/local';
+import { kvDelete, kvGet, kvGetSecretCell, kvSetSecret } from '../storage/local';
+import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
 
 /**
  * Сколько фото можно приложить к публикации. Ограничение продуктовое: столько
@@ -239,6 +240,33 @@ export function parseComposeDraft(raw: string | null, now: number): ComposeDraft
 }
 
 /**
+ * Прочитать снимок, пережидая занятую базу.
+ *
+ * v4.32.984: здесь стоял `kvGetSecret`, а он отвечает одним и тем же `null` и
+ * на «снимка нет», и на «база не открылась». Отказ базы в первую секунду после
+ * запуска — обычное дело (см. `storage/readRetry`), и восстановление черновика
+ * зовётся ровно в эту секунду: смысл снимка в том, чтобы пережить убитую
+ * системой активити, то есть срабатывает он при перезапуске приложения, когда
+ * SQLite занята восстановлением сессии и разбором очереди. Приняв отказ за
+ * «восстанавливать нечего», экран открывал composer пустым — набранный текст,
+ * фото и гео пропадали с глаз, — и второго захода не было: эффект в ленте
+ * одноразовый, на `[did]`. Снимок при этом лежал на диске целым и через
+ * полчаса протухал сам.
+ */
+async function readComposeSnapshot(key: string): Promise<{ raw: string | null; unreadable: boolean }> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, readRetryDelayMs(attempt)); });
+    }
+    const cell = await kvGetSecretCell(key);
+    if (cell.state !== 'unreadable') {
+      return { raw: cell.state === 'plain' ? cell.text : null, unreadable: false };
+    }
+    if (attempt >= READ_RETRY_ATTEMPTS) return { raw: null, unreadable: true };
+  }
+}
+
+/**
  * Поднять черновик. Восстановление одноразовое, но запись стирает экран —
  * после того, как применил снимок: между чтением и применением ещё ждём
  * результат picker'а, и умри активити там, стирать было бы нечего и незачем.
@@ -247,7 +275,8 @@ export function parseComposeDraft(raw: string | null, now: number): ComposeDraft
 export async function loadComposeDraft(did: string): Promise<ComposeDraft | null> {
   try {
     const pid = ownerProfileId(did);
-    let raw = pid == null ? null : await kvGetSecret(profileScopedKey(pid, COMPOSE_DRAFT_KEY));
+    const scoped = pid == null ? null : await readComposeSnapshot(profileScopedKey(pid, COMPOSE_DRAFT_KEY));
+    let raw = scoped?.raw ?? null;
     // Запись от версий до v4.32.292: открытым текстом и с did в ключе. Стираем
     // её всегда, даже если поднимать нечего — иначе она так и останется
     // читаемой, а удаление профиля её не заберёт.
@@ -255,7 +284,17 @@ export async function loadComposeDraft(did: string): Promise<ComposeDraft | null
     const legacyRaw = await kvGet(legacyKey);
     if (legacyRaw != null) {
       await kvDelete(legacyKey);
-      if (raw == null) raw = legacyRaw;
+      // v4.32.984: но подставлять её вместо своего снимка можно только тогда,
+      // когда свой и правда прочитан. Иначе на экран поднялся бы черновик
+      // времён до v4.32.292, а публикация следом стёрла бы нынешний как
+      // отработанный — вместе с текстом, который человек набирал последним.
+      if (raw == null && scoped?.unreadable !== true) raw = legacyRaw;
+    }
+    if (scoped?.unreadable) {
+      // Снимок цел, просто сейчас не открылся. Стирать его нельзя: поднимется
+      // при следующем запуске либо протухнет сам через полчаса.
+      log.warn('compose_draft_unreadable', { pid });
+      return null;
     }
     const snap = parseComposeDraft(raw, Date.now());
     if (!snap && raw != null) await clearComposeDraft(did);

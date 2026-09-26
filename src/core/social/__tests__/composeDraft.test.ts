@@ -25,6 +25,17 @@ jest.mock('../../storage/local', () => {
         return null;
       }
     }),
+    // v4.32.984: черновик читают ячейкой — «нет записи» и «не открылось»
+    // здесь разные ответы.
+    kvGetSecretCell: jest.fn(async (k: string) => {
+      const v = kv[k];
+      if (v == null || !v.startsWith(PREFIX)) return { state: 'absent' };
+      try {
+        return { state: 'plain', text: Buffer.from(v.slice(PREFIX.length), 'base64').toString('utf8') };
+      } catch {
+        return { state: 'unreadable' };
+      }
+    }),
     kvSetSecret: jest.fn(async (k: string, v: string) => {
       kv[k] = PREFIX + Buffer.from(v, 'utf8').toString('base64');
     }),

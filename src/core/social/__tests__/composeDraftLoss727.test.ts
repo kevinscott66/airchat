@@ -33,6 +33,11 @@ jest.mock('../../storage/local', () => {
       delete kv[k];
     }),
     kvGetSecret: jest.fn(async (k: string) => kv[k] ?? null),
+    // v4.32.984: черновик читают ячейкой — «нет записи» и «не открылось»
+    // здесь разные ответы.
+    kvGetSecretCell: jest.fn(async (k: string) => (
+      kv[k] == null ? { state: 'absent' } : { state: 'plain', text: kv[k] }
+    )),
     kvSetSecret: jest.fn(async (k: string, v: string) => {
       // Отказ не бросает и ничего не пишет — как настоящий kvSetChecked.
       if (!mockKvSetSecretOk) return false;
