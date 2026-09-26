@@ -91,8 +91,10 @@ describe('groupMessaging — приёмники больше не спрашив
   });
 
   it('решение о доверии к приглашению целиком считается по своему профилю', () => {
-    expect(GM).toContain('profileKvGet(rcpt.pid, INVITE_PENDING_KEY_PREFIX + groupId)');
-    expect(GM).toContain('listContactsFor(rcpt.pid)');
+    // v4.32.986: те же два источника, но различающей формой — «не прочитали»
+    // перестало быть ответом «нет». Профиль в вопросе прежний: rcpt.pid.
+    expect(GM).toContain('scopedKvTryGetFor(rcpt.pid, INVITE_PENDING_KEY_PREFIX + groupId)');
+    expect(GM).toContain('listContactsReadDetailed(rcpt.pid)');
     expect(GM).toContain("privacyPrefTryBoolFor(rcpt.pid, 'privacy_only_contacts_group')");
     // Общий (непрофильный) маркер не читается и не удаляется.
     expect(GM).not.toContain('kvGet(INVITE_PENDING_KEY_PREFIX');

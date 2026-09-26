@@ -39,13 +39,13 @@ import {
   recountGroupMembers,
   setGroupSlowMode,
   setGroupDisappearTimer,
-  profileKvGet,
   kvDeleteScoped,
   type GroupMessageRow,
   type GroupMessageWrite,
   type MemberRole,
   type GroupMemberRow,
 } from '../storage/local';
+import { scopedKvTryGetFor } from '../storage/profileScopedKv';
 import { type GroupRecipient } from './groupRecipient';
 import type { EnvelopeIntake } from '../transport/envelopeIntake';
 import { lookupValue } from '../utils/lookupResult';
@@ -1304,34 +1304,66 @@ export async function ensureGroupInviteToken(
 export const INVITE_PENDING_KEY_PREFIX = 'grp_invite_pending_';
 
 /**
+ * Ответ на «можно ли принять приглашение от этого отправителя» — тремя
+ * состояниями (v4.32.986).
+ *
+ * `unknown` — не «нет». Отказ базы раньше приходил сюда как «не доверяем», а
+ * вызывающий на «не доверяем» отвечает `consumed`: кадр разобран, метка relay
+ * перешагнула его, и второй подачи не будет никогда. Повторной рассылки
+ * приглашений в проекте нет, так что довод v4.32.474 («приглашение можно
+ * прислать повторно») не выполняется: группа не появляется уже совсем, а
+ * администратор видит «принято». Откладывать — и безопасно, и поправимо.
+ */
+type InviteTrust = 'yes' | 'no' | 'unknown';
+
+/**
  * Можно ли принять приглашение в неизвестную нам группу от этого отправителя.
  *
  * Два законных случая: (1) мы сами отправляли заявку на вступление именно
  * этому администратору; (2) отправитель — наш контакт. Незнакомцы отсекаются,
  * если включена настройка «Добавление в группы — только контакты».
  */
-async function isInviteTrusted(groupId: string, senderPubB64: string, rcpt: GroupRecipient): Promise<boolean> {
+async function isInviteTrusted(groupId: string, senderPubB64: string, rcpt: GroupRecipient): Promise<InviteTrust> {
+  // Ни один источник не отвечает «нет» в одиночку: «да» достаточно любого, а
+  // «нет» — только когда все трое прочитаны.
+  let unreadable = false;
   try {
-    if ((await profileKvGet(rcpt.pid, INVITE_PENDING_KEY_PREFIX + groupId)) === senderPubB64) return true;
-  } catch { /* ignore */ }
+    // v4.32.986: profileKvGet сводил отказ базы и «заявки не было» в один
+    // null. Своя же заявка — единственное, что пропускает приглашение от того,
+    // кого нет в контактах, и теряется она ровно в занятую первую секунду
+    // после запуска, когда конверт и приходит.
+    const pending = await scopedKvTryGetFor(rcpt.pid, INVITE_PENDING_KEY_PREFIX + groupId);
+    if (pending === null) unreadable = true;
+    else if (pending.value === senderPubB64) return 'yes';
+  } catch { unreadable = true; }
   try {
-    const { listContactsFor } = await import('./contacts');
-    const contacts = await listContactsFor(rcpt.pid);
-    // v4.32.617: неявная строка — это «незнакомец однажды написал», а не «мой
-    // контакт»: в разделе «Контакты» её и не видно. Настройка называется
-    // «Добавление в группы — только контакты», и считать такую строку доверием
-    // значит её же и отменять.
-    if (contacts.some((c) => c.peerPublicKey === senderPubB64 && c.implicit !== true)) return true;
-  } catch { /* ignore */ }
+    const { listContactsReadDetailed } = await import('./contacts');
+    // v4.32.986: listContactsFor отдаёт `?? []`, то есть непрочитанный
+    // справочник выглядит как пустой — «контактов нет», а не «не смогли
+    // посмотреть». Строка, которую не удалось расшифровать этим проходом, из
+    // списка тоже просто исчезает, и её отсутствие значит столько же (см.
+    // `missing`, v4.32.846).
+    const read = await listContactsReadDetailed(rcpt.pid);
+    if (read === null) unreadable = true;
+    else {
+      // v4.32.617: неявная строка — это «незнакомец однажды написал», а не «мой
+      // контакт»: в разделе «Контакты» её и не видно. Настройка называется
+      // «Добавление в группы — только контакты», и считать такую строку доверием
+      // значит её же и отменять.
+      if (read.contacts.some((c) => c.peerPublicKey === senderPubB64 && c.implicit !== true)) return 'yes';
+      if (read.missing > 0) unreadable = true;
+    }
+  } catch { unreadable = true; }
+  if (unreadable) return 'unknown';
   // v4.32.312: решение своё у каждого аккаунта, см. privacyPrefs. Чтение по
   // старому общему имени возвращало здесь пустоту — то есть «только контакты»
   // переставало работать ровно на приглашениях от незнакомцев.
   //
   // v4.32.474: то же самое делал отказ базы — он приходил сюда как «выключено»,
-  // и приглашение незнакомца становилось доверенным. Не прочитали — не доверяем:
-  // приглашение можно прислать повторно, а добавление в чужую группу человек
-  // увидит уже случившимся.
-  return (await privacyPrefTryBoolFor(rcpt.pid, 'privacy_only_contacts_group')) === false;
+  // и приглашение незнакомца становилось доверенным.
+  const onlyContacts = await privacyPrefTryBoolFor(rcpt.pid, 'privacy_only_contacts_group');
+  if (onlyContacts === null) return 'unknown';
+  return onlyContacts === false ? 'yes' : 'no';
 }
 
 /**
@@ -1532,7 +1564,18 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       log.info('group_ctl_invite_blocked_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }
-    if (!(await isInviteTrusted(env.groupId, senderPubB64, rcpt))) {
+    // v4.32.986: «не смогли посмотреть» — не «нельзя». Ниже стоит `consumed`,
+    // то есть кадр уходит навсегда; ровно так же рядом поступает проверка
+    // списка блокировок (v4.32.795).
+    const trust = await isInviteTrusted(env.groupId, senderPubB64, rcpt);
+    if (trust === 'unknown') {
+      log.warn('group_ctl_invite_trust_unreadable_defer', {
+        gid: env.groupId.slice(0, 8),
+        from: senderPubB64.slice(0, 12),
+      });
+      return 'deferred';
+    }
+    if (trust === 'no') {
       log.warn('group_ctl_invite_untrusted_drop', { gid: env.groupId.slice(0, 8), from: senderPubB64.slice(0, 12) });
       return 'consumed';
     }

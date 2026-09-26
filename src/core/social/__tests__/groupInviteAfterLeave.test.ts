@@ -105,7 +105,12 @@ jest.mock('../controlFanout', () => ({
   activeRecipients: async () => [],
   fanoutControlEnvelope: async () => ({ sent: true, recipients: 1 }),
 }));
-jest.mock('../contacts', () => ({ listContactsFor: async () => mockContacts() }));
+// v4.32.986: доверие к приглашению спрашивает справочник различающей формой:
+// `listContactsFor` отдаёт `?? []`, и непрочитанный список выглядел пустым.
+jest.mock('../contacts', () => ({
+  listContactsFor: async () => mockContacts(),
+  listContactsReadDetailed: async () => ({ contacts: mockContacts(), missing: 0 }),
+}));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryBoolFor: async () => true,
   privacyPrefBoolFor: async () => false,

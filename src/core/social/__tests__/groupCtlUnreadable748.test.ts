@@ -68,6 +68,9 @@ jest.mock('../../storage/local', () => ({
   }),
   insertGroupJoinRequest: jest.fn(async () => ({ created: true })),
   profileKvGet: jest.fn(async () => null),
+  // v4.32.986: отметку своей заявки читают парой kvTryGet —
+  // «записи нет» и «база не ответила» стали разными ответами.
+  kvTryGet: jest.fn(async () => ({ value: null })),
   kvDeleteScoped: jest.fn(async () => {}),
   createGroup: jest.fn(async (...a: unknown[]) => { mockCreated.push(a); }),
   // v4.32.816: группа и её состав теперь ложатся одной записью. Подмена
@@ -104,7 +107,12 @@ jest.mock('../controlFanout', () => ({
   activeRecipients: async () => [],
   fanoutControlEnvelope: async () => ({ sent: true, recipients: 1 }),
 }));
-jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
+// v4.32.986: доверие к приглашению спрашивает справочник различающей формой:
+// `listContactsFor` отдаёт `?? []`, и непрочитанный список выглядел пустым.
+jest.mock('../contacts', () => ({
+  listContactsFor: async () => [],
+  listContactsReadDetailed: async () => ({ contacts: [], missing: 0 }),
+}));
 jest.mock('../../security/rateLimiter', () => ({
   rateLimiter: {
     whenReady: async () => {},

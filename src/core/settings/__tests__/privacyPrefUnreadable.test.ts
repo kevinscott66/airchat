@@ -85,9 +85,12 @@ describe('отметки о прочтении не уходят вслепую'
 describe('решения при нечитаемой настройке приняты явно', () => {
   it('приглашение в группу без ответа базы не считается доверенным', () => {
     const gm = read('social/groupMessaging.ts');
-    expect(gm).toContain(
-      "return (await privacyPrefTryBoolFor(rcpt.pid, 'privacy_only_contacts_group')) === false;",
-    );
+    // v4.32.986: ответов стало три. Нечитаемая настройка больше не сводится к
+    // «не доверяем» — она отвечает `unknown`, и кадр откладывается вместо того,
+    // чтобы уйти навсегда. Прежний однострочник проверял ту же мысль слабее.
+    expect(gm).toContain("const onlyContacts = await privacyPrefTryBoolFor(rcpt.pid, 'privacy_only_contacts_group');");
+    expect(gm).toContain("if (onlyContacts === null) return 'unknown';");
+    expect(gm).toContain("return onlyContacts === false ? 'yes' : 'no';");
     expect(gm).not.toContain("privacyPrefBoolFor(rcpt.pid, 'privacy_only_contacts_group')");
   });
 
