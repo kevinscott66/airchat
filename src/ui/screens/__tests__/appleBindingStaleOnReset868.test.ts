@@ -36,14 +36,18 @@ import {
   APPLE_BINDING_STALE_TEXT,
   markAppleBindingStale,
 } from '../../../core/security/appleBindingStale';
-import { scopedKvGet, scopedKvSetChecked } from '../../../core/storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../../../core/storage/profileScopedKv';
 
 jest.mock('../../../core/storage/profileScopedKv', () => ({
-  scopedKvGet: jest.fn(),
+  scopedKvTryGet: jest.fn(),
   scopedKvSetChecked: jest.fn(),
 }));
 
-const kvGet = scopedKvGet as jest.MockedFunction<typeof scopedKvGet>;
+// v4.32.977: подсказку читает форма с тремя ответами. `{ value }` — прочитали
+// (внутри может быть и null: ячейки нет), голый `null` — прочитать не вышло.
+const kvGet = scopedKvTryGet as jest.MockedFunction<typeof scopedKvTryGet>;
+/** «Прочитали, и там лежит вот это». */
+const answers = (raw: string | null): void => { kvGet.mockResolvedValue({ value: raw }); };
 const kvSet = scopedKvSetChecked as jest.MockedFunction<typeof scopedKvSetChecked>;
 
 const SRC = path.join(__dirname, '..', '..', '..');
@@ -106,7 +110,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
 describe('ядро отвечает исходом, а не броском', () => {
   it('привязка живая — помечает и говорит «пометили»', async () => {
-    kvGet.mockResolvedValue(APPLE_BINDING_STORED.bound);
+    answers(APPLE_BINDING_STORED.bound);
     kvSet.mockResolvedValue(true);
     await expect(markAppleBindingStale()).resolves.toBe('marked');
     expect(kvSet).toHaveBeenCalledWith(APPLE_BINDING_HINT_KEY, APPLE_BINDING_STORED.stale);
@@ -114,20 +118,20 @@ describe('ядро отвечает исходом, а не броском', () 
 
   it('привязки нет или она уже помечена — не пишет вовсе', async () => {
     for (const stored of [APPLE_BINDING_STORED.none, APPLE_BINDING_STORED.stale, null]) {
-      kvGet.mockResolvedValue(stored);
+      answers(stored);
       await expect(markAppleBindingStale()).resolves.toBe('not_bound');
     }
     expect(kvSet).not.toHaveBeenCalled();
   });
 
   it('база ответила «не легло» — так и сказано, отдельным словом', async () => {
-    kvGet.mockResolvedValue(APPLE_BINDING_STORED.bound);
+    answers(APPLE_BINDING_STORED.bound);
     kvSet.mockResolvedValue(false);
     await expect(markAppleBindingStale()).resolves.toBe('unwritten');
   });
 
   it('запись бросила — тоже «не легло», и наружу бросок не уходит', async () => {
-    kvGet.mockResolvedValue(APPLE_BINDING_STORED.bound);
+    answers(APPLE_BINDING_STORED.bound);
     kvSet.mockRejectedValue(new Error('database is locked'));
     await expect(markAppleBindingStale()).resolves.toBe('unwritten');
   });

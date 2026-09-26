@@ -35,14 +35,18 @@ import {
 } from '../../../core/backup/cloudVaultCopy';
 import { APPLE_BINDING_STALE_TEXT } from '../../../core/security/appleBindingStale';
 import { passwordChangeAftermathText } from '../../../core/security/passwordChangeAftermath';
-import { scopedKvGet, scopedKvSetChecked } from '../../../core/storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../../../core/storage/profileScopedKv';
 
 jest.mock('../../../core/storage/profileScopedKv', () => ({
-  scopedKvGet: jest.fn(),
+  scopedKvTryGet: jest.fn(),
   scopedKvSetChecked: jest.fn(),
 }));
 
-const kvGet = scopedKvGet as jest.MockedFunction<typeof scopedKvGet>;
+// v4.32.977: подсказку читает форма с тремя ответами. `{ value }` — прочитали
+// (внутри может быть и null: ячейки нет), голый `null` — прочитать не вышло.
+const kvGet = scopedKvTryGet as jest.MockedFunction<typeof scopedKvTryGet>;
+/** «Прочитали, и там лежит вот это». */
+const answers = (raw: string | null): void => { kvGet.mockResolvedValue({ value: raw }); };
 const kvSet = scopedKvSetChecked as jest.MockedFunction<typeof scopedKvSetChecked>;
 
 const SRC = path.join(__dirname, '..', '..', '..');
@@ -68,7 +72,7 @@ beforeEach(() => {
 
 describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
   it('подсказка читается и пишется под своим ключом', async () => {
-    kvGet.mockResolvedValue(CLOUD_VAULT_COPY_STORED.uploaded);
+    answers(CLOUD_VAULT_COPY_STORED.uploaded);
     await expect(readCloudVaultCopy()).resolves.toBe('uploaded');
     expect(kvGet).toHaveBeenCalledWith(CLOUD_VAULT_COPY_KEY);
     kvSet.mockResolvedValue(true);
@@ -116,7 +120,7 @@ describe('подсказка о копии: три состояния', () => {
   });
 
   it('копия живая — помечает и говорит «пометили»', async () => {
-    kvGet.mockResolvedValue(CLOUD_VAULT_COPY_STORED.uploaded);
+    answers(CLOUD_VAULT_COPY_STORED.uploaded);
     kvSet.mockResolvedValue(true);
     await expect(markCloudVaultCopyStale()).resolves.toBe('marked');
     expect(kvSet).toHaveBeenCalledWith(CLOUD_VAULT_COPY_KEY, CLOUD_VAULT_COPY_STORED.stale);
@@ -124,14 +128,14 @@ describe('подсказка о копии: три состояния', () => {
 
   it('копии не было или её уже пометили — не пишет вовсе', async () => {
     for (const stored of [CLOUD_VAULT_COPY_STORED.none, CLOUD_VAULT_COPY_STORED.stale, null]) {
-      kvGet.mockResolvedValue(stored);
+      answers(stored);
       await expect(markCloudVaultCopyStale()).resolves.toBe('not_bound');
     }
     expect(kvSet).not.toHaveBeenCalled();
   });
 
   it('отказ записи — «не легло», отказ чтения — «неизвестно», и ни одного броска', async () => {
-    kvGet.mockResolvedValue(CLOUD_VAULT_COPY_STORED.uploaded);
+    answers(CLOUD_VAULT_COPY_STORED.uploaded);
     kvSet.mockResolvedValue(false);
     await expect(markCloudVaultCopyStale()).resolves.toBe('unwritten');
     kvSet.mockRejectedValue(new Error('database is locked'));

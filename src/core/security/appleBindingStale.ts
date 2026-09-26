@@ -24,7 +24,7 @@ import {
   hintAfterPasswordChange,
   parseAppleBindingHint,
 } from './appleBindingHint';
-import { scopedKvGet, scopedKvSetChecked } from '../storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../storage/profileScopedKv';
 
 /**
  * Ключ подсказки «здесь уже привязывали слова к Apple ID».
@@ -54,7 +54,19 @@ export type AppleBindingStaleOutcome = StaleMark;
 export async function markAppleBindingStale(): Promise<AppleBindingStaleOutcome> {
   let next: ReturnType<typeof hintAfterPasswordChange>;
   try {
-    next = hintAfterPasswordChange(parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY)));
+    // v4.32.977: читаем формой, которая отличает отказ базы от пустоты.
+    // `scopedKvGet` их складывал в один `null`, а `parseAppleBindingHint`
+    // всё незнакомое читает как «привязки не было», — и исход `'unknown'`,
+    // ради которого экран держит запасного свидетеля, не наступал никогда:
+    // занятая база молча давала `'not_bound'`, то есть «предупреждать не о
+    // чем». Человек менял пароль, предупреждения не видел, слов не сохранял
+    // — и узнавал о запертом конверте на новом телефоне, когда поздно.
+    const cell = await scopedKvTryGet(APPLE_BINDING_HINT_KEY);
+    if (!cell) {
+      log.warn('apple_binding_hint_unreadable', { key: APPLE_BINDING_HINT_KEY });
+      return 'unknown';
+    }
+    next = hintAfterPasswordChange(parseAppleBindingHint(cell.value));
   } catch (e) {
     log.warn('apple_binding_hint_read_failed', { err: e instanceof Error ? e.message : String(e) });
     return 'unknown';

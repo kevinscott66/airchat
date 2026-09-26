@@ -18,7 +18,7 @@
  */
 import { log } from '../logger';
 import type { StaleMark } from '../security/staleMark';
-import { scopedKvGet, scopedKvSetChecked } from '../storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../storage/profileScopedKv';
 
 /** Ключ подсказки. Namespace профиля: копия у каждого аккаунта своя. */
 export const CLOUD_VAULT_COPY_KEY = 'cloud_vault_copy_v1';
@@ -66,7 +66,19 @@ export async function storeCloudVaultCopy(hint: CloudVaultCopyHint): Promise<boo
  * будем, экран в этом случае не обещает ничего. */
 export async function readCloudVaultCopy(): Promise<CloudVaultCopyHint | null> {
   try {
-    return parseCloudVaultCopyHint(await scopedKvGet(CLOUD_VAULT_COPY_KEY));
+    // v4.32.977: `null` обещан докблоком, но прежнее чтение его не возвращало.
+    // `scopedKvGet` отвечает тем же `null` и на отказ базы, и на пустую
+    // ячейку, а `parseCloudVaultCopyHint` всё незнакомое читает как «копии
+    // нет». Экран из-за этого показывал «копии нет» вместо молчания, а
+    // `markCloudVaultCopyStale` отвечал `'not_bound'` вместо `'unknown'` —
+    // то есть при занятой базе человек не слышал, что копия в облаке больше
+    // не откроется новым паролем.
+    const cell = await scopedKvTryGet(CLOUD_VAULT_COPY_KEY);
+    if (!cell) {
+      log.warn('cloud_vault_copy_unreadable', { key: CLOUD_VAULT_COPY_KEY });
+      return null;
+    }
+    return parseCloudVaultCopyHint(cell.value);
   } catch (e) {
     log.warn('cloud_vault_copy_read_failed', { err: e instanceof Error ? e.message : String(e) });
     return null;
