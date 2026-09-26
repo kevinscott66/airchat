@@ -24,6 +24,7 @@ import { join } from 'path';
 const SRC = join(__dirname, '..', '..');
 const profile = readFileSync(join(SRC, 'ui', 'screens', 'ProfileScreen.tsx'), 'utf8');
 const settings = readFileSync(join(SRC, 'ui', 'screens', 'SettingsScreen.tsx'), 'utf8');
+const seedPresence = readFileSync(join(SRC, 'core', 'backup', 'seedPresence.ts'), 'utf8');
 
 /** Сколько раз встречается подстрока. */
 function count(source: string, needle: string): number {
@@ -75,7 +76,11 @@ describe('секретные слова — одна дверь, и она в «
 
   it('профиль всё же предупреждает, если слов на устройстве нет', () => {
     expect(profile).toContain('hasStoredMnemonic');
-    expect(profile).toContain('Секретные слова на этом устройстве не найдены');
+    // v4.32.993: сама фраза переехала в seedPresence — там же, где решается,
+    // говорить ли её вообще: «не найдены» и «не смогли посмотреть» теперь
+    // разные случаи, и путать их нельзя. Экран зовёт этот выбор.
+    expect(profile).toContain('seedWarningText(hasSeed)');
+    expect(seedPresence).toContain('Секретные слова на этом устройстве не найдены');
   });
 
   it('дверь в настройках названа так же, как о ней говорит приложение', () => {

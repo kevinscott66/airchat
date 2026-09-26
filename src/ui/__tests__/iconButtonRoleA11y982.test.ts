@@ -215,8 +215,11 @@ describe('ЗАКРЕПКА: выбор не назван командой', () =
   });
 
   it('ссылки на 𝕏 и GitHub названы ссылками: они уводят из приложения', () => {
-    for (const line of ['654', '666']) {
-      expect(at('screens', 'ProfileScreen.tsx', line)?.tag).toContain('accessibilityRole="link"');
+    // По надписи, а не по номеру строки: номер съезжал от любой правки выше
+    // по файлу, и закрепка падала там, где роль была на месте (v4.32.993).
+    for (const label of ['𝕏 @{twitterHandle}', '⌥ {githubHandle}']) {
+      const site = sites.find((s) => s.file === join('screens', 'ProfileScreen.tsx') && s.label === label);
+      expect(site?.tag).toContain('accessibilityRole="link"');
     }
   });
 });

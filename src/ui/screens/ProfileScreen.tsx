@@ -24,6 +24,8 @@ import { ipfsId } from '../../core/transport/ipfs/node';
 import { deleteContact, listContacts, subscribeContactsChanged } from '../../core/social/contacts';
 import { ContactsScreen } from './ContactsScreen';
 import { isCloudVaultConfigured } from '../../core/backup/cloudVault';
+import { seedWarningText, type SeedPresence } from '../../core/backup/seedPresence';
+import { log } from '../../core/logger';
 import { LOCAL_RADIO_TRANSPORTS_AVAILABLE } from '../platformCapabilities';
 import { loadFeedPosts } from '../../core/social/feedService';
 import {
@@ -67,7 +69,7 @@ import { formatSpokenDuration } from '../time/durationLabel';
 import { shortIdentity } from '../identity/shortId';
 import { findEntities } from '../../core/text/entities';
 import { dayMonthShort, dayMonthShortTime } from '../../core/time/ruDateTime';
-import { userErrorText } from '../components/userErrorText';
+import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPY_LINK_ACTION, COPIED_LINK, COPY_FAILED } from '../clipboardText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { buildContactLink } from '../../core/net/appLink';
@@ -166,7 +168,7 @@ function ProfileScreenImpl({
   const [showQrModal, setShowQrModal] = useState(false);
   const [starredVisible, setStarredVisible] = useState(false);
   const [starredEntries, setStarredEntries] = useState<StarredMessageEntry[]>([]);
-  const [hasSeed, setHasSeed] = useState(false);
+  const [hasSeed, setHasSeed] = useState<SeedPresence>('asking');
   const [exportPwd, setExportPwd] = useState('');
   const [exportModal, setExportModal] = useState(false);
   const [busy, _setBusy] = useState(false);
@@ -264,6 +266,21 @@ function ProfileScreenImpl({
 
   useEffect(() => {
     let alive = true;
+    // v4.32.993: проверка секретных слов — своя ветка эффекта, со своей
+    // ловушкой. Прежде она стояла четвёртой в общей цепочке, за походом в
+    // сеть, и до ответа экран показывал «не найдены» стартовым false; а
+    // бросок хранилища ключей (Keystore заперт — `readSeedRecord` такое
+    // намеренно пробрасывает) оставлял это «не найдены» навсегда и обрывал
+    // чтение всего остального, отчего экран выглядел как после переустановки.
+    void (async () => {
+      try {
+        const has = await hasStoredMnemonic();
+        if (alive) setHasSeed(has ? 'yes' : 'no');
+      } catch (e) {
+        log.warn('profile_seed_presence_unknown', { err: rawErrorText(e) });
+        if (alive) setHasSeed('unknown');
+      }
+    })();
     void (async () => {
       const id = await ipfsId();
       if (alive) setPeer(id);
@@ -272,7 +289,6 @@ function ProfileScreenImpl({
       // ключа профиля — по ним никуда не перейти. Один тихий повторный захват
       // за запуск это чинит; ошибка здесь ничего не значит для экрана.
       void republishOwnUsernameToDirectory();
-      setHasSeed(await hasStoredMnemonic());
       await loadDisplayName();
       const savedAvatar = await ownAvatarUri();
       if (alive && savedAvatar) setAvatarUri(savedAvatar);
@@ -764,10 +780,8 @@ function ProfileScreenImpl({
           <Ionicons name="archive-outline" size={20} color={colors.text} style={{ marginRight: 8 }} />
           <Text style={styles.exportBtnText}>Сохранить зашифрованную копию</Text>
         </AppPressable>
-        {!hasSeed ? (
-          <Text style={styles.warn}>
-            Секретные слова на этом устройстве не найдены — при необходимости пройдите настройку заново.
-          </Text>
+        {seedWarningText(hasSeed) ? (
+          <Text style={styles.warn}>{seedWarningText(hasSeed)}</Text>
         ) : null}
 
         {peer ? (
