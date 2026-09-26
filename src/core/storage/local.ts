@@ -9916,7 +9916,25 @@ export type QuickReply = {
   createdAt: number;
 };
 
+/**
+ * Шаблоны быстрых ответов профиля.
+ *
+ * Пустой список означает и «шаблонов нет», и «прочитать не вышло». Кому
+ * разница важна — берёт `listQuickRepliesRead`.
+ */
 export async function listQuickReplies(ownerProfileId: number): Promise<QuickReply[]> {
+  return (await listQuickRepliesRead(ownerProfileId)) ?? [];
+}
+
+/**
+ * Те же шаблоны, но отличающие «шаблонов нет» от «прочитать не вышло»
+ * (v4.32.998).
+ *
+ * Отказать здесь может и запрос, и `getOrCreateDataEncryptionKey`. Признак
+ * `unreadable` у строки — про другое: столбец приехал, но не открылся ключом
+ * (v4.32.582). Здесь же не приехало ничего.
+ */
+export async function listQuickRepliesRead(ownerProfileId: number): Promise<QuickReply[] | null> {
   try {
     const d = await db();
     const rows = await d.getAllAsync<{ id: string; text: string; owner_profile_id: number; created_at: number }>(
@@ -9938,7 +9956,7 @@ export async function listQuickReplies(ownerProfileId: number): Promise<QuickRep
     });
   } catch (e) {
     log.warn('list_quick_replies_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    return null;
   }
 }
 

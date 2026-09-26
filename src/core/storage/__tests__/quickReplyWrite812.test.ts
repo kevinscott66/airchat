@@ -211,11 +211,11 @@ describe('избранное: снятие звезды больше не рон
 describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: шаблон уходит нажатием, без перечитывания', () => {
   it('лист шаблонов открыт в каждом чате', () => {
     const attach = codeOnly(read('ui', 'components', 'AttachSheet.tsx'));
-    expect(attach).toContain('const list = await listQuickReplies(profileId);');
+    expect(attach).toContain('const list = await listQuickRepliesRead(profileId);');
   });
 
   it('нажатие вставляет текст шаблона в поле сообщения', () => {
     const chat = codeOnly(read('ui', 'screens', 'ChatScreen.tsx'));
-    expect(chat).toContain('void listQuickReplies(activeProfileId).then((list) => {');
+    expect(chat).toContain('void listQuickRepliesRead(activeProfileId).then((list) => {');
   });
 });

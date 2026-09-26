@@ -5,15 +5,22 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import type { QuickReply } from '../../../../core/storage/local';
+import { UNREADABLE_QUICK_REPLIES_TEXT } from '../../../../core/storage/unreadableText';
 
 export interface ChatQuickRepliesModalProps {
   visible: boolean;
   onClose: () => void;
   onPick: (text: string) => void;
   quickReplies: QuickReply[];
+  /**
+   * v4.32.998: список читает экран чата, поэтому и отказ приходит оттуда.
+   * Без него пустой массив означал сразу и «шаблонов нет», и «прочитать не
+   * вышло», а окно печатало приговор и звало завести шаблон заново.
+   */
+  readFailed?: boolean;
 }
 
-function ChatQuickRepliesModalImpl({ visible, onClose, onPick, quickReplies }: ChatQuickRepliesModalProps) {
+function ChatQuickRepliesModalImpl({ visible, onClose, onPick, quickReplies, readFailed = false }: ChatQuickRepliesModalProps) {
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
   const stopPropagation = useCallback(() => {}, []);
@@ -34,7 +41,9 @@ function ChatQuickRepliesModalImpl({ visible, onClose, onPick, quickReplies }: C
                 <Text style={[styles.title, { color: colors.text }]}>Быстрые ответы</Text>
                 {quickReplies.length === 0 ? (
                   <Text style={[styles.empty, { color: colors.textMuted }]}>
-                    Нет шаблонов. Добавьте в Настройки → Быстрые ответы.
+                    {readFailed
+                      ? `${UNREADABLE_QUICK_REPLIES_TEXT}. Шаблоны на месте — откройте окно заново.`
+                      : 'Нет шаблонов. Добавьте в Настройки → Быстрые ответы.'}
                   </Text>
                 ) : (
                   <ScrollView style={styles.scroll}>

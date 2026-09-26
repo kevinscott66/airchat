@@ -78,12 +78,12 @@ import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '
 import { useTabBarInset } from '../TabBarInset';
 import {
   kvGet, kvSetChecked, clearAllMessageHistory, liveAttachmentBlobIds,
-  listQuickReplies, addQuickReply, updateQuickReply, deleteQuickReply,
+  listQuickRepliesRead, addQuickReply, updateQuickReply, deleteQuickReply,
   type QuickReply,
 } from '../../core/storage/local';
 import { templateReadable } from '../../core/social/templateSearch';
 import { hourOfDayLabel, parseHourOfDay } from '../../core/time/hourOfDay';
-import { UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
+import { UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
 import {
   getDefaultDisappearMs,
   setDefaultDisappearMs,
@@ -402,6 +402,13 @@ function SettingsScreenImpl({
 
   // ── Quick replies state ────────────────────────────────────────────────────
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  /**
+   * v4.32.998: здесь шаблоны не только показывают, но и заводят. Отказ
+   * чтения, сведённый к пустому списку, рисовал пустой редактор с полем
+   * «Новый шаблон…» — то есть звал написать второй такой же поверх целого,
+   * и счётчик в меню исчезал заодно.
+   */
+  const [quickRepliesReadFailed, setQuickRepliesReadFailed] = useState(false);
   const [quickReplyInput, setQuickReplyInput] = useState('');
   const [editingQR, setEditingQR] = useState<QuickReply | null>(null);
   const [editingQRText, setEditingQRText] = useState('');
@@ -633,7 +640,10 @@ function SettingsScreenImpl({
    * добавленное там в чате не появлялось вовсе.
    */
   const loadQuickReplies = useCallback(() => {
-    void listQuickReplies(profileManager.getActiveProfile()?.id ?? 1).then(setQuickReplies);
+    void listQuickRepliesRead(profileManager.getActiveProfile()?.id ?? 1).then((list) => {
+      setQuickRepliesReadFailed(list === null);
+      if (list !== null) setQuickReplies(list);
+    });
   }, []);
   useEffect(() => { loadQuickReplies(); }, [loadQuickReplies, profileRefreshToken]);
 
@@ -2622,6 +2632,12 @@ function SettingsScreenImpl({
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.content, { paddingBottom: tabInset + 40 }]}>
       <SubHeader title="Быстрые ответы" />
       <Text style={styles.hint}>Сохранённые шаблоны для быстрой отправки в чатах.</Text>
+      {quickRepliesReadFailed ? (
+        <Text style={[styles.hint, { color: colors.warning }]}>
+          {UNREADABLE_QUICK_REPLIES_TEXT}. Ниже пусто не потому, что шаблонов нет: прежние на месте,
+          и новый лучше не заводить, пока список не прочитается.
+        </Text>
+      ) : null}
 
       {quickReplies.map((qr) => (
         <View key={qr.id} style={[styles.linkRow, { alignItems: 'flex-start' }]}>

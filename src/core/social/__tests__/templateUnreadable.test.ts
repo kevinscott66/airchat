@@ -83,8 +83,11 @@ describe('правила про непрочитанный шаблон', () => 
 });
 
 describe('чтение и показ шаблонов', () => {
-  it('listQuickReplies читает текст трёхзначно и несёт признак наружу', () => {
-    const body = slice(LOCAL(), 'export async function listQuickReplies(', "log.warn('list_quick_replies_failed'");
+  // v4.32.998: тело переехало в listQuickRepliesRead (под прежним именем
+  // осталась обёртка `?? []`), и якорь среза переехал вместе с ним.
+  // Проверяется то же самое место кода, что и раньше.
+  it('чтение шаблонов берёт текст трёхзначно и несёт признак наружу', () => {
+    const body = slice(LOCAL(), 'export async function listQuickRepliesRead(', "log.warn('list_quick_replies_failed'");
     expect(body).not.toContain('decryptAtRestString(r.text, dek)');
     expect(body).toContain('const cell = readAtRestCell(r.text, dek);');
     expect(body).toContain("text: cellTextOrNull(cell) ?? '',");

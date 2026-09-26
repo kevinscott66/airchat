@@ -4,7 +4,8 @@ import { AppModal as Modal } from '../../AppModal';
 import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
-import { listQuickReplies, type QuickReply } from '../../../../core/storage/local';
+import { listQuickRepliesRead, type QuickReply } from '../../../../core/storage/local';
+import { UNREADABLE_QUICK_REPLIES_TEXT } from '../../../../core/storage/unreadableText';
 import { profileManager } from '../../../../core/identity/profileManager';
 
 export interface GroupQuickRepliesModalProps {
@@ -19,13 +20,21 @@ function GroupQuickRepliesModalImpl({ visible, onClose, onPick, groupId }: Group
   const { colors } = useTheme();
   const stopPropagation = useCallback(() => {}, []);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  /**
+   * v4.32.998: отказ чтения приезжал сюда пустым списком, и окно отвечало
+   * «Нет шаблонов. Добавьте в Настройки → Быстрые ответы.» — приговор и
+   * приглашение написать второй такой же поверх целого.
+   */
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
     const pid = profileManager.getActiveProfile()?.id ?? 1;
-    void listQuickReplies(pid).then((list) => {
-      if (!cancelled) setQuickReplies(list);
+    void listQuickRepliesRead(pid).then((list) => {
+      if (cancelled) return;
+      setReadFailed(list === null);
+      if (list !== null) setQuickReplies(list);
     });
     return () => {
       cancelled = true;
@@ -48,7 +57,9 @@ function GroupQuickRepliesModalImpl({ visible, onClose, onPick, groupId }: Group
                 <Text style={[styles.title, { color: colors.text }]}>Быстрые ответы</Text>
                 {quickReplies.length === 0 ? (
                   <Text style={[styles.empty, { color: colors.textMuted }]}>
-                    Нет шаблонов. Добавьте в Настройки → Быстрые ответы.
+                    {readFailed
+                      ? `${UNREADABLE_QUICK_REPLIES_TEXT}. Шаблоны на месте — откройте окно заново.`
+                      : 'Нет шаблонов. Добавьте в Настройки → Быстрые ответы.'}
                   </Text>
                 ) : (
                   <ScrollView style={styles.scroll}>

@@ -85,7 +85,7 @@ import {
   POLL_PREFIX,
   type ScheduledMessage,
   type StarredMessageEntry,
-  listQuickReplies,
+  listQuickRepliesRead,
   type QuickReply,
   searchChatMessages,
   recentlyDeletedKey,
@@ -935,6 +935,8 @@ function ChatThreadView({
   const [pollCreatorVisible, setPollCreatorVisible] = useState(false);
   const [quickRepliesVisible, setQuickRepliesVisible] = useState(false);
   const [quickRepliesList, setQuickRepliesList] = useState<QuickReply[]>([]);
+  /** v4.32.998: список шаблонов либо прочитан, либо нет — третьего не даём. */
+  const [quickRepliesReadFailed, setQuickRepliesReadFailed] = useState(false);
   const [wallpaperPickerVisible, setWallpaperPickerVisible] = useState(false);
   const [pendingImageUris, setPendingImageUris] = useState<string[]>([]);
   const [imageCaption, setImageCaption] = useState('');
@@ -4404,8 +4406,9 @@ function ChatThreadView({
               onPress={() => {
                 setQuickRepliesVisible(true);
                 requestAnimationFrame(() => {
-                  void listQuickReplies(activeProfileId).then((list) => {
-                    setQuickRepliesList(list);
+                  void listQuickRepliesRead(activeProfileId).then((list) => {
+                    setQuickRepliesReadFailed(list === null);
+                    if (list !== null) setQuickRepliesList(list);
                   });
                 });
               }}
@@ -4457,6 +4460,7 @@ function ChatThreadView({
         onClose={closeQuickReplies}
         onPick={pickQuickReplyFromModal}
         quickReplies={quickRepliesList}
+        readFailed={quickRepliesReadFailed}
       />
 
       <ReactionsModal

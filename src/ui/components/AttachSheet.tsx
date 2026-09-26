@@ -20,9 +20,9 @@ import { KeyboardHost } from './KeyboardHost';
 import { SafeScreen } from './SafeScreen';
 import { useThemedStyles, useColors } from '../ThemeContext';
 import { badgeTint, contrastingInk, font, mediaScrim, radius, spacing } from '../theme';
-import { listQuickReplies, type QuickReply } from '../../core/storage/local';
+import { listQuickRepliesRead, type QuickReply } from '../../core/storage/local';
 import { filterTemplates, mayPickTemplate, templateReadable } from '../../core/social/templateSearch';
-import { UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
+import { UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
 import { listContacts, type Contact } from '../../core/social/contacts';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 import { MAX_BLOB_BYTES } from '../../core/media/blobRef';
@@ -781,12 +781,17 @@ function ReplyTab({
   const [replies, setReplies] = useState<QuickReply[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
+  // v4.32.998: отказ чтения списка — не то же самое, что пустой список.
+  // Прежний `listQuickReplies` сводил одно к другому, и вкладка звала завести
+  // шаблоны заново поверх целых.
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const list = await listQuickReplies(profileId);
-        setReplies(list);
+        const list = await listQuickRepliesRead(profileId);
+        if (list === null) setReadFailed(true);
+        else setReplies(list);
       } finally {
         setLoading(false);
       }
@@ -845,7 +850,11 @@ function ReplyTab({
         <View style={styles.empty}>
           <Ionicons name="arrow-undo-outline" size={40} color={colors.textMuted} style={{ marginBottom: spacing.sm }} />
           <Text style={styles.emptyText}>
-            {q ? 'Ничего не найдено' : 'Нет быстрых ответов. Создайте их в Настройках → Быстрые ответы.'}
+            {readFailed
+              ? `${UNREADABLE_QUICK_REPLIES_TEXT}. Шаблоны на месте — откройте вкладку заново.`
+              : q
+              ? 'Ничего не найдено'
+              : 'Нет быстрых ответов. Создайте их в Настройках → Быстрые ответы.'}
           </Text>
         </View>
       ) : (

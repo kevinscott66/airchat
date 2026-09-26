@@ -150,7 +150,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обход находит знач
 
   it('найдены и «Удалить», и кружок ожидания в настройках', () => {
     expect(sites.filter((s) => s.label === 'Удалить').length).toBeGreaterThanOrEqual(2);
-    expect(at('screens', 'SettingsScreen.tsx', '2961')?.label).toBe('Открыть');
+    expect(at('screens', 'SettingsScreen.tsx', '2977')?.label).toBe('Открыть');
   });
 });
 
@@ -165,7 +165,7 @@ describe('ЗАКРЕПКА: у каждого такого места роль �
   it('«Открыть» и «Включить» в настройках слышны так же, как соседняя «Отмена»', () => {
     // Ровно тот диалог, на котором виден перекос: отказ находился на ощупь,
     // подтверждение — нет.
-    for (const line of ['2961', '2988', '3017']) {
+    for (const line of ['2977', '3004', '3033']) {
       expect(at('screens', 'SettingsScreen.tsx', line)?.tag).toContain('accessibilityRole="button"');
     }
   });
