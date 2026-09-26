@@ -131,6 +131,24 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
   await retryPendingUsernameReleases();
   const pid = ownerProfileId();
   let sent: string | null = null;
+  /**
+   * Забыть отметку «это уже отправлено» — если отправить так и не вышло.
+   *
+   * v4.32.980: отметка ставится до сетевого запроса нарочно, чтобы два
+   * одновременных захода не сходили в реестр дважды. Но выходов, на которых
+   * запроса не будет вовсе, оказалось больше, чем откатов: ключа переписки
+   * может не быть (менеджер профилей ещё не поднялся — ровно тот случай, ради
+   * которого `activeProfilePair` и возвращает `null`), seed-фразы может не
+   * быть тоже. Экран профиля, открытый в эту секунду, ставил отметку и уходил
+   * ни с чем — а следующие заходы видели «уже отправлено» и молчали до самого
+   * перезапуска. Запись в справочнике так и оставалась дореформенной: без
+   * ключа (до v4.32.607) — по @имени никуда не перейти, без имени
+   * (до v4.32.722) — незнакомец видит «Без имени». Починить это и должен был
+   * ближайший заход на экран профиля.
+   */
+  const forget = (): void => {
+    if (sent !== null && republished.get(pid) === sent) republished.delete(pid);
+  };
   try {
     const username = await getOwnUsernameFor(pid);
     if (!username) return;
@@ -139,9 +157,9 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
     if (republished.get(pid) === sent) return;
     republished.set(pid, sent);
     const pair = activeProfilePair();
-    if (!pair) return;
+    if (!pair) { forget(); return; }
     const mnemonic = await getStoredMnemonic();
-    if (!mnemonic) return;
+    if (!mnemonic) { forget(); return; }
     const claim = await claimSyncUsername(
       mnemonic,
       deriveKeyPairFromMnemonic(mnemonic),
@@ -153,10 +171,10 @@ export async function republishOwnUsernameToDirectory(): Promise<void> {
     );
     // Недоступный сервер не бросает, а отвечает `offline` — и тоже значит
     // «повторить в следующий раз», а не «отправлено».
-    if (!claim.ok && claim.reason === 'offline' && republished.get(pid) === sent) republished.delete(pid);
+    if (!claim.ok && claim.reason === 'offline') forget();
   } catch (error) {
     // Не вышло — пусть следующий вызов попробует снова.
-    if (sent !== null && republished.get(pid) === sent) republished.delete(pid);
+    forget();
     log.info('username_directory_republish_skipped', {
       err: error instanceof Error ? error.message : String(error),
     });
