@@ -97,7 +97,7 @@ import { subscribeToPostCommentsTopic } from '../../core/social/feedTransport';
 import type { FeedViewerRow } from '../../core/storage/feedStorage';
 import { profileManager } from '../../core/identity/profileManager';
 import { getOwnDisplayName } from '../../core/identity/ownProfile';
-import { listContacts, type Contact } from '../../core/social/contacts';
+import { listContacts, listContactsRead, type Contact } from '../../core/social/contacts';
 import { getMessagingService } from '../../core/social/messaging';
 import type { FeedPostRow } from '../../core/storage/feedStorage';
 import { log, measurePerformance } from '../../core/logger';
@@ -125,7 +125,7 @@ import { useTabBarInset } from '../TabBarInset';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { StoriesRow } from '../components/StoriesRow';
 import { useMediaViewer } from '../components/MediaViewer';
-import { makePollText, parsePollText, POLL_PREFIX, setPollVote, deletePollVote, getPollVotes, listGroups, insertGroupMessageOrThrow, touchGroupConversation, type GroupRow } from '../../core/storage/local';
+import { makePollText, parsePollText, POLL_PREFIX, setPollVote, deletePollVote, getPollVotes, listGroupsRead, insertGroupMessageOrThrow, touchGroupConversation, type GroupRow } from '../../core/storage/local';
 import { scopedKvGet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
 import { fanoutGroupMessage } from '../../core/social/groupMessaging';
@@ -1426,9 +1426,18 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     const pid = profileManager.getActiveProfile()?.id ?? 1;
     setShareTargets('loading');
     setShareQuery('');
-    void Promise.all([listContacts(), listGroups(pid)])
+    // v4.32.997: читаем теми входами, которые отличают пустоту от отказа.
+    // До этой версии `listContacts`/`listGroups` гасили отказ базы в пустой
+    // список, `catch` ниже не срабатывал никогда, и исход 'failed' — вместе с
+    // текстом feed.shareTargetsFailed — был недостижим с самой v4.32.534.
+    void Promise.all([listContactsRead(), listGroupsRead(pid)])
       .then(([ctacts, grps]) => {
         if (!alive) return;
+        if (ctacts === null || grps === null) {
+          log.warn('feed_share_targets_failed', { err: 'read_failed' });
+          setShareTargets('failed');
+          return;
+        }
         setShareContacts(ctacts);
         setShareGroups(grps.filter((g) => !g.archived));
         setShareTargets('ready');

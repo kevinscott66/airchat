@@ -77,8 +77,14 @@ describe('окна групп не молчат об отказе (v4.32.639)', 
     expect(CREATE.match(/showSuccess\(/g)).toHaveLength(1);
   });
 
+  // v4.32.997: обещание v4.32.639 до сих пор не сбывалось — `listContacts`
+  // гасил отказ базы в пустой список, `.catch` не срабатывал, и раздел всё
+  // равно исчезал молча. Теперь отказ приезжает отдельным значением, а
+  // `.catch` остаётся на случай броска мимо чтения.
   it('отказ чтения контактов объясняется, а не прячет раздел', () => {
-    expect(CREATE).toContain('void listContacts()');
+    expect(CREATE).toContain('void listContactsRead()');
+    expect(CREATE).toContain('if (all === null) {');
+    expect(CREATE).toContain("'Не удалось прочитать контакты. Участников можно добавить потом.'");
     expect(CREATE).toContain(".catch((e) => {");
     expect(CREATE).toContain("'Не удалось загрузить контакты'");
   });

@@ -14,11 +14,11 @@ import { AppPressable } from '../../AppPressable';
 import { useTheme } from '../../../ThemeContext';
 import { avatarShape, primaryInk, radius } from '../../../theme';
 import type { KeyPairBytes } from '../../../../core/crypto/keyManager';
-import { listContacts, type Contact } from '../../../../core/social/contacts';
+import { listContactsRead, type Contact } from '../../../../core/social/contacts';
 import { groupSendProblem, groupSendProblemShort } from '../../../../core/social/groupSendOutcome';
 import { getMessagingService } from '../../../../core/social/messaging';
 import {
-  listGroups,
+  listGroupsRead,
   insertGroupMessage,
   touchGroupConversation,
   type GroupRow,
@@ -73,9 +73,18 @@ export function ForwardModal({
     if (!visible) return;
     let alive = true;
     setLoad('loading');
-    void Promise.all([listContacts(), listGroups(pid)])
+    // v4.32.997: входы, отличающие «переслать некому» от «не прочитали».
+    // Прежние `listContacts`/`listGroups` отдавали пустой список и на отказе
+    // базы — исход 'failed' и надпись с повтором, заведённые в v4.32.879, не
+    // включались ни разу.
+    void Promise.all([listContactsRead(), listGroupsRead(pid)])
       .then(([cs, gs]) => {
         if (!alive) return;
+        if (cs === null || gs === null) {
+          log.warn('forward_list_failed', { err: 'read_failed' });
+          setLoad('failed');
+          return;
+        }
         setContacts(cs);
         setGroups(gs);
         setLoad('ready');

@@ -189,8 +189,8 @@ describe('ЗАКРЕПКА: выбор не назван командой', () =
       [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '123'], 'isQuiz'],
       [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '132'], 'allowMultiple'],
       [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '138'], 'anonymous'],
-      [['screens', 'FeedScreen.tsx', '3707'], 'pollAnonymous'],
-      [['screens', 'FeedScreen.tsx', '3715'], 'pollMultiSelect'],
+      [['screens', 'FeedScreen.tsx', '3716'], 'pollAnonymous'],
+      [['screens', 'FeedScreen.tsx', '3724'], 'pollMultiSelect'],
     ];
     for (const [parts, flag] of boxes) {
       const tag = at(...parts)?.tag;
@@ -210,7 +210,7 @@ describe('ЗАКРЕПКА: выбор не назван командой', () =
   });
 
   it('«Канал»/«Группа» — выбор, и озвучка слышит, какой сделан', () => {
-    expect(at('components', 'modals', 'groups', 'GroupCreateModal.tsx', '198')?.tag)
+    expect(at('components', 'modals', 'groups', 'GroupCreateModal.tsx', '208')?.tag)
       .toContain('accessibilityState={{ selected: type === t }}');
   });
 

@@ -205,7 +205,7 @@ describe('перевод и список получателей', () => {
   });
 
   it('эффект листа пересылки снимает свои результаты при закрытии', () => {
-    const start = SCREEN.indexOf('void Promise.all([listContacts(), listGroups(pid)])');
+    const start = SCREEN.indexOf('void Promise.all([listContactsRead(), listGroupsRead(pid)])');
     expect(start).toBeGreaterThan(-1);
     const head = SCREEN.lastIndexOf('useEffect(() => {', start);
     const body = SCREEN.slice(head, SCREEN.indexOf('}, [shareToTarget]);', start));

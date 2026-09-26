@@ -43,8 +43,8 @@ describe('v4.32.879 — пустота в окне пересылки', () => {
 
     it('список и правда собирается из контактов и групп', () => {
       const src = codeOnly(read('ChatForwardModal.tsx'));
-      expect(src).toContain('listContacts()');
-      expect(src).toContain('listGroups(pid)');
+      expect(src).toContain('listContactsRead()');
+      expect(src).toContain('listGroupsRead(pid)');
       expect(src).toContain('const listData: FwdItem[] = [');
     });
   });
@@ -55,6 +55,16 @@ describe('v4.32.879 — пустота в окне пересылки', () => {
       expect(contacts).toMatch(/export async function listContacts\(/);
       const local = fs.readFileSync(path.join(DIR, '../../../../core/storage/local.ts'), 'utf8');
       expect(local).toMatch(/export async function listGroups\(/);
+    });
+
+    // v4.32.997: и отказ этот доезжает сюда отдельным значением, а не пустым
+    // списком — иначе исход 'failed' ниже был бы недостижим, как и был с
+    // v4.32.879 по v4.32.996.
+    it('отказ чтения приезжает в окно как null, а не как пустой список', () => {
+      const contacts = fs.readFileSync(path.join(DIR, '../../../../core/social/contacts.ts'), 'utf8');
+      expect(contacts).toContain('export async function listContactsRead(): Promise<Contact[] | null>');
+      const local = fs.readFileSync(path.join(DIR, '../../../../core/storage/local.ts'), 'utf8');
+      expect(local).toContain('export async function listGroupsRead(ownerProfileId: number): Promise<GroupRow[] | null>');
     });
   });
 
@@ -101,7 +111,7 @@ describe('v4.32.879 — пустота в окне пересылки', () => {
     });
 
     it('чтение одно на оба списка и с перехватом отказа', () => {
-      expect(src).toContain('void Promise.all([listContacts(), listGroups(pid)])');
+      expect(src).toContain('void Promise.all([listContactsRead(), listGroupsRead(pid)])');
       expect(src).toContain(".catch((e) => {");
       expect(src).toContain("setLoad('failed')");
       expect(src).not.toContain('void listContacts().then(setContacts)');

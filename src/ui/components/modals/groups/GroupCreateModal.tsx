@@ -20,7 +20,7 @@ import { useTheme } from '../../../ThemeContext';
 import { announceCtl } from '../../../groupControlAnnounce';
 import { primaryInk, radius } from '../../../theme';
 import type { KeyPairBytes } from '../../../../core/crypto/keyManager';
-import { listContacts, type Contact } from '../../../../core/social/contacts';
+import { listContactsRead, type Contact } from '../../../../core/social/contacts';
 import {
   createGroup,
   getGroupRead,
@@ -66,13 +66,23 @@ export function CreateGroupModal({
   useEffect(() => {
     if (visible && pair) {
       const myPubB64 = Buffer.from(pair.publicKey).toString('base64');
-      void listContacts()
-        .then((all) => setContacts(all.filter((c) => c.peerPublicKey !== myPubB64)))
+      // v4.32.639: раздел «Добавить участников» рисуется только при непустом
+      // списке контактов. Отказ чтения молча убирал его целиком — выглядело
+      // так, будто контактов нет вовсе, и группа заводилась пустой, хотя
+      // выбирать было из кого.
+      //
+      // v4.32.997: до этой версии сюда звали `listContacts`, а он гасил отказ
+      // базы в пустой список — `catch` не срабатывал, и обещание докблока выше
+      // не выполнялось ни разу. Теперь отказ приходит отдельным значением.
+      void listContactsRead()
+        .then((all) => {
+          if (all === null) {
+            showError('Не удалось прочитать контакты. Участников можно добавить потом.');
+            return;
+          }
+          setContacts(all.filter((c) => c.peerPublicKey !== myPubB64));
+        })
         .catch((e) => {
-          // v4.32.639: раздел «Добавить участников» рисуется только при
-          // непустом списке контактов. Отказ чтения молча убирал его целиком —
-          // выглядело так, будто контактов нет вовсе, и группа заводилась
-          // пустой, хотя выбирать было из кого.
           showError(userErrorText(e, 'Не удалось загрузить контакты'));
         });
     }

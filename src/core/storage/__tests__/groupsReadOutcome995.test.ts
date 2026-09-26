@@ -254,9 +254,15 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(await listArchivedGroups(1)).toEqual([]);
   });
 
-  it('у пересылки и «Поделиться» выбор по-прежнему из простого списка', () => {
-    expect(read('ui', 'components', 'modals', 'chat', 'ChatForwardModal.tsx')).toContain('listGroups(pid)');
-    expect(read('ui', 'screens', 'FeedScreen.tsx')).toContain('listGroups(pid)');
+  // v4.32.995 оставляла пересылку и «Поделиться» на коротком входе: там
+  // пустой список означал «переслать некому», и правка была про вкладку групп.
+  // v4.32.997 разобралась и с ними — у обоих листов свой исход отказа был
+  // написан заранее (v4.32.534 и v4.32.879) и не включался ни разу. Граница
+  // переехала, и проверка едет за ней: короткий вход остаётся, но в этих двух
+  // местах его больше не зовут.
+  it('пересылка и «Поделиться» читают тем же входом, что и вкладка групп', () => {
+    expect(read('ui', 'components', 'modals', 'chat', 'ChatForwardModal.tsx')).toContain('listGroupsRead(pid)');
+    expect(read('ui', 'screens', 'FeedScreen.tsx')).toContain('listGroupsRead(pid)');
   });
 });
 
