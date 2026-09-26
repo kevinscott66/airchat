@@ -54,9 +54,15 @@ import {
   getOwnUsername,
   ownFieldGet,
   ownFieldSet,
+  ownFieldTryGet,
   sanitizeOwnDisplayName,
   type OwnProfileKey,
 } from '../../../../core/identity/ownProfile';
+import {
+  decideLinkFieldWrite,
+  linkFieldsKeptText,
+  type LinkFieldName,
+} from '../../../../core/identity/linkFieldWrite';
 import { checkUsernameClaim } from '../../../../core/identity/reservedUsernames';
 import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
 import { applyOwnBadgeGrant, ownBadgeClaim } from '../../../../core/identity/ownBadge';
@@ -124,6 +130,14 @@ export function ProfileEditModal({
    */
   const [proofs, setProofs] = useState<{ x: LinkRecord | null; github: LinkRecord | null }>({ x: null, github: null });
   const [sheet, setSheet] = useState<LinkPlatform | null>(null);
+  /**
+   * Какие из полей-ссылок при наполнении окна не открылись (v4.32.994).
+   * Пустота в них — не ответ человека, а отказ чтения, и записывать её обратно
+   * нельзя. См. linkFieldWrite.
+   */
+  const [linkUnread, setLinkUnread] = useState<Record<LinkFieldName, boolean>>({
+    website: false, twitter: false, github: false, twitter_proof: false, github_proof: false,
+  });
   const [pubB64, setPubB64] = useState('');
 
   // Читается на каждое открытие: между открытиями профиль мог измениться и с
@@ -139,15 +153,15 @@ export function ProfileEditModal({
           ownFieldGet('user_pronouns'),
           ownFieldGet('user_custom_status'),
           ownFieldGet('user_bio'),
-          ownFieldGet('user_website'),
-          ownFieldGet('user_twitter'),
-          ownFieldGet('user_github'),
+          ownFieldTryGet('user_website'),
+          ownFieldTryGet('user_twitter'),
+          ownFieldTryGet('user_github'),
           ownAvatarUri(),
           ownBadgeClaim(),
         ]);
       const [xProof, ghProof, kp] = await Promise.all([
-        ownFieldGet('user_twitter_proof'),
-        ownFieldGet('user_github_proof'),
+        ownFieldTryGet('user_twitter_proof'),
+        ownFieldTryGet('user_github_proof'),
         loadKeyPair(),
       ]);
       if (!alive) return;
@@ -157,15 +171,22 @@ export function ProfileEditModal({
         pronouns: cleanPronouns(pronouns),
         status: normalizeOwnStatus(status),
         bio: normalizeOwnBio(bio),
-        website: website ?? '',
-        twitter: twitter ?? '',
-        github: github ?? '',
+        website: website?.text ?? '',
+        twitter: twitter?.text ?? '',
+        github: github?.text ?? '',
       };
       setSaved(next);
       setDraft(next);
       setAvatar(face ?? null);
       setBadge(claim);
-      setProofs({ x: readLinkProofRecord(xProof), github: readLinkProofRecord(ghProof) });
+      setProofs({ x: readLinkProofRecord(xProof?.text ?? null), github: readLinkProofRecord(ghProof?.text ?? null) });
+      setLinkUnread({
+        website: website === null,
+        twitter: twitter === null,
+        github: github === null,
+        twitter_proof: xProof === null,
+        github_proof: ghProof === null,
+      });
       setPubB64(kp ? Buffer.from(kp.publicKey).toString('base64') : '');
     })();
     return () => { alive = false; };
@@ -363,19 +384,38 @@ export function ProfileEditModal({
       const website = cleanLink(draft.website);
       const twitter = cleanLink(draft.twitter).replace(/^@/, '');
       const github = cleanLink(draft.github).replace(/^@/, '');
+      // v4.32.994: пустое поверх непрочитанного не пишем. Поле, которое не
+      // открылось при наполнении окна, приехало сюда пустым не от человека, а
+      // от отказа чтения — и «Сохранить» стирало бы им живое значение. Дороже
+      // всех бумага: её возвращают публикацией на площадке, а не в приложении.
+      // См. linkFieldWrite; то же правило у описания группы (v4.32.579).
+      const skipped: LinkFieldName[] = [];
+      const write = async (field: LinkFieldName, key: OwnProfileKey, value: string): Promise<void> => {
+        if (!decideLinkFieldWrite(value, linkUnread[field]).write) {
+          skipped.push(field);
+          return;
+        }
+        await put(key, value);
+      };
+
       if (website !== saved.website || twitter !== saved.twitter || github !== saved.github) {
         // Бумага пишется тем же заходом, что и имя: имя без своей бумаги —
         // это заявка, и разъехаться они не должны даже на один запуск.
         await Promise.all([
-          put('user_website', website),
-          put('user_twitter', twitter),
-          put('user_github', github),
+          write('website', 'user_website', website),
+          write('twitter', 'user_twitter', twitter),
+          write('github', 'user_github', github),
         ]);
       }
       await Promise.all([
-        put('user_twitter_proof', twitter && proofs.x ? encodeLinkProofRecord(proofs.x) : ''),
-        put('user_github_proof', github && proofs.github ? encodeLinkProofRecord(proofs.github) : ''),
+        write('twitter_proof', 'user_twitter_proof', twitter && proofs.x ? encodeLinkProofRecord(proofs.x) : ''),
+        write('github_proof', 'user_github_proof', github && proofs.github ? encodeLinkProofRecord(proofs.github) : ''),
       ]);
+      // Сохранение на этом не обрывается, в отличие от соседнего writeFailed:
+      // там база отказала, а здесь мы сами не стали писать. Имя, «О себе» и
+      // статус уже легли, и не разослать их контактам значило бы завести
+      // второе расхождение вместо одного. Говорим о ссылках и идём дальше.
+      const kept = linkFieldsKeptText(skipped);
 
       // Дальше — общий реестр имён по сети. Занимать в нём имя, когда своя же
       // база только что отказала в записи, не за чем: успех был бы объявлен
@@ -413,19 +453,28 @@ export function ProfileEditModal({
       // кто откроет нас по @имени, ещё не переписываясь. Новый юзернейм выше
       // уже занят вместе с именем, повторять не нужно.
       if (name !== saved.name && handle === saved.handle) void republishOwnUsernameToDirectory();
-      const next: Loaded = { name, handle, pronouns, status, bio, website, twitter, github };
+      // Поля, которые мы не стали переписывать, в «сохранённое» не попадают:
+      // окно иначе запомнило бы пустоту как значение и стёрло бы её при
+      // следующем сохранении — правило обошло бы само себя.
+      const next: Loaded = {
+        name, handle, pronouns, status, bio,
+        website: skipped.includes('website') ? saved.website : website,
+        twitter: skipped.includes('twitter') ? saved.twitter : twitter,
+        github: skipped.includes('github') ? saved.github : github,
+      };
       setSaved(next);
       setDraft(next);
       if (touchedProfile) void publish();
       onSaved?.(name);
-      if (!handle || handle === saved.handle) showSuccess('Профиль сохранён');
+      if (kept) showError(kept);
+      else if (!handle || handle === saved.handle) showSuccess('Профиль сохранён');
       onClose();
     } catch (e) {
       showError(userErrorText(e, 'Не удалось сохранить профиль'));
     } finally {
       setBusy(false);
     }
-  }, [draft, saved, badge, proofs, publish, onSaved, onClose]);
+  }, [draft, saved, badge, proofs, linkUnread, publish, onSaved, onClose]);
 
   if (!visible) return null;
 

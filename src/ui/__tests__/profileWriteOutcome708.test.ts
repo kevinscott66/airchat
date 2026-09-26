@@ -59,8 +59,16 @@ describe('отказ записи больше не выдаётся за усп
     const body = s.slice(put, put + 260);
     expect(body).toContain('const ok = await ownFieldSet(key, value);');
     expect(body).toContain('if (!ok) writeFailed = true;');
-    // Все девять полей идут через неё — и ни одним больше.
-    expect(s.match(/\bput\(/g)?.length).toBe(9);
+    // v4.32.994: у пяти полей-ссылок появился второй слой — `write`, который
+    // сперва спрашивает правило «пустое поверх непрочитанного» и только потом
+    // зовёт `put`. Счёт поэтому такой: четыре поля пишутся напрямую, пять — из
+    // `write`, а сам `write` зовёт `put` ровно один раз. Мимо обёртки
+    // по-прежнему не проходит ни одно: `ownFieldSet` на весь файл один.
+    expect(s.match(/\bput\(/g)?.length).toBe(5);
+    const link = s.indexOf("const write = async (field: LinkFieldName, key: OwnProfileKey, value: string)");
+    expect(link).toBeGreaterThan(0);
+    expect(s.slice(link, link + 300)).toContain('await put(key, value);');
+    expect(s.match(/\bwrite\('/g)?.length).toBe(5);
   });
 
   it('правка профиля: отказ назван вслух и окно остаётся открытым', () => {
