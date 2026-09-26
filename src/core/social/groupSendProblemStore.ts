@@ -23,6 +23,7 @@
  */
 
 import { log } from '../logger';
+import { createSerialRunner } from '../../notifications/lifecycleQueue';
 import {
   scopedKvTryGetSecretFor,
   scopedKvSetSecretCheckedFor,
@@ -110,12 +111,43 @@ function trim(map: GroupSendProblemMap): GroupSendProblemMap {
 }
 
 /**
+ * Дорожка записи (v4.32.988).
+ *
+ * Карта читается перед КАЖДОЙ записью и пишется целиком, а между чтением и
+ * записью стоит await. Пишущих же много и друг о друге они не знают: обе
+ * отметки ставятся из `announceGroupSend` через `void`, то есть по одной на
+ * каждое разосланное сообщение, и приходят они тогда, когда ответила
+ * рассылка. Ровно в тот момент, ради которого вся запись и заведена — сеть
+ * пропала, и подряд не уходит десяток сообщений, — ответы приходят пачкой.
+ *
+ * Второй пишущий успевал прочитать карту до того, как первый её записал, и
+ * ложился поверх: оставалась одна отметка из нескольких. Пропажа молчаливая,
+ * а стоит она того же, что и в v4.32.951: сообщение, не ушедшее никому,
+ * снова выглядит отправленным — с галочкой и словом «Отправлено».
+ *
+ * Правило и дорожка те же, что у закреплений (groupPinSync, v4.32.675):
+ * следующая запись начинается после того, как предыдущая закончилась.
+ * Дорожка одна на модуль — запись местная и короткая, а карта дорожек по
+ * профилю росла бы без потолка. Стирание отметок идёт по той же дорожке: оно
+ * читает и пишет ту же самую карту.
+ */
+const problemWrites = createSerialRunner();
+
+/**
  * Отметить сообщение как не дошедшее. Отвечает, легла ли отметка.
  *
  * Не прочитали — не пишем: иначе одна свежая отметка заменила бы собой всю
  * карту, и прежние несостоявшиеся сообщения снова выглядели бы отправленными.
  */
 export async function recordGroupSendProblemFor(
+  pid: number,
+  msgId: string,
+  problem: GroupSendProblem,
+): Promise<boolean> {
+  return problemWrites(() => recordGroupSendProblemSerial(pid, msgId, problem));
+}
+
+async function recordGroupSendProblemSerial(
   pid: number,
   msgId: string,
   problem: GroupSendProblem,
@@ -147,6 +179,10 @@ export async function recordGroupSendProblemFor(
  */
 export async function forgetGroupSendProblemsFor(pid: number, msgIds: string[]): Promise<void> {
   if (msgIds.length === 0) return;
+  return problemWrites(() => forgetGroupSendProblemsSerial(pid, msgIds));
+}
+
+async function forgetGroupSendProblemsSerial(pid: number, msgIds: string[]): Promise<void> {
   const stored = await loadGroupSendProblemsFor(pid);
   if (stored === null) return;
   let changed = false;
