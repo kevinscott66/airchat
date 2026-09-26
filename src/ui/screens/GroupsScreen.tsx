@@ -319,7 +319,7 @@ import { openMapAt } from '../utils/openExternal';
 import { roleChangeNoopText, roleChangeSysText, roleLabel, roleTone, sortMembersByRole, type AssignableRole } from '../../core/social/groupRolePolicy';
 import { createEditCommitGate } from '../../core/utils/editCommitGate';
 import { createCoalescedTask } from '../../core/utils/coalescedTask';
-import { runViewOnceTap, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
+import { runViewOnceTap, viewOncePartialText, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
 import { forgetViewOnceShown, noteViewOnceShown } from '../../core/social/viewOncePending';
 import { shareTextExport } from '../../core/media/cacheFiles';
 import { getEmojiSuggestions } from './chat-utils/emoji';
@@ -1177,6 +1177,7 @@ function GroupChatScreen({
       reload: () => { void loadMessages(); },
       // Вложение живёт на relay около трёх часов — старое уже не достать.
       onUnavailable: () => showError('Снимок больше недоступен'),
+      onPartial: (shown, total) => showError(viewOncePartialText(shown, total)),
       onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке'),
     });
   }, [gateway, grpMediaViewer, pid, loadMessages]);

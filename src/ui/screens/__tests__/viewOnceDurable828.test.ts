@@ -113,6 +113,8 @@ function stand(over: Partial<ViewOnceTapDeps> = {}): {
     remove: jest.fn(async () => true),
     reload: jest.fn(),
     onUnavailable: jest.fn(),
+    // v4.32.990: неполный показ больше не молчит.
+    onPartial: jest.fn(),
     onRemoveFailed: jest.fn(),
     ...over,
   };

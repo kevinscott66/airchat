@@ -181,7 +181,7 @@ import { reverseGeocodeLabel } from '../../core/social/geocode';
 import { EmojiPanel } from './chat-components/EmojiPanel';
 import { LinkPreview, extractFirstUrl } from './chat-components/LinkPreview';
 import { SendEffectOverlay, detectSendEffect } from './chat-components/SendEffectOverlay';
-import { runViewOnceTap, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
+import { runViewOnceTap, viewOncePartialText, VIEW_ONCE_DELETE_DELAY_MS } from './chat-utils/viewOnceTap';
 import { forgetViewOnceShown, noteViewOnceShown } from '../../core/social/viewOncePending';
 import { getEmojiSuggestions, isBigEmoji } from './chat-utils/emoji';
 import {
@@ -2903,6 +2903,7 @@ function ChatThreadView({
         // Вложение живёт на relay около трёх часов; в группе про это говорили,
         // в личном чате молчали (v4.32.359).
         onUnavailable: () => showError('Снимок больше недоступен'),
+        onPartial: (shown, total) => showError(viewOncePartialText(shown, total)),
         onRemoveFailed: () => showError('Снимок показан, но стереть его не получилось — он остался в переписке'),
       });
     },
