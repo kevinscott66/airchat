@@ -45,7 +45,7 @@ import { profileManager } from '../../core/identity/profileManager';
 import { getOwnDisplayName, getOwnUsername } from '../../core/identity/ownProfile';
 import { outwardName, shownName, shownNameOrNull } from '../../core/social/unreadableName';
 import {
-  listGroups,
+  listGroupsRead,
   getGroup,
   getGroupRead,
   listGroupMessages,
@@ -63,7 +63,7 @@ import {
 
   setGroupSlowMode,
   setGroupArchived,
-  listArchivedGroups,
+  listArchivedGroupsRead,
   deleteGroup,
   upsertGroupMember,
   recountGroupMembers,
@@ -105,7 +105,7 @@ import { setMuted as muteSet, unmute as muteUnset, type MuteKind } from '../../c
 import { decidePage, shouldApplyRows } from '../../core/storage/readResult';
 import { atCreatedAt, hasMoreAfterRefresh, mergeListHead } from '../../core/storage/listHeadMerge';
 import { setActiveGroupId } from '../../notifications/pushNotifications';
-import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
+import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
 import { quoteView } from '../../core/social/replyQuote';
 import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterWrite } from '../../core/social/draftGuard';
 import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
@@ -6082,6 +6082,14 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
   const [nav, setNav] = useState<NavState>({ screen: 'list' });
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [archivedGroups, setArchivedGroups] = useState<GroupRow[]>([]);
+  /**
+   * Списки групп не прочитались (v4.32.995).
+   *
+   * Пустой список — законный ответ только у нового аккаунта. Отказ чтения
+   * отдавал такой же пустой, и человеку предлагали создать группу заново
+   * вместо той, что цела на диске. Подробности — в `loadGroups` ниже.
+   */
+  const [groupsReadFailed, setGroupsReadFailed] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [createVisible, setCreateVisible] = useState(false);
   const [grpSearch, setGrpSearch] = useState('');
@@ -6136,8 +6144,25 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
     return () => { alive = false; clearTimeout(t); };
   }, [grpSearch, pid]);
 
+  /**
+   * Списки читаются тремя исходами (v4.32.995).
+   *
+   * До этой версии оба чтения гасили отказ базы пустым массивом, и вкладка
+   * отвечала «Нет групп» с подсказкой «Создайте группу или канал, нажав «+»».
+   * При целом диске это читается как пропажа всех разговоров разом, а
+   * подсказка зовёт завести группу заново — с новой ссылкой, без истории и
+   * мимо участников, у которых прежняя осталась.
+   *
+   * На отказе показанное остаётся как было: прошлый список честнее пустого.
+   * Сам отказ уже записан слоем чтения (list_groups_failed).
+   */
   const loadGroups = useCallback(async () => {
-    const [list, archived] = await Promise.all([listGroups(pid), listArchivedGroups(pid)]);
+    const [list, archived] = await Promise.all([listGroupsRead(pid), listArchivedGroupsRead(pid)]);
+    if (list === null || archived === null) {
+      setGroupsReadFailed(true);
+      return;
+    }
+    setGroupsReadFailed(false);
     setGroups(list);
     setArchivedGroups(archived);
   }, [pid]);
@@ -6650,6 +6675,20 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
             </View>
           ) : null}
           ListEmptyComponent={
+            groupsReadFailed ? (
+              // v4.32.995: список не прочитался. Звать создать группу здесь
+              // значило бы завести вторую с новой ссылкой при целой первой;
+              // помогает возврат на вкладку — он перечитывает список.
+              <View style={gsStyles.empty}>
+                <Ionicons name="alert-circle-outline" size={52} color={colors.textMuted} />
+                <Text style={[gsStyles.emptyTitle, { color: colors.text }]}>
+                  {UNREADABLE_GROUPS_TEXT}
+                </Text>
+                <Text style={[gsStyles.emptyHint, { color: colors.textMuted }]}>
+                  Группы на месте — их не удалось прочитать сейчас. Откройте вкладку заново.
+                </Text>
+              </View>
+            ) : (
             <View style={gsStyles.empty}>
               <Ionicons
                 name={filterTab === 'channels' ? 'megaphone-outline' : filterTab === 'pinned' ? 'pin-outline' : filterTab === 'groups' ? 'people-circle-outline' : 'people-outline'}
@@ -6671,6 +6710,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
                   : 'Ничего не найдено для этого фильтра'}
               </Text>
             </View>
+            )
           }
         />
       </View>

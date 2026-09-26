@@ -6900,34 +6900,84 @@ async function insertGroupRow(
   );
 }
 
-export async function listGroups(ownerProfileId: number): Promise<GroupRow[]> {
+/**
+ * Строки групп одним чтением: открытые либо архивные (v4.32.995).
+ *
+ * Два списка отличались условием `archived`, порядком строк и меткой в
+ * журнале — как это было у диалогов до v4.32.650. Разбор строки у них один
+ * (`rowToGroup`), и держать его в двух телах значило заводить вторую правду о
+ * том, что такое группа.
+ *
+ * Отдаёт три исхода общим правилом readResult.ts: строки, пусто, сбой чтения.
+ * Пустой список раньше означал и «групп нет», и «прочитать не вышло» — а на
+ * экране групп это разные вещи: см. `listGroupsRead`.
+ */
+async function readGroupRows(
+  ownerProfileId: number,
+  archived: 0 | 1,
+  order: string,
+  failTag: string
+): Promise<DbRead<GroupRow>> {
   try {
     const d = await db();
     const rows = await d.getAllAsync<Record<string, unknown>>(
-      `SELECT * FROM groups WHERE owner_profile_id = ? AND archived = 0 ORDER BY pinned DESC, last_message_at DESC`,
-      [ownerProfileId]
+      `SELECT * FROM groups WHERE owner_profile_id = ? AND archived = ? ORDER BY ${order}`,
+      [ownerProfileId, archived]
     );
     const dek = await getOrCreateDataEncryptionKey();
     return rows.map((r) => rowToGroup(r, dek));
   } catch (e) {
-    log.warn('list_groups_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
+    log.warn(failTag, { err: e instanceof Error ? e.message : String(e) });
+    return null;
   }
 }
 
+const OPEN_GROUP_ORDER = 'pinned DESC, last_message_at DESC';
+const ARCHIVED_GROUP_ORDER = 'last_message_at DESC';
+
+/**
+ * Открытые группы профиля.
+ *
+ * Пустой список означает и «групп нет», и «прочитать не вышло». Кому разница
+ * важна — берёт `listGroupsRead`.
+ */
+export async function listGroups(ownerProfileId: number): Promise<GroupRow[]> {
+  return (await listGroupsRead(ownerProfileId)) ?? [];
+}
+
+/**
+ * Те же открытые группы, но отличающие «групп нет» от «прочитать не вышло»
+ * (v4.32.995).
+ *
+ * Пустой список — законный ответ: у нового аккаунта групп правда нет. На нём же
+ * строился вывод, которого неудавшееся чтение делать не вправе: вкладка
+ * отвечала «Нет групп» и звала «Создайте группу или канал, нажав «+»». Человек
+ * с двумя десятками групп на диске читает это как «всё пропало» — и создаёт
+ * группу заново, с новой ссылкой и без истории, а прежний разговор остаётся у
+ * остальных участников. Сюда же попадает отказ `getOrCreateDataEncryptionKey`:
+ * ключ не открылся — строки целы, а списка нет.
+ */
+export async function listGroupsRead(ownerProfileId: number): Promise<GroupRow[] | null> {
+  const read = await readGroupRows(ownerProfileId, 0, OPEN_GROUP_ORDER, 'list_groups_failed');
+  return read?.slice() ?? null;
+}
+
+/**
+ * Архивные группы профиля.
+ *
+ * Тот же уговор, что у `listGroups`: пустой список сводит два ответа в один.
+ */
 export async function listArchivedGroups(ownerProfileId: number): Promise<GroupRow[]> {
-  try {
-    const d = await db();
-    const rows = await d.getAllAsync<Record<string, unknown>>(
-      `SELECT * FROM groups WHERE owner_profile_id = ? AND archived = 1 ORDER BY last_message_at DESC`,
-      [ownerProfileId]
-    );
-    const dek = await getOrCreateDataEncryptionKey();
-    return rows.map((r) => rowToGroup(r, dek));
-  } catch (e) {
-    log.warn('list_archived_groups_failed', { err: e instanceof Error ? e.message : String(e) });
-    return [];
-  }
+  return (await listArchivedGroupsRead(ownerProfileId)) ?? [];
+}
+
+/**
+ * Те же архивные группы, но отличающие «в архиве пусто» от «прочитать не
+ * вышло» (v4.32.995).
+ */
+export async function listArchivedGroupsRead(ownerProfileId: number): Promise<GroupRow[] | null> {
+  const read = await readGroupRows(ownerProfileId, 1, ARCHIVED_GROUP_ORDER, 'list_archived_groups_failed');
+  return read?.slice() ?? null;
 }
 
 /**
