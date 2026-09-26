@@ -36,6 +36,8 @@ jest.mock('../../storage/local', () => {
       return cell.state === 'plain' ? cell.text : null;
     }),
     kvGetSecret: jest.fn(async () => null),
+    // v4.32.978: перенос общей записи перешёл на трёхсостоятельную форму.
+    kvGetSecretCell: jest.fn(async () => ({ state: 'absent' })),
     kvSetSecret: jest.fn(async () => true),
     kvSetSecretScoped: jest.fn(async (pid: number, key: string, value: string) => {
       cells[`p${pid}:${key}`] = { state: 'plain', text: value };

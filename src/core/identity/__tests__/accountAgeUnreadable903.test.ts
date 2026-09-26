@@ -36,6 +36,12 @@ jest.mock('../../storage/local', () => {
       return cell.state === 'plain' ? cell.text : null;
     }),
     kvGetSecret: jest.fn(async (key: string) => legacy[key] ?? null),
+    // v4.32.978: та же общая запись, но тремя состояниями. Обе формы стоят
+    // поверх одного хранилища, как в `local.ts`, где строчная и написана
+    // поверх ячейки; строчная оставлена, чтобы прогон на дореформенном
+    // дереве шёл по живому коду.
+    kvGetSecretCell: jest.fn(async (key: string) =>
+      (key in legacy ? { state: 'plain', text: legacy[key] } : { state: 'absent' })),
     kvSetSecret: jest.fn(async (key: string, value: string) => {
       if (!state.setSecretOk) return false;
       cells[key] = { state: 'plain', text: value };

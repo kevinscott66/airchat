@@ -25,6 +25,13 @@ jest.mock('../../storage/local', () => {
     if (stored == null) return null;
     return stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored;
   });
+  // v4.32.978: та же общая запись тремя состояниями — перенос перешёл на неё,
+  // чтобы «записи нет» не путалось с «не открылась». Здесь чтение всегда
+  // удаётся, так что 'unreadable' не возвращается.
+  const kvGetSecretCell = jest.fn(async (key: string) => {
+    const text = await kvGetSecret(key);
+    return text == null ? { state: 'absent' } : { state: 'plain', text };
+  });
   const kvGetSecretUpgrading = jest.fn(async (key: string) => {
     const stored = kv[key];
     if (stored == null) return null;
@@ -48,6 +55,7 @@ jest.mock('../../storage/local', () => {
     kvSet,
     kvDelete,
     kvGetSecret,
+    kvGetSecretCell,
     kvSetSecret,
     kvGetSecretUpgrading,
     kvGetSecretCellUpgrading,

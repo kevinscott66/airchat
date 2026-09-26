@@ -34,6 +34,12 @@ jest.mock('../../storage/local', () => {
       return cell.state === 'plain' ? cell.text : null;
     }),
     kvGetSecret: jest.fn(async (key: string) => legacy[key] ?? null),
+    // v4.32.978: та же общая запись, но тремя состояниями. Обе формы стоят
+    // поверх одного хранилища, как в `local.ts`, где строчная и написана
+    // поверх ячейки; строчная оставлена, чтобы прогон на дореформенном
+    // дереве шёл по живому коду.
+    kvGetSecretCell: jest.fn(async (key: string) =>
+      (key in legacy ? { state: 'plain', text: legacy[key] } : { state: 'absent' })),
     kvSetSecret: jest.fn(async (key: string, value: string) => {
       if (!state.setSecretOk) return false;
       cells[key] = { state: 'plain', text: value };
@@ -66,6 +72,7 @@ const mockLocal = jest.requireMock('../../storage/local') as {
   __state: { setSecretOk: boolean };
   kvGetSecretCellUpgrading: jest.Mock;
   kvGetSecret: jest.Mock;
+  kvGetSecretCell: jest.Mock;
   kvSetSecret: jest.Mock;
   kvDelete: jest.Mock;
 };
@@ -90,6 +97,9 @@ describe('нечитаемое своё поле не подменяется о�
     mockLocal.__legacy[KEY] = 'Имя из общей записи';
     expect(await ownFieldGetFor(1, KEY)).toBeNull();
     expect(mockLocal.kvGetSecret).not.toHaveBeenCalled();
+    // v4.32.978: и трёхсостоятельной формой тоже — «не трогаем общую»
+    // должно остаться утверждением, а не пустым местом после смены формы.
+    expect(mockLocal.kvGetSecretCell).not.toHaveBeenCalled();
   });
 
   it('и живой шифртекст остаётся на месте — ни записи поверх, ни удаления', async () => {
@@ -132,6 +142,9 @@ describe('остальные исходы разбираются как преж
     mockLocal.__legacy[KEY] = 'Имя из общей записи';
     expect(await ownFieldGetFor(1, KEY)).toBe('Своё имя');
     expect(mockLocal.kvGetSecret).not.toHaveBeenCalled();
+    // v4.32.978: и трёхсостоятельной формой тоже — «не трогаем общую»
+    // должно остаться утверждением, а не пустым местом после смены формы.
+    expect(mockLocal.kvGetSecretCell).not.toHaveBeenCalled();
     expect(mockLocal.kvDelete).not.toHaveBeenCalled();
   });
 
@@ -139,6 +152,9 @@ describe('остальные исходы разбираются как преж
     mockLocal.__legacy[KEY] = 'Имя из общей записи';
     expect(await ownFieldGetFor(2, KEY)).toBeNull();
     expect(mockLocal.kvGetSecret).not.toHaveBeenCalled();
+    // v4.32.978: и трёхсостоятельной формой тоже — «не трогаем общую»
+    // должно остаться утверждением, а не пустым местом после смены формы.
+    expect(mockLocal.kvGetSecretCell).not.toHaveBeenCalled();
     expect(mockLocal.kvSetSecret).not.toHaveBeenCalled();
   });
 

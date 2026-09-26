@@ -21,6 +21,13 @@ jest.mock('../../storage/local', () => {
       if (stored == null) return null;
       return stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored;
     }),
+    // v4.32.978: та же общая запись тремя состояниями. Здесь чтение всегда
+    // удаётся, поэтому 'unreadable' не возвращается.
+    kvGetSecretCell: jest.fn(async (key: string) => {
+      const stored = kv[key];
+      if (stored == null) return { state: 'absent' };
+      return { state: 'plain', text: stored.startsWith(PREFIX) ? stored.slice(PREFIX.length) : stored };
+    }),
     kvSetSecret,
     kvGetSecretUpgrading: jest.fn(async (key: string) => {
       const stored = kv[key];

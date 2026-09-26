@@ -23,7 +23,7 @@
  */
 import {
   kvDelete,
-  kvGetSecret,
+  kvGetSecretCell,
   kvGetSecretCellUpgrading,
   kvSetSecret,
   kvSetSecretScoped,
@@ -147,11 +147,20 @@ export async function ownFieldTryGetFor(
   // когда профиль был один. Остальным она не наследуется — иначе разделение
   // профилей снова стало бы декорацией.
   if (pid !== 1) return { text: null };
-  const legacy = await kvGetSecret(key);
-  if (legacy == null) return { text: null };
+  // v4.32.978: общая запись читается тремя состояниями по той же причине, по
+  // какой читается своя двумя строками выше. `kvGetSecret` сводит «записи нет»
+  // и «не открылась» к одному null, и на нечитаемой общей записи функция
+  // отвечала `{ text: null }` — «поля нет». Здесь это не умолчание, а
+  // утверждение: на нём стоит проверка «не занято ли имя соседним профилем»
+  // (`isUsernameTakenByAnotherProfile`), которая из «нет» выводит разрешение
+  // занять @имя. Два DID на одном устройстве получали один и тот же
+  // человекочитаемый адрес, а различить таких двоих получателю конверта нечем.
+  const legacy = await kvGetSecretCell(key);
+  if (legacy.state === 'unreadable') return null;
+  if (legacy.state !== 'plain') return { text: null };
   // v4.32.293: исходную запись убираем, только если копия действительно легла.
-  if (await kvSetSecret(profileScopedKey(pid, key), legacy)) await kvDelete(key);
-  return { text: legacy };
+  if (await kvSetSecret(profileScopedKey(pid, key), legacy.text)) await kvDelete(key);
+  return { text: legacy.text };
 }
 
 /**
