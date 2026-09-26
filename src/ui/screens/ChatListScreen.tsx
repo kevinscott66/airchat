@@ -33,10 +33,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedDots } from '../components/AnimatedDots';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { profileManager } from '../../core/identity/profileManager';
-import { addContact, deleteContact, listContacts, parseContactId, subscribeContactsChanged, type Contact } from '../../core/social/contacts';
+import { addContact, deleteContact, listContactsRead, parseContactId, subscribeContactsChanged, type Contact } from '../../core/social/contacts';
 import { getMessagingService } from '../../core/social/messaging';
 import { previewLabelForText } from '../../core/social/messagePreview';
 import {
+  UNREADABLE_CONTACTS_TEXT,
   UNREADABLE_CONVERSATIONS_TEXT,
   UNREADABLE_DRAFT_TEXT,
   UNREADABLE_MESSAGE_TEXT,
@@ -508,8 +509,23 @@ function AddContactModal({
     // Ранее addContact молча перезаписывал displayName у уже существующего контакта,
     // что приводило к «фантомному» повторному добавлению. Теперь показываем явный отказ
     // и даём возможность открыть чат или удалить старую запись.
+    // v4.32.999: список читается исходом, а не пустотой. Прежний listContacts
+    // отдавал `[]` и на сбое чтения — проверка ниже молча не находила ничего,
+    // и добавление шло дальше. Дальше mergeExplicitContactRow ставит
+    // displayName из патча, а патч здесь непустой всегда («Новый контакт»,
+    // если поле пустое): человек, повторно вставивший знакомый ID, вместо
+    // «Контакт уже добавлен» получал переименованный контакт. Ровно то
+    // «фантомное повторное добавление», против которого проверку и завели.
+    const known = await listContactsRead();
+    if (known === null) {
+      Alert.alert(
+        'AirChat',
+        `${UNREADABLE_CONTACTS_TEXT}. Не видно, нет ли такого контакта уже, поэтому добавлять не стали: иначе у знакомого контакта сменилось бы имя. Откройте окно заново.`
+      );
+      return;
+    }
     try {
-      const existing = (await listContacts()).find((c) => c.peerPublicKey === pkB64);
+      const existing = known.find((c) => c.peerPublicKey === pkB64);
       if (existing) {
         Alert.alert(
           'Контакт уже добавлен',
@@ -539,7 +555,7 @@ function AddContactModal({
         return;
       }
     } catch {
-      /* list failure — fall through to addContact */
+      /* показ окна отказал — добавление ниже идёт своим чередом */
     }
     setBusy(true);
     try {
@@ -665,6 +681,15 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
    * вставали в список как «контакт без переписки».
    */
   const [convReadFailed, setConvReadFailed] = useState(false);
+  /**
+   * v4.32.999: то же самое про адресную книгу, читалась она третьим списком в
+   * том же запросе. Её сбой приезжал пустотой, и список рассылки отвечал «Нет
+   * контактов» — при целой книге на диске. Заодно из списка чатов исчезали
+   * строки контактов без переписки: показанное менялось от сбоя чтения.
+   */
+  const [contactsReadFailed, setContactsReadFailed] = useState(false);
+  /** Последняя прочитанная книга: на сбое показываем её, а не пустоту. */
+  const lastContactsRef = useRef<Contact[]>([]);
   const [addContactVisible, setAddContactVisible] = useState(false);
   const [broadcastVisible, setBroadcastVisible] = useState(false);
   const [broadcastSelected, setBroadcastSelected] = useState<Set<string>>(new Set());
@@ -702,7 +727,7 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
     const [openConvs, archivedConvs, ctactsRaw] = await Promise.all([
       listConversationsRead(pid),
       listArchivedConversationsRead(pid),
-      listContacts(),
+      listContactsRead(),
     ]);
     if (openConvs === null || archivedConvs === null) {
       // Показанное остаётся как было: прошлый список честнее пустого. Сбой уже
@@ -712,18 +737,21 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
     }
     setConvReadFailed(false);
     setArchivedCount(archivedConvs.length);
+    setContactsReadFailed(ctactsRaw === null);
+    const ctacts = ctactsRaw ?? lastContactsRef.current;
+    if (ctactsRaw !== null) lastContactsRef.current = ctactsRaw;
 
     // v4.32.31: self-chat «Сохранённые сообщения» показывается ТОЛЬКО в закреплённом
     // заголовке (ListHeaderComponent), а в обычном списке чатов и в списке контактов
     // — фильтруется. Критерий: peerPublicKey === myPubB64.
     const mine = pair ? Buffer.from(pair.publicKey).toString('base64') : null;
-    setContacts(mine ? ctactsRaw.filter((c) => c.peerPublicKey !== mine) : ctactsRaw);
+    setContacts(mine ? ctacts.filter((c) => c.peerPublicKey !== mine) : ctacts);
 
     setConversations(
       buildChatListRows({
         openConversations: openConvs,
         archivedConversations: archivedConvs,
-        contacts: ctactsRaw,
+        contacts: ctacts,
         showArchived,
         ownerProfileId: pid,
         myPubB64: mine,
@@ -1223,7 +1251,13 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   </AppPressable>
                 );
               }}
-              ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', padding: 24 }}>Нет контактов</Text>}
+              ListEmptyComponent={
+                <Text style={{ color: colors.textMuted, textAlign: 'center', padding: 24 }}>
+                  {contactsReadFailed
+                    ? `${UNREADABLE_CONTACTS_TEXT}. Кому слать — отсюда не видно. Откройте список заново.`
+                    : 'Нет контактов'}
+                </Text>
+              }
             />
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', padding: 12, gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border }}>

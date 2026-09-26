@@ -21,7 +21,7 @@ import Constants from 'expo-constants';
 import { BrandedQr } from '../components/BrandedQr';
 import { runSyncIfOnline } from '../../core/storage/sync';
 import { ipfsId } from '../../core/transport/ipfs/node';
-import { deleteContact, listContacts, subscribeContactsChanged } from '../../core/social/contacts';
+import { deleteContact, listContactsRead, subscribeContactsChanged } from '../../core/social/contacts';
 import { ContactsScreen } from './ContactsScreen';
 import { isCloudVaultConfigured } from '../../core/backup/cloudVault';
 import { seedWarningText, type SeedPresence } from '../../core/backup/seedPresence';
@@ -346,7 +346,7 @@ function ProfileScreenImpl({
       // показываем: строка про возраст просто не появится до следующего раза.
       const [posts, contacts] = await Promise.all([
         loadFeedPosts(200, 0),
-        listContacts(),
+        listContactsRead(),
       ]);
       if (alive) {
         // v4.32.528: чтение не удалось — счётчик публикаций не трогаем. Ноль
@@ -356,11 +356,18 @@ function ProfileScreenImpl({
         // v4.32.32: one-off migration — если в БД остался self-contact от v4.32.30
         // (когда ChatScreen auto-добавлял «Сохранённые сообщения»), удаляем физически.
         const mine = pair ? Buffer.from(pair.publicKey).toString('base64') : null;
-        if (mine && contacts.some((c) => c.peerPublicKey === mine)) {
-          try { await deleteContact(mine); } catch { /* ignore */ }
+        // v4.32.999: то же самое, что строкой выше про публикации, и ровно по
+        // той же причине. Книгу читал гасящий вход, и её сбой приезжал сюда
+        // пустым списком: карточка «Контакты» показывала 0 при целой книге на
+        // диске. Заодно чистка self-контакта ниже искала его в пустоте и
+        // всякий раз решала, что чистить нечего.
+        if (contacts !== null) {
+          if (mine && contacts.some((c) => c.peerPublicKey === mine)) {
+            try { await deleteContact(mine); } catch { /* ignore */ }
+          }
+          const realContacts = mine ? contacts.filter((c) => c.peerPublicKey !== mine) : contacts;
+          setContactCount(realContacts.length);
         }
-        const realContacts = mine ? contacts.filter((c) => c.peerPublicKey !== mine) : contacts;
-        setContactCount(realContacts.length);
       }
     })();
     return () => {
@@ -393,8 +400,8 @@ function ProfileScreenImpl({
     // component (RN warns and on strict mode is reproducible).
     let alive = true;
     const unsub = subscribeContactsChanged(() => {
-      void listContacts().then((contacts) => {
-        if (!alive) return;
+      void listContactsRead().then((contacts) => {
+        if (!alive || contacts === null) return;
         const mine = pair ? Buffer.from(pair.publicKey).toString('base64') : null;
         const realContacts = mine ? contacts.filter((c) => c.peerPublicKey !== mine) : contacts;
         setContactCount(realContacts.length);

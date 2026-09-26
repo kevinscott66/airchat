@@ -22,8 +22,8 @@ import { useThemedStyles, useColors } from '../ThemeContext';
 import { badgeTint, contrastingInk, font, mediaScrim, radius, spacing } from '../theme';
 import { listQuickRepliesRead, type QuickReply } from '../../core/storage/local';
 import { filterTemplates, mayPickTemplate, templateReadable } from '../../core/social/templateSearch';
-import { UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
-import { listContacts, type Contact } from '../../core/social/contacts';
+import { UNREADABLE_CONTACTS_TEXT, UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
+import { listContactsRead, type Contact } from '../../core/social/contacts';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 import { MAX_BLOB_BYTES } from '../../core/media/blobRef';
 import { IPFS_DOC_MAX_BYTES, formatLimit, uploadLimitBytes } from '../../core/media/uploadRoute';
@@ -884,7 +884,7 @@ function ReplyTab({
 }
 
 // ============================================================================
-// Tab: Контакт — список из listContacts()
+// Tab: Контакт — список из listContactsRead()
 // ============================================================================
 
 function ContactTab({ onPick }: { onPick: (c: Contact) => void }) {
@@ -892,12 +892,15 @@ function ContactTab({ onPick }: { onPick: (c: Contact) => void }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
+  /** v4.32.999: адресная книга либо прочитана, либо нет — третьего не даём. */
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const list = await listContacts();
-        setContacts(list);
+        const list = await listContactsRead();
+        setReadFailed(list === null);
+        if (list !== null) setContacts(list);
       } finally {
         setLoading(false);
       }
@@ -965,7 +968,11 @@ function ContactTab({ onPick }: { onPick: (c: Contact) => void }) {
         <View style={styles.empty}>
           <Ionicons name="person-outline" size={40} color={colors.textMuted} style={{ marginBottom: spacing.sm }} />
           <Text style={styles.emptyText}>
-            {q ? 'Ничего не найдено' : 'Нет контактов'}
+            {readFailed
+              ? `${UNREADABLE_CONTACTS_TEXT}. Контакты на месте — откройте вкладку заново.`
+              : q
+              ? 'Ничего не найдено'
+              : 'Нет контактов'}
           </Text>
         </View>
       ) : (
