@@ -175,12 +175,37 @@ async function applyLocalPinSerial(params: {
   // прежнего значения — и «не открылось» превращалось в «пусто» уже насовсем,
   // без обратного хода. Пишем null: id закрепления остаётся, текста нет.
   const top = entries[0] ?? null;
-  await setGroupPinnedMessage(
-    groupId,
-    ownerProfileId,
-    top?.id ?? null,
-    top && !top.unreadable ? top.text : null
-  );
+  // v4.32.971: зеркало в `groups` бросало наружу мимо GroupPinWrite. Ни `db()`,
+  // ни ключ шифрования при записи не проверялись, а занятый SQLite тут обычное
+  // дело — и отказ улетал в `void (async () => {…})()` экрана, где его не ловил
+  // никто: ни баннера, ни сообщения, ни повтора. Нажатие выглядело как
+  // несработавшее, а при следующем открытии группы закрепление «само
+  // появлялось» — ровно та беда, которую v4.32.758 убрала у «Открепить все».
+  try {
+    await setGroupPinnedMessage(
+      groupId,
+      ownerProfileId,
+      top?.id ?? null,
+      top && !top.unreadable ? top.text : null
+    );
+  } catch (e) {
+    log.warn('group_pin_mirror_write_failed', {
+      gid: groupId.slice(0, 8),
+      pid: ownerProfileId,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    // Пока в списке кто-то остался, зеркало ни на что не влияет: источник
+    // правды — kv, и экран читает закрепления оттуда (см. dmPinSync, v4.32.838).
+    // Объявлять состоявшееся закрепление несостоявшимся из-за неподновлённой
+    // строки `groups` значило бы врать в другую сторону.
+    //
+    // А вот пустой список власть отдаёт обратно строке `groups`: в
+    // GroupsScreen живёт перенос наследия — при пустом kv и живом
+    // `pinned_message_id` он закрепляет сообщение ЗАНОВО. То есть открепление
+    // последнего с несостоявшимся зеркалом человек увидит отменённым. Здесь
+    // молчать нельзя.
+    if (!top) return { ok: false, reason: 'write_failed' };
+  }
   return { ok: true, entries };
 }
 
@@ -200,7 +225,20 @@ export async function clearPinned(groupId: string, ownerProfileId: number): Prom
       log.warn('group_pin_clear_write_failed', { gid: groupId.slice(0, 8), pid: ownerProfileId });
       return false;
     }
-    await setGroupPinnedMessage(groupId, ownerProfileId, null, null);
+    // v4.32.971: та же причина, что и выше, только здесь список пуст всегда —
+    // значит перенос наследия вернёт откреплённое при следующем открытии
+    // группы. «Не легло» — честный ответ: повтор идемпотентен, а баннер по
+    // нему остаётся на месте вместо того, чтобы пропасть и вернуться.
+    try {
+      await setGroupPinnedMessage(groupId, ownerProfileId, null, null);
+    } catch (e) {
+      log.warn('group_pin_clear_mirror_failed', {
+        gid: groupId.slice(0, 8),
+        pid: ownerProfileId,
+        err: e instanceof Error ? e.message : String(e),
+      });
+      return false;
+    }
     return true;
   });
 }
