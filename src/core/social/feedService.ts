@@ -2697,7 +2697,15 @@ export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Pr
   try {
     const gone = await dropPublicPostCopy(pair, postId);
     if (!gone) return false;
-    await setLinkPublished(postId, false);
+    // v4.32.974: отметка — не побочное дело, а половина обещания. Копия ушла, а
+    // отметка осталась лежать — и при следующем запуске отозванная запись снова
+    // горит «опубликовано по ссылке»: экран перечитывает отметки с диска. Лечит
+    // это второе нажатие того же пункта меню: снятие копии идемпотентно.
+    const unmarked = await setLinkPublished(postId, false);
+    if (!unmarked) {
+      log.warn('public_post_revoke_mark_stuck', { postId: postId.slice(0, 24) });
+      return false;
+    }
     log.info('public_post_revoked', { postId: postId.slice(0, 24) });
     return true;
   } catch (e) {
