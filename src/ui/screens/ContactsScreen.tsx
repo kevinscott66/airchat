@@ -60,17 +60,17 @@ type ContactRowProps = {
   styles: Record<string, StyleProp<ViewStyle & TextStyle & ImageStyle>>;
   colors: ReturnType<typeof useColors>;
   onPress: (peerPublicKey: string) => void;
-  onLongPress: (item: Contact) => void;
+  onMenu: (item: Contact) => void;
 };
 
-function ContactRowImpl({ item, isBlocked, styles, colors, onPress, onLongPress }: ContactRowProps): React.ReactElement {
+function ContactRowImpl({ item, isBlocked, styles, colors, onPress, onMenu }: ContactRowProps): React.ReactElement {
   const handlePress = useCallback(() => onPress(item.peerPublicKey), [onPress, item.peerPublicKey]);
-  const handleLongPress = useCallback(() => onLongPress(item), [onLongPress, item]);
+  const handleMenu = useCallback(() => onMenu(item), [onMenu, item]);
   return (
     <AppPressable
       style={styles.row}
       onPress={handlePress}
-      onLongPress={handleLongPress}
+      onLongPress={handleMenu}
       delayLongPress={400}
       testID={`contact_${item.peerPublicKey.slice(0, 8)}`}
     >
@@ -97,6 +97,22 @@ function ContactRowImpl({ item, isBlocked, styles, colors, onPress, onLongPress 
         size={22}
         color={isBlocked ? colors.textMuted : colors.accent}
       />
+      {/*
+        v4.32.985: «Удалить», «Переименовать» и «Заблокировать» открывались
+        только долгим нажатием на строку. Нарисовано это нигде не было, и
+        единственный видимый на строке значок — чат — говорил ровно обратное:
+        что строка умеет одно. Удалить контакт было неоткуда.
+      */}
+      <AppPressable
+        style={styles.rowMore}
+        onPress={handleMenu}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`Действия с контактом ${item.displayName || 'Контакт'}`}
+        testID={`contact_menu_${item.peerPublicKey.slice(0, 8)}`}
+      >
+        <Ionicons name="ellipsis-horizontal" size={20} color={colors.textMuted} />
+      </AppPressable>
     </AppPressable>
   );
 }
@@ -173,6 +189,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
       borderColor: c.border,
     },
     rowBody: { flex: 1, marginLeft: 10 },
+    rowMore: { paddingLeft: 12, paddingVertical: 4 },
     name: { color: c.text, fontSize: 16, fontWeight: '600' as const },
     sub: { color: c.textMuted, fontSize: 12, marginTop: 2 },
     empty: { alignItems: 'center' as const, paddingVertical: 40, paddingHorizontal: 16 },
@@ -652,7 +669,8 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     }
   }, [myDid]);
 
-  // ─── Long-press actions: rename / delete / block ───────────────────────
+  // ─── Меню строки: переименовать / удалить / заблокировать ──────────────
+  // Открывается кнопкой «…» на строке и долгим нажатием на неё же.
   const openContextMenu = useCallback((c: Contact) => {
     const isBlocked = blockedSet.has(c.peerPublicKey);
     Alert.alert(
@@ -778,7 +796,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         styles={styles}
         colors={colors}
         onPress={handleContactPress}
-        onLongPress={openContextMenu}
+        onMenu={openContextMenu}
       />
     ),
     [blockedSet, styles, colors, handleContactPress, openContextMenu],
