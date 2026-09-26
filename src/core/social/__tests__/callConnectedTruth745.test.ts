@@ -98,6 +98,14 @@ jest.mock('react-native-webrtc', () => ({
 
 jest.mock('../../storage/local', () => ({
   kvGetSecret: (key: string) => mockKvGetSecret(key),
+  // v4.32.979: свой столбец журнал читает тремя состояниями. Обе формы
+  // стоят поверх одного мока — как в `local.ts`, где строчная написана
+  // поверх ячейки; строчная оставлена, чтобы прогон на дореформенном
+  // дереве шёл по живому коду.
+  kvGetSecretCell: async (key: string) => {
+    const text = await mockKvGetSecret(key);
+    return text == null ? { state: 'absent' } : { state: 'plain', text };
+  },
   kvSetSecret: (key: string, value: string) => mockKvSetSecret(key, value),
   kvDelete: (key: string) => mockKvDelete(key),
 }));

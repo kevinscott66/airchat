@@ -68,6 +68,14 @@ const mockKvDelete = jest.fn(async (key: string): Promise<void> => {
 
 jest.mock('../../storage/local', () => ({
   kvGetSecret: (key: string) => mockKvGetSecret(key),
+  // v4.32.979: свой столбец журнал читает тремя состояниями. Обе формы
+  // стоят поверх одного мока — как в `local.ts`, где строчная написана
+  // поверх ячейки; строчная оставлена, чтобы прогон на дореформенном
+  // дереве шёл по живому коду.
+  kvGetSecretCell: async (key: string) => {
+    const text = await mockKvGetSecret(key);
+    return text == null ? { state: 'absent' } : { state: 'plain', text };
+  },
   kvSetSecret: (key: string, value: string) => mockKvSetSecret(key, value),
   kvDelete: (key: string) => mockKvDelete(key),
   kvDeleteChecked: (key: string) => mockKvDeleteChecked(key),
@@ -253,7 +261,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('журнал поднимается с диска при каждом запуске — уцелевший вернётся', () => {
     const body = codeOnly(read('core/social/callService.ts'));
     expect(body).toContain('export async function loadCallLog(pid: number): Promise<void> {');
-    expect(body).toContain('let raw = await kvGetSecret(callLogKey(pid));');
+    // v4.32.979: чтение перешло на форму с тремя состояниями — смысл тот же,
+    // журнал по-прежнему поднимается с диска при каждом запуске.
+    expect(body).toContain('const own = await kvGetSecretCell(callLogKey(pid));');
+    expect(body).toContain("let raw = own.state === 'plain' ? own.text : null;");
   });
 });
 

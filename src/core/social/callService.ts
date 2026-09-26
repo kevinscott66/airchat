@@ -169,6 +169,15 @@ const LEGACY_CALL_LOG_KEY = 'call_log';
 const callLogKey = (pid: number): string => `p${pid}:${LEGACY_CALL_LOG_KEY}`;
 
 let callLog: CallLogEntry[] = [];
+/**
+ * Профиль, чей журнал не открылся (v4.32.979).
+ *
+ * Пока стоит эта отметка, поверх столбца не пишут: в памяти журнала нет не
+ * потому, что звонков не было, а потому, что прочитать их не вышло. То же
+ * правило, что в `atRestCell` (v4.32.544): не открыв запись, разрешать её
+ * перезапись нельзя. Снимается удачным чтением и удачной очисткой.
+ */
+let callLogUnreadableFor: number | null = null;
 let callProfileId: number | null = null;
 const callLogListeners = new Set<(log: CallLogEntry[]) => void>();
 const callLogPersistenceQueues = new Map<number, Promise<unknown>>();
@@ -352,6 +361,14 @@ function enqueueCallLogPersistence<T>(profileId: number, operation: () => Promis
 function persistCallLog(profileId: number, entries = callLog): Promise<boolean> {
   const snapshot = entries.slice(0, MAX_LOG);
   return enqueueCallLogPersistence(profileId, async () => {
+    // v4.32.979: журнал этого профиля не открылся — в памяти его нет, и
+    // запись стёрла бы то, что ещё может прочитаться. Отказ уходит наверх
+    // тем же путём, что и сорванная запись: за придержанные сервером звонки
+    // не расписываемся, он отдаст их снова.
+    if (callLogUnreadableFor === profileId) {
+      log.warn('call_log_persist_blocked_unreadable', { pid: profileId });
+      return false;
+    }
     try {
       const { kvSetSecret } = await import('../storage/local');
       // v4.32.661: kvSetSecret отвечает, легла ли запись на диск, а здесь ответ
@@ -441,6 +458,8 @@ export async function clearCallLog(): Promise<boolean> {
       }
       try {
         await wipe();
+        // Столбца больше нет — писать поверх нечего (v4.32.979).
+        if (callLogUnreadableFor === pid) callLogUnreadableFor = null;
         return true;
       } catch (e) {
         last = e;
@@ -474,8 +493,23 @@ export async function clearCallLog(): Promise<boolean> {
  */
 export async function loadCallLog(pid: number): Promise<void> {
   try {
-    const { kvGetSecret, kvSetSecret, kvDelete } = await import('../storage/local');
-    let raw = await kvGetSecret(callLogKey(pid));
+    const { kvGetSecret, kvGetSecretCell, kvSetSecret, kvDelete } = await import('../storage/local');
+    // v4.32.979: своим столбцом — тремя состояниями. `kvGetSecret` сводит
+    // «журнала нет» и «журнал не открылся» к одному null, а дальше по коду
+    // разница между ними решающая: пустая память — это не пустой журнал.
+    // Первая же запись после неудачного чтения (`recordCallEnd` кладёт новую
+    // строку и зовёт `persistCallLog`, придержанные сервером звонки — тем
+    // более) уходила в тот же столбец поверх шифртекста, который, возможно,
+    // ещё открылся бы правильным ключом. Сто последних звонков — кому, когда
+    // и чем кончилось — исчезали от одного входящего.
+    const own = await kvGetSecretCell(callLogKey(pid));
+    if (own.state === 'unreadable') {
+      callLogUnreadableFor = pid;
+      log.warn('call_log_unreadable', { pid });
+      return;
+    }
+    if (callLogUnreadableFor === pid) callLogUnreadableFor = null;
+    let raw = own.state === 'plain' ? own.text : null;
     // Миграция с legacy (глобального) ключа — разово копируем в scoped.
     // kvGetSecret пропускает старую незашифрованную строку насквозь, поэтому
     // тот же путь заодно перешифровывает журнал, записанный до v4.32.277.
@@ -1626,6 +1660,9 @@ export async function disposeCallService(): Promise<void> {
     endedResetTimer = null;
   }
   callLog = [];
+  // v4.32.979: отметку о непрочитанном журнале тоже сбрасываем — следующий
+  // `loadCallLog` поставит её заново, если столбец и правда не открывается.
+  callLogUnreadableFor = null;
   emit();
   emitCallLog();
   log.info('call_service_disposed');
