@@ -3704,14 +3704,18 @@ function ChatThreadView({
                   {
                     text: 'Недавно удалённые',
                     onPress: () => {
-                      void import('../../core/storage/local').then((m) => m.kvGetSecretScoped(activeProfileId, recentlyDeletedKey(peerB64))).then((raw) => {
-                        let list: Array<{ id: string; text: string; createdAt: number; deletedAt: number; direction: string }> = [];
-                        if (raw) { try { const p = JSON.parse(raw); if (Array.isArray(p)) list = p; } catch { /* */ } }
-                        const now = Date.now();
-                        list = list.filter((m) => m && now - m.deletedAt < DM_RECENTLY_DELETED_TTL_MS);
-                        setRecentlyDeletedList(list);
+                      // v4.32.992: «не открылось» больше не показывается как
+                      // «Нет удалённых сообщений». Разбор и срок хранения — в
+                      // одном месте с групповой корзиной: правило одно.
+                      void (async () => {
+                        const { readRecentlyDeletedFor, RECENTLY_DELETED_UNREADABLE_TEXT } =
+                          await import('../../core/storage/recentlyDeletedRead');
+                        const read = await readRecentlyDeletedFor<{ id: string; text: string; createdAt: number; deletedAt: number; direction: string }>(
+                          activeProfileId, recentlyDeletedKey(peerB64), DM_RECENTLY_DELETED_TTL_MS);
+                        if (!read.ok) { showError(RECENTLY_DELETED_UNREADABLE_TEXT); return; }
+                        setRecentlyDeletedList(read.list);
                         setRecentlyDeletedVisible(true);
-                      });
+                      })();
                     },
                   },
                   {

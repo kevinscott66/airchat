@@ -1195,13 +1195,17 @@ function GroupChatScreen({
   const openGrpRecentlyDeleted = useCallback(() => {
     requestAnimationFrame(() => {
       void (async () => {
-        const { kvGetSecretScoped } = await import('../../core/storage/local');
-        const raw = await kvGetSecretScoped(pid, recentlyDeletedGroupKey(group.id));
-        let list: Array<{ id: string; text: string; senderName: string; deletedAt: number }> = [];
-        try { list = raw ? (JSON.parse(raw) as Array<{ id: string; text: string; senderName: string; deletedAt: number }>) : []; } catch { list = []; }
-        const cutoff = Date.now() - GRP_RECENTLY_DELETED_TTL_MS;
-        list = list.filter((x) => x.deletedAt > cutoff);
-        setGrpRecentlyDeletedList(list);
+        // v4.32.992: не прочитанная корзина больше не выдаётся за пустую.
+        // kvGetSecretScoped сводил «не открылось» к null, и окно говорило
+        // «Нет недавно удалённых сообщений» — при том, что запись на месте.
+        // Сюда же переехали разбор и срок хранения: та же корзина читается и
+        // в переписке, и две копии правила уже разъехались.
+        const { readRecentlyDeletedFor, RECENTLY_DELETED_UNREADABLE_TEXT } =
+          await import('../../core/storage/recentlyDeletedRead');
+        const read = await readRecentlyDeletedFor<GroupRecentlyDeletedEntry>(
+          pid, recentlyDeletedGroupKey(group.id), GRP_RECENTLY_DELETED_TTL_MS);
+        if (!read.ok) { showError(RECENTLY_DELETED_UNREADABLE_TEXT); return; }
+        setGrpRecentlyDeletedList(read.list);
         setGrpRecentlyDeletedVisible(true);
       })();
     });
