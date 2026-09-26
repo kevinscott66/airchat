@@ -73,7 +73,7 @@ jest.mock('../../social/feedService', () => ({ cleanupFeedStorageForProfile: jes
 jest.mock('../../storage/dialogBackup', () => ({ deleteDialogBackupForProfile: jest.fn(async () => undefined) }));
 jest.mock('../avatarKeep', () => ({ collectAvatarsToKeep: jest.fn(async () => new Set<string>()) }));
 jest.mock('../../media/avatarFiles', () => ({ sweepAvatarFiles: jest.fn(async () => undefined) }));
-jest.mock('../../social/storyAlbums', () => ({ sweepOrphanAlbumFiles: jest.fn(async () => undefined) }));
+jest.mock('../../social/storyAlbums', () => ({ sweepOrphanAlbumFiles: jest.fn(async () => true) }));
 jest.mock('../../social/liveLocationService', () => ({ stopAllLiveLocSessions: jest.fn() }));
 
 import { profileManager } from '../profileManager';

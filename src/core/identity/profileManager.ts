@@ -956,7 +956,10 @@ class ProfileManager {
     // нигде — как и с аватарами до v4.32.309.
     try {
       const { sweepOrphanAlbumFiles } = await import('../social/storyAlbums');
-      await sweepOrphanAlbumFiles();
+      // v4.32.991: отказ уборки — такой же остаток, как сорвавшаяся уборка
+      // аватаров строкой выше. Он молчал: уборка отвечала числом снесённых
+      // файлов, и «не стала сносить» выглядело как «нечего было».
+      if (!(await sweepOrphanAlbumFiles())) leftovers.push('albums');
     } catch (e) {
       log.warn('delete_profile_album_sweep_failed', {
         profileId,

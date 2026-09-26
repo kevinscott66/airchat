@@ -89,7 +89,12 @@ jest.mock('../../media/avatarFiles', () => ({
   sweepAvatarFiles: jest.fn(async () => mockStep('avatars')),
 }));
 jest.mock('../../social/storyAlbums', () => ({
-  sweepOrphanAlbumFiles: jest.fn(async () => mockStep('albums')),
+  // v4.32.991: уборка отвечает «да/нет». Отказ этот стенд изображает броском
+  // из mockStep — как и у остальных шагов.
+  sweepOrphanAlbumFiles: jest.fn(async () => {
+    mockStep('albums');
+    return true;
+  }),
 }));
 jest.mock('../../social/liveLocationService', () => ({ stopAllLiveLocSessions: jest.fn() }));
 

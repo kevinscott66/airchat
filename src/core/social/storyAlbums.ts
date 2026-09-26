@@ -196,14 +196,23 @@ export async function removeStoryAlbum(albumId: string, ownerProfileId: number):
  * остальными данными, а файлы лежат в общем каталоге и адресов больше нигде
  * нет. Неполный список «оставить» останавливает уборку — иначе она снесла бы
  * альбомы живого профиля (та же цена ошибки, что у аватаров, v4.32.309).
+ *
+ * v4.32.991: отвечает, состоялась ли уборка, а не сколько файлов снесла.
+ * Отказ ничем не отличался от «сносить было нечего»: возвращался 0, ничего не
+ * бросалось, и `deleteProfile` записывал остаток только при исключении. Человек
+ * читал «Профиль удалён» — при том, что копии историй удалённого аккаунта
+ * остались на устройстве и адресов их больше нет нигде, то есть навсегда.
+ * Фраза про остаток в списке профилей уже написана и ждала этого ответа; так
+ * же — одной буквой «да/нет» — отвечает соседняя уборка аватаров.
  */
-export async function sweepOrphanAlbumFiles(): Promise<number> {
+export async function sweepOrphanAlbumFiles(): Promise<boolean> {
   const { names, complete } = await storyAlbumFileNames();
   if (!complete) {
     log.warn('story_album_sweep_skipped_unreadable', { known: names.length });
-    return 0;
+    return false;
   }
-  return await sweepStoryAlbumFiles(names);
+  await sweepStoryAlbumFiles(names);
+  return true;
 }
 
 /**
