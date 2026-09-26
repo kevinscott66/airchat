@@ -91,6 +91,6 @@ describe('переключателя без пароля больше нет', (
     // Второе упоминание — чтение при открытии экрана, писать умеет только
     // переключатель, и он теперь под условием.
     expect(src.split("applyKvPref('auto_lock_on_exit'").length - 1).toBe(1);
-    expect(src).toContain("kvGet('auto_lock_on_exit'),");
+    expect(src).toContain("kvRead('auto_lock_on_exit'),");
   });
 });

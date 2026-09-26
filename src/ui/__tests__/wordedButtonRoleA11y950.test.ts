@@ -150,7 +150,7 @@ describe('у каждой такой кнопки озвучка слышит «
     const others = sites
       .filter((s) => !/accessibilityRole="button"/.test(s.tag))
       .map((s) => `${s.file}:${s.line}`);
-    expect(others).toEqual([join('screens', 'SettingsScreen.tsx') + ':1639']);
+    expect(others).toEqual([join('screens', 'SettingsScreen.tsx') + ':1678']);
     const settings = readFileSync(join(UI, 'screens', 'SettingsScreen.tsx'), 'utf8');
     expect(settings).toContain('style={styles.versionTap} accessibilityRole="text"');
   });

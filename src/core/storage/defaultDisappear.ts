@@ -31,10 +31,21 @@ import { profileManager } from '../identity/profileManager';
  */
 const cache = new Map<number, number | null>();
 
-/** Автоудаление по умолчанию у названного профиля. */
-export async function getDefaultDisappearMsFor(profileId: number): Promise<number | null> {
+/**
+ * Автоудаление по умолчанию у названного профиля, исходом чтения (v4.32.1000).
+ *
+ * `null` — прочитать не удалось. `{ ms }` — прочитали: внутри либо срок, либо
+ * `null`, то есть «не включено». Короткая форма ниже сводит эти два ответа к
+ * одному `null`, и вызывающим её местам этого довольно — они ставят таймер и
+ * на «не включено» не ставят ничего. Экрану настроек мало: он не ставит
+ * таймер, он показывает, что записано, и «Выключено» на месте непрочитанной
+ * записи — рассказ о базе, в которую не заглядывали.
+ */
+export async function getDefaultDisappearMsReadFor(
+  profileId: number,
+): Promise<{ ms: number | null } | null> {
   const cached = cache.get(profileId);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) return { ms: cached };
   const got = await scopedKvTryGetFor(profileId, DEFAULT_AUTO_DELETE_KEY);
   // Провал чтения в кэш НЕ кладётся: раньше единственная ошибка SQLite на
   // старте означала «автоудаление выключено» до конца запуска приложения —
@@ -42,12 +53,22 @@ export async function getDefaultDisappearMsFor(profileId: number): Promise<numbe
   if (got === null) return null;
   const value = parseAutoDeleteMs(got.value);
   cache.set(profileId, value);
-  return value;
+  return { ms: value };
+}
+
+/** Автоудаление по умолчанию у названного профиля. */
+export async function getDefaultDisappearMsFor(profileId: number): Promise<number | null> {
+  return (await getDefaultDisappearMsReadFor(profileId))?.ms ?? null;
 }
 
 /** То же у активного профиля — для экрана настроек. */
 export async function getDefaultDisappearMs(): Promise<number | null> {
   return getDefaultDisappearMsFor(activeProfileId());
+}
+
+/** Исход чтения у активного профиля — см. getDefaultDisappearMsReadFor. */
+export async function getDefaultDisappearMsRead(): Promise<{ ms: number | null } | null> {
+  return getDefaultDisappearMsReadFor(activeProfileId());
 }
 
 /**

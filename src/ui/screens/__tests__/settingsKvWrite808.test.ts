@@ -64,7 +64,7 @@ describe('отказ записи настройки доходит до экр�
     expect(SETTINGS).not.toContain('void kvSet(');
     expect(SETTINGS).not.toContain('kvSet(');
     // И самого имени в импортах: незанятая дверь однажды снова откроется.
-    expect(SETTINGS).toContain('kvGet, kvSetChecked, clearAllMessageHistory, liveAttachmentBlobIds,');
+    expect(SETTINGS).toContain('kvSetChecked, kvTryGet, clearAllMessageHistory, liveAttachmentBlobIds,');
   });
 
   it('правило одно на все переключатели, и оно на проверяемой записи', () => {
@@ -129,8 +129,10 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежнее правило це
   });
 
   it('чтение настроек при открытии экрана не менялось', () => {
-    expect(SETTINGS).toContain("kvGet('notify_dm')");
-    expect(SETTINGS).toContain("kvGet('auto_lock_on_exit')");
+    // v4.32.1000: те же две записи, но читаются тремя состояниями — kvGet
+    // гасил отказ базы и выдавал его за «не трогали».
+    expect(SETTINGS).toContain("kvRead('notify_dm')");
+    expect(SETTINGS).toContain("kvRead('auto_lock_on_exit')");
   });
 });
 

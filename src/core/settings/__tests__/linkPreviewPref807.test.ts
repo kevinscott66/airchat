@@ -212,7 +212,7 @@ describe('форма исходников: обе поломки закрыты 
   });
 
   it('экран настроек читает через privacyPrefs', () => {
-    expect(SETTINGS).toContain('privacyPrefGet(LINK_PREVIEW_INCOMING_KEY),');
+    expect(SETTINGS).toContain('prefRead(LINK_PREVIEW_INCOMING_KEY),');
     expect(SETTINGS).not.toContain('kvGet(LINK_PREVIEW_INCOMING_KEY)');
   });
 
@@ -235,7 +235,10 @@ describe('форма исходников: обе поломки закрыты 
     for (const rel of ['ui/screens/SettingsScreen.tsx', 'ui/screens/chat-components/LinkPreview.tsx']) {
       const body = codeOnly(read(rel));
       const hits = body.match(/LINK_PREVIEW_INCOMING_KEY/g) ?? [];
-      const viaPrefs = body.match(/privacyPref(Get|Set)\(LINK_PREVIEW_INCOMING_KEY/g) ?? [];
+      // v4.32.1000: у экрана настроек чтение зовётся prefRead — это обёртка
+      // над privacyPrefTryGet, то есть та же дверь. Голого kvGet тут по-прежнему
+      // быть не может: имя ключа мимо privacyPrefs не ходит.
+      const viaPrefs = body.match(/(privacyPref(Get|Set)|prefRead)\(LINK_PREVIEW_INCOMING_KEY/g) ?? [];
       // Одно упоминание — импорт, остальные обязаны быть через privacyPrefs.
       expect(hits.length - 1).toBe(viaPrefs.length);
     }

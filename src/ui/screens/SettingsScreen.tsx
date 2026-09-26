@@ -68,16 +68,16 @@ import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 import { DiagnosticScreen } from './DiagnosticScreen';
 import { ProfileSelector } from '../components/ProfileSelector';
 import { profileManager } from '../../core/identity/profileManager';
-import { scopedKvGet, scopedKvSetChecked } from '../../core/storage/profileScopedKv';
-import { TRANSLATION_TARGET_LANG_KEY } from '../../core/storage/kvKeys';
-import { ownFieldGet, ownFieldSet } from '../../core/identity/ownProfile';
+import { scopedKvGet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
+import { TRANSLATION_TARGET_LANG_KEY, type OwnProfileKey, type PrivacyPrefKey } from '../../core/storage/kvKeys';
+import { ownFieldSet, ownFieldTryGet } from '../../core/identity/ownProfile';
 import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { ACCENT_SWATCHES, avatarShape, colorsForScheme, contrastingInk, font, radius, TOUCH_TARGET_MIN } from '../theme';
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
 import {
-  kvGet, kvSetChecked, clearAllMessageHistory, liveAttachmentBlobIds,
+  kvSetChecked, kvTryGet, clearAllMessageHistory, liveAttachmentBlobIds,
   listQuickRepliesRead, addQuickReply, updateQuickReply, deleteQuickReply,
   type QuickReply,
 } from '../../core/storage/local';
@@ -85,7 +85,7 @@ import { templateReadable } from '../../core/social/templateSearch';
 import { hourOfDayLabel, parseHourOfDay } from '../../core/time/hourOfDay';
 import { UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
 import {
-  getDefaultDisappearMs,
+  getDefaultDisappearMsRead,
   setDefaultDisappearMs,
 } from '../../core/storage/defaultDisappear';
 import { exportDialogBackupToFile, importDialogBackupJson } from '../../core/storage/dialogBackup';
@@ -94,10 +94,10 @@ import { syncStuckBadge, syncStuckText } from '../../core/sync/syncStuckReport';
 import { readSyncStuck, subscribeSyncStuck } from '../../core/sync/syncStuckState';
 import { clearCacheFiles } from '../../core/media/cacheFiles';
 // v4.32.311: переключатели приватности — свои у каждого аккаунта, см. privacyPrefs.
-import { privacyPrefGet, privacyPrefSet } from '../../core/settings/privacyPrefs';
+import { privacyPrefSet, privacyPrefTryGet } from '../../core/settings/privacyPrefs';
 // v4.32.486: облачный перевод — решение о приватности, и до этой версии
 // переключателя к нему не было вовсе (см. social/translateConsent).
-import { cloudTranslateAllowed, setCloudTranslateAllowed } from '../../core/social/translateConsent';
+import { cloudTranslateAllowedRead, setCloudTranslateAllowed } from '../../core/social/translateConsent';
 import {
   clearSeedBackupPending,
   deriveKeyPairFromMnemonic,
@@ -467,36 +467,75 @@ function SettingsScreenImpl({
      * И гонки: быстрое переключение профилей меняет profileRefreshToken дважды,
      * а ответить пачки могут в обратном порядке — настройки профиля A ложились
      * поверх открытого профиля B.
+     *
+     * v4.32.1000: отказ читался как «ничего не записано». Написанное выше про
+     * catch было верно по замыслу и неверно по делу: kvGet, privacyPrefGet,
+     * ownFieldGet, scopedKvGet и cloudTranslateAllowed ловят ошибку базы у
+     * себя и отдают null — ни один из двадцати пяти не умеет отказать. То
+     * есть catch ниже не исполнялся ни разу с тех пор, как его написали, а
+     * null доезжал до setter'ов как законное «не трогали» и раскрывался в
+     * разрешающую сторону: `nDm !== 'false'` — уведомления включены,
+     * `dndEn === 'true'` — «не беспокоить» выключено, `disableRr === 'true'`
+     * — отметки о прочтении уходят. Человек читал с экрана не то, что лежит в
+     * базе, а значения по умолчанию, и они были ровно противоположны той
+     * стороне, куда ошибаются осторожно: выключенное ночное молчание
+     * показывалось включённым разговором. Молчаливая же правка тумблера
+     * поверх этого попадала не туда, куда человек целился.
+     *
+     * Поэтому чтения идут тремя состояниями (kvTryGet и родня, v4.32.474), а
+     * непрочитанная запись отказывает здесь на месте — тем самым отказом,
+     * который catch ниже и ждёт. Разбирать по одной записи нечего: ошибку
+     * даёт занятая база, и она забирает пачку целиком.
      */
     let cancelled = false;
+    /** Непрочитанная запись — отказ, а не «не трогали». Имя ключа уйдёт в журнал. */
+    const unreadable = (key: string): never => {
+      throw new Error(`settings_unreadable:${key}`);
+    };
+    const kvRead = async (key: string): Promise<string | null> => {
+      const got = await kvTryGet(key);
+      return got === null ? unreadable(key) : got.value;
+    };
+    const prefRead = async (key: PrivacyPrefKey): Promise<string | null> => {
+      const got = await privacyPrefTryGet(key);
+      return got === null ? unreadable(key) : got.value;
+    };
+    const ownRead = async (key: OwnProfileKey): Promise<string | null> => {
+      const got = await ownFieldTryGet(key);
+      return got === null ? unreadable(key) : got.text;
+    };
+    const scopedRead = async (key: string): Promise<string | null> => {
+      const got = await scopedKvTryGet(key);
+      return got === null ? unreadable(key) : got.value;
+    };
     void Promise.all([
-      privacyPrefGet('privacy_last_seen_visibility'),
-      privacyPrefGet('privacy_avatar_visibility'),
-      privacyPrefGet('privacy_only_contacts_msg'),
-      kvGet('notify_dm'),
-      kvGet('notify_feed'),
-      kvGet('notify_groups'),
-      kvGet('notify_preview'),
-      kvGet('auto_lock_on_exit'),
-      kvGet('auto_lock_delay_ms'),
-      kvGet('dnd_enabled'),
-      kvGet('dnd_start'),
-      kvGet('dnd_end'),
-      privacyPrefGet('privacy_only_contacts_group'),
-      kvGet('notify_mentions'),
-      ownFieldGet('user_custom_status'),
-      kvGet('auto_download_media'),
-      privacyPrefGet('privacy_disable_read_receipts'),
-      cloudTranslateAllowed(),
-      scopedKvGet(TRANSLATION_TARGET_LANG_KEY),
-      kvGet('notify_vibrate'),
-      kvGet('notify_sound'),
+      prefRead('privacy_last_seen_visibility'),
+      prefRead('privacy_avatar_visibility'),
+      prefRead('privacy_only_contacts_msg'),
+      kvRead('notify_dm'),
+      kvRead('notify_feed'),
+      kvRead('notify_groups'),
+      kvRead('notify_preview'),
+      kvRead('auto_lock_on_exit'),
+      kvRead('auto_lock_delay_ms'),
+      kvRead('dnd_enabled'),
+      kvRead('dnd_start'),
+      kvRead('dnd_end'),
+      prefRead('privacy_only_contacts_group'),
+      kvRead('notify_mentions'),
+      ownRead('user_custom_status'),
+      kvRead('auto_download_media'),
+      prefRead('privacy_disable_read_receipts'),
+      cloudTranslateAllowedRead().then((v) => (v === null ? unreadable('cloud_translate') : v)),
+      scopedRead(TRANSLATION_TARGET_LANG_KEY),
+      kvRead('notify_vibrate'),
+      kvRead('notify_sound'),
       // v4.32.483: через общий геттер — запись живёт в namespace профиля, и
       // разбор значения (границы, мусор) один на всё приложение.
-      getDefaultDisappearMs(),
-      privacyPrefGet(LINK_PREVIEW_INCOMING_KEY),
-      kvGet('notify_calls'),
-      kvGet(KEEPALIVE_KEY),
+      getDefaultDisappearMsRead().then((v) => (v === null ? unreadable('default_auto_delete') : v.ms)),
+      prefRead(LINK_PREVIEW_INCOMING_KEY),
+      kvRead('notify_calls'),
+      kvRead(KEEPALIVE_KEY),
     ]).then(([lsVis, avVis, onlyContacts, nDm, nFeed, nGroups, nPreview, lockEnabled, lockDelay, dndEn, dndS, dndE, onlyCtGrp, notMentions, custStatus, autoDl, disableRr, cloudTr, tgtLang, nVibrate, nSound, defAutoDelete, linkPrev, nCalls, keepAlive]) => {
       if (cancelled) return;
       if (lsVis === 'everybody' || lsVis === 'contacts' || lsVis === 'nobody') setLastSeenVisibility(lsVis);

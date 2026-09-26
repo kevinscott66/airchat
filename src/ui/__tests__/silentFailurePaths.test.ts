@@ -146,9 +146,15 @@ describe('U3: опрос в личной переписке отчитывает
 describe('U5: настройки не выдают значения по умолчанию за состояние базы', () => {
   const honest = (src: string): boolean => {
     const lines = codeLines(src);
-    const at = lines.findIndex((l) => l.includes("privacyPrefGet('privacy_last_seen_visibility')"));
+    // v4.32.1000: опора переехала на prefRead — ту же запись читает форма,
+    // которая умеет отказать. Блок BEFORE ниже написан на privacyPrefGet и
+    // по этой опоре не находится, то есть по-прежнему считается нечестным.
+    const at = lines.findIndex((l) => l.includes("prefRead('privacy_last_seen_visibility')"));
     if (at < 0) return false;
-    const block = lines.slice(Math.max(0, at - 4), at + 130).join('\n');
+    // v4.32.1000: назад берём шире. `let cancelled` стоит перед чтениями, а
+    // между ними теперь живут четыре формы чтения тремя состояниями — в
+    // прежние четыре строки опора не попадала.
+    const block = lines.slice(Math.max(0, at - 40), at + 130).join('\n');
     return block.includes('let cancelled = false;')
       && block.includes('if (cancelled) return;')
       && block.includes("log.error('settings_read_failed'")

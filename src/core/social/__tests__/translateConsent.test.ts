@@ -166,7 +166,9 @@ describe('переключатель существует', () => {
     // об этом; молча оставить его в новом положении больше нельзя. Правило
     // с v4.32.808 зовётся applyPref — оно общее для всех настроек экрана.
     expect(s).toContain('void applyPref(() => setCloudTranslateAllowed(v), () => setAllowCloudTranslate(!v));');
-    expect(s).toContain('cloudTranslateAllowed(),');
+    // v4.32.1000: экран читает исходом (`cloudTranslateAllowedRead`), а не
+    // решением: показывать надо то, что записано, а не осторожный ответ.
+    expect(s).toContain('cloudTranslateAllowedRead()');
   });
 
   it('диалог в ленте включает то же самое решение', () => {

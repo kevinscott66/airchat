@@ -152,7 +152,9 @@ describe('форма исходников', () => {
   it('экран настроек не читает ключ голым именем', () => {
     const s = src('ui/screens/SettingsScreen.tsx');
     expect(s).not.toContain("kvGet('default_auto_delete_ms')");
-    expect(s).toContain('getDefaultDisappearMs()');
+    // v4.32.1000: экран читает исходом — «не прочитали» ему не то же самое,
+    // что «выключено». Короткая форма осталась для тех, кто ставит таймер.
+    expect(s).toContain('getDefaultDisappearMsRead()');
   });
 
   it('имя ключа набрано один раз', () => {

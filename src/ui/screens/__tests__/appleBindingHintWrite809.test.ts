@@ -61,7 +61,9 @@ describe('подсказка о привязке пишется проверяе
     expect(SETTINGS).not.toContain('void scopedKvSet');
     // И имени в импортах: незанятая дверь однажды снова откроется.
     expect(SETTINGS).toContain(
-      "import { scopedKvGet, scopedKvSetChecked } from '../../core/storage/profileScopedKv';",
+      // v4.32.1000: рядом приехал scopedKvTryGet — чтение настроек тремя
+      // состояниями. Закрепка здесь про запись: имени scopedKvSet в строке нет.
+      "import { scopedKvGet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';",
     );
   });
 
