@@ -108,6 +108,51 @@ function legacyBackupUri(): string | null {
   return base ? `${base}${BACKUP_FILENAME_LEGACY}` : null;
 }
 
+/**
+ * Имя, под которым прежняя копия пережидает запись новой (v4.32.969).
+ *
+ * До этой версии запись шла так: временный файл — удалить старый — переставить
+ * временный на его место. Между вторым и третьим шагом копии не было ни одной,
+ * а разбор отказа доделывал начатое: он стирал временный файл, то есть
+ * единственное, что к тому моменту оставалось от переписки. Приём тот же, что
+ * у настроек устройства (config, v4.32.967): прежняя отходит в сторону под
+ * именем, которое читатель знает и умеет поднять.
+ */
+function previousBackupUri(uri: string): string {
+  return `${uri}.prev`;
+}
+
+/**
+ * Поднять отодвинутую копию, если основной нет.
+ *
+ * Нужно потому, что выключенное питание не ждёт никакого `catch`: обрыв между
+ * двумя переносами оставляет переписку под именем `.prev`, а у этого имени
+ * должен быть читатель — иначе оно ничем не лучше прежней дыры.
+ */
+async function restoreStrandedBackup(uri: string): Promise<void> {
+  try {
+    if ((await FileSystem.getInfoAsync(uri)).exists) return;
+    const previous = previousBackupUri(uri);
+    if (!(await FileSystem.getInfoAsync(previous)).exists) return;
+    await FileSystem.moveAsync({ from: previous, to: uri });
+    log.warn('dialog_backup_restored_from_previous');
+  } catch (e) {
+    log.warn('dialog_backup_restore_failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
+ * Все имена, которыми копия может лежать на диске: она сама, отодвинутая
+ * прежняя и обрывок незавершённой записи. Содержимое у всех трёх одно — вся
+ * переписка профиля, — поэтому и уборка у них общая.
+ */
+const BACKUP_NAME_RE = /^airchat_dialogs_backup_v1(?:_p\d+)?\.json(?:\.prev|\.tmp-\d+)?$/;
+
+/** Имена, принадлежащие ровно этой копии: `…_p1.json` и всё, что за её точкой. */
+function isNameOfBackup(name: string, mainName: string): boolean {
+  return name === mainName || name.startsWith(`${mainName}.`);
+}
+
 function activeProfileId(): number {
   return profileManager.getActiveProfile()?.id ?? 1;
 }
@@ -142,11 +187,28 @@ export function cancelScheduledDialogBackup(): void {
 export async function deleteDialogBackupForProfile(profileId: number): Promise<void> {
   const base = FileSystem.documentDirectory;
   if (!base) return;
-  const uris = [`${base}${backupFilename(profileId)}`];
-  if (profileId === 1) {
-    const legacy = legacyBackupUri();
-    if (legacy) uris.push(legacy);
+  const mainNames = [backupFilename(profileId)];
+  if (profileId === 1) mainNames.push(BACKUP_FILENAME_LEGACY);
+  const uris = mainNames.map((name) => `${base}${name}`);
+  // v4.32.969: удалялись только точные имена, а копия живёт ещё под двумя —
+  // отодвинутой прежней и обрывком записи. Обе — та же переписка целиком, и
+  // не убирал их никто: временное имя каждый раз новое (`.tmp-<время>`),
+  // так что следующая запись поверх старого обрывка не встаёт.
+  let strays: string[] = [];
+  try {
+    const names = await FileSystem.readDirectoryAsync(base);
+    strays = names
+      .filter((name) => mainNames.some((main) => isNameOfBackup(name, main)))
+      .map((name) => `${base}${name}`);
+  } catch (e) {
+    // Не прочитали — не говорим «удалено»: ниже это станет отказом шага.
+    log.warn('dialog_backup_scan_failed', {
+      profileId,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    strays = [];
   }
+  for (const uri of strays) if (!uris.includes(uri)) uris.push(uri);
   // v4.32.741: отказ удаления гасился здесь, а строка «копия удалена» писалась
   // в журнал безусловно — и то и другое неправда. Копия диалогов это вся
   // переписка профиля одним файлом; зовут эту уборку только при удалении
@@ -173,9 +235,7 @@ export async function deleteAllDialogBackups(): Promise<void> {
   if (!base) return;
   try {
     const names = await FileSystem.readDirectoryAsync(base);
-    const backupNames = names.filter((name) =>
-      name === BACKUP_FILENAME_LEGACY || /^airchat_dialogs_backup_v1_p\d+\.json$/.test(name),
-    );
+    const backupNames = names.filter((name) => BACKUP_NAME_RE.test(name));
     await Promise.all(backupNames.map((name) => FileSystem.deleteAsync(`${base}${name}`, { idempotent: true })));
     log.info('dialog_backups_deleted', { count: backupNames.length });
   } catch (e) {
@@ -279,15 +339,34 @@ export async function exportDialogBackupToFile(): Promise<string | null> {
   // отвергает целиком, — а старой, целой, уже нет. Между тем смысл файла ровно
   // в том, чтобы пережить потерю базы: это последнее, к чему можно вернуться.
   // Тот же приём, что при разборе архива аккаунта (accountVault, v4.32.617).
+  // v4.32.969: удаление прежней заменено на отход в сторону. Целым временный
+  // файл делал только первую половину дела: между `delete` и `move` копии не
+  // было ни одной, а разбор отказа стирал временный — то есть последнее, что
+  // от переписки оставалось. Отказ переноса тут не выдумка: на iOS он бывает
+  // на исходе места и при защите файла, и ровно на нём всё и сходилось.
   const temporary = `${uri}.tmp-${Date.now()}`;
+  const previous = previousBackupUri(uri);
+  let movedAside = false;
   try {
     await FileSystem.writeAsStringAsync(temporary, JSON.stringify(payload), {
       encoding: FileSystem.EncodingType.UTF8,
     });
+    await FileSystem.deleteAsync(previous, { idempotent: true });
     // Перестановка имени: содержимое к этому моменту уже целиком на диске.
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    if ((await FileSystem.getInfoAsync(uri)).exists) {
+      await FileSystem.moveAsync({ from: uri, to: previous });
+      movedAside = true;
+    }
     await FileSystem.moveAsync({ from: temporary, to: uri });
+    await FileSystem.deleteAsync(previous, { idempotent: true });
   } catch (e) {
+    if (movedAside) {
+      await FileSystem.moveAsync({ from: previous, to: uri }).catch((err: unknown) => {
+        log.error('dialog_backup_previous_rollback_failed', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     // Обрывок не оставляем: он не копия и занимает столько же места.
     await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => {});
     log.warn('dialog_backup_export_failed', { err: e instanceof Error ? e.message : String(e) });
@@ -477,10 +556,12 @@ export async function tryRestoreDialogBackupFromFile(): Promise<number> {
     log.debug('dialog_backup_no_filesystem');
     return 0;
   }
+  await restoreStrandedBackup(readUri);
   if (!(await FileSystem.getInfoAsync(readUri)).exists) {
     // Копию, снятую до v4.32.280, наследует только первый профиль: она одна на
     // устройство и не помнит, чья она, а второму аккаунту чужая переписка не нужна.
     const legacy = pid === 1 ? legacyBackupUri() : null;
+    if (legacy) await restoreStrandedBackup(legacy);
     if (!legacy || !(await FileSystem.getInfoAsync(legacy)).exists) {
       log.debug('dialog_backup_no_file');
       return 0;
