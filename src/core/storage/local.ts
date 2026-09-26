@@ -9174,6 +9174,15 @@ export async function deleteStoryAlbum(id: string, ownerProfileId: number): Prom
  * файл, который в списке не назван, а на диске лежит: уборка по такому списку
  * снесла бы историю, оставленную человеком навсегда. Отсюда признак: sweep
  * зовут только при `complete`.
+ *
+ * v4.32.987: пустой столбец — не непрочитанный. Строка, приехавшая с другого
+ * устройства аккаунта, вставляется с `media_file` = NULL нарочно
+ * (`upsertStoryAlbumItemFromSync`), и имя появляется, только если плитку
+ * открыли и копия скачалась. Файла на диске за такой строкой нет вовсе:
+ * `albumItemLocalUri` при несохранившемся имени сносит копию сразу, чтобы
+ * безымянных файлов не заводилось. Считая NULL неполнотой, признак навсегда
+ * гас на любом синхронизированном устройстве — и уборка после удаления
+ * профиля не работала там никогда. Останавливает её только `unreadable`.
  */
 export async function storyAlbumFileNames(): Promise<{ names: string[]; complete: boolean }> {
   const d = await db();
@@ -9186,7 +9195,7 @@ export async function storyAlbumFileNames(): Promise<{ names: string[]; complete
     const cell = readAtRestCell(r.media_file, dek);
     const name = cellTextOrNull(cell);
     if (name) names.push(name);
-    else if (cell.state !== 'plain') complete = false;
+    else if (cell.state === 'unreadable') complete = false;
   }
   return { names, complete };
 }
