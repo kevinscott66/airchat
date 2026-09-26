@@ -241,8 +241,10 @@ describe('GroupsScreen — записи в базу больше не остаю
     const start = SCREEN.indexOf('await clearGroupMessages(');
     expect(start).toBeGreaterThan(-1);
     const body = SCREEN.slice(start, start + 400);
+    // v4.32.1001: об успехе говорит reportErased — он один знает, остались ли
+    // на диске расшифрованные копии вложений стёртой переписки.
     expect(body.indexOf("showError(userErrorText(e, 'Не удалось очистить историю'))")).toBeLessThan(
-      body.indexOf("showSuccess('История очищена')")
+      body.indexOf("reportErased(sweep, 'История очищена')")
     );
   });
 });

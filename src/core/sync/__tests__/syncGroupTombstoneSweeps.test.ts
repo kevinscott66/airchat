@@ -58,7 +58,9 @@ it('заявки снимаются внутри той же транзакци�
   const from = LOCAL.indexOf('export async function deleteGroup(');
   const body = LOCAL.slice(from, LOCAL.indexOf('\nexport ', from + 10));
   const tx = body.indexOf("'delete_group',");
-  const files = body.indexOf('() => dropOrphanBlobCache(doomed)');
+  // v4.32.1001: уборщик отвечает исходом, поэтому вызов стал телом с
+  // присваиванием. Место его в тексте то же самое.
+  const files = body.indexOf('sweep = await dropOrphanBlobCache(doomed);');
   const del = body.indexOf('DELETE FROM group_join_requests');
   expect(tx).toBeGreaterThan(0);
   expect(del).toBeGreaterThan(tx);

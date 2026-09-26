@@ -75,7 +75,7 @@ import {
 } from '../../core/storage/chatFolders';
 // v4.32.168: зеркалим mute в muteStore (источник правды для FCM gate).
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
-import { showError, showSuccess } from '../components/userFeedback';
+import { reportErased, showError, showSuccess } from '../components/userFeedback';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { useTheme, useScaledFont } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
@@ -1040,7 +1040,13 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   // v4.32.626: та же ветка, что и в экране переписки — без
                   // неё отказ очистки молчал, а список просто не менялся.
                   void clearChatHistory(item.contactPubB64, pid)
-                    .then(loadData)
+                    // v4.32.1001: об удачной очистке здесь не говорят — список
+                    // перерисовывается сам; про уцелевшие вложения сказать
+                    // надо, их никакая перерисовка не покажет.
+                    .then((sweep) => {
+                      reportErased(sweep, 'История очищена', { quietOnSuccess: true });
+                      return loadData();
+                    })
                     .catch((e: unknown) => {
                       showError(userErrorText(e, 'Не удалось очистить историю'));
                     });

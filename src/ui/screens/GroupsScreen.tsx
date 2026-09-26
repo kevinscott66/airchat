@@ -111,7 +111,7 @@ import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterW
 import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
 import { decideOwnDescriptionWrite } from '../../core/social/groupMetaEvents';
 import { SafeScreen } from '../components/SafeScreen';
-import { showError, showSuccess } from '../components/userFeedback';
+import { reportErased, showError, showSuccess } from '../components/userFeedback';
 import { announceGroupSend } from '../groupSendAnnounce';
 import { groupSendProblemText } from '../../core/social/groupSendOutcome';
 import { loadGroupSendProblemsFor, forgetGroupSendProblemsFor, type GroupSendProblemMap } from '../../core/social/groupSendProblemStore';
@@ -4010,13 +4010,15 @@ function GroupChatScreen({
             // обещанием. Теперь «История очищена» говорится только
             // после удаления.
             onPress: () => { requestAnimationFrame(() => { void (async () => {
+              let sweep;
               try {
-                await clearGroupMessages(group.id, pid);
+                sweep = await clearGroupMessages(group.id, pid);
               } catch (e) {
                 showError(userErrorText(e, 'Не удалось очистить историю'));
                 return;
               }
-              showSuccess('История очищена');
+              // v4.32.1001: «удалены локально» — обещание про устройство.
+              reportErased(sweep, 'История очищена');
               await loadMessages();
             })(); }); },
           },
@@ -6263,9 +6265,13 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
               // удалении ничего не меняет, пока строка группы на месте —
               // ветка 'invite' выходит на `if (group)` раньше проверки.
               await markGroupLeft(g.id, pid);
-              await deleteGroup(g.id, pid);
+              const sweep = await deleteGroup(g.id, pid);
               await loadGroups();
               if (problem) showError(problem);
+              // v4.32.1001: подтверждение обещает «Переписка будет удалена с
+              // этого устройства». Об удачном выходе тут не говорят — группа
+              // просто уходит из списка; про уцелевшие вложения надо.
+              reportErased(sweep, 'Вы вышли из группы', { quietOnSuccess: true });
             }, 'Не удалось покинуть группу', 'group_leave_failed'),
           },
         ]

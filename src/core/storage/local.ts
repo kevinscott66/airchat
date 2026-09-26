@@ -50,6 +50,7 @@ import {
 } from '../utils/lookupResult';
 import type { ChatPageCursor } from './chatPageCursor';
 import { shouldApplyRows, type DbRead } from './readResult';
+import type { BlobCacheSweep } from './eraseOutcome';
 import {
   INLINE_BLOB_PREFIX,
   decodeInlineBlob,
@@ -5963,9 +5964,14 @@ export async function liveAttachmentBlobIds(): Promise<ReadonlySet<string>> {
  * сломать второе. Полный проход стоит расшифровки всех строк, поэтому зовётся
  * только там, где сообщения действительно удалены, и только если удаляемый
  * файл на диске вообще есть.
+ *
+ * v4.32.1001: отвечает, осталось ли что-нибудь. Раньше и пропуск по неполному
+ * обходу, и пойманная ошибка уходили в `log.warn` и возвращались как успех —
+ * четыре стирания выше объявляли человеку «удалено», не зная, что файлы на
+ * диске остались. См. eraseOutcome.ts.
  */
-async function dropOrphanBlobCache(doomed: AttachmentRefs): Promise<void> {
-  if (doomed.ids.size === 0 && doomed.uris.size === 0) return;
+async function dropOrphanBlobCache(doomed: AttachmentRefs): Promise<BlobCacheSweep> {
+  if (doomed.ids.size === 0 && doomed.uris.size === 0) return 'clean';
   try {
     const { cachedBlobIdsPresent, cachedFileUrisPresent, deleteCachedBlobs, deleteCachedFileUris } =
       await import('../media/mediaBlob');
@@ -5975,21 +5981,32 @@ async function dropOrphanBlobCache(doomed: AttachmentRefs): Promise<void> {
       cachedBlobIdsPresent(doomed.ids),
       cachedFileUrisPresent(doomed.uris),
     ]);
-    if (presentIds.length === 0 && presentUris.length === 0) return;
+    if (presentIds.length === 0 && presentUris.length === 0) return 'clean';
     const alive = await liveAttachmentRefs();
     // v4.32.564: то же правило, что и у суточной уборки. Файл, которого нет в
     // неполном списке, может быть нужен непрочитанной строке — и как раз она
     // не может об этом сказать.
     if (!mayDeleteUnreferenced(alive.scan)) {
       log.warn('blob_cache_sweep_skipped_incomplete', refScanReport(alive.scan));
-      return;
+      return 'kept';
     }
     const idsToDelete = presentIds.filter((id) => !alive.ids.has(id));
     const urisToDelete = presentUris.filter((u) => !alive.uris.has(u));
     if (idsToDelete.length > 0) await deleteCachedBlobs(idsToDelete);
     if (urisToDelete.length > 0) await deleteCachedFileUris(urisToDelete);
+    // v4.32.1001: исход берётся с диска, а не из того, что мы собирались
+    // сделать. Обе deleteCached* пропускают файл, который не удалился, и
+    // отдают счётчик снесённых — по счётчику не видно, чего он недосчитался:
+    // одному id может принадлежать несколько файлов. Второй проход теми же
+    // дешёвыми проверками отвечает прямо.
+    const [keptIds, keptUris] = await Promise.all([
+      cachedBlobIdsPresent(idsToDelete),
+      cachedFileUrisPresent(urisToDelete),
+    ]);
+    return keptIds.length === 0 && keptUris.length === 0 ? 'clean' : 'kept';
   } catch (e) {
     log.warn('blob_cache_sweep_failed', { err: e instanceof Error ? e.message : String(e) });
+    return 'kept';
   }
 }
 
@@ -7288,7 +7305,12 @@ export async function setGroupPinnedMessage(
   emitChatWrites();
 }
 
-export async function deleteGroup(id: string, ownerProfileId: number): Promise<void> {
+/**
+ * v4.32.1001: отвечает тем же, чем clearChatHistory. Выход из группы обещает
+ * «Переписка будет удалена с этого устройства» — тем же словом «устройство».
+ */
+export async function deleteGroup(id: string, ownerProfileId: number): Promise<BlobCacheSweep> {
+  let sweep: BlobCacheSweep = 'clean';
   const d = await db();
   // v4.32.272: до удаления строк — какие вложения они держали. Иначе выход из
   // группы уносил переписку, а расшифрованные снимки и голосовые оставались
@@ -7332,9 +7354,12 @@ export async function deleteGroup(id: string, ownerProfileId: number): Promise<v
       );
       await kvDeleteScopedChecked(ownerProfileId, recentlyDeletedGroupKey(id));
     },
-    () => dropOrphanBlobCache(doomed)
+    async () => {
+      sweep = await dropOrphanBlobCache(doomed);
+    }
   );
   emitChatWrites();
+  return sweep;
 }
 
 // Members
@@ -8293,11 +8318,17 @@ export async function searchAllGroupMessages(
 // парная ей updateMessageReactions выше — реакции в группе меняет
 // toggleReaction(..., { group: true }), за одно чтение-запись.
 
-/** Очистить историю диалога (удаляет все сообщения, сбрасывает метаданные). */
+/**
+ * Очистить историю диалога (удаляет все сообщения, сбрасывает метаданные).
+ *
+ * v4.32.1001: отвечает, остались ли расшифрованные копии вложений, — экран
+ * обещает удаление «на этом устройстве», а не в базе. См. eraseOutcome.ts.
+ */
 export async function clearChatHistory(
   contactPubB64: string,
   ownerProfileId: number
-): Promise<void> {
+): Promise<BlobCacheSweep> {
+  let sweep: BlobCacheSweep = 'clean';
   const d = await db();
   // v4.32.272: та же чистка кэша вложений, что и у групп, — «очистить историю»
   // не должно оставлять расшифрованные снимки на диске.
@@ -8333,9 +8364,12 @@ export async function clearChatHistory(
       // оставался, и шапка переписки пыталась показать то, чего уже нет.
       await d.runAsync(clearTracesSql('conversations', 'row'), [ownerProfileId, contactPubB64]);
     },
-    () => dropOrphanBlobCache(doomed)
+    async () => {
+      sweep = await dropOrphanBlobCache(doomed);
+    }
   );
   emitChatWrites();
+  return sweep;
 }
 
 /**
@@ -8567,7 +8601,9 @@ export async function deleteGroupMessageChecked(
         );
         removed = anyChanged(res);
       },
-      () => (removed ? dropOrphanBlobCache(doomed) : Promise.resolve())
+      async () => {
+        if (removed) await dropOrphanBlobCache(doomed);
+      }
     );
     if (!removed) {
       log.warn('delete_group_message_no_row', { id: messageId.slice(0, 8), pid: ownerProfileId });
@@ -8598,10 +8634,14 @@ export async function deleteGroupMessageChecked(
  * придёт.
  *
  * Соседи по смыслу так и написаны: `clearChatHistory` и `deleteGroup` своей
- * ловушки не имеют вовсе, `clearAllMessageHistory` отвечает `false`. Из
+ * ловушки не имеют вовсе, `clearAllMessageHistory` отвечает отказом. Из
  * четырёх стираний молчало одно.
  */
-export async function clearGroupMessages(groupId: string, ownerProfileId: number): Promise<void> {
+export async function clearGroupMessages(
+  groupId: string,
+  ownerProfileId: number
+): Promise<BlobCacheSweep> {
+  let sweep: BlobCacheSweep = 'clean';
   const d = await db();
   const dek = await getOrCreateDataEncryptionKey();
   const doomed = newAttachmentRefs();
@@ -8635,9 +8675,12 @@ export async function clearGroupMessages(groupId: string, ownerProfileId: number
       // хранит копию текста, и удаление group_messages её не касается.
       await d.runAsync(clearTracesSql('groups', 'row'), [ownerProfileId, groupId]);
     },
-    () => dropOrphanBlobCache(doomed)
+    async () => {
+      sweep = await dropOrphanBlobCache(doomed);
+    }
   );
   emitChatWrites();
+  return sweep;
 }
 
 /** Изменить текст сообщения группы (только своё). */
@@ -9850,8 +9893,15 @@ export async function listStarredMessagesRead(
  * этом рапортовал «История очищена».
  *
  * Возвращает признак успеха, чтобы вызывающий не показывал успех после отказа.
+ *
+ * v4.32.1001: исходов стало три. `failed` — прежний `false`; `kept` — строки
+ * стёрты, а расшифрованные копии вложений на устройстве остались, и подпись
+ * кнопки обещает как раз устройство («Удалить все сообщения с устройства»).
  */
-export async function clearAllMessageHistory(ownerProfileId: number): Promise<boolean> {
+export async function clearAllMessageHistory(
+  ownerProfileId: number
+): Promise<BlobCacheSweep | 'failed'> {
+  let sweep: BlobCacheSweep = 'clean';
   try {
     const d = await db();
     // Голоса в опросах и отметки о завершении — до удаления самих сообщений,
@@ -9891,13 +9941,15 @@ export async function clearAllMessageHistory(ownerProfileId: number): Promise<bo
         await d.runAsync(clearTracesSql('conversations', 'profile'), [ownerProfileId]);
         await d.runAsync(clearTracesSql('groups', 'profile'), [ownerProfileId]);
       },
-      () => dropOrphanBlobCache(doomed)
+      async () => {
+        sweep = await dropOrphanBlobCache(doomed);
+      }
     );
     emitChatWrites();
-    return true;
+    return sweep;
   } catch (e) {
     log.warn('clear_all_message_history_failed', { err: e instanceof Error ? e.message : String(e) });
-    return false;
+    return 'failed';
   }
 }
 

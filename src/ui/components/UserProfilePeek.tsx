@@ -85,7 +85,7 @@ import { SheetShell } from './SheetShell';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import { useColors } from '../ThemeContext';
 import { font, glass, mono, radius, scrim, spacing, withAlpha } from '../theme';
-import { showSuccess, showError } from './userFeedback';
+import { reportErased, showSuccess, showError } from './userFeedback';
 import {
   addContact,
   deleteContact,
@@ -886,7 +886,9 @@ export function UserProfilePeek({
           text: 'Удалить',
           style: 'destructive',
           onPress: () => void clearChatHistory(pub, activeProfileId)
-            .then(() => showSuccess('Переписка удалена'))
+            // v4.32.1001: «на этом устройстве» — обещание про устройство, а не
+            // про базу, и расшифрованные вложения его иногда переживают.
+            .then((sweep) => reportErased(sweep, 'Переписка удалена'))
             .catch((e: unknown) => showError(userErrorText(e, 'Не удалось удалить переписку'))),
         },
       ]

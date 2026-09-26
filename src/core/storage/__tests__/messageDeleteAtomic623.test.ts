@@ -57,5 +57,6 @@ it('личное сообщение: то же, и «строки не было�
 it('ПРОВЕРКА НЕ ПУСТАЯ: соседняя очистка истории группы осталась как была', () => {
   const b = body('clearGroupMessages');
   expect(b).toContain("'clear_group_messages',");
-  expect(b).toContain('() => dropOrphanBlobCache(doomed)');
+  // v4.32.1001: вызов отдаёт исход наружу — форма другая, место то же.
+  expect(b).toContain('sweep = await dropOrphanBlobCache(doomed);');
 });

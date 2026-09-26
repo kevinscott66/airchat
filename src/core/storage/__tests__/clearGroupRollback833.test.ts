@@ -202,7 +202,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(fail).toBeGreaterThan(0);
     // Успех объявляется только после ловушки, и до него — return по отказу.
     expect(tail.indexOf('return;', fail)).toBeGreaterThan(fail);
-    expect(tail.indexOf("showSuccess('История очищена');")).toBeGreaterThan(fail);
+    // v4.32.1001: успех объявляет reportErased — он же молчит про успех,
+    // когда расшифрованные копии вложений остались на диске.
+    expect(tail.indexOf("reportErased(sweep, 'История очищена');")).toBeGreaterThan(fail);
   });
 
   it('помощник стирания заведён именно ради броска наверх', () => {
@@ -225,7 +227,10 @@ describe('форма исходников: своей ловушки у очис
   it('тело очистки идёт без try — как у соседней очистки переписки', () => {
     const local = fs.readFileSync(path.join(__dirname, '..', 'local.ts'), 'utf8');
     const at = local.indexOf(
-      'export async function clearGroupMessages(groupId: string, ownerProfileId: number): Promise<void> {',
+      'export async function clearGroupMessages(\n' +
+        '  groupId: string,\n' +
+        '  ownerProfileId: number\n' +
+        '): Promise<BlobCacheSweep> {',
     );
     expect(at).toBeGreaterThan(0);
     const end = local.indexOf('\n}\n', at);

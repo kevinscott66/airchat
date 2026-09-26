@@ -165,17 +165,19 @@ describe('очистка переписки: корзина не удалила�
 });
 
 describe('очистка всей истории: то же самое на удалении по префиксу', () => {
-  it('возвращает false и не фиксирует стирание', async () => {
+  // v4.32.1001: вместо `false`/`true` воронка отдаёт исход уборки кэша, а
+  // отказ стирания остался отдельным словом. Различение то же.
+  it('возвращает отказ и не фиксирует стирание', async () => {
     mockKvDeleteFails = true;
-    await expect(clearAllMessageHistory(1)).resolves.toBe(false);
+    await expect(clearAllMessageHistory(1)).resolves.toBe('failed');
     expect(mockCommitted).not.toContain('messages');
     expect(mockCommitted).not.toContain('group_messages');
     expect(mockCommitted).toEqual([]);
     expect(mockOpen).toBe(false);
   });
 
-  it('без отказа возвращает true и фиксирует обе таблицы', async () => {
-    await expect(clearAllMessageHistory(1)).resolves.toBe(true);
+  it('без отказа возвращает исход уборки и фиксирует обе таблицы', async () => {
+    await expect(clearAllMessageHistory(1)).resolves.toBe('clean');
     expect(mockCommitted).toContain('messages');
     expect(mockCommitted).toContain('group_messages');
     expect(mockCommitted).toContain('bin_prefix');

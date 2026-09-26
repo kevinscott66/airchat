@@ -1,5 +1,6 @@
 import { Alert, Platform, ToastAndroid } from 'react-native';
 import { authGuard } from '../../core/security/authGuard';
+import type { BlobCacheSweep } from '../../core/storage/eraseOutcome';
 import { hasPeerHalf, localHalfDone, peerHalfDone, type TwoSidedOutcome } from '../../core/social/twoSidedEdit';
 import { pushConfirm, pushToast, type ConfirmActionSpec } from './appNotify';
 import { lockoutMinutesLeft } from '../utils/lockScreen';
@@ -68,6 +69,36 @@ export async function showPasswordRejected(): Promise<void> {
   }
   const left = await authGuard.getRemainingAttempts();
   showError(left > 0 ? `Неверный пароль. Осталось попыток: ${left}` : 'Неверный пароль');
+}
+
+/**
+ * Сказать об исходе стирания, не выдавая половину за целое (v4.32.1001).
+ *
+ * Четыре действия — «Очистить историю» в переписке, в группе и в настройках и
+ * выход из группы — обещают удаление «с этого устройства». Строки они
+ * стирают всегда, а расшифрованные снимки и голосовые из этих сообщений
+ * иногда остаются лежать отдельными файлами в кэше приложения: см.
+ * eraseOutcome.ts, там же — почему дочищать их нельзя.
+ *
+ * Слово одно на все четыре места, и это важнее краткости: человек упирается в
+ * одно и то же последствие с разных экранов, и узнать его он должен по тексту,
+ * а не догадаться. Тон — как у отказа, потому что сделано не то, о чём
+ * договаривались; сказанное при этом остаётся фактом, а не советом повторить:
+ * повтор ничего не изменит, пока не прочитается база.
+ *
+ * `quietOnSuccess` — для списка переписок: там об удачной очистке не говорят
+ * вовсе, список просто перерисовывается.
+ */
+export function reportErased(
+  sweep: BlobCacheSweep,
+  done: string,
+  opts?: { quietOnSuccess?: boolean }
+): void {
+  if (sweep === 'kept') {
+    showError(`${done}, но расшифрованные копии вложений остались на устройстве`);
+    return;
+  }
+  if (opts?.quietOnSuccess !== true) showSuccess(done);
 }
 
 /** Краткое уведомление об успехе. */

@@ -71,7 +71,7 @@ import { profileManager } from '../../core/identity/profileManager';
 import { scopedKvGet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY, type OwnProfileKey, type PrivacyPrefKey } from '../../core/storage/kvKeys';
 import { ownFieldSet, ownFieldTryGet } from '../../core/identity/ownProfile';
-import { showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
+import { reportErased, showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { ACCENT_SWATCHES, avatarShape, colorsForScheme, contrastingInk, font, radius, TOUCH_TARGET_MIN } from '../theme';
 import { useTheme, useScaledFont, FONT_SIZE_OPTIONS, type FontSizeValue } from '../ThemeContext';
@@ -2230,9 +2230,12 @@ function SettingsScreenImpl({
                 // кнопка чистила чужую переписку, а свою оставляла на месте.
                 onPress: () => {
                   const pid = profileManager.getActiveProfile()?.id ?? 1;
-                  void clearAllMessageHistory(pid).then((ok) => {
-                    if (ok) showSuccess('История очищена');
-                    else showError('Не удалось очистить историю');
+                  // v4.32.1001: исходов три. «Удалить все сообщения с
+                  // устройства» — подпись про устройство, а расшифрованные
+                  // вложения оставались на нём и после «История очищена».
+                  void clearAllMessageHistory(pid).then((res) => {
+                    if (res === 'failed') showError('Не удалось очистить историю');
+                    else reportErased(res, 'История очищена');
                   });
                 },
               },

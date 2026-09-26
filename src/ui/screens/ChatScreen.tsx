@@ -103,7 +103,7 @@ import { closeAndSyncPoll } from '../../core/social/pollVoteSync';
 import { profileManager } from '../../core/identity/profileManager';
 import { BLOCK_CONFIRM_BODY, BLOCK_CONFIRM_TITLE, BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { SafeScreen } from '../components/SafeScreen';
-import { reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
+import { reportErased, reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';
 import { exportBody } from '../../core/social/exportLine';
 import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
@@ -3744,9 +3744,11 @@ function ChatThreadView({
                               // v4.32.626: у clearChatHistory нет своего try,
                               // а лист подтверждения к этому мигу уже закрыт —
                               // сорвавшаяся очистка выглядела как выполненная.
-                              void clearChatHistory(peerB64, activeProfileId).then(() => {
+                              void clearChatHistory(peerB64, activeProfileId).then((sweep) => {
                                 void reloadThread();
-                                showSuccess('История очищена');
+                                // v4.32.1001: см. reportErased — «удалены
+                                // локально» обещает устройство, а не базу.
+                                reportErased(sweep, 'История очищена');
                               }).catch((e: unknown) => {
                                 showError(userErrorText(e, 'Не удалось очистить историю'));
                               });

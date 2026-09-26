@@ -176,8 +176,11 @@ describe('об отказе говорят один раз', () => {
 
   it('все семь одиночных отказов говорят через общее правило', () => {
     expect(CHAT().split('reportSendRefusal(res,').length - 1).toBe(7);
+    // v4.32.1001: в том же импорте появился reportErased — слово об остатке
+    // расшифрованных вложений. Проверяется, что отказы по-прежнему берутся
+    // из общего модуля, а не заводятся на экране заново.
     expect(CHAT()).toContain(
-      "import { reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';"
+      "import { reportErased, reportSendRefusal, reportTwoSided, showConfirm, showError, showSuccess } from '../components/userFeedback';"
     );
   });
 
