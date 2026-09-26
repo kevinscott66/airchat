@@ -493,7 +493,7 @@ export async function clearCallLog(): Promise<boolean> {
  */
 export async function loadCallLog(pid: number): Promise<void> {
   try {
-    const { kvGetSecret, kvGetSecretCell, kvSetSecret, kvDelete } = await import('../storage/local');
+    const { kvGetSecretCell, kvSetSecret, kvDelete } = await import('../storage/local');
     // v4.32.979: своим столбцом — тремя состояниями. `kvGetSecret` сводит
     // «журнала нет» и «журнал не открылся» к одному null, а дальше по коду
     // разница между ними решающая: пустая память — это не пустой журнал.
@@ -510,13 +510,32 @@ export async function loadCallLog(pid: number): Promise<void> {
     }
     if (callLogUnreadableFor === pid) callLogUnreadableFor = null;
     let raw = own.state === 'plain' ? own.text : null;
-    // Миграция с legacy (глобального) ключа — разово копируем в scoped.
-    // kvGetSecret пропускает старую незашифрованную строку насквозь, поэтому
-    // тот же путь заодно перешифровывает журнал, записанный до v4.32.277.
+    // Глобальный ключ перенесён в свой столбец, но убран ли он оттуда —
+    // решается ниже, по факту записи, а не по удаче первой попытки.
+    let legacyPending = false;
+    // Миграция с legacy (глобального) ключа — разово копируем в scoped. Старая
+    // незашифрованная строка проходит насквозь, поэтому тот же путь заодно
+    // перешифровывает журнал, записанный до v4.32.277.
     if (!raw) {
-      const legacy = await kvGetSecret(LEGACY_CALL_LOG_KEY);
+      // v4.32.983: и здесь тремя состояниями. `kvGetSecret` сводил «ключа нет»
+      // и «не прочиталось» к одному null, а занятая база в первую секунду
+      // после запуска — дело обычное (ровно та секунда, ради которой сделан
+      // повтор записи в v4.32.749). Приняв отказ за «переносить нечего», мы
+      // пускали первую же новую запись в свой столбец — и сюда больше не
+      // заходили никогда: `raw` с этого мгновения непустой, и ветка миграции
+      // закрыта навсегда. Журнал звонков до v4.32.277 оставался лежать на
+      // диске непрочитанным. Выход из этого состояния есть: «Очистить» в
+      // истории звонков стирает оба ключа и снимает запрет.
+      const legacyCell = await kvGetSecretCell(LEGACY_CALL_LOG_KEY);
+      if (legacyCell.state === 'unreadable') {
+        callLogUnreadableFor = pid;
+        log.warn('call_log_legacy_unreadable', { pid });
+        return;
+      }
+      const legacy = legacyCell.state === 'plain' ? legacyCell.text : null;
       if (legacy) {
         raw = legacy;
+        legacyPending = true;
         // v4.32.661: копия не легла — глобальный ключ не трогаем. Прежде
         // DELETE шёл безусловно, и одна сорванная запись уничтожала журнал
         // звонков целиком: в scoped-ключ он не попал, а legacy уже стёрт.
@@ -526,6 +545,7 @@ export async function loadCallLog(pid: number): Promise<void> {
           // повторялась бы у каждого профиля — второй аккаунт на том же
           // устройстве поднимал бы журнал звонков первого как свой.
           await kvDelete(LEGACY_CALL_LOG_KEY);
+          legacyPending = false;
         } else {
           log.warn('call_log_migrate_failed', { pid });
         }
@@ -559,7 +579,17 @@ export async function loadCallLog(pid: number): Promise<void> {
         // Журнал, записанный до v4.32.277, лежит открытым текстом. Прочитали —
         // сразу перезаписываем шифртекстом: иначе он оставался бы открытым до
         // следующего звонка, а у того, кто больше не звонит, — навсегда.
-        if (clean.length > 0) await persistCallLog(pid, clean);
+        if (clean.length > 0) {
+          const stored = await persistCallLog(pid, clean);
+          // v4.32.983: копия выше идёт одним заходом, а эта запись — с
+          // повторами (v4.32.749). Занятая секунда роняла первую и отпускала
+          // вторую: журнал ложился в свой столбец, а глобальный ключ
+          // оставался. Следующий профиль на том же устройстве поднимал его как
+          // свой — кому звонили, когда и чем кончилось. Ровно та утечка,
+          // которую закрыли в v4.32.278; сюда она вернулась через заднюю
+          // дверь. Глобальный ключ убираем тогда, когда данные заведомо легли.
+          if (stored && legacyPending) await kvDelete(LEGACY_CALL_LOG_KEY);
+        }
       }
     }
   } catch { /* ignore */ }
