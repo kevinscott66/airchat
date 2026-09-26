@@ -160,12 +160,44 @@ function activeProfileId(): number {
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 const DEBOUNCE_MS = 4000;
 
-/** Отменить отложенный экспорт (например перед удалением БД). */
-export function cancelScheduledDialogBackup(): void {
+/**
+ * Поколение отложенных записей (v4.32.970).
+ *
+ * Отсрочка у копии двухступенчатая: сначала таймер на 4 секунды, потом
+ * `runAfterInteractions` — очередь, которая ждёт конца анимаций и не имеет
+ * отмены. Между ступенями `debounceTimer` уже null, и отмена, умевшая только
+ * гасить таймер, становилась пустым действием ровно тогда, когда запись была
+ * ближе всего.
+ */
+let backupEpoch = 0;
+/** Запись, которая уже идёт: её нельзя отменить, но можно дождаться. */
+let inFlightExport: Promise<unknown> | null = null;
+
+/**
+ * Отменить отложенный экспорт (например перед удалением БД).
+ *
+ * v4.32.970: отмена перестала быть обещанием на словах. Зовут её из сброса
+ * кошелька первым шагом, а файлы копий уносит шаг `dialog_backups` намного
+ * позже — и всё, что между ними успевало записаться, переживало «удалить
+ * данные на устройстве» навсегда: в файле вся переписка профиля, имя профиля
+ * повторно не займёт никто, перезаписать его нечем.
+ *
+ * Отменяется теперь и то, что уже ушло в очередь взаимодействий (по номеру
+ * поколения), и то, что уже пишется (дожидаемся — тогда удаление файлов
+ * заведомо идёт после записи, а не до неё).
+ *
+ * Номер поколения, а не флаг «запись выключена»: после сброса приложение
+ * поднимается в том же процессе (walletBootNonce в App.tsx), и выключенная
+ * навсегда копия — это следующий владелец устройства без резервной копии.
+ */
+export async function cancelScheduledDialogBackup(): Promise<void> {
+  backupEpoch += 1;
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
+  const running = inFlightExport;
+  if (running) await running.catch(() => {});
 }
 
 /**
@@ -249,13 +281,25 @@ export async function deleteAllDialogBackups(): Promise<void> {
 /** Вызов после изменения чатов — редкий экспорт на диск. */
 export function scheduleDialogBackupPersist(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
+  const epoch = backupEpoch;
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
     InteractionManager.runAfterInteractions(() => {
-      void exportDialogBackupToFile().catch((e) => {
+      // Очередь взаимодействий отмены не знает: снять из неё задачу нечем.
+      // Поэтому задача сама спрашивает, тот ли мир вокруг, в котором её
+      // заводили.
+      if (epoch !== backupEpoch) {
+        log.debug('dialog_backup_scheduled_cancelled');
+        return;
+      }
+      const running = exportDialogBackupToFile().catch((e) => {
         log.warn('dialog_backup_scheduled_failed', {
           err: e instanceof Error ? e.message : String(e),
         });
+      });
+      inFlightExport = running;
+      void running.then(() => {
+        if (inFlightExport === running) inFlightExport = null;
       });
     });
   }, DEBOUNCE_MS);

@@ -200,6 +200,10 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
     await closeLocalDatabase();
   }, failed);
   await step('dialog_backups', () => deleteAllDialogBackups(), failed);
+  // v4.32.970: вторая отмена — не суеверие. Между первым шагом и этим местом
+  // проходит два десятка шагов, и любая запись в чат за это время заводит
+  // новую отсрочку. Отменённая здесь, она уже не переживёт удаление файлов.
+  await step('cancel_dialog_backup_late', () => cancelScheduledDialogBackup(), failed);
   await step('account_vault', async () => {
     const { getStoredMnemonic } = await import('../backup/seedPhrase');
     const { deleteAccountVault } = await import('../storage/accountVault');
