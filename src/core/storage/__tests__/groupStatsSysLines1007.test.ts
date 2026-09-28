@@ -28,6 +28,9 @@
  * База здесь поддельная, но запросы она разбирает по-настоящему: и условие
  * `sender_name IS NOT NULL`, и `LIMIT 5` читаются из самого текста запроса,
  * поэтому прежняя редакция получает ровно то, что получала от SQLite.
+ *
+ * v4.32.1008: столбики за 7 дней больше не собирает база — отбор по дням
+ * переехал в код, и запрос отдаёт `created_at` строками.
  */
 type Row = {
   sender_pub_b64: string;
@@ -38,11 +41,6 @@ type Row = {
 };
 
 let mockRows: Row[] = [];
-
-/** Ключ дня ровно так, как его строит strftime(..., 'unixepoch'): сутки по UTC. */
-function mockUtcDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
 
 jest.mock('expo-sqlite', () => {
   const named = () => mockRows.filter((r) => r.sender_name !== null);
@@ -76,15 +74,11 @@ jest.mock('expo-sqlite', () => {
           const out = [...by.values()].sort((a, b) => b.cnt - a.cnt);
           return sql.includes('LIMIT 5') ? out.slice(0, 5) : out;
         }
-        if (sql.includes('strftime')) {
+        if (sql.includes('SELECT created_at')) {
           const since = Number(params[2] ?? 0);
-          const days = new Map<string, number>();
-          for (const r of pick(sql)) {
-            if (r.created_at < since) continue;
-            const d = mockUtcDay(r.created_at);
-            days.set(d, (days.get(d) ?? 0) + 1);
-          }
-          return [...days.entries()].sort().map(([day, cnt]) => ({ day, cnt }));
+          return pick(sql)
+            .filter((r) => r.created_at >= since)
+            .map((r) => ({ created_at: r.created_at }));
         }
         if (sql.includes('sender_name IS NULL')) {
           return mockRows.filter((r) => r.sender_name === null);

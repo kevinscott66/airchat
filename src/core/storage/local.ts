@@ -8044,6 +8044,21 @@ export type GroupStats = {
  * это строка, знать нечем, а спрятать чужое сообщение хуже, чем показать
  * лишнюю единицу.
  */
+/**
+ * Ключ дня для столбиков «Активность за 7 дней» — сутки местные.
+ *
+ * v4.32.1008: раньше столбики строила база (`datetime(…, 'unixepoch')` — это
+ * сутки по UTC), а подписи к ним подбирал экран по местному календарю, и
+ * ключи не сходились. К востоку от Гринвича первые часы суток попадали на
+ * вчерашний столбик, к западу — последние часы уезжали в завтрашний, то есть
+ * за край семидневки, и не показывались вовсе: у Нью-Йорка каждый вечер
+ * после семи из сводки пропадал.
+ */
+function localDayKey(ms: number): string {
+  const t = new Date(ms);
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+}
+
 export async function getGroupStats(groupId: string, ownerProfileId: number): Promise<GroupStats> {
   try {
     const d = await db();
@@ -8070,14 +8085,29 @@ export async function getGroupStats(groupId: string, ownerProfileId: number): Pr
        GROUP BY sender_pub_b64`,
       [groupId, ownerProfileId],
     );
-    // Daily activity for the last 7 days
-    const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
-    const dailyRows = await d.getAllAsync<{ day: string; cnt: number }>(
-      `SELECT strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch')) as day, COUNT(*) as cnt
+    // v4.32.1008: окно — ровно те семь суток, что нарисованы, от полуночи
+    // самого давнего дня. Прежние «последние 168 часов» брали шире края
+    // семидневки: лишние строки вычитывались и выбрасывались.
+    //
+    // Шаг по календарю, а не вычитанием суток: при переводе часов сутки
+    // длятся 23 или 25 часов, и `Date.now() - i * 24ч` перескакивало бы
+    // через дату или повторяло её — на неделе перевода один столбик выходил
+    // бы пустым, а соседний считал бы за двоих.
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 6);
+    const windowStart = dayStart.getTime();
+    const dayKeys: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      const d2 = new Date(dayStart);
+      d2.setDate(dayStart.getDate() + i);
+      dayKeys.push(localDayKey(d2.getTime()));
+    }
+    const dailyRows = await d.getAllAsync<{ created_at: number }>(
+      `SELECT created_at
        FROM group_messages
-       WHERE group_id = ? AND owner_profile_id = ? AND created_at >= ? AND sender_name IS NOT NULL
-       GROUP BY day ORDER BY day ASC`,
-      [groupId, ownerProfileId, sevenDaysAgo],
+       WHERE group_id = ? AND owner_profile_id = ? AND created_at >= ? AND sender_name IS NOT NULL`,
+      [groupId, ownerProfileId, windowStart],
     );
     const nameless = await d.getAllAsync<{
       sender_pub_b64: string;
@@ -8108,7 +8138,11 @@ export async function getGroupStats(groupId: string, ownerProfileId: number): Pr
         unreadable: unreadableFromCellState(cell.state) === true,
       });
     }
-    const dayMap = new Map(dailyRows.map((r) => [r.day, r.cnt]));
+    const dayMap = new Map<string, number>();
+    for (const r of dailyRows) {
+      const key = localDayKey(r.created_at);
+      dayMap.set(key, (dayMap.get(key) ?? 0) + 1);
+    }
     for (const r of nameless) {
       const text = cellTextOrNull(readAtRestCell(r.text, statsDek));
       if (text !== null && isGroupSysMessage(text)) continue;
@@ -8116,19 +8150,12 @@ export async function getGroupStats(groupId: string, ownerProfileId: number): Pr
       if (r.media_cids !== null) mediaCount += 1;
       if (firstMessageAt === null || r.created_at < firstMessageAt) firstMessageAt = r.created_at;
       counts.set(r.sender_pub_b64, (counts.get(r.sender_pub_b64) ?? 0) + 1);
-      if (r.created_at >= sevenDaysAgo) {
-        // Тот же ключ дня, что у strftime выше: сутки по UTC.
-        const day = new Date(r.created_at).toISOString().slice(0, 10);
+      if (r.created_at >= windowStart) {
+        const day = localDayKey(r.created_at);
         dayMap.set(day, (dayMap.get(day) ?? 0) + 1);
       }
     }
-    // Build full 7-day array
-    const dailyActivity: Array<{ date: string; count: number }> = [];
-    for (let i = 6; i >= 0; i--) {
-      const d2 = new Date(Date.now() - i * 24 * 3600 * 1000);
-      const key = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')}`;
-      dailyActivity.push({ date: key, count: dayMap.get(key) ?? 0 });
-    }
+    const dailyActivity = dayKeys.map((date) => ({ date, count: dayMap.get(date) ?? 0 }));
     return {
       totalMessages,
       mediaCount,
