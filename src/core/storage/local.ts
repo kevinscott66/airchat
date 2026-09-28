@@ -83,6 +83,7 @@ import {
 } from './conversationMeta';
 import { RAW_CHAT_MESSAGE_COLUMNS, sanitizeRawChatMessageRows } from './chatMessageBackup';
 import { AT_REST_COLUMNS } from './atRestColumns';
+import { isGroupSysMessage } from '../social/groupSysLine';
 import { rebuildColumns, type ColumnInfo } from './tableRebuild';
 import { classifyStorageError, type StoragePressureKind } from './storagePressure';
 import {
@@ -8011,37 +8012,117 @@ export type GroupStats = {
   dailyActivity: Array<{ date: string; count: number }>;
 };
 
+/**
+ * Сводка по группе: сколько сообщений, кто их писал, когда начался разговор.
+ *
+ * Дефект (v4.32.1007). Служебные строки лежат в той же таблице, что и
+ * сообщения, и отличаются от них одним префиксом в тексте — а считались
+ * наравне. «Сообщение закреплено», «Группа переименована», «X вступил(а) в
+ * группу», «Пригласительная ссылка сброшена» попадали и в плитку
+ * «Сообщений», и в столбики «Активность за 7 дней», и в «Самые активные».
+ *
+ * Цена. Служебные строки пишет тот, кто распоряжается группой, и пишет их
+ * много: каждое закрепление, переименование, исключение, одобрение заявки.
+ * Поэтому наверх «Самых активных» поднимался администратор, не написавший в
+ * группу ни слова, — сводка отвечала на вопрос «кто больше всех говорит»
+ * списком тех, кто больше всех нажимал кнопки. У строк из управляющего
+ * конверта ключа отправителя нет вовсе, и в пятёрку они вставали безымянной
+ * строкой, подписанной сокращением пустого ключа. «Первое сообщение»
+ * показывало день создания группы: строку «создал(а) группу» кладут на
+ * миллисекунду раньше первого приветствия как раз затем, чтобы она стояла
+ * первой (см. GroupCreateModal).
+ *
+ * Правка. Служебные строки из счёта исключены. Отличить их можно только по
+ * тексту, а текст лежит шифртекстом — SQL по префиксу не отберёт. Но
+ * расшифровывать всю историю ради счётчика и не нужно: у служебной строки
+ * `sender_name` всегда `null` (см. insertGroupSysMessage и
+ * insertCtlSysMessage), так что разбирать текст приходится только строкам
+ * без имени — в обычной группе это ровно они и есть. Всё остальное
+ * по-прежнему считает база.
+ *
+ * Границы. Не открывшийся текст считается обычным сообщением: служебная ли
+ * это строка, знать нечем, а спрятать чужое сообщение хуже, чем показать
+ * лишнюю единицу.
+ */
 export async function getGroupStats(groupId: string, ownerProfileId: number): Promise<GroupStats> {
   try {
     const d = await db();
-    const totals = await d.getFirstAsync<{ total: number; media: number; first_at: number | null }>(
+    const statsDek = await getOrCreateDataEncryptionKey();
+    const named = await d.getFirstAsync<{ total: number; media: number; first_at: number | null }>(
       `SELECT COUNT(*) as total,
               COUNT(CASE WHEN media_cids IS NOT NULL THEN 1 END) as media,
               MIN(created_at) as first_at
-       FROM group_messages WHERE group_id = ? AND owner_profile_id = ?`,
+       FROM group_messages
+       WHERE group_id = ? AND owner_profile_id = ? AND sender_name IS NOT NULL`,
       [groupId, ownerProfileId],
     );
-    const statsDek = await getOrCreateDataEncryptionKey();
-    const senders = await d.getAllAsync<{ sender_pub_b64: string; sender_name: string | null; cnt: number }>(
+    const namedSenders = await d.getAllAsync<{ sender_pub_b64: string; sender_name: string | null; cnt: number }>(
       // v4.32.592: ключ отправителя тоже выбирается — по нему подписывается
       // строка, если имени нет. Голое `sender_name` при `GROUP BY` отдавало
       // имя произвольной строки группы и легко попадало на строку без имени
       // при том, что у соседних оно есть; `MAX` от NULL уходит.
+      // v4.32.1007: `LIMIT 5` снят. Пятёрку выбирают ниже, когда к счёту
+      // добавлены безымянные строки, оказавшиеся обычными сообщениями:
+      // отрезать хвост до этого значило бы выбирать пятёрку по другим числам.
       `SELECT sender_pub_b64, MAX(sender_name) as sender_name, COUNT(*) as cnt
-       FROM group_messages WHERE group_id = ? AND owner_profile_id = ?
-       GROUP BY sender_pub_b64 ORDER BY cnt DESC LIMIT 5`,
+       FROM group_messages
+       WHERE group_id = ? AND owner_profile_id = ? AND sender_name IS NOT NULL
+       GROUP BY sender_pub_b64`,
       [groupId, ownerProfileId],
     );
     // Daily activity for the last 7 days
     const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
     const dailyRows = await d.getAllAsync<{ day: string; cnt: number }>(
       `SELECT strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch')) as day, COUNT(*) as cnt
-       FROM group_messages WHERE group_id = ? AND owner_profile_id = ? AND created_at >= ?
+       FROM group_messages
+       WHERE group_id = ? AND owner_profile_id = ? AND created_at >= ? AND sender_name IS NOT NULL
        GROUP BY day ORDER BY day ASC`,
       [groupId, ownerProfileId, sevenDaysAgo],
     );
-    // Build full 7-day array
+    const nameless = await d.getAllAsync<{
+      sender_pub_b64: string;
+      text: string | null;
+      media_cids: string | null;
+      created_at: number;
+    }>(
+      `SELECT sender_pub_b64, text, media_cids, created_at
+       FROM group_messages
+       WHERE group_id = ? AND owner_profile_id = ? AND sender_name IS NULL`,
+      [groupId, ownerProfileId],
+    );
+
+    let totalMessages = named?.total ?? 0;
+    let mediaCount = named?.media ?? 0;
+    let firstMessageAt = named?.first_at ?? null;
+    const counts = new Map<string, number>();
+    // v4.32.592: раньше здесь стояло `decryptAtRestNullable(...) ?? '?'` —
+    // и `??` не срабатывал, потому что при неудаче расшифровки приходит не
+    // `null`, а пустая строка. В списке «Самые активные» появлялась строка
+    // без имени вовсе: ни имени, ни знака вопроса, ни подписи ключом.
+    const names = new Map<string, { name: string | null; unreadable: boolean }>();
+    for (const s of namedSenders) {
+      const cell = readAtRestCell(s.sender_name, statsDek);
+      counts.set(s.sender_pub_b64, s.cnt);
+      names.set(s.sender_pub_b64, {
+        name: cellTextOrNull(cell),
+        unreadable: unreadableFromCellState(cell.state) === true,
+      });
+    }
     const dayMap = new Map(dailyRows.map((r) => [r.day, r.cnt]));
+    for (const r of nameless) {
+      const text = cellTextOrNull(readAtRestCell(r.text, statsDek));
+      if (text !== null && isGroupSysMessage(text)) continue;
+      totalMessages += 1;
+      if (r.media_cids !== null) mediaCount += 1;
+      if (firstMessageAt === null || r.created_at < firstMessageAt) firstMessageAt = r.created_at;
+      counts.set(r.sender_pub_b64, (counts.get(r.sender_pub_b64) ?? 0) + 1);
+      if (r.created_at >= sevenDaysAgo) {
+        // Тот же ключ дня, что у strftime выше: сутки по UTC.
+        const day = new Date(r.created_at).toISOString().slice(0, 10);
+        dayMap.set(day, (dayMap.get(day) ?? 0) + 1);
+      }
+    }
+    // Build full 7-day array
     const dailyActivity: Array<{ date: string; count: number }> = [];
     for (let i = 6; i >= 0; i--) {
       const d2 = new Date(Date.now() - i * 24 * 3600 * 1000);
@@ -8049,22 +8130,18 @@ export async function getGroupStats(groupId: string, ownerProfileId: number): Pr
       dailyActivity.push({ date: key, count: dayMap.get(key) ?? 0 });
     }
     return {
-      totalMessages: totals?.total ?? 0,
-      mediaCount: totals?.media ?? 0,
-      firstMessageAt: totals?.first_at ?? null,
-      // v4.32.592: раньше здесь стояло `decryptAtRestNullable(...) ?? '?'` —
-      // и `??` не срабатывал, потому что при неудаче расшифровки приходит не
-      // `null`, а пустая строка. В списке «Самые активные» появлялась строка
-      // без имени вовсе: ни имени, ни знака вопроса, ни подписи ключом.
-      topSenders: senders.map((s) => {
-        const cell = readAtRestCell(s.sender_name, statsDek);
-        return {
-          name: cellTextOrNull(cell),
-          pub: s.sender_pub_b64,
-          unreadable: unreadableFromCellState(cell.state) === true,
-          count: s.cnt,
-        };
-      }),
+      totalMessages,
+      mediaCount,
+      firstMessageAt,
+      topSenders: [...counts.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 5)
+        .map(([pub, count]) => ({
+          name: names.get(pub)?.name ?? null,
+          pub,
+          unreadable: names.get(pub)?.unreadable === true,
+          count,
+        })),
       dailyActivity,
     };
   } catch (e) {
@@ -8072,7 +8149,6 @@ export async function getGroupStats(groupId: string, ownerProfileId: number): Pr
     return { totalMessages: 0, mediaCount: 0, firstMessageAt: null, topSenders: [], dailyActivity: [] };
   }
 }
-
 // ─── Poll votes ───────────────────────────────────────────────────────────────
 
 // Кодек опроса переехал в core/social/pollEnvelope.ts. Здесь он был заперт в
