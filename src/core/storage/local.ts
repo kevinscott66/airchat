@@ -10167,6 +10167,42 @@ export async function listGroupJoinRequests(
   });
 }
 
+/**
+ * Заявки на вступление тремя состояниями (v4.32.1003).
+ *
+ * `listGroupJoinRequests` и `countPendingJoinRequests` бросают, и это верно:
+ * выдумывать за базу они не должны. Но оба зовут с экрана через `void` без
+ * `.catch`, а обе кнопки заявок нарисованы по условию
+ * «счётчик больше нуля». Отказ чтения оставлял счётчик нулём — кнопка
+ * исчезала, и администратор не узнавал ни про заявки, ни про сам отказ.
+ *
+ * Здесь тот же третий исход, что и у состава группы: `null` — «не
+ * прочитали». Он обязан быть в типе, иначе про него снова забудут.
+ */
+export async function listGroupJoinRequestsRead(
+  groupId: string,
+  ownerProfileId: number,
+  status: 'pending' | 'approved' | 'rejected' = 'pending'
+): Promise<GroupJoinRequest[] | null> {
+  try {
+    return await listGroupJoinRequests(groupId, ownerProfileId, status);
+  } catch {
+    return null;
+  }
+}
+
+/** Число ждущих заявок либо `null` — чтение не удалось (v4.32.1003). */
+export async function countPendingJoinRequestsRead(
+  groupId: string,
+  ownerProfileId: number
+): Promise<number | null> {
+  try {
+    return await countPendingJoinRequests(groupId, ownerProfileId);
+  } catch {
+    return null;
+  }
+}
+
 export async function countPendingJoinRequests(groupId: string, ownerProfileId: number): Promise<number> {
   const d = await db();
   const row = await d.getFirstAsync<{ cnt: number }>(

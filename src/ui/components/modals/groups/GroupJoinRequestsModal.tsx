@@ -9,7 +9,7 @@ import { avatarShape, contrastingInk, font, radius, scrim } from '../../../theme
 import { shortIdentity } from '../../../identity/shortId';
 import { numericDate } from '../../../../core/time/ruDateTime';
 import { shownName } from '../../../../core/social/unreadableName';
-import { UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
+import { UNREADABLE_JOIN_REQUESTS_TEXT, UNREADABLE_MESSAGE_TEXT } from '../../../../core/storage/unreadableText';
 import { PersonAvatar } from '../../PersonAvatar';
 
 export interface GroupJoinRequestsModalProps {
@@ -17,11 +17,17 @@ export interface GroupJoinRequestsModalProps {
   onClose: () => void;
   groupId: string;
   joinRequests: GroupJoinRequest[];
+  /**
+   * v4.32.1003: список не прочитался. Отдельный признак, а не пустой массив:
+   * «Нет запросов» и «заявки не прочитались» — разные новости, и вторая
+   * требует от администратора действия, а первая ничего не требует.
+   */
+  unreadable?: boolean;
   onApprove: (req: GroupJoinRequest) => void;
   onReject: (req: GroupJoinRequest) => void;
 }
 
-function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove, onReject }: GroupJoinRequestsModalProps) {
+function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, unreadable, onApprove, onReject }: GroupJoinRequestsModalProps) {
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
   const stopPropagation = useCallback(() => { /* prevent dismiss */ }, []);
@@ -34,7 +40,9 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
           {mounted ? (
             <>
               <View style={[styles.sheetHandle, { backgroundColor: colors.textMuted }]} />
-              <Text style={[styles.headerName, { color: colors.text, marginBottom: 12 }]}>Запросы на вступление ({pendingCount})</Text>
+              <Text style={[styles.headerName, { color: colors.text, marginBottom: 12 }]}>
+                {unreadable ? 'Запросы на вступление' : `Запросы на вступление (${pendingCount})`}
+              </Text>
               <FlatList
                 data={joinRequests}
                 keyExtractor={(r) => r.id}
@@ -75,7 +83,13 @@ function GroupJoinRequestsModalImpl({ visible, onClose, joinRequests, onApprove,
                     </AppPressable>
                   </View>
                 )}
-                ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 24 }}>Нет запросов</Text>}
+                ListEmptyComponent={
+                  unreadable ? (
+                    <Text style={{ color: colors.warning, textAlign: 'center', paddingVertical: 24 }}>{UNREADABLE_JOIN_REQUESTS_TEXT}</Text>
+                  ) : (
+                    <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 24 }}>Нет запросов</Text>
+                  )
+                }
                 style={{ maxHeight: 400 }}
               />
               <AppPressable style={styles.closeBtn} onPress={onClose} accessibilityRole="button">

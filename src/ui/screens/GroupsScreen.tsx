@@ -74,9 +74,9 @@ import {
   clearGroupMessages,
   searchGroupMessages,
   makePollText,
-  listGroupJoinRequests,
+  listGroupJoinRequestsRead,
   updateGroupJoinRequestStatus,
-  countPendingJoinRequests,
+  countPendingJoinRequestsRead,
   type GroupJoinRequest,
   POLL_PREFIX,
   type GroupRow,
@@ -105,7 +105,7 @@ import { setMuted as muteSet, unmute as muteUnset, type MuteKind } from '../../c
 import { decidePage, shouldApplyRows } from '../../core/storage/readResult';
 import { atCreatedAt, hasMoreAfterRefresh, mergeListHead } from '../../core/storage/listHeadMerge';
 import { setActiveGroupId } from '../../notifications/pushNotifications';
-import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
+import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_JOIN_REQUESTS_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
 import { quoteView } from '../../core/social/replyQuote';
 import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterWrite } from '../../core/social/draftGuard';
 import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
@@ -860,9 +860,20 @@ function GroupChatScreen({
 
   // Pending join requests count (shown as badge on members button for admins)
   const [pendingJoinCount, setPendingJoinCount] = useState(0);
+  /**
+   * v4.32.1003: «сколько заявок» и «сколько заявок прочиталось» — разные
+   * вопросы. Счётчик читался через `void ... .then` без `.catch`: отказ базы
+   * оставлял ноль, а метка нарисована по условию «больше нуля» — значит
+   * заявки просто переставали существовать на экране. Молчать об этом нельзя:
+   * с той стороны человек ждёт ответа.
+   */
+  const [pendingJoinUnknown, setPendingJoinUnknown] = useState(false);
   useEffect(() => {
     if (!amAdmin) return;
-    void countPendingJoinRequests(group.id, pid).then(setPendingJoinCount);
+    void countPendingJoinRequestsRead(group.id, pid).then((n) => {
+      setPendingJoinUnknown(n === null);
+      if (n !== null) setPendingJoinCount(n);
+    });
   }, [amAdmin, group.id, pid]);
 
   const [msgOffset, setMsgOffset] = useState(0);
@@ -4142,9 +4153,9 @@ function GroupChatScreen({
           </AppPressable>
           <AppPressable style={[gcStyles.iconBtn, { position: 'relative' }]} onPress={onOpenMembers}>
             <Ionicons name="people-outline" size={22} color={colors.text} />
-            {amAdmin && pendingJoinCount > 0 ? (
+            {amAdmin && (pendingJoinUnknown || pendingJoinCount > 0) ? (
               <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(pendingJoinCount, SMALL_BADGE_MAX)}</Text>
+                <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{pendingJoinUnknown ? '?' : badgeText(pendingJoinCount, SMALL_BADGE_MAX)}</Text>
               </View>
             ) : null}
           </AppPressable>
@@ -5353,16 +5364,25 @@ function GroupMembersScreen({
   const handleGate = useRef(createEditCommitGate(group.username ?? '')).current;
   // Join requests
   const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
+  /** v4.32.1003: список не прочитался — это не «заявок нет». */
+  const [joinReqUnreadable, setJoinReqUnreadable] = useState(false);
   const [joinReqVisible, setJoinReqVisible] = useState(false);
   const pendingCount = joinRequests.length;
   // Admin log
   const [adminLogVisible, setAdminLogVisible] = useState(false);
   const [adminLogEntries, setAdminLogEntries] = useState<GroupMessageRow[]>([]);
 
+  /**
+   * v4.32.1003: зовут это `void`-ом без `.catch`, а чтение бросает. Отказ
+   * оставлял прежний список (на первом заходе — пустой) и не говорил ничего,
+   * кнопка заявок при этом рисуется по «больше нуля» — то есть исчезала.
+   * Теперь неудача отличима от пустоты и показанного списка не трогает.
+   */
   const loadJoinRequests = useCallback(async () => {
     if (!amAdmin) return;
-    const reqs = await listGroupJoinRequests(group.id, pid, 'pending');
-    setJoinRequests(reqs);
+    const reqs = await listGroupJoinRequestsRead(group.id, pid, 'pending');
+    setJoinReqUnreadable(reqs === null);
+    if (reqs !== null) setJoinRequests(reqs);
   }, [amAdmin, group.id, pid]);
 
   // v4.32.623: возвращает, удалось ли прочитать. Проверка ниже стояла с
@@ -5762,11 +5782,16 @@ function GroupMembersScreen({
             </AppPressable>
           </>
         ) : null}
-        {amAdmin && pendingCount > 0 ? (
-          <AppPressable style={[gcStyles.iconBtn, { position: 'relative' }]} onPress={() => setJoinReqVisible(true)} accessibilityRole="button" accessibilityLabel={`Заявки на вступление: ${pendingCount}`}>
+        {amAdmin && (joinReqUnreadable || pendingCount > 0) ? (
+          <AppPressable
+            style={[gcStyles.iconBtn, { position: 'relative' }]}
+            onPress={() => setJoinReqVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel={joinReqUnreadable ? UNREADABLE_JOIN_REQUESTS_TEXT : `Заявки на вступление: ${pendingCount}`}
+          >
             <Ionicons name="person-circle-outline" size={22} color={colors.accent} />
             <View style={{ position: 'absolute', top: 4, right: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: colors.errorFill, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{badgeText(pendingCount, SMALL_BADGE_MAX)}</Text>
+              <Text style={{ color: contrastingInk(colors.errorFill), fontSize: badgeDigit, fontWeight: '700' }}>{joinReqUnreadable ? '?' : badgeText(pendingCount, SMALL_BADGE_MAX)}</Text>
             </View>
           </AppPressable>
         ) : null}
@@ -5918,6 +5943,7 @@ function GroupMembersScreen({
         onClose={() => setJoinReqVisible(false)}
         groupId={group.id}
         joinRequests={joinRequests}
+        unreadable={joinReqUnreadable}
         onApprove={(item) => {
           // v4.32.531: раньше вся ветка висела на `void (async () => ...)()` без
           // try/catch. updateGroupJoinRequestStatus и upsertGroupMember бросают:
