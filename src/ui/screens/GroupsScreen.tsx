@@ -875,13 +875,22 @@ function GroupChatScreen({
    * с той стороны человек ждёт ответа.
    */
   const [pendingJoinUnknown, setPendingJoinUnknown] = useState(false);
-  useEffect(() => {
+  /**
+   * v4.32.1006: пересчёт назван, потому что зовут его теперь дважды — при
+   * входе в группу и на каждую запись заявки. Считался он ровно один раз, и
+   * заявка, пришедшая пока администратор сидит в этой самой группе, не
+   * оставляла на экране ни следа: метка нарисована по «больше нуля», а
+   * уведомления и строки в истории у заявки нет — метка единственный признак.
+   */
+  const reloadPendingJoin = useCallback(async () => {
     if (!amAdmin) return;
-    void countPendingJoinRequestsRead(group.id, pid).then((n) => {
-      setPendingJoinUnknown(n === null);
-      if (n !== null) setPendingJoinCount(n);
-    });
+    const n = await countPendingJoinRequestsRead(group.id, pid);
+    setPendingJoinUnknown(n === null);
+    if (n !== null) setPendingJoinCount(n);
   }, [amAdmin, group.id, pid]);
+  useEffect(() => {
+    void reloadPendingJoin();
+  }, [reloadPendingJoin]);
 
   const [msgOffset, setMsgOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
@@ -1849,9 +1858,12 @@ function GroupChatScreen({
         setPinnedMsgId(list[0]?.id ?? null);
         setPinnedMsgText(list[0]?.text ?? null);
       });
+      // v4.32.1006: заявка на вступление приходит тем же путём и будит тот же
+      // сигнал. Без пересчёта метка оставалась бы нулём до ухода с экрана.
+      void reloadPendingJoin();
     });
     return unsub;
-  }, [loadMessages, tabRefGroupChat, group.id, pid, setPinnedMsgText]);
+  }, [loadMessages, tabRefGroupChat, group.id, pid, setPinnedMsgText, reloadPendingJoin]);
 
   const applyReaction = useCallback(async (msg: GroupMessageRow, emoji: string) => {
     // v4.32.232: реакция писалась ТОЛЬКО в локальную БД — остальные участники
@@ -5411,6 +5423,14 @@ function GroupMembersScreen({
     void import('../../core/config').then((m) => m.loadConfig()).then((c) => setGateway(c.ipfs.gatewayUrl.replace(/\/$/, '')));
     void loadJoinRequests();
   }, [loadJoinRequests]);
+
+  /**
+   * v4.32.1006: список заявок перечитывается на запись, а не только при входе.
+   * Здесь цена промаха выше, чем у метки в чате: открытое окно «Запросы на
+   * вступление» — это то место, где администратор СМОТРИТ на заявки, и
+   * пришедшая при нём заявка в нём не появлялась вовсе.
+   */
+  useEffect(() => subscribeChatWrites(() => { void loadJoinRequests(); }), [loadJoinRequests]);
 
   const uploadAvatar = useCallback(async () => {
     if (!amAdmin) return;

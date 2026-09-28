@@ -195,7 +195,11 @@ describe('экран больше не прячет кнопки на отказ
 
   it('счётчик в чате читается через трёхсостоятельное имя', () => {
     const s = screen();
-    expect(s).toContain('countPendingJoinRequestsRead(group.id, pid).then((n) => {');
+    // v4.32.1006: чтение переехало из тела эффекта в `reloadPendingJoin` —
+    // его теперь зовут ещё и по сигналу о записи. Повод для проверки тот же:
+    // счётчик читается трёхсостоятельным именем, и `null` от нуля отличают.
+    expect(s).toContain('const n = await countPendingJoinRequestsRead(group.id, pid);');
+    expect(s).toContain('setPendingJoinUnknown(n === null);');
     expect(s).not.toContain('void countPendingJoinRequests(group.id, pid).then(setPendingJoinCount);');
   });
 
