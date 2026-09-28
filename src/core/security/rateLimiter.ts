@@ -359,6 +359,13 @@ export class RateLimiter {
    * несостоявшаяся запись — оставались только в журнале. Все три экрана при
    * этом одинаково показывали «Заблокировано»: человек уходил уверенный, что
    * запрет поставлен, а после перезапуска запрета не было.
+   *
+   * v4.32.1011: сперва дожидаемся списка. Без этого новая запись ложилась
+   * поверх НЕПОДНЯТОГО списка: в памяти пусто, на диске — все прежние
+   * запреты, и запись выкладывала туда одну новую строку. Прежние исчезали
+   * молча, а человеку говорили «Заблокировано». Отказ чтения здесь особенно
+   * вероятен: список поднимают один раз при загрузке модуля, когда база ещё
+   * открывается, а блокируют минутами позже, когда она давно открыта.
    */
   async blockContact(peerPubKeyB64: string): Promise<boolean> {
     // v4.32.187 (Round-17 #8): reject garbage shapes at the entry point so
@@ -371,6 +378,10 @@ export class RateLimiter {
       log.warn('rate_limiter_block_invalid_shape', { len });
       return false;
     }
+    // Порядок обязателен: `whenReady` при сорвавшемся чтении перечитывает
+    // список с диска целиком, и всё, что добавлено в память до него, было бы
+    // стёрто этим чтением.
+    await this.whenReady();
     this.blocked.add(peerPubKeyB64);
     this.messageCounts.delete(peerPubKeyB64);
     const pid = await this.currentPid();
@@ -379,8 +390,15 @@ export class RateLimiter {
     return saved;
   }
 
-  /** Снять блокировку. Как и {@link blockContact}, отвечает про запись. */
+  /**
+   * Снять блокировку. Как и {@link blockContact}, отвечает про запись.
+   *
+   * v4.32.1011: и ждёт список по той же причине — снятие тоже записывает
+   * список целиком, а из неподнятого получился бы пустой. Здесь цена ошибки
+   * даже выше: одно «Разблокировать» снимало разом все запреты.
+   */
   async unblockContact(peerPubKeyB64: string): Promise<boolean> {
+    await this.whenReady();
     this.blocked.delete(peerPubKeyB64);
     const pid = await this.currentPid();
     const saved = await this.persistBlocked(pid);
@@ -400,8 +418,20 @@ export class RateLimiter {
    * верным ключом, переписанные не откроются ничем. Правило то же, что у
    * kvUpdateSecretScoped: не прочитали — не переписываем. Отказ доходит до
    * человека теми же строками BLOCK_NOT_SAVED_ON и BLOCK_NOT_SAVED_OFF.
+   *
+   * v4.32.1011: и поверх НЕПОДНЯТОГО списка тоже не пишем. Проверка ячейки
+   * ниже ловила только один повод не читать — шифртекст, не открывшийся
+   * нашим ключом. Чтение срывается и иначе: база занята, ключ шифрования ещё
+   * не поднят при переключении профиля, — и тогда на диске лежит совершенно
+   * читаемая запись со всеми прежними запретами, а в памяти пусто. Разницы
+   * между «список пуст» и «списка не видели» у множества нет, поэтому
+   * спрашиваем признак, заведённый ровно для этого.
    */
   private async persistBlocked(pid: number): Promise<boolean> {
+    if (this.loadFailed) {
+      log.warn('rate_limiter_block_save_refused_unloaded', { pid, size: this.blocked.size });
+      return false;
+    }
     const key = blockedKey(pid);
     if (!mayOverwrite(await kvGetSecretCell(key))) {
       log.warn('rate_limiter_block_save_refused_unreadable', { pid, size: this.blocked.size });
