@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { AppPressable } from '../components/AppPressable';
 import { badgeText } from '../utils/badgeCount';
-import { buildChatListRows } from './chat-utils/chatListRows';
+import { buildChatListRows, rowsToArchiveOnBulk, type ChatListRow } from './chat-utils/chatListRows';
 import { PersonAvatar } from '../components/PersonAvatar';
 import { AppModal as Modal } from '../components/AppModal';
 import { SafeScreen } from '../components/SafeScreen';
@@ -60,7 +60,6 @@ import {
   searchMessages,
   setConversationColorTag,
   clearChatHistory,
-  type ConversationRow,
   type MessageSearchResult,
 } from '../../core/storage/local';
 import { subscribeChatWrites } from '../../core/storage/local';
@@ -108,17 +107,15 @@ export type ChatListProps = {
   refreshTick?: number;
 };
 
-type ConversationItem = ConversationRow & {
-  displayName: string;
-  /** v4.32.247: фото контакта из его же конверта профиля (см. profileSync). */
-  avatarCid?: string;
-  /**
-   * v4.32.547: официальная галочка контакта. Список чатов — то самое место,
-   * где её отсутствие стоит дорого: похожее имя и похожее фото здесь стоят
-   * рядом с настоящими, и отличить их до открытия переписки больше нечем.
-   */
-  verified?: 'official';
-};
+/**
+ * v4.32.1002: строка списка — ровно то, что собрал buildChatListRows, а не
+ * вторая запись той же формы. Прежде форма была описана здесь ещё раз, и
+ * расхождение между ними прошло бы молча: TypeScript сверяет типы по составу,
+ * а необязательное поле, которого нет во второй записи, ничему не мешает —
+ * так и потерялся бы `contactOnly`, по которому пачечные действия отличают
+ * настоящую переписку от контакта, которому ни разу не писали.
+ */
+type ConversationItem = ChatListRow;
 
 /**
  * v4.32.247: кружок с буквой — только запасной вариант. Если контакт прислал
@@ -1396,31 +1393,40 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                   );
                 }}
                 onLongPress={() => {
-                  Alert.alert('Архивировать прочитанные?', 'Все переписки без непрочитанных сообщений будут архивированы.', [
-                    { text: 'Отмена', style: 'cancel' },
-                    { text: 'Архивировать', onPress: () => {
-                      const pid = activeProfileId();
-                      const readConvs = conversations.filter((c) => c.unreadCount === 0 && !c.pinned && !c.archived);
-                      // v4.32.838: пачка — `allSettled`, а не `all`: одна
-                      // упавшая запись не должна отменять перечитывание, иначе
-                      // остальные переписки останутся показанными неархивными,
-                      // хотя в базе уже архивны. Считаем отказавшие и говорим
-                      // об этом числом — «ни одна» и «одна из сорока» это
-                      // разные новости.
-                      runGuardedOp(
-                        async () => {
-                          const res = await Promise.allSettled(
-                            readConvs.map((c) => setConversationArchived(c.contactPubB64, pid, true)),
-                          );
-                          await loadData();
-                          const failed = res.filter((r) => r.status === 'rejected').length;
-                          if (failed > 0) throw new Error(`Не удалось архивировать: ${failed} из ${readConvs.length}`);
-                        },
-                        'Не удалось архивировать прочитанные',
-                        'chat_list_archive_read_failed',
-                      );
-                    }},
-                  ]);
+                  // v4.32.1002: «все» было неправдой трижды. Закреплённые
+                  // остаются, уже архивные не трогаются, а контакт, которому
+                  // ни разу не писали, переписки не имеет вовсе.
+                  Alert.alert(
+                    'Архивировать прочитанные?',
+                    'Переписки без непрочитанных сообщений уедут в архив. Закреплённые останутся на месте, контакты без переписки — тоже.',
+                    [
+                      { text: 'Отмена', style: 'cancel' },
+                      { text: 'Архивировать', onPress: () => {
+                        const pid = activeProfileId();
+                        // v4.32.1002: правило живёт рядом со сборкой строк —
+                        // там же, где заводится строка контакта без переписки.
+                        const readConvs = rowsToArchiveOnBulk(conversations);
+                        // v4.32.838: пачка — `allSettled`, а не `all`: одна
+                        // упавшая запись не должна отменять перечитывание, иначе
+                        // остальные переписки останутся показанными неархивными,
+                        // хотя в базе уже архивны. Считаем отказавшие и говорим
+                        // об этом числом — «ни одна» и «одна из сорока» это
+                        // разные новости.
+                        runGuardedOp(
+                          async () => {
+                            const res = await Promise.allSettled(
+                              readConvs.map((c) => setConversationArchived(c.contactPubB64, pid, true)),
+                            );
+                            await loadData();
+                            const failed = res.filter((r) => r.status === 'rejected').length;
+                            if (failed > 0) throw new Error(`Не удалось архивировать: ${failed} из ${readConvs.length}`);
+                          },
+                          'Не удалось архивировать прочитанные',
+                          'chat_list_archive_read_failed',
+                        );
+                      }},
+                    ],
+                  );
                 }}
                 delayLongPress={600}
                 accessibilityLabel="Отметить всё прочитанным"
