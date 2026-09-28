@@ -22,6 +22,12 @@
  * просить включить туннель бессмысленно навсегда, во втором — осмысленно
  * прямо сейчас. Различение уже сделано в `vpn/openFluxController`
  * (`unsupported` против `off`), и терять его по дороге нельзя.
+ *
+ * v4.32.1009: то же самое и про «не поднялся». Причин не включить туннель
+ * три — нет ядра, нет ссылки, ядро не отозвалось, — и все три это отказ.
+ * Агент докладывает о сделанном по `ok`, так что `ok: true` с `state:
+ * 'failed'` внутри читается как «включил» всяким, кто не вчитывался в
+ * `result`.
  */
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
@@ -185,6 +191,12 @@ async function cmdOpenFluxEnable(): Promise<BridgeReply> {
       'В этой сборке нет ссылки на документ: туннель вести некуда.',
     );
   }
+  // `retryOpenFlux` гасит туннель перед каждой попыткой. Значит, у команды
+  // есть исход, при котором до неё туннель был, а после неё его нет, — и
+  // главный канал в этом случае остался бы в уже погашенном SOCKS5 ровно так
+  // же, как при выключении (см. `cmdOpenFluxDisable`). Поэтому помним, что
+  // было до.
+  const wasRunning = await getOpenFluxRunning();
   // Флаг пишется ДО попытки. `retryOpenFlux` отказывается поднимать туннель,
   // выключенный в конфиге, и это правильно — иначе «выключить» в настройках
   // перестало бы что-то значить. Значит, включение это ровно две вещи в
@@ -193,9 +205,36 @@ async function cmdOpenFluxEnable(): Promise<BridgeReply> {
     openflux: { ...before.openflux, enabled: true },
   } as Partial<AppConfig>);
   const status = settled(await retryOpenFlux(cfg));
-  if (status === 'on') await restartInternetTransport(cfg);
-  const socks = status === 'on' ? await getOpenFluxSocksAddr() : null;
-  return { ok: true, cmd: 'openflux.enable', result: { state: status, socks } };
+  if (status === 'on' || wasRunning) await restartInternetTransport(cfg);
+  if (status !== 'on') {
+    // v4.32.1009: здесь стоял `ok: true` с `state: 'failed'` и `socks: null`.
+    // Тот же самый ответ — «команда выполнена» — мост отдавал и когда туннель
+    // поднялся, и когда ядро не отозвалось ни разу; агент по `ok` докладывает
+    // «включил», и человек узнавал правду по тому, что трафик как шёл
+    // напрямую, так и идёт. Отказ там же, где отказ на «нет ядра» и «нет
+    // ссылки»: три причины не поднять туннель — три отказа, а не один отказ и
+    // одно согласие с примечанием.
+    //
+    // Отказной ответ не носит `result`, поэтому оба факта называем словами:
+    // решение записано, туннеля нет. Без первого агент не поймёт, что повтор
+    // — это именно повтор попытки, а не повторное включение.
+    log.warn('bridge_openflux_enable_failed', { state: status, wasRunning });
+    return fail('openflux.enable', status, openFluxEnableFailure(status, cfg));
+  }
+  return { ok: true, cmd: 'openflux.enable', result: { state: status, socks: await getOpenFluxSocksAddr() } };
+}
+
+/** Почему не поднялся — словами, раз `result` в отказе нет. */
+function openFluxEnableFailure(status: BridgeOpenFluxState, cfg: AppConfig): string {
+  if (status === 'unsupported') return 'На этой платформе нет ядра OpenFlux: включать нечего.';
+  if (status === 'unconfigured') return 'В этой сборке нет ссылки на документ: туннель вести некуда.';
+  if (status === 'off') {
+    // `retryOpenFlux` отвечает `off` ровно на выключенный в конфиге туннель —
+    // то есть запись решения не легла, и поднимать никто не пробовал.
+    return 'Включение не записалось: в настройках туннель остался выключенным, поднять его не пробовали.';
+  }
+  const tries = Math.max(1, cfg.openflux?.startRetries ?? 3);
+  return `Ядро OpenFlux не поднялось, попыток: ${tries}. В настройках туннель включён, трафик идёт напрямую.`;
 }
 
 async function cmdOpenFluxDisable(): Promise<BridgeReply> {
