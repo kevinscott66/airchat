@@ -25,8 +25,10 @@ const mockFetch = jest.fn();
 
 jest.mock('../../backup/cloudVault', () => ({ cloudBaseUrl: () => 'https://vault.test' }));
 jest.mock('../../settings/avatarVisibility', () => ({ avatarVisibilityTryFor: jest.fn(async () => mockVisibility) }));
-jest.mock('../../identity/ownProfile', () => ({ ownFieldGetFor: jest.fn(async () => mockImg) }));
+// v4.32.1010: байты своего снимка отдаёт identity/ownAvatar целиком — он же
+// решает, дочитать ли их с диска. Отсюда `null` значит «фотографии нет».
 jest.mock('../../identity/ownAvatar', () => ({
+  ownAvatarBytesFor: jest.fn(async () => mockImg),
   ownAvatarUriFor: jest.fn(async () => (mockImg ? 'file:///me.jpg' : null)),
   ownAvatarUri: jest.fn(async () => null),
 }));

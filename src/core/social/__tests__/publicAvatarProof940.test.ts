@@ -30,6 +30,7 @@ jest.mock('../../backup/cloudVault', () => ({ cloudBaseUrl: () => 'https://vault
 jest.mock('../../settings/avatarVisibility', () => ({ avatarVisibilityTryFor: jest.fn(async () => null) }));
 jest.mock('../../identity/ownProfile', () => ({ ownFieldGetFor: jest.fn(async () => null) }));
 jest.mock('../../identity/ownAvatar', () => ({
+  ownAvatarBytesFor: jest.fn(async () => null),
   ownAvatarUriFor: jest.fn(async () => null),
   ownAvatarUri: jest.fn(async () => null),
 }));

@@ -101,6 +101,7 @@ jest.mock('../../identity/ownProfile', () => ({
 jest.mock('../../identity/ownAvatar', () => ({
   ownAvatarNameFor: async () => null,
   ownAvatarUriFor: async () => null,
+  ownAvatarBytesFor: async () => null,
 }));
 jest.mock('../../settings/avatarVisibility', () => ({
   avatarVisibilityTryFor: async () => 'everybody',

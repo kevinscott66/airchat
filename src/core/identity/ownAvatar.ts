@@ -52,14 +52,29 @@ async function fileExists(uri: string): Promise<boolean> {
   }
 }
 
-/** Положить байты файла в базу. Не вышло — снимок всё равно показан из файла. */
-async function keepBytes(pid: number, uri: string): Promise<void> {
+/**
+ * Положить байты файла в базу.
+ *
+ * Возвращает и сами байты, и лёг ли они в базу, потому что спрашивают об этом
+ * по-разному: сохранению снимка важно, что запись состоялась (без неё снимок
+ * не переживёт обновления), а рассылке важны байты — записались они или нет,
+ * отправить наружу можно те, что уже в руках.
+ */
+async function keepBytes(pid: number, uri: string): Promise<{ b64: string | null; stored: boolean }> {
+  let b64: string;
   try {
-    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-    if (b64 && !(await ownFieldSetFor(pid, IMG_KEY, b64))) log.warn('avatar_bytes_not_stored', { pid });
+    b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
   } catch (e) {
     log.warn('avatar_bytes_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    return { b64: null, stored: false };
   }
+  if (!b64) {
+    log.warn('avatar_bytes_empty', { pid });
+    return { b64: null, stored: false };
+  }
+  const stored = await ownFieldSetFor(pid, IMG_KEY, b64);
+  if (!stored) log.warn('avatar_bytes_not_stored', { pid });
+  return { b64, stored };
 }
 
 /** Имя файла фотографии активного профиля; пустая строка — фотографии нет. */
@@ -124,10 +139,20 @@ export async function ownAvatarUriFor(pid: number): Promise<string | null> {
  *
  * Прежний файл удаляется только после успеха: пока новый не лёг, старое лицо
  * лучше пустого кружка.
+ *
+ * v4.32.1010: байты — тоже успех, а не украшение. Раньше их незаписанность
+ * сходила с рук: путь возвращался, экран отвечал «Фото профиля обновлено», а
+ * в базе оставалось имя НОВОГО файла при байтах ПРЕЖНЕГО. Это состояние
+ * ложное насквозь: имя и байты — одна запись, и та половина, что уезжает в
+ * облако и на второе устройство, показывала бы там прежнее лицо под видом
+ * нового. Стоит файлу пропасть (обновление, чистка, перенос) — и прежний
+ * снимок вернётся уже и на этом устройстве, ровно тот случай, ради которого
+ * в v4.32.309 и заведён отказ.
  */
 export async function saveOwnAvatar(srcUri: string): Promise<string | null> {
   const pid = activeProfileId();
-  const prev = avatarUriFromName(await ownAvatarNameFor(pid));
+  const prevName = await ownAvatarNameFor(pid);
+  const prev = avatarUriFromName(prevName);
   const dst = newAvatarUri(Date.now());
   try {
     await FileSystem.copyAsync({ from: srcUri, to: dst });
@@ -141,9 +166,38 @@ export async function saveOwnAvatar(srcUri: string): Promise<string | null> {
     try { await FileSystem.deleteAsync(dst, { idempotent: true }); } catch { /* ignore */ }
     return null;
   }
-  await keepBytes(pid, dst);
+  if (!(await keepBytes(pid, dst)).stored) {
+    // Возвращаем имя прежнего снимка (пустое — значит его и не было): к
+    // байтам в базе оно подходит, а имя нового файла — уже нет. Порядок тот
+    // же, что и при успехе: сначала запись, потом файл, чтобы имя ни на
+    // мгновение не указывало на удалённое.
+    if (!(await ownFieldSetFor(pid, NAME_KEY, prevName))) log.warn('avatar_name_rollback_failed', { pid });
+    try { await FileSystem.deleteAsync(dst, { idempotent: true }); } catch { /* ignore */ }
+    return null;
+  }
   if (prev && prev !== dst) {
     try { await FileSystem.deleteAsync(prev, { idempotent: true }); } catch { /* ignore */ }
   }
   return dst;
+}
+
+/**
+ * Байты фотографии заданного профиля, base64 — то же, что лежит в файле.
+ *
+ * `null` здесь значит «фотографии нет», и только это. Читать одну базу
+ * нельзя: снимок, выбранный до v4.32.556, лежит только файлом, и туда же
+ * попадает снимок, чью запись байтов не приняли. Отсюда чтение с диска — файл
+ * рядом, и спрашивающий получает ответ про ту фотографию, которую человек
+ * видит у себя на экране, а не про её половину в базе.
+ *
+ * v4.32.1010: до этой версии «в базе пусто» отвечали `null`, и рассылка
+ * (social/publicAvatar) читала это как «фотографии нет» — то есть СНИМАЛА в
+ * справочнике снимок, который человек только что выбрал и видит перед собой.
+ */
+export async function ownAvatarBytesFor(pid: number): Promise<string | null> {
+  const uri = await ownAvatarUriFor(pid);
+  if (!uri) return null;
+  const stored = await ownFieldGetFor(pid, IMG_KEY);
+  if (stored && stored.length > 0) return stored;
+  return (await keepBytes(pid, uri)).b64;
 }

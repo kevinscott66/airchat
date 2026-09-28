@@ -95,6 +95,7 @@ jest.mock('../../identity/ownProfile', () => ({
 jest.mock('../../identity/ownAvatar', () => ({
   ownAvatarNameFor: async () => null,
   ownAvatarUriFor: async () => null,
+  ownAvatarBytesFor: async () => null,
 }));
 jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantFor: async () => null }));
 jest.mock('../../identity/ownLinks', () => ({ ownLinksFor: async () => null }));

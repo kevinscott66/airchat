@@ -24,8 +24,7 @@ import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { bytesToBase64Url } from '../utils/base64url';
 import { fetchWithDeadline } from '../net/timedFetch';
-import { ownFieldGetFor } from '../identity/ownProfile';
-import { ownAvatarUriFor } from '../identity/ownAvatar';
+import { ownAvatarBytesFor } from '../identity/ownAvatar';
 import { profileManager } from '../identity/profileManager';
 import { avatarVisibilityTryFor } from '../settings/avatarVisibility';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -67,16 +66,6 @@ const MAX_SIGNED_PAYLOAD = 600 * 1024;
 
 /** Что уже ушло на сервер от этого профиля за запуск: `put:<hash>` или `del`. */
 const published = new Map<number, string>();
-
-/**
- * Байты своего снимка. Сначала — путь: снимок, выбранный до v4.32.556, лежит
- * только файлом, и в базу его переносит именно ownAvatarUriFor.
- */
-async function ownAvatarB64(pid: number): Promise<string | null> {
-  if (!(await ownAvatarUriFor(pid))) return null;
-  const stored = await ownFieldGetFor(pid, 'user_avatar_img');
-  return stored && stored.length > 0 ? stored : null;
-}
 
 async function sendAvatarRequest(pair: KeyPairBytes, body: Record<string, unknown>): Promise<boolean> {
   const base = cloudBaseUrl();
@@ -122,7 +111,11 @@ export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
   try {
     const visibility = await avatarVisibilityTryFor(pid);
     if (visibility === null) return;
-    const b64 = visibility === 'everybody' ? await ownAvatarB64(pid) : null;
+    // `null` от identity/ownAvatar значит «фотографии нет» — и только это:
+    // байты он при нужде дочитывает с диска. Разница здесь ценой в снимок:
+    // «нет» уходит на сервер запросом `del`, то есть снимает выставленное
+    // фото у всех, кто смотрит карточку по @имени.
+    const b64 = visibility === 'everybody' ? await ownAvatarBytesFor(pid) : null;
     const bytes = b64 ? Buffer.from(b64, 'base64') : null;
     const share = bytes !== null && bytes.length > 0 && bytes.length <= MAX_IMAGE_BYTES;
     marker = share && bytes
