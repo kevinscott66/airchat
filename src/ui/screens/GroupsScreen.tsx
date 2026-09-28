@@ -3929,7 +3929,7 @@ function GroupChatScreen({
                           // их кнопка продолжит выдавать ссылки, которые
                           // группа уже не пускает, а отзыв выглядел бы
                           // состоявшимся.
-                          if (!announceInviteToken(next.announced)) {
+                          if (!announceInviteToken(next)) {
                             showSuccess('Ссылка сброшена — прежние больше не действуют');
                           }
                           // Показываем новую сразу: иначе «сбросил
@@ -3952,7 +3952,7 @@ function GroupChatScreen({
         // открылся ключом (v4.32.601). Показать ссылку было бы
         // хуже, чем не показать: она ни с чем не сверяется.
         if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
-        announceInviteToken(invite.announced);
+        announceInviteToken(invite);
         await showInviteSheet(invite.token);
         })(); });
         return;
@@ -5736,7 +5736,7 @@ function GroupMembersScreen({
     const invite = await ensureGroupInviteToken(group.id, pid, myPubB64, myName);
     // Оба вызывающих уже показывают «Не удалось собрать ссылку» по отказу.
     if (invite === null) throw new Error('group_invite_token_unavailable');
-    announceInviteToken(invite.announced);
+    announceInviteToken(invite);
     return webForm(buildGroupInviteLink({
       id: group.id,
       name: group.name,
@@ -6441,7 +6441,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
           // уходила бы ссылка, которую нечем отозвать.
           const invite = await ensureGroupInviteToken(g.id, pid, myPub);
           if (invite === null) { showError('Не удалось получить пригласительную ссылку'); return; }
-          announceInviteToken(invite.announced);
+          announceInviteToken(invite);
           // v4.32.762: то же, что и у кнопки в карточке группы, — ссылку с
           // пустым составом наружу не выпускаем (см. showInviteSheet).
           const roster = await listGroupMembersRead(g.id, pid);

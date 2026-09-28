@@ -26,7 +26,7 @@ import { isPubKeyB64 } from '../crypto/pubKeyFormat';
 import { MIN_AUTO_DELETE_MS, MAX_AUTO_DELETE_MS } from '../storage/autoDeletePolicy';
 import { isSafeMediaCid } from '../media/mediaCidPolicy';
 import { sanitizeDisplayName as sanitizeName, sanitizeParagraphText, stripSpoofedSysPrefix } from './sysLineGuard';
-import { isInviteToken } from './groupInviteToken';
+import { isInviteToken, isInviteVerifier } from './groupInviteToken';
 import { parseGroupHandleFromEnvelope } from './groupHandle';
 import { OWN_GROUP_DESC_MAX, OWN_GROUP_NAME_MAX } from './groupNameRule';
 import { withinMessageTextLimit } from './messageTextLimit';
@@ -139,6 +139,15 @@ export type GroupCtlOp =
       requireApproval?: boolean;
       anonymousPosting?: boolean;
       inviteToken?: string;
+      /**
+       * v4.32.1005: отпечаток действующего токена — и вот он едет ВСЕМ.
+       *
+       * Сам токен раздать нельзя (см. выше), а без него обычный участник не
+       * мог отличить отозванную ссылку от действующей и впускал по любой:
+       * сброс работал только у администраторов. Отпечаток даёт сверку, не
+       * давая права приглашать, — подобрать по нему токен не за что.
+       */
+      inviteVerifier?: string;
       /** v4.32.681: публичный адрес — «@имя». Пустая строка = адрес убрали. */
       username?: string;
     }
@@ -233,6 +242,10 @@ export function decodeGroupCtlEnvelope(text: string): GroupCtlEnvelope | null {
     // ссылкам, выданным собственным администратором, пока он не сбросит их ещё
     // раз. Форму проверяет тот же модуль, что её и задаёт.
     if (env.inviteToken != null && !isInviteToken(env.inviteToken)) return null;
+    // v4.32.1005: отпечаток — тем же правилом и по той же причине. Мусор,
+    // записанный себе, отвергал бы ссылки собственного администратора до
+    // следующего сброса, а сверить его не с чем: токена у нас нет.
+    if (env.inviteVerifier != null && !isInviteVerifier(env.inviteVerifier)) return null;
     // v4.32.681: публичный адрес. Пустая строка — «адрес убрали», и таким она
     // и остаётся. Всё остальное приводится к канону (нижний регистр, без
     // собачки); мусор отбрасывает конверт целиком, а не «подрезается»: адрес

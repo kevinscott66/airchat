@@ -1076,7 +1076,8 @@ import { FALLBACK_GROUP_NAME, normalizeOwnGroupName } from './groupNameRule';
 
 import { GROUP_SYS_PREFIX } from './groupSysLine';
 import { decideJoin, acceptJoinRequest } from './groupJoinPolicy';
-import { decideInviteToken, inviteTokenBlocks, isInviteToken } from './groupInviteToken';
+import { readInviteVerifier, saveInviteVerifier } from './groupInviteVerifierStore';
+import { decideInviteToken, inviteTokenBlocks, inviteTokenVerifier, isInviteToken } from './groupInviteToken';
 
 export { GROUP_CTL_PREFIX, encodeGroupCtlEnvelope, decodeGroupCtlEnvelope };
 export type { GroupCtlOp, GroupCtlEnvelope };
@@ -1190,8 +1191,15 @@ export async function sendGroupControlTo(
 export type InviteTokenResult = {
   /** Действующий токен группы — он же записан в БД. */
   token: string;
-  /** Итог рассылки; null — токен не менялся, рассылать было нечего. */
+  /** Итог рассылки администраторам; null — токен не менялся. */
   announced: GroupControlOutcome | null;
+  /**
+   * Итог рассылки отпечатка остальным участникам (v4.32.1005); null — токен
+   * не менялся. Отдельно от `announced`, потому что расходится по-разному:
+   * не узнавший администратор РАЗДАЁТ негодные ссылки, не узнавший участник
+   * по прежним ВПУСКАЕТ.
+   */
+  spread?: GroupControlOutcome | null;
 };
 
 /**
@@ -1233,7 +1241,11 @@ export async function rotateGroupInviteToken(
     // Токен уже записан, и прежние ссылки уже отозваны — прятать это было бы
     // второй потерей. Наверх уходит правда: сброшено, но не разослано; текст
     // для человека собирает inviteTokenSpreadProblem.
-    return { token, announced: { op: 'meta', sent: false, reason: 'members_unreadable' } };
+    return {
+      token,
+      announced: { op: 'meta', sent: false, reason: 'members_unreadable' },
+      spread: { op: 'meta', sent: false, reason: 'members_unreadable' },
+    };
   }
   const admins = members
     .filter((m) => (m.role === 'owner' || m.role === 'admin') && m.peerPubB64 !== myPubB64)
@@ -1243,8 +1255,35 @@ export async function rotateGroupInviteToken(
   // `if (admins.length)` тут больше не нужен, а исход рассылки перестал
   // теряться внутри: он уходит наверх вместе с токеном.
   const announced = await sendGroupControlTo(admins, groupId, { op: 'meta', inviteToken: token }, myName);
-  log.info('group_invite_token_rotated', { gid: groupId.slice(0, 8), admins: admins.length });
-  return { token, announced };
+  /**
+   * v4.32.1005: остальным участникам — отпечаток нового токена.
+   *
+   * Без этой рассылки сброс отзывал ссылку только у администраторов. У
+   * обычного участника токена нет никогда, сверять предъявленный было нечем —
+   * decideInviteToken отвечал 'unenforceable', и человек с отозванной ссылкой
+   * вступал ко всем, кроме администраторов: те его отвергали, эти записывали
+   * себе в состав и слали ему сообщения группы. Отпечаток сверку даёт, а
+   * права приглашать не даёт (groupInviteToken.inviteTokenVerifier).
+   *
+   * Отдельным конвертом, а не полем в том же: тот уходит адресно
+   * администраторам, и добавить сюда отпечаток значило бы либо послать токен
+   * всем, либо оставить участников без отпечатка.
+   */
+  const rest = members
+    .filter((m) => m.role !== 'banned' && m.peerPubB64 !== myPubB64 && !admins.includes(m.peerPubB64))
+    .map((m) => m.peerPubB64);
+  const spread = await sendGroupControlTo(
+    rest,
+    groupId,
+    { op: 'meta', inviteVerifier: inviteTokenVerifier(token) },
+    myName
+  );
+  log.info('group_invite_token_rotated', {
+    gid: groupId.slice(0, 8),
+    admins: admins.length,
+    members: rest.length,
+  });
+  return { token, announced, spread };
 }
 
 /**
@@ -1710,13 +1749,20 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
      * ссылки выбрасывал бы из группы тех, кто давно в ней состоит.
      *
      * Своего токена нет — 'unenforceable', и всё решает decideJoin, как и
-     * раньше: у групп, созданных до этой версии, сверять не с чем, а у обычных
-     * участников токена нет никогда.
+     * раньше: у групп, созданных до этой версии, сверять не с чем.
+     *
+     * v4.32.1005: «не с чем» перестало означать «у всех, кроме
+     * администраторов». Токена у обычного участника по-прежнему нет — он и
+     * есть право приглашать, — но отпечаток действующего токена ему приходит
+     * при каждом сбросе, и по нему предъявленный токен сверяется. Без этого
+     * сброс ссылки отзывал её только у администраторов: остальные впускали по
+     * любой, записывали вошедшего в состав и слали ему сообщения группы.
      */
     if (knownRole === undefined) {
       const tokenVerdict = decideInviteToken({
         knownToken: group.inviteToken,
         knownUnreadable: group.inviteTokenUnreadable,
+        knownVerifier: isInviteToken(group.inviteToken) ? null : await readInviteVerifier(env.groupId, pid),
         presented: env.inviteToken,
       });
       if (inviteTokenBlocks(tokenVerdict)) {
@@ -2340,6 +2386,28 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
     if (env.inviteToken != null && iAmAdmin && env.inviteToken !== group.inviteToken && (await fresh('inviteToken'))) {
       patch.inviteToken = env.inviteToken;
       events.push({ field: 'inviteToken', text: 'Пригласительная ссылка сброшена: прежние больше не действуют' });
+    }
+    /**
+     * v4.32.1005: отпечаток нового токена — то же событие, только для тех, у
+     * кого токена нет. Он и есть весь смысл сброса на их стороне: до этой
+     * версии сверять было нечем, и отозванная ссылка впускала к каждому, кто
+     * не администратор.
+     *
+     * Пишется РАНЬШЕ всех остальных применений — это единственная запись в
+     * секции решений, и отказ её уводит кадр в перезапрос, ничего не тронув.
+     * Отложить обязательно: повторов у служебного конверта нет, а не легший
+     * отпечаток означает участника, который так и продолжит впускать по
+     * прежней ссылке — молча и до следующего сброса.
+     *
+     * Строки в истории у этого события нет намеренно: у администраторов её
+     * пишет ветка выше, а здесь она встала бы ВТОРОЙ у того администратора,
+     * кому пришли оба конверта.
+     */
+    if (env.inviteVerifier != null && (await fresh('inviteVerifier'))) {
+      if (!(await saveInviteVerifier(env.groupId, pid, env.inviteVerifier))) {
+        log.warn('group_meta_invite_verifier_unsaved', { gid: env.groupId.slice(0, 8) });
+        return 'deferred';
+      }
     }
     // Две последние настройки живут не в `patch`, а в своих запросах. Решение о
     // них принимается здесь, а применяются они ниже — вместе со всем остальным.

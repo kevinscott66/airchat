@@ -66,7 +66,11 @@ describe('ensureGroupInviteToken не крутит токен вслепую', (
     // У сброса announced всегда есть: пустой список администраторов воронка
     // считает «разослано нулю», а не отказом.
     expect(rotate).toContain('): Promise<InviteTokenResult> {');
-    expect(rotate).toContain('return { token, announced };');
+    // v4.32.1005: у сброса к исходу рассылки токена администраторам добавился
+    // исход рассылки отпечатка остальным. Повод для правки тот же и проверка
+    // про то же: у сброса оба исхода есть всегда, у неизменного токена — нет
+    // ни одного, и спутать эти два случая наверху нечем.
+    expect(rotate).toContain('return { token, announced, spread };');
     expect(rotate).not.toContain('if (admins.length) {');
   });
 
@@ -138,7 +142,11 @@ describe('расхождение по токену называется вслу
   it('фраза про кнопку другого администратора живёт в одном месте', () => {
     expect(OUTCOME).toContain('export function inviteTokenSpreadProblem(outcome: GroupControlOutcome): string | null {');
     expect(OUTCOME).toContain('продолжит выдавать ссылки, которые группа уже не пускает');
-    expect(ANNOUNCE).toContain('export function announceInviteToken(announced: GroupControlOutcome | null): boolean {');
+    // v4.32.1005: на вход идёт весь ответ, а не один исход: расхождений теперь
+    // два — по токену у администраторов и по отпечатку у остальных, — и назвать
+    // надо оба. Одно место по-прежнему одно, в этом и смысл проверки.
+    expect(ANNOUNCE).toContain('export function announceInviteToken(result: InviteTokenResult): boolean {');
+    expect(OUTCOME).toContain('export function inviteVerifierSpreadProblem(outcome: GroupControlOutcome): string | null {');
   });
 
   it('все четыре места разбирают исход, а не только токен', () => {
@@ -149,9 +157,9 @@ describe('расхождение по токену называется вслу
   });
 
   it('«Ссылка сброшена» говорится только когда о ней узнали', () => {
-    expect(SCREEN2).toContain('if (!announceInviteToken(next.announced)) {');
+    expect(SCREEN2).toContain('if (!announceInviteToken(next)) {');
     const say = SCREEN2.indexOf("showSuccess('Ссылка сброшена — прежние больше не действуют')");
-    const guard = SCREEN2.indexOf('if (!announceInviteToken(next.announced)) {');
+    const guard = SCREEN2.indexOf('if (!announceInviteToken(next)) {');
     expect(guard).toBeGreaterThanOrEqual(0);
     expect(say).toBeGreaterThan(guard);
   });

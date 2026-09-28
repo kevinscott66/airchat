@@ -27,8 +27,16 @@ type FakeMember = { peerPubB64: string; role: string; ownerProfileId: number };
 let mockMembers: FakeMember[] | null = [];
 /** Аргументы каждого updateGroupMeta — токен обязан лечь в базу до рассылки. */
 const mockMetaWrites: unknown[][] = [];
-/** Кому ушёл служебный конверт: воронку подменяем, сеть не нужна. */
-let mockFanoutTo: string[] | null = null;
+/**
+ * Каждый служебный конверт: кому ушёл и что в нём. Воронку подменяем, сеть не
+ * нужна.
+ *
+ * v4.32.1005: конвертов у сброса стало два — токен администраторам и отпечаток
+ * токена остальным участникам. Одной переменной «кому ушёл последний» они уже
+ * не различаются, а различать их здесь нужно: весь смысл набора в том, что
+ * обычному участнику уходит не то же самое, что администратору.
+ */
+const mockFanout: { recipients: string[]; payload: string }[] = [];
 
 jest.mock('../../storage/local', () => ({
   getGroup: jest.fn(async () => null),
@@ -69,9 +77,10 @@ jest.mock('../controlFanout', () => {
   const actual = jest.requireActual('../controlFanout');
   return {
     ...actual,
-    fanoutControlEnvelope: jest.fn(async (_op: string, _p: string, t: { recipients?: string[] }) => {
-      mockFanoutTo = t.recipients ?? [];
-      return { sent: true, recipients: mockFanoutTo.length };
+    fanoutControlEnvelope: jest.fn(async (_op: string, p: string, t: { recipients?: string[] }) => {
+      const recipients = t.recipients ?? [];
+      mockFanout.push({ recipients, payload: p });
+      return { sent: true, recipients: recipients.length };
     }),
   };
 });
@@ -104,6 +113,16 @@ function member(pub: string, role: string): FakeMember {
   return { peerPubB64: pub, role, ownerProfileId: 1 };
 }
 
+/** Конверт с самим токеном: его видят только администраторы. */
+function tokenEnvelope(): { recipients: string[]; payload: string } | null {
+  return mockFanout.find((c) => c.payload.includes('"inviteToken"')) ?? null;
+}
+
+/** Конверт с отпечатком токена: он уходит остальным участникам. */
+function verifierEnvelope(): { recipients: string[]; payload: string } | null {
+  return mockFanout.find((c) => c.payload.includes('"inviteVerifier"')) ?? null;
+}
+
 /** Только код: пояснения не должны сами удовлетворять проверку. */
 function codeOnly(src: string): string {
   return src
@@ -125,7 +144,7 @@ function bodyOf(source: string, name: string): string {
 beforeEach(() => {
   mockMembers = [];
   mockMetaWrites.length = 0;
-  mockFanoutTo = null;
+  mockFanout.length = 0;
 });
 
 describe('состав группы не прочитался', () => {
@@ -162,7 +181,7 @@ describe('состав группы не прочитался', () => {
 
     await rotateGroupInviteToken(GID, 1, ME, 'Я');
 
-    expect(mockFanoutTo).toBeNull();
+    expect(mockFanout).toHaveLength(0);
   });
 });
 
@@ -174,7 +193,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой состав оста
 
     expect(res.announced).toEqual({ op: 'meta', sent: true, recipients: 0 });
     expect(inviteTokenSpreadProblem(res.announced!)).toBeNull();
-    expect(mockFanoutTo).toEqual([]);
+    expect(tokenEnvelope()?.recipients).toEqual([]);
   });
 
   it('второй администратор есть — конверт уходит именно ему', async () => {
@@ -182,7 +201,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой состав оста
 
     const res = await rotateGroupInviteToken(GID, 1, ME, 'Я');
 
-    expect(mockFanoutTo).toEqual([ADMIN]);
+    expect(tokenEnvelope()?.recipients).toEqual([ADMIN]);
     expect(res.announced).toEqual({ op: 'meta', sent: true, recipients: 1 });
   });
 
@@ -191,7 +210,23 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: пустой состав оста
 
     await rotateGroupInviteToken(GID, 1, ME, 'Я');
 
-    expect(mockFanoutTo).not.toContain(PLAIN);
+    expect(tokenEnvelope()?.recipients ?? []).not.toContain(PLAIN);
+  });
+
+  /**
+   * v4.32.1005: отпечаток — не токен. Раздать обычному участнику сам токен
+   * значит сделать отзыв пустой кнопкой: любой участник выдаст по нему ссылку
+   * дальше. Отпечаток же одностороннее — сверить предъявленный токен по нему
+   * можно, а выдать по нему ссылку нельзя. Проверка ровно про эту границу.
+   */
+  it('обычному участнику уходит отпечаток, и в его конверте токена нет', async () => {
+    mockMembers = [member(ME, 'owner'), member(PLAIN, 'member')];
+
+    await rotateGroupInviteToken(GID, 1, ME, 'Я');
+
+    const vfy = verifierEnvelope();
+    expect(vfy?.recipients).toEqual([PLAIN]);
+    expect(vfy?.payload).not.toContain('"inviteToken"');
   });
 });
 
@@ -201,7 +236,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('сброс читает состав различающим чтением и отсекает отказ до рассылки', () => {
     const body = codeOnly(bodyOf(SOURCE, 'rotateGroupInviteToken'));
     expect(body).toContain('const members = await listGroupMembersRead(groupId, ownerProfileId);');
-    expect(body).toContain("return { token, announced: { op: 'meta', sent: false, reason: 'members_unreadable' } };");
+    // v4.32.1005: исходов у сброса стало два — рассылка токена администраторам
+    // и рассылка отпечатка остальным. Повод для правки тот же: ни один из них
+    // на нечитаемом составе не смеет назваться состоявшимся.
+    expect(body).toContain("announced: { op: 'meta', sent: false, reason: 'members_unreadable' },");
+    expect(body).toContain("spread: { op: 'meta', sent: false, reason: 'members_unreadable' },");
     // Схлопывающего чтения в этой функции не осталось вовсе.
     expect(body).not.toContain('await listGroupMembers(groupId, ownerProfileId)');
   });
