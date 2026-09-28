@@ -88,7 +88,7 @@ import {
   setGroupDisappearTimer,
   purgeDisappearedMessages,
   listStarredMessagesRead,
-  listGroupScheduledMessages,
+  listGroupScheduledMessagesRead,
   deleteScheduledMessage,
   getGroupStats,
   type StarredMessageEntry,
@@ -105,7 +105,7 @@ import { setMuted as muteSet, unmute as muteUnset, type MuteKind } from '../../c
 import { decidePage, shouldApplyRows } from '../../core/storage/readResult';
 import { atCreatedAt, hasMoreAfterRefresh, mergeListHead } from '../../core/storage/listHeadMerge';
 import { setActiveGroupId } from '../../notifications/pushNotifications';
-import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_JOIN_REQUESTS_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
+import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_JOIN_REQUESTS_TEXT, UNREADABLE_SCHEDULED_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
 import { quoteView } from '../../core/social/replyQuote';
 import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterWrite } from '../../core/social/draftGuard';
 import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
@@ -656,6 +656,12 @@ function GroupChatScreen({
   const [grpEmojiPanelVisible, setGrpEmojiPanelVisible] = useState(false);
   const [grpScheduleVisible, setGrpScheduleVisible] = useState(false);
   const [grpScheduledMsgs, setGrpScheduledMsgs] = useState<ScheduledMessage[]>([]);
+  /**
+   * v4.32.1004: то же, что в переписке. Плашка «N запланированных» рисуется
+   * по `length > 0` и ведёт в единственное место, где отправку отменяют;
+   * рассылает же строки планировщик сам и по своему таймеру.
+   */
+  const [grpScheduledUnreadable, setGrpScheduledUnreadable] = useState(false);
   const [grpQuickRepliesVisible, setGrpQuickRepliesVisible] = useState(false);
   const [grpRecentReactions, setGrpRecentReactions] = useState<string[]>([]);
   const [grpReactMoreVisible, setGrpReactMoreVisible] = useState(false);
@@ -782,8 +788,9 @@ function GroupChatScreen({
   const headerMemberCount = allMembers.length || group.memberCount;
 
   const reloadGrpScheduled = useCallback(async () => {
-    const list = await listGroupScheduledMessages(group.id, pid);
-    setGrpScheduledMsgs(list);
+    const list = await listGroupScheduledMessagesRead(group.id, pid);
+    setGrpScheduledUnreadable(list === null);
+    if (list !== null) setGrpScheduledMsgs(list);
   }, [group.id, pid]);
 
   useEffect(() => { void reloadGrpScheduled(); }, [reloadGrpScheduled]);
@@ -4769,15 +4776,15 @@ function GroupChatScreen({
               ))}
             </View>
           ) : null}
-          {grpScheduledMsgs.length > 0 ? (
+          {grpScheduledUnreadable || grpScheduledMsgs.length > 0 ? (
             <AppPressable
               accessibilityRole="button"
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surfaceHigh, gap: 8 }}
               onPress={() => setGrpScheduledListVisible(true)}
             >
               <Ionicons name="time-outline" size={16} color={colors.accent} />
-              <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '600' }}>
-                {scheduledLabel(grpScheduledMsgs.length)}
+              <Text style={{ color: grpScheduledUnreadable ? colors.warning : colors.accent, fontSize: 13, fontWeight: '600' }}>
+                {grpScheduledUnreadable ? UNREADABLE_SCHEDULED_TEXT : scheduledLabel(grpScheduledMsgs.length)}
               </Text>
             </AppPressable>
           ) : null}
@@ -5080,6 +5087,7 @@ function GroupChatScreen({
         visible={grpScheduledListVisible}
         onClose={closeGrpScheduledList}
         scheduled={grpScheduledMsgs}
+        unreadable={grpScheduledUnreadable}
         onDelete={handleDeleteGrpScheduled}
       />
 

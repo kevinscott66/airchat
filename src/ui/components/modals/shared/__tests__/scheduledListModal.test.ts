@@ -104,7 +104,11 @@ describe('список запланированных — один компон�
         .map((l) => l.trim().split('=')[0])
         .filter(Boolean);
     };
-    expect(propsAt(CHAT_SCREEN())).toEqual(['visible', 'onClose', 'scheduled', 'onDelete']);
-    expect(propsAt(GROUPS_SCREEN())).toEqual(['visible', 'onClose', 'scheduled', 'onDelete']);
+    // v4.32.1004: к набору добавился `unreadable` — признак того, что список не
+    // прочитался. Добавился он на обоих экранах сразу, и проверка здесь ровно
+    // про это: набор один, иначе один экран умеет говорить об отказе, а второй
+    // молчит.
+    expect(propsAt(CHAT_SCREEN())).toEqual(['visible', 'onClose', 'scheduled', 'unreadable', 'onDelete']);
+    expect(propsAt(GROUPS_SCREEN())).toEqual(['visible', 'onClose', 'scheduled', 'unreadable', 'onDelete']);
   });
 });

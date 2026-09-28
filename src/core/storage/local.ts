@@ -9715,6 +9715,39 @@ export async function listGroupScheduledMessages(groupId: string, ownerProfileId
   return rows.map((r) => rowToScheduled(r, dek));
 }
 
+/**
+ * Запланированные сообщения тремя состояниями (v4.32.1004).
+ *
+ * Оба списка выше бросают — и это верно. Но на экранах их звали `void`-ом, а
+ * плашка «N запланированных сообщений» нарисована по `length > 0`: отказ
+ * чтения убирал её вместе с единственным путём к списку. Рассылает эти
+ * строки не экран, а планировщик — своим чтением (`listDueScheduledMessages`)
+ * и по своему таймеру, так что сообщение уходило в срок, а отменить его было
+ * нечем и незачем: человек не знал, что оно есть.
+ *
+ * `null` — «не прочитали». Прежние имена остались: по ним ходит отправка,
+ * которой пустота не годится.
+ */
+export async function listAllScheduledMessagesRead(ownerProfileId: number): Promise<ScheduledMessage[] | null> {
+  try {
+    return await listAllScheduledMessages(ownerProfileId);
+  } catch {
+    return null;
+  }
+}
+
+/** То же для расписания одной группы (v4.32.1004). */
+export async function listGroupScheduledMessagesRead(
+  groupId: string,
+  ownerProfileId: number
+): Promise<ScheduledMessage[] | null> {
+  try {
+    return await listGroupScheduledMessages(groupId, ownerProfileId);
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteScheduledMessage(id: string, ownerProfileId?: number): Promise<void> {
   const d = await db();
   const pid = ownerProfileId ?? (await import('../identity/profileManager')).profileManager.getActiveProfile()?.id ?? 1;

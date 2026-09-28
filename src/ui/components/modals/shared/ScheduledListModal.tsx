@@ -35,6 +35,7 @@ import { useDeferredMount } from '../../../../core/hooks/useDeferredMount';
 import { scrim } from '../../../theme';
 import { dayMonthShortTime } from '../../../../core/time/ruDateTime';
 import { decideScheduledSend, scheduledHoldTitle, type ScheduledReadState } from '../../../../core/social/scheduledDispatch';
+import { UNREADABLE_SCHEDULED_TEXT } from '../../../../core/storage/unreadableText';
 
 export interface ScheduledItem {
   id: string;
@@ -52,12 +53,18 @@ export interface ScheduledListModalProps {
   visible: boolean;
   onClose: () => void;
   scheduled: ScheduledItem[];
+  /**
+   * v4.32.1004: список не прочитался. Пустой список здесь читается как «ничего
+   * не запланировано» — и это самое опасное из возможных умолчаний: рассылает
+   * строки планировщик сам, а отменить отправку можно только отсюда.
+   */
+  unreadable?: boolean;
   onDelete: (id: string) => void;
 }
 
 const noop = () => {};
 
-function ScheduledListModalImpl({ visible, onClose, scheduled, onDelete }: ScheduledListModalProps) {
+function ScheduledListModalImpl({ visible, onClose, scheduled, unreadable, onDelete }: ScheduledListModalProps) {
   const mounted = useDeferredMount(visible);
   const { colors } = useTheme();
 
@@ -78,6 +85,11 @@ function ScheduledListModalImpl({ visible, onClose, scheduled, onDelete }: Sched
                 </AppPressable>
               </View>
               <ScrollView contentContainerStyle={styles.scrollContent}>
+                {unreadable ? (
+                  <Text style={{ color: colors.warning, textAlign: 'center', paddingVertical: 24 }}>
+                    {UNREADABLE_SCHEDULED_TEXT}
+                  </Text>
+                ) : null}
                 {scheduled.map((m) => (
                   <ScheduledRow
                     key={m.id}

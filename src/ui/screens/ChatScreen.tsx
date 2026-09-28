@@ -77,7 +77,7 @@ import {
   listConversationsRead,
   clearChatHistory,
   listAllChatMessages,
-  listAllScheduledMessages,
+  listAllScheduledMessagesRead,
   deleteScheduledMessage,
   setMessageStarred,
   listStarredMessagesRead,
@@ -115,7 +115,7 @@ import { GlassSurface } from '../components/GlassSurface';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatListScreen } from './ChatListScreen';
 import { subscribeChatWrites } from '../../core/storage/local';
-import { isUnreadableMessage, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT } from '../../core/storage/unreadableText';
+import { isUnreadableMessage, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_SCHEDULED_TEXT } from '../../core/storage/unreadableText';
 import { outwardQuote, quoteView } from '../../core/social/replyQuote';
 import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterWrite } from '../../core/social/draftGuard';
 import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
@@ -1103,6 +1103,12 @@ function ChatThreadView({
   }, [myPubB64, peerB64, onOpenOwnProfile]);
   const [localDisplayName, setLocalDisplayName] = useState(displayName);
   const [scheduledMsgs, setScheduledMsgs] = useState<ScheduledMessage[]>([]);
+  /**
+   * v4.32.1004: список не прочитался — это не «ничего не запланировано».
+   * Плашка ниже рисуется по `length > 0` и ведёт в единственное место, где
+   * отправку можно отменить; отправляет же строки планировщик сам.
+   */
+  const [scheduledUnreadable, setScheduledUnreadable] = useState(false);
   const [openUnreadCount, setOpenUnreadCount] = useState(0);
   const openUnreadRef = useRef(0);
   const [autoTranslate, setAutoTranslate] = useState(false);
@@ -1574,8 +1580,9 @@ function ChatThreadView({
   // Load scheduled messages for this peer
   const reloadScheduled = useCallback(async () => {
     if (!peerB64) return;
-    const all = await listAllScheduledMessages(activeProfileId);
-    setScheduledMsgs(all.filter((m) => m.contactPubB64 === peerB64));
+    const all = await listAllScheduledMessagesRead(activeProfileId);
+    setScheduledUnreadable(all === null);
+    if (all !== null) setScheduledMsgs(all.filter((m) => m.contactPubB64 === peerB64));
   }, [peerB64, activeProfileId]);
   useEffect(() => { void reloadScheduled(); }, [reloadScheduled]);
 
@@ -2721,13 +2728,10 @@ function ChatThreadView({
     // способа отменить отправку. Оставался один тост, и до перезахода в
     // переписку человеку приходилось верить ему на слово. Соседний
     // deleteScheduledFromModal перечитывает список ровно так же.
-    try {
-      await reloadScheduled();
-    } catch (e) {
-      // Список не перечитался — сообщение всё равно запланировано, и говорить
-      // об отказе тут значило бы соврать в обратную сторону.
-      log.warn('schedule_dm_reload_failed', { err: rawErrorText(e) });
-    }
+    // v4.32.1004: перечитывание больше не бросает — отказ оно показывает само,
+    // строкой вместо числа. Прежний `catch` глушил его в журнал, и плашка
+    // просто не появлялась.
+    await reloadScheduled();
     // v4.32.913: `fullDateTime` — форма сведений о сообщении и выгрузки, с
     // секундами: «25 сентября 2026, 14:30:00». Выбирают время с точностью до
     // минуты, а секунды в ответе обещают точность, которой человек не задавал;
@@ -3952,14 +3956,14 @@ function ChatThreadView({
           );
         })() : null}
 
-        {scheduledMsgs.length > 0 ? (
+        {scheduledUnreadable || scheduledMsgs.length > 0 ? (
           <AppPressable
             style={[s.pinnedBar, { backgroundColor: colors.surfaceHigh, borderTopColor: colors.border }]}
             onPress={() => setScheduledListVisible(true)}
           >
             <Ionicons name="time-outline" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={{ flex: 1, color: colors.accent, fontSize: 13 }}>
-              {scheduledLabel(scheduledMsgs.length)}
+            <Text style={{ flex: 1, color: scheduledUnreadable ? colors.warning : colors.accent, fontSize: 13 }}>
+              {scheduledUnreadable ? UNREADABLE_SCHEDULED_TEXT : scheduledLabel(scheduledMsgs.length)}
             </Text>
             <Ionicons name="chevron-forward" size={14} color={colors.accent} />
           </AppPressable>
@@ -4670,6 +4674,7 @@ function ChatThreadView({
         visible={scheduledListVisible}
         onClose={closeScheduledList}
         scheduled={scheduledMsgs}
+        unreadable={scheduledUnreadable}
         onDelete={deleteScheduledFromModal}
       />
 

@@ -67,12 +67,15 @@ describe('удаление отложенного сообщения адрес�
   });
 
   it('экраны удаляют под тем же профилем, под которым собрали список', () => {
+    // v4.32.1004: оба экрана читают через трёхсостоятельное имя — оно отличает
+    // «ничего не запланировано» от «не прочиталось». Профиль в чтении и в
+    // удалении по-прежнему один и тот же, а проверка здесь именно про это.
     const groups = GROUPS();
-    expect(groups).toContain('await listGroupScheduledMessages(group.id, pid);');
+    expect(groups).toContain('await listGroupScheduledMessagesRead(group.id, pid);');
     expect(groups).toContain('await deleteScheduledMessage(id, pid);');
 
     const chat = CHAT();
-    expect(chat).toContain('await listAllScheduledMessages(activeProfileId);');
+    expect(chat).toContain('await listAllScheduledMessagesRead(activeProfileId);');
     expect(chat).toContain('await deleteScheduledMessage(id, activeProfileId);');
 
     expect(codeOnly(groups)).not.toContain('deleteScheduledMessage(id)');
