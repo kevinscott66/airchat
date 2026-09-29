@@ -2805,14 +2805,17 @@ export async function getFeedPostViewCountsMap(postIds: string[]): Promise<Recor
  * v4.32.68: список viewer'ов конкретного поста. UI откроет модалку со списком.
  * Имена резолвятся через contacts (viewer_name из envelope'а — fallback если
  * у автора нет контакта). Если ни того ни другого — показывается short-DID.
+ *
+ * v4.32.1020: отказ чтения больше не глотается. Здесь стоял немой
+ * `catch { return [] }`, и модалка «Просмотры» читала его как «пока никто не
+ * просмотрел» — вывод о чужом поведении там, где база не ответила. Ветку
+ * отказа экран завёл ещё в v4.32.881, но броска не приходило ни одного, и
+ * она была мёртвым кодом. Соседние чтения (`getFeedComments`,
+ * `getFeedCommentCounts`) отказ не ловят — и это здесь образец.
  */
 export async function listFeedPostViewers(postId: string): Promise<FeedViewerRow[]> {
-  try {
-    const s = await ensureStorage();
-    return await s.getViewers(postId);
-  } catch {
-    return [];
-  }
+  const s = await ensureStorage();
+  return await s.getViewers(postId);
 }
 
 export async function getUnreadFeedCount(): Promise<number> {
