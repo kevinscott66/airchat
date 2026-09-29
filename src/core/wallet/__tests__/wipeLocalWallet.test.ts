@@ -35,6 +35,32 @@ function mockStep(name: string): void {
   if (mockThrowingSteps.has(name)) throw new Error(`${name} failed`);
 }
 
+/**
+ * Что лежит на диске после уборки файлов (v4.32.1018).
+ *
+ * Уборщики файлов не бросают вовсе, поэтому «шаг упал» тут не бывает.
+ * Состояние здесь одно — содержимое каталога, — и уборка его убирает.
+ */
+const mockLeftOnDisk = new Map<string, string[]>();
+/** Сколько раз уборка ещё «не справится», прежде чем каталог опустеет. */
+const mockSweepMisses = new Map<string, number>();
+/** Проверки, которые должны бросить: перечитать каталог не вышло совсем. */
+const mockThrowingChecks = new Set<string>();
+
+/** Уборка прошла: каталог пуст, если у теста не заказан промах. */
+function mockSweep(name: string): void {
+  const miss = mockSweepMisses.get(name) ?? 0;
+  if (miss > 0) mockSweepMisses.set(name, miss - 1);
+  else mockLeftOnDisk.delete(name);
+}
+
+/** Парный вопрос уборщика: что осталось. */
+function mockSurvivors(name: string): string[] {
+  mockCalls.push(`check:${name}`);
+  if (mockThrowingChecks.has(name)) throw new Error(`${name} check failed`);
+  return mockLeftOnDisk.get(name) ?? [];
+}
+
 jest.mock('../../storage/secureStoreQueued', () => ({
   getItemAsync: async (key: string): Promise<string | null> => {
     const left = mockReadFailures.get(key) ?? 0;
@@ -149,13 +175,27 @@ jest.mock('../../social/liveLocationService', () => ({ stopAllLiveLocSessions: (
 jest.mock('../../social/scheduledMessages', () => ({ stopScheduler: () => mockStep('scheduler') }));
 jest.mock('../../../notifications/pushNotifications', () => ({ disposePushNotificationService: async () => mockStep('push_service') }));
 jest.mock('../../security/rateLimiter', () => ({ rateLimiter: { resetForProfileSwitch: async () => mockStep('rate_limiter') } }));
-jest.mock('../../media/cacheFiles', () => ({ purgeSensitiveCache: async () => mockStep('media_cache') }));
-jest.mock('../../media/avatarFiles', () => ({ sweepAvatarFiles: async () => mockStep('avatars') }));
+jest.mock('../../media/cacheFiles', () => ({
+  purgeSensitiveCache: async () => {
+    mockStep('media_cache');
+    mockSweep('media_cache');
+  },
+  survivingSensitiveCache: async () => mockSurvivors('media_cache'),
+}));
+jest.mock('../../media/avatarFiles', () => ({
+  sweepAvatarFiles: async () => {
+    mockStep('avatars');
+    mockSweep('avatars');
+  },
+  survivingAvatarFiles: async () => mockSurvivors('avatars'),
+}));
 jest.mock('../../media/storyAlbumFiles', () => ({
   sweepStoryAlbumFiles: async (keep: readonly unknown[]) => {
     mockCalls.push(`story_albums_keep:${keep.length}`);
     mockStep('story_albums');
+    mockSweep('story_albums');
   },
+  survivingStoryAlbumFiles: async () => mockSurvivors('story_albums'),
 }));
 jest.mock('../../fileLogSink', () => ({ deleteAppLogFile: async () => mockStep('app_log') }));
 jest.mock('../../security/clipboardSecret', () => ({ clearSecretClipboardNow: async () => mockStep('clipboard') }));
@@ -246,6 +286,9 @@ beforeEach(() => {
   mockDeleteFailures.clear();
   mockReadFailures.clear();
   mockThrowingSteps.clear();
+  mockLeftOnDisk.clear();
+  mockSweepMisses.clear();
+  mockThrowingChecks.clear();
   mockCalls.length = 0;
   // Устройство «в рабочем состоянии»: все секреты на месте.
   for (const key of ALL_SECRETS) mockStore.set(key, 'secret');
@@ -647,11 +690,14 @@ describe('упавший шаг стирания больше не молчит'
 
   it('вид объявлен у каждого шага, а не списком в стороне', () => {
     const wipe = src('core', 'wallet', 'wipeLocalWallet.ts');
-    const erase = wipe.match(/await erase\('/g)?.length ?? 0;
-    const stop = wipe.match(/await stop\('/g)?.length ?? 0;
-    expect(erase + stop).toBe(34);
-    expect(erase).toBeGreaterThanOrEqual(20);
-    // Безвидных не осталось: иначе новый шаг молча попадал бы в «остановку».
+    // v4.32.1018: здесь стояло точное число шагов (34), и первый же
+    // добавленный шаг его сломал. Утверждение при этом было другое — «вид
+    // объявлен у КАЖДОГО», — и оно проверяется без счёта: ни одного вызова
+    // безвидного помощника.
+    const all = wipe.match(/await (?:step|erase|stop)\('/g) ?? [];
+    const tagged = all.filter((m) => !m.includes('step('));
+    expect(all.length).toBeGreaterThan(30);
+    expect(tagged).toHaveLength(all.length);
     expect(wipe).not.toContain("await step('");
   });
 
@@ -685,5 +731,142 @@ describe('упавший шаг стирания больше не молчит'
     const local = src('core', 'storage', 'local.ts');
     expect(local).toContain('contact_pub_b64 TEXT NOT NULL,');
     expect(local).toContain('last_message_at INTEGER NOT NULL DEFAULT 0,');
+  });
+});
+
+/**
+ * Уборка файлов отчитывалась об успехе, не проверив его (v4.32.1018).
+ *
+ * Дефект. Три шага сброса — кэш с расшифрованным, аватары, сохранённые
+ * истории — зовут уборщиков, которые не бросают наружу никогда: отказ чтения
+ * каталога каждый обращает в `0`, отказ удаления файла — в строку в журнале.
+ * Значит, `erase` видел успех при любом исходе, и отличие v4.32.1017 сюда не
+ * достаёт: в `leftBehind` попадает упавшее, а эти шаги не падают.
+ *
+ * Цена. «Данные удалены» — а в кэше лежат расшифрованные снимки, все записи
+ * голоса (файл после отправки не удаляется никогда), приложенные документы и
+ * выгруженная в .txt переписка; в documentDirectory — последний снимок лица
+ * прежнего владельца и его сохранённые истории. Телефон отдают дальше.
+ *
+ * Правка. После шагов уборки каталоги перечитываются (`survivingFiles`), и
+ * оставшееся называет шаг — тем же порядком, каким проверяются секреты:
+ * перечитать, один раз повторить, перечитать снова. Проверка сама бросила —
+ * тоже «осталось»: она затем и заведена, чтобы неизвестность не читалась как
+ * пустота.
+ *
+ * Границы. `ok` остаётся признаком SecureStore: решение v4.32.869 в силе, и
+ * оставшийся кэш его не трогает. Уборщики не переписаны — они по-прежнему
+ * возвращают число снесённого, и «Очистить кэш» в настройках работает как
+ * работал. Стенд самих проверок — wipeVerifyFiles1018.
+ */
+describe('уборка файлов проверяется, а не принимается на слово', () => {
+  const srcOf = (...p: string[]): string =>
+    readFileSync(join(__dirname, '..', '..', '..', ...p), 'utf8');
+
+  it('кэш не опустел — шаг назван', async () => {
+    mockLeftOnDisk.set('media_cache', ['airchat_export_1.txt']);
+    mockSweepMisses.set('media_cache', 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['media_cache']);
+  });
+
+  it('лицо прежнего владельца осталось — шаг назван', async () => {
+    mockLeftOnDisk.set('avatars', ['avatar_1.jpg']);
+    mockSweepMisses.set('avatars', 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['avatars']);
+  });
+
+  it('сохранённые истории остались — шаг назван', async () => {
+    mockLeftOnDisk.set('story_albums', ['storyalbum_1_ab12cd.jpg']);
+    mockSweepMisses.set('story_albums', 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['story_albums']);
+  });
+
+  it('перечитать каталог не вышло — это «осталось», а не «пусто»', async () => {
+    mockThrowingChecks.add('avatars');
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['avatars']);
+  });
+
+  it('разовый отказ файловой системы добивается повтором', async () => {
+    // Тот же порядок, что у секретов: перечитать, повторить, перечитать.
+    mockLeftOnDisk.set('media_cache', ['airchat_export_1.txt']);
+    mockSweepMisses.set('media_cache', 1);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual([]);
+    expect(mockCalls.filter((c) => c === 'media_cache')).toHaveLength(2);
+  });
+
+  it('шаг и упал, и оставил за собой — назван один раз', async () => {
+    mockThrowingSteps.add('avatars');
+    mockLeftOnDisk.set('avatars', ['avatar_1.jpg']);
+    mockSweepMisses.set('avatars', 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['avatars']);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: чисто убрано — и список пуст, и повтора не было', async () => {
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual([]);
+    for (const name of ['media_cache', 'avatars', 'story_albums']) {
+      expect(mockCalls.filter((c) => c === name)).toHaveLength(1);
+    }
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: каталоги перечитываются после уборки, а не вместо неё', async () => {
+    await performLocalWalletWipe();
+
+    expect(posOf('avatars')).toBeLessThan(mockCalls.indexOf('check:avatars'));
+  });
+
+  it('ГРАНИЦА: оставшийся кэш не делает `ok` ложным — это не SecureStore', async () => {
+    mockLeftOnDisk.set('media_cache', ['airchat_export_1.txt']);
+    mockSweepMisses.set('media_cache', 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.ok).toBe(true);
+    expect(res.survivors).toEqual([]);
+  });
+
+  it('ГРАНИЦА: уборщики отвечают числом снесённого — их подписи не тронуты', () => {
+    const wipe = srcOf('core', 'wallet', 'wipeLocalWallet.ts');
+    // Тот же вызов, что и был: сброс уборщиков не переписывал.
+    expect(wipe).toContain("erase('media_cache', () => purgeSensitiveCache())");
+    expect(wipe).toContain("erase('avatars', () => sweepAvatarFiles([]))");
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: ни один из трёх уборщиков наружу не бросает', () => {
+    for (const [file, mark] of [
+      ['avatarFiles.ts', "log.warn('avatar_sweep_scan_failed'"],
+      ['storyAlbumFiles.ts', "log.warn('story_album_sweep_scan_failed'"],
+      ['cacheFiles.ts', "log.warn('cache_sweep_scan_failed'"],
+    ] as const) {
+      const text = srcOf('core', 'media', file);
+      const at = text.indexOf(mark);
+      expect(at).toBeGreaterThan(0);
+      expect(text.slice(at, at + 200)).toContain('return 0;');
+    }
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: в кэше лежит расшифрованное, а не шифртекст', () => {
+    const cache = srcOf('core', 'media', 'cacheFiles.ts');
+    expect(cache).toContain("'airchat_export_'");
+    expect(cache).toContain("'ExpoAudio'");
   });
 });

@@ -297,6 +297,48 @@ async function purgeCacheSubdirs(dirs: readonly string[]): Promise<number> {
  * v4.32.856: и не то, что чужие пакеты кладут в свои подкаталоги, — а это
  * все записи голоса и все отправленные снимки (см. WIPE_CACHE_DIRS).
  */
+/**
+ * Что из расшифрованного всё ещё лежит в кэше (v4.32.1018).
+ *
+ * `purgeSensitiveCache` наружу не бросает никогда: отказ чтения каталога она
+ * обращает в `0`, отказ удаления отдельного файла — в пропуск. Числу
+ * удалённого этого хватает, а на вопрос «можно ли отдавать телефон» оно не
+ * отвечает: «удалили ноль файлов» и «в кэше не было ничего» приходят одним
+ * ответом. Поэтому вопрос задаётся отдельно — перечитыванием.
+ *
+ * Непрочитанный каталог — это «осталось»: не увидели не значит, что пусто.
+ * Правило то же, по которому `survivingSecrets` записывает в уцелевшие ключ,
+ * который не смогла перечитать.
+ */
+export async function survivingSensitiveCache(): Promise<string[]> {
+  const root = FileSystem.cacheDirectory;
+  if (!root) return [];
+  const left: string[] = [];
+  let names: string[];
+  try {
+    names = await FileSystem.readDirectoryAsync(root);
+  } catch (e) {
+    log.warn('cache_verify_scan_failed', { err: e instanceof Error ? e.message : String(e) });
+    return ['<кэш не перечитан>'];
+  }
+  for (const name of names) {
+    const lower = name.toLowerCase();
+    if (WIPE_CACHE_PREFIXES.some((p) => name.startsWith(p))
+      || CLEARABLE_CACHE_SUFFIXES.some((s) => lower.endsWith(s))) {
+      left.push(name);
+    }
+  }
+  for (const sub of WIPE_CACHE_DIRS) {
+    try {
+      await FileSystem.readDirectoryAsync(`${root}${sub}`);
+      left.push(`${sub}/`);
+    } catch {
+      // Каталога нет — значит, снесён или им ни разу не пользовались.
+    }
+  }
+  return left;
+}
+
 export async function purgeSensitiveCache(): Promise<number> {
   // Каталоги сносятся независимо от обхода по именам: отказ чтения корня
   // кэша не повод оставить на диске все записи голоса и все снимки.

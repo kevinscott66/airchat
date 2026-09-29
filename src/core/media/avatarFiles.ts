@@ -73,6 +73,32 @@ export function avatarUriFromName(name: string): string {
  * здесь неотличим от «этих аватаров больше нет», и сборка мусора снесёт живое
  * лицо. Поэтому у аргумента и нет значения по умолчанию.
  */
+/**
+ * Какие аватары остались на диске после уборки (v4.32.1018).
+ *
+ * `sweepAvatarFiles` отвечает числом снесённого и молчит обо всём остальном:
+ * непрочитанный каталог у неё `0`, неудавшееся удаление файла — строка в
+ * журнале. Для сборки мусора это верно, для сброса устройства — нет: там
+ * нужен ответ не «сколько снесли», а «осталось ли лицо прежнего владельца».
+ *
+ * Непрочитанный каталог считается «осталось»: не увидели не значит, что пусто.
+ */
+export async function survivingAvatarFiles(
+  keep: readonly (string | null | undefined)[]
+): Promise<string[]> {
+  const dir = FileSystem.documentDirectory;
+  if (!dir) return [];
+  const keepNames = new Set(keep.map(avatarFileName).filter((n) => n !== ''));
+  let names: string[];
+  try {
+    names = await FileSystem.readDirectoryAsync(dir);
+  } catch (e) {
+    log.warn('avatar_verify_scan_failed', { err: e instanceof Error ? e.message : String(e) });
+    return ['<каталог не перечитан>'];
+  }
+  return names.filter((n) => isAvatarFileName(n) && !keepNames.has(n));
+}
+
 export async function sweepAvatarFiles(keep: readonly (string | null | undefined)[]): Promise<number> {
   const dir = FileSystem.documentDirectory;
   if (!dir) return 0;

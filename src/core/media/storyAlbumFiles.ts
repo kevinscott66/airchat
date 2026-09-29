@@ -112,6 +112,32 @@ export async function deleteStoryAlbumFiles(names: readonly string[]): Promise<n
  * непрочитанная строка базы обязана останавливать уборку целиком (см.
  * storyAlbumFileNames: она возвращает признак полноты списка).
  */
+/**
+ * Какие сохранённые истории остались на диске после уборки (v4.32.1018).
+ *
+ * Причина та же, что у аватаров: `sweepStoryAlbumFiles` отвечает числом
+ * снесённого, а сбросу нужен ответ на другой вопрос. Альбом — своя копия в
+ * documentDirectory, сделанная ровно затем, чтобы пережить любую чистку кэша;
+ * пережить сброс она не должна.
+ *
+ * Непрочитанный каталог считается «осталось».
+ */
+export async function survivingStoryAlbumFiles(
+  keep: readonly (string | null | undefined)[]
+): Promise<string[]> {
+  const dir = FileSystem.documentDirectory;
+  if (!dir) return [];
+  const keepNames = new Set(keep.map(storyAlbumFileName).filter((n) => n !== ''));
+  let names: string[];
+  try {
+    names = await FileSystem.readDirectoryAsync(dir);
+  } catch (e) {
+    log.warn('story_album_verify_scan_failed', { err: e instanceof Error ? e.message : String(e) });
+    return ['<каталог не перечитан>'];
+  }
+  return names.filter((n) => isStoryAlbumFileName(n) && !keepNames.has(n));
+}
+
 export async function sweepStoryAlbumFiles(keep: readonly (string | null | undefined)[]): Promise<number> {
   const dir = FileSystem.documentDirectory;
   if (!dir) return 0;

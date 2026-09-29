@@ -22,10 +22,10 @@ import { closeLocalDatabase, wipeLocalDatabase } from '../storage/local';
 import { deleteAllFeedDbs } from '../storage/feedStorage';
 import { closeFeedStorage } from '../social/feedService';
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
-import { purgeSensitiveCache } from '../media/cacheFiles';
+import { purgeSensitiveCache, survivingSensitiveCache } from '../media/cacheFiles';
 import { clearSecretClipboardNow } from '../security/clipboardSecret';
-import { sweepAvatarFiles } from '../media/avatarFiles';
-import { sweepStoryAlbumFiles } from '../media/storyAlbumFiles';
+import { sweepAvatarFiles, survivingAvatarFiles } from '../media/avatarFiles';
+import { sweepStoryAlbumFiles, survivingStoryAlbumFiles } from '../media/storyAlbumFiles';
 import { clearDekMemory, DEK_CANARY_KEY, DEK_KEY } from '../storage/localEncryption';
 import { resetIpfsClient } from '../transport/ipfs/node';
 import { AUTH_SECURE_KEYS, authGuard } from '../security/authGuard';
@@ -82,6 +82,10 @@ export type WalletWipeResult = {
    *
    * Остановка служб сюда не попадает: погасший слушатель или неснятый
    * таймер не переживут перезапуск, который идёт сразу за сбросом.
+   *
+   * v4.32.1018. Броска мало: три уборщика файлов не бросают вовсе — ни на
+   * непрочитанном каталоге, ни на неудавшемся удалении. Их шаги попадают сюда
+   * не по броску, а по перечитыванию каталогов (см. `survivingFiles`).
    */
   leftBehind: string[];
   /** Ключи SecureStore, оставшиеся на устройстве после двух попыток удаления. */
@@ -135,6 +139,56 @@ async function survivingSecrets(): Promise<string[]> {
     } catch (e) {
       log.warn('wallet_wipe_verify_read_failed', { key, err: errText(e) });
       left.push(key);
+    }
+  }
+  return left;
+}
+
+/**
+ * Уборщики файлов, у которых «вызвали удаление» и «удалено» — разные
+ * утверждения (v4.32.1018).
+ *
+ * Все три отвечают числом снесённого и не бросают ни при отказе чтения
+ * каталога, ни при отказе удаления отдельного файла. Значит, `erase` видел
+ * успех всегда, и после «Данные удалены» на телефоне могли остаться лежать
+ * расшифрованные снимки, все записи голоса, выгруженная в .txt переписка,
+ * лицо прежнего владельца и сохранённые истории — молча.
+ *
+ * Пустой список «оставить» здесь честен по той же причине, что и на шагах
+ * стирания: живых профилей после сброса не осталось ни одного.
+ */
+const FILE_STEPS: ReadonlyArray<{
+  /** Имя шага — то же, под которым уборка идёт в `failedSteps`. */
+  readonly name: string;
+  /** Что осталось на диске. */
+  readonly left: () => Promise<string[]>;
+  /** Повторить уборку. Идемпотентна, стоит одного обхода каталога. */
+  readonly again: () => Promise<unknown>;
+}> = [
+  { name: 'media_cache', left: () => survivingSensitiveCache(), again: () => purgeSensitiveCache() },
+  { name: 'avatars', left: () => survivingAvatarFiles([]), again: () => sweepAvatarFiles([]) },
+  { name: 'story_albums', left: () => survivingStoryAlbumFiles([]), again: () => sweepStoryAlbumFiles([]) },
+];
+
+/**
+ * Перечитать каталоги и назвать шаги, после которых что-то осталось.
+ *
+ * Бросок самой проверки — тоже «осталось»: проверка затем и заведена, чтобы
+ * неизвестность не читалась как пустота.
+ */
+async function survivingFiles(): Promise<string[]> {
+  const left: string[] = [];
+  for (const { name, left: check } of FILE_STEPS) {
+    let rest: string[];
+    try {
+      rest = await check();
+    } catch (e) {
+      log.warn('wallet_wipe_verify_files_failed', { step: name, err: errText(e) });
+      rest = ['<проверить не смогли>'];
+    }
+    if (rest.length > 0) {
+      log.warn('wallet_wipe_files_survived', { step: name, count: rest.length, names: rest.slice(0, 20) });
+      left.push(name);
     }
   }
   return left;
@@ -314,6 +368,28 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
     }
     survivors = await survivingSecrets();
   }
+  // Файлы проверяются тем же порядком, что и секреты: перечитать, один раз
+  // повторить, перечитать снова. Уборщики идемпотентны, повтор стоит трёх
+  // чтений каталога — а разовый отказ файловой системы со второго раза
+  // проходит ровно так же, как разовый отказ SecureStore.
+  let filesLeft = await survivingFiles();
+  if (filesLeft.length > 0) {
+    // Повтор не заводит своих имён шагов: вопрос к нему один и тот же —
+    // осталось ли что-нибудь ПОСЛЕ него, и на него отвечает повторная
+    // проверка ниже. Своё имя в `leftBehind` только путало бы человека,
+    // которому и так уже названа не прошедшая уборка.
+    for (const { name, again } of FILE_STEPS) {
+      if (!filesLeft.includes(name)) continue;
+      try {
+        await again();
+      } catch (e) {
+        log.warn('wallet_wipe_files_retry_failed', { step: name, err: errText(e) });
+      }
+    }
+    filesLeft = await survivingFiles();
+  }
+  for (const name of filesLeft) if (!leftBehind.includes(name)) leftBehind.push(name);
+
   const result: WalletWipeResult = { ok: survivors.length === 0, failedSteps: failed, leftBehind, survivors };
   log.info('wallet_wipe_done', result);
   return result;
