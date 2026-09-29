@@ -61,7 +61,14 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
     expect(CHAT).toContain('const blockLabel = isBlocked');
     expect(CHAT).toContain("? 'Разблокировать'");
     expect(CHAT).toContain("    : 'Заблокировать';");
-    expect(CONTACTS.split("'Разблокировать' : 'Заблокировать'").length - 1).toBe(2);
+    // v4.32.1066: обе подписи в контактах берёт общее правило — там список
+    // запретов тоже может не прочитаться, и подпись стала трёхзначной, как в
+    // переписке (v4.32.1048) и в карточке (v4.32.1051). Повод у закрепки
+    // прежний и живой: оба места с блокировкой на месте и оба по-прежнему
+    // различают снятие и постановку. Сами слова сторожит
+    // contactsBlockUnknown1066.
+    expect(CONTACTS).toContain('text: blockActionLabel(isBlocked, blockUnknown),');
+    expect(CONTACTS).toContain('text: blockActionLabel(alreadyBlocked, blockUnknown),');
     expect(PEEK).toContain('rateLimiter.blockContact(pub)');
   });
 

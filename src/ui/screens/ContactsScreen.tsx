@@ -44,6 +44,7 @@ import { rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPY_ID_ACTION, COPY_LINK_ACTION, COPIED_ID, COPY_FAILED } from '../clipboardText';
 import { runGuardedOp } from '../components/runGuardedOp';
 import { CONTACT_ID_UNPARSED_TEXT, CONTACT_KEY_BROKEN_TEXT, NOT_READY_TEXT } from '../commonText';
+import { blockActionLabel, BLOCKED_LIST_UNKNOWN_NOTE, BLOCKED_UNKNOWN_HEAD } from '../utils/blockActionLabel';
 
 type Props = {
   onOpenChatWithPeer: (peerPublicKey: string) => void;
@@ -192,6 +193,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     rowMore: { paddingLeft: 12, paddingVertical: 4 },
     name: { color: c.text, fontSize: 16, fontWeight: '600' as const },
     sub: { color: c.textMuted, fontSize: 12, marginTop: 2 },
+    blockNote: { fontSize: font.xs, marginHorizontal: 16, marginBottom: 8, lineHeight: 17 },
     empty: { alignItems: 'center' as const, paddingVertical: 40, paddingHorizontal: 16 },
     emptyTitle: { color: c.text, fontSize: 18, fontWeight: '600' as const, marginTop: 12 },
     emptyText: { color: c.textSecondary, textAlign: 'center' as const, marginTop: 8, lineHeight: 20 },
@@ -337,6 +339,12 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
 
   // v4.32.44: блок-лист — для быстрого lookup в рендере и long-press menu.
   const [blockedSet, setBlockedSet] = useState<Set<string>>(new Set());
+  /**
+   * Список не прочитался (v4.32.1066). Отдельно от `blockedSet`, потому что у
+   * множества нет разницы между «никого не блокировал» и «не видели списка», а
+   * значат они противоположное.
+   */
+  const [blockUnknown, setBlockUnknown] = useState(false);
 
   const load = useCallback(async () => {
     // v4.32.622: сорванное чтение раньше приходило сюда пустым списком и
@@ -363,11 +371,22 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     setContacts(filtered);
     // v4.32.44: подгружаем блок-лист, чтобы отображать «заблокирован» в строке
     // и менять пункт контекст-меню между «Заблокировать» / «Разблокировать».
+    // v4.32.1066: и спрашиваем, прочитался ли он. `getBlockedPubKeys` отдаёт
+    // то, что в памяти, а сорвавшееся чтение оставляет память пустой — сюда
+    // это приходило неотличимо от «никого не блокировал». Экран тогда снимал с
+    // заблокированного и значок, и зачёркивание, и предлагал в меню
+    // «Заблокировать» — то есть снять запрет отсюда было нечем. Ту же разницу
+    // переписка спрашивает с v4.32.1048, а карточка собеседника — с v4.32.1051.
     try {
-      const blocked = await rateLimiter.getBlockedPubKeys();
-      setBlockedSet(new Set(blocked));
+      await rateLimiter.whenReady();
+      const readable = rateLimiter.blockedListReadable();
+      setBlockUnknown(!readable);
+      // Непрочитанным ответом прежде показанное не затираем: удачное чтение
+      // было правдой, а это — незнание. То же правило, что строчкой выше у
+      // самих контактов (v4.32.622).
+      if (readable) setBlockedSet(new Set(await rateLimiter.getBlockedPubKeys()));
     } catch {
-      /* ignore */
+      setBlockUnknown(true);
     }
   }, [myPubB64]);
 
@@ -581,7 +600,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
             },
           },
           {
-            text: alreadyBlocked ? 'Разблокировать' : 'Заблокировать',
+            text: blockActionLabel(alreadyBlocked, blockUnknown),
             style: alreadyBlocked ? 'default' : 'destructive',
             onPress: () => {
               const run = () => {
@@ -652,7 +671,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     } finally {
       setAddBusy(false);
     }
-  }, [parsedKey, pair, isSelf, addNameInput, isDuplicate, resetAddForm, blockedSet, load]);
+  }, [parsedKey, pair, isSelf, addNameInput, isDuplicate, resetAddForm, blockedSet, blockUnknown, load]);
 
   // ─── Share my ID ───────────────────────────────────────────────────────
   const shareMyId = useCallback(async () => {
@@ -676,7 +695,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     Alert.alert(
       c.displayName || 'Контакт',
       shortenDid(didFromPubB64(c.peerPublicKey) ?? '') +
-        (isBlocked ? '\n\n🚫 Заблокирован' : ''),
+        (isBlocked ? '\n\n🚫 Заблокирован' : blockUnknown ? BLOCKED_UNKNOWN_HEAD : ''),
       [
         {
           text: 'Открыть чат',
@@ -708,7 +727,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         },
         {
           // v4.32.44: быстрый блок/разблок прямо из списка контактов — не надо идти в ChatScreen.
-          text: isBlocked ? 'Разблокировать' : 'Заблокировать',
+          text: blockActionLabel(isBlocked, blockUnknown),
           style: isBlocked ? 'default' : 'destructive',
           onPress: () => {
             const run = () => {
@@ -766,7 +785,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
         { text: 'Отмена', style: 'cancel' },
       ]
     );
-  }, [onOpenChatWithPeer, blockedSet, load]);
+  }, [onOpenChatWithPeer, blockedSet, blockUnknown, load]);
 
   const submitRename = useCallback(async () => {
     if (!renameTarget) return;
@@ -828,6 +847,17 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
           </View>
         </View>
 
+        {/*
+          v4.32.1066: непрочитанный список запретов называется вслух. Без этой
+          строки отметок «заблокирован» просто нет, и список выглядит как ответ
+          «никто не заблокирован» — которого никто не давал. Янтарь здесь
+          второй сигнал, как у прочих непрочитанных настроек.
+        */}
+        {blockUnknown ? (
+          <Text style={[styles.blockNote, { color: colors.warning }]} testID="contacts_block_unknown_note">
+            {BLOCKED_LIST_UNKNOWN_NOTE}
+          </Text>
+        ) : null}
         <FlatList
           data={contacts}
           keyExtractor={contactKeyExtractor}
