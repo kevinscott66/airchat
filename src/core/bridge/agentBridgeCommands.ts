@@ -246,13 +246,29 @@ async function cmdOpenFluxDisable(): Promise<BridgeReply> {
       'На этой платформе нет ядра OpenFlux: выключать нечего.',
     );
   }
-  await stopOpenFlux();
+  const stopped = await stopOpenFlux();
+  // Решение записываем в любом случае: даже если ядро сейчас не погасло, при
+  // следующем запуске оно подниматься уже не должно.
   const cfg = await saveConfigOverride({
     openflux: { ...(before.openflux ?? {}), enabled: false },
   } as Partial<AppConfig>);
   // Перезапуск нужен и при выключении: иначе главный канал остался бы в уже
   // погашенном SOCKS5 (см. restartInternetTransport).
   await restartInternetTransport(cfg);
+  if (!stopped) {
+    // v4.32.1014: зеркало v4.32.1009. Здесь стоял безусловный `ok: true` с
+    // `state: 'off'` — тот же ответ мост отдавал и когда ядро погасло, и
+    // когда оно не отозвалось. Агент по `ok` докладывает «выключил», а
+    // трафик как шёл через туннель, так и идёт: человек выключает его
+    // обычно затем, чтобы выйти в сеть напрямую, и узнаёт правду по тому,
+    // что не вышел.
+    log.warn('bridge_openflux_disable_failed', {});
+    return fail(
+      'openflux.disable',
+      'on',
+      'Ядро OpenFlux не погасло. В настройках туннель выключен, при следующем запуске он не поднимется, но сейчас трафик по-прежнему идёт через него.',
+    );
+  }
   return { ok: true, cmd: 'openflux.disable', result: { state: 'off', socks: null } };
 }
 

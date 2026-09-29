@@ -16,7 +16,7 @@ jest.mock('../../../ui/platformCapabilities', () => ({
 
 let mockRunning = false;
 const mockRetry = jest.fn(async (_cfg: unknown) => 'on');
-const mockStop = jest.fn(async () => {});
+const mockStop = jest.fn(async () => true);
 jest.mock('../../vpn/openFluxController', () => ({
   getOpenFluxRunning: jest.fn(async () => mockRunning),
   getOpenFluxSocksAddr: jest.fn(async () => (mockRunning ? '127.0.0.1:10808' : null)),

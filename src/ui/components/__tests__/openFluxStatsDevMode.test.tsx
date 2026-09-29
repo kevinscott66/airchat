@@ -37,7 +37,7 @@ jest.mock('../../../core/vpn/openFluxController', () => ({
   enableOpenFluxTunnelStats: jest.fn(async () => true),
   getOpenFluxHttpLayerActive: jest.fn(() => true),
   retryOpenFlux: jest.fn(async () => 'on'),
-  stopOpenFlux: jest.fn(async () => undefined),
+  stopOpenFlux: jest.fn(async () => true),
 }));
 
 jest.mock('../../../core/vpn/openFluxNetworkGuard', () => ({

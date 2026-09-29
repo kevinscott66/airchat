@@ -149,16 +149,49 @@ export function getOpenFluxHttpLayerActive(): boolean | null {
   return httpLayer;
 }
 
-export async function stopOpenFlux(): Promise<void> {
-  httpLayer = null;
-  if (!openFluxAvailable()) return;
+/**
+ * Погасить ядро. `true` — погасло, `false` — осталось поднятым (v4.32.1014).
+ *
+ * Прежде ответа не было вовсе: отказ ядра уходил в `log.warn`, наружу
+ * возвращалось одно и то же `undefined`, и оба вызывающих — переключатель в
+ * настройках и мост внешнего агента — объявляли туннель выключенным, не
+ * спросив, выключился ли он.
+ *
+ * Отказ на `stop()` сам по себе ещё не значит «не погасло»: «ядра уже нет»
+ * прилетает таким же отказом. Поэтому после отказа ядро спрашивают напрямую,
+ * и только молчание или ответ «поднят» считаются неудачей — не ответило,
+ * значит подтвердить остановку нечем.
+ */
+export async function stopOpenFlux(): Promise<boolean> {
+  if (!openFluxAvailable()) {
+    httpLayer = null;
+    return true;
+  }
   const mod = AirChatOpenFlux;
-  if (!mod) return;
+  if (!mod) {
+    httpLayer = null;
+    return true;
+  }
   try {
     await mod.stop();
+    httpLayer = null;
     log.info('openflux_stopped');
+    return true;
   } catch (e) {
+    try {
+      if (!(await mod.isRunning())) {
+        // Отказ был про то, что гасить уже нечего.
+        httpLayer = null;
+        log.info('openflux_stopped');
+        return true;
+      }
+    } catch {
+      // Ядро не ответило и на это: подтвердить остановку нечем.
+    }
+    // Слой перехвата не трогаем: он таким и остался, а `null` здесь значил бы
+    // «неизвестно» про то, что как раз известно.
     log.warn('openflux_stop_failed', { err: openFluxErrorText(e) });
+    return false;
   }
 }
 

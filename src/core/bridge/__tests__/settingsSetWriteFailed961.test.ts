@@ -32,7 +32,7 @@ jest.mock('../../vpn/openFluxController', () => ({
   getOpenFluxRunning: async () => false,
   getOpenFluxSocksAddr: async () => null,
   retryOpenFlux: async () => 'on',
-  stopOpenFlux: async () => {},
+  stopOpenFlux: async () => true,
 }));
 jest.mock('../../config', () => ({
   loadConfig: async () => ({}),

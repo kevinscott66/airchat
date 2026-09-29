@@ -197,7 +197,17 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
       try {
         const cfg = await persist(on);
         if (!on) {
-          await stopOpenFlux();
+          // v4.32.1014: «Выключен» рисовали, не спросив, выключилось ли.
+          // Отказ ядра на остановке уходил в лог, а человек видел серую
+          // надпись и уходил в сеть в уверенности, что идёт напрямую.
+          const stopped = await stopOpenFlux();
+          if (!stopped) {
+            setStatus('on');
+            setSocks(await getOpenFluxSocksAddr());
+            await restartTransport(cfg);
+            showError('Туннель выключен в настройках, но ядро не погасло: трафик пока идёт через него. Помогает перезапуск приложения');
+            return;
+          }
           setStatus('off');
           setSocks(null);
           await restartTransport(cfg);

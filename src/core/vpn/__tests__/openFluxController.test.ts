@@ -199,8 +199,44 @@ describe('retryOpenFlux', () => {
 
 describe('stopOpenFlux', () => {
   it('не роняет приложение, если ядро упало на остановке', async () => {
+    // v4.32.1014: ответ появился. Повод для закрепки прежний — отказ ядра не
+    // должен разваливать вызывающего, — но «ничего не вернули» больше не
+    // годится: по этому ответу и решают, говорить ли человеку «выключено».
     mockNative.stop.mockRejectedValueOnce(new Error('already dead'));
-    await expect(stopOpenFlux()).resolves.toBeUndefined();
+    await expect(stopOpenFlux()).resolves.toBe(true);
+  });
+
+  it('«ядра уже нет» — это погасло, а не неудача', async () => {
+    mockNative.stop.mockRejectedValueOnce(new Error('already dead'));
+    mockNative.isRunning.mockResolvedValueOnce(false);
+
+    expect(await stopOpenFlux()).toBe(true);
+  });
+
+  it('отказ, после которого ядро всё ещё поднято, — неудача', async () => {
+    mockNative.stop.mockRejectedValueOnce(new Error('busy'));
+    mockNative.isRunning.mockResolvedValueOnce(true);
+
+    expect(await stopOpenFlux()).toBe(false);
+  });
+
+  it('ядро не ответило и на «поднят ли» — подтвердить остановку нечем', async () => {
+    mockNative.stop.mockRejectedValueOnce(new Error('busy'));
+    mockNative.isRunning.mockRejectedValueOnce(new Error('no answer'));
+
+    expect(await stopOpenFlux()).toBe(false);
+  });
+
+  it('обычная остановка — `true`, и слой перехвата забыт', async () => {
+    expect(await stopOpenFlux()).toBe(true);
+    expect(getOpenFluxHttpLayerActive()).toBeNull();
+  });
+
+  it('там, где ядра нет, гасить нечего — и это успех', async () => {
+    (Platform as { OS: string }).OS = 'web';
+
+    expect(await stopOpenFlux()).toBe(true);
+    expect(mockNative.stop).not.toHaveBeenCalled();
   });
 });
 
