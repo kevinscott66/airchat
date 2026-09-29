@@ -267,7 +267,11 @@ describe('места вызова', () => {
     );
     // Своей карточки это не касается: она читается с устройства.
     const at = src.indexOf('void requestPeerProfile(');
-    expect(src.slice(0, at)).toContain('const found = all.find(');
+    // v4.32.1052: чтение книги стало различающим (`listContactsRead`), поэтому
+    // поиск идёт по `all?.find`. Повод у закрепки прежний: просьба обязана
+    // стоять ПОСЛЕ поиска — иначе она уходила бы и к тем, чей профиль у нас
+    // уже есть.
+    expect(src.slice(0, at)).toContain('const found = all?.find(');
   });
 });
 

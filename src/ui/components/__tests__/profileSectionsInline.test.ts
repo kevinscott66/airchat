@@ -28,6 +28,7 @@ const FACTS = {
   isSelf: false,
   inContacts: true,
   hasContactRecord: true,
+  bookUnknown: false,
   blocked: false,
   blockUnknown: false,
   muted: false,

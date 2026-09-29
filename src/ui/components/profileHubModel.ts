@@ -50,6 +50,13 @@ export type HubFacts = {
    * руками. А вот удалять нечего — вместе со строкой ушёл бы ключ переписки.
    */
   hasContactRecord: boolean;
+  /**
+   * Список контактов не прочитался (v4.32.1052). `inContacts: false` при этом
+   * — не ответ, а незнание, и «Добавить в контакты» из него делать нельзя:
+   * добавление переписывает строку контакта именем, взятым с той же карточки,
+   * то есть тем, которым человек назвался сам.
+   */
+  bookUnknown: boolean;
   blocked: boolean;
   /**
    * Список запретов не прочитался (v4.32.1051). Отдельно от `blocked`, потому
@@ -236,7 +243,17 @@ export function hubMore(f: HubFacts): Array<HubItem<MoreId>> {
   }
   for (const s of hubSettings(f)) out.push(s as HubItem<MoreId>);
   if (!f.isSelf) {
-    if (!f.inContacts) out.push({ id: 'add_contact', label: 'Добавить в контакты' });
+    if (!f.inContacts) {
+      out.push(
+        f.bookUnknown
+          ? {
+              id: 'add_contact',
+              label: 'Добавить в контакты (список не прочитался)',
+              disabled: true,
+            }
+          : { id: 'add_contact', label: 'Добавить в контакты' }
+      );
+    }
     if (f.hasContactRecord) out.push({ id: 'rename_contact', label: 'Переименовать' });
     if (f.inContacts) out.push({ id: 'delete_contact', label: 'Удалить контакт', danger: true });
   }

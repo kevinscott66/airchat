@@ -89,13 +89,13 @@ import { reportErased, showSuccess, showError } from './userFeedback';
 import {
   addContact,
   deleteContact,
-  listContacts,
+  listContactsRead,
   renameContact,
   type Contact,
 } from '../../core/social/contacts';
 import { publicKeyToDidKey } from '../../core/identity/did';
 import { publicKeyFromB64 } from '../../core/crypto/pubKeyFormat';
-import { BAD_PUBLIC_KEY_MESSAGE } from '../../core/social/contacts';
+import { BAD_PUBLIC_KEY_MESSAGE, CONTACTS_UNREADABLE_MESSAGE } from '../../core/social/contacts';
 import { peekIdentity, resolvePeer, shortDid, type PeekOwn } from './profilePeekModel';
 import {
   hubMore,
@@ -331,6 +331,20 @@ export function UserProfilePeek({
 
   // Пытаемся найти контакт в адресной книге (даёт displayName + знание, что он в контактах).
   const [contact, setContact] = useState<Contact | null>(null);
+  /**
+   * v4.32.1052: адресная книга не прочиталась.
+   *
+   * `listContacts` сводила отказ указателя контактов к пустому списку, и
+   * карточка читала это как факт: «Не в контактах», местная подпись заменена
+   * тем именем, которым человек назвался сам, официальная галочка снята,
+   * «О себе» и ссылки пусты. Хуже подписи — предложение «Добавить в контакты»:
+   * оно уходит с этим же чужим именем в `addContact`, а слияние строки
+   * (`mergeExplicitContactRow`) переданное имя ставит ВЫШЕ хранимого. То есть
+   * занятая база превращалась в потерю имени, которое человек дал контакту
+   * сам. Строка контакта при этом цела: `readContactsFor` отвечает `null` уже
+   * на непрочитанном указателе, отдельно от самих строк.
+   */
+  const [bookUnknown, setBookUnknown] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [isSelf, setIsSelf] = useState(false);
@@ -413,6 +427,7 @@ export function UserProfilePeek({
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока
     // грузится адресная книга нового, на карточке висит имя предыдущего.
     setContact(null);
+    setBookUnknown(false);
     setOpenSection(null);
     setRenaming(false);
     setRenameDraft('');
@@ -463,9 +478,11 @@ export function UserProfilePeek({
             links,
           });
         }
-        const all = await listContacts();
+        const all = await listContactsRead();
         if (cancelled) return;
-        const found = all.find((c) => c.peerPublicKey === resolved.pubB64) ?? null;
+        // v4.32.1052: `null` — книга не прочиталась, а не «контактов нет».
+        setBookUnknown(all === null);
+        const found = all?.find((c) => c.peerPublicKey === resolved.pubB64) ?? null;
         setContact(found);
         setRenameDraft(contactLabel(found?.displayName, fallbackName ?? ''));
         // v4.32.671: карточка собеседника, чей профиль до нас ни разу не
@@ -551,12 +568,13 @@ export function UserProfilePeek({
           }
         : null,
       fallbackName,
+      bookUnknown,
       did: resolved?.did ?? '',
       isSelf,
       own,
       usernameHint,
     }),
-    [contact, fallbackName, resolved, isSelf, own, usernameHint]
+    [contact, fallbackName, bookUnknown, resolved, isSelf, own, usernameHint]
   );
   // Имя для действий: у безымянного это заглушка из DID, а не слово «Контакт»
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
@@ -571,6 +589,7 @@ export function UserProfilePeek({
   const facts: HubFacts = useMemo(() => ({
     isSelf,
     inContacts: identity.inContacts,
+    bookUnknown,
     hasContactRecord: !!contact,
     blocked,
     blockUnknown,
@@ -581,7 +600,7 @@ export function UserProfilePeek({
     reported,
     canOpenChat: !!onOpenChat,
     inChat: !!inChat,
-  }), [isSelf, identity.inContacts, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
+  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
@@ -620,6 +639,13 @@ export function UserProfilePeek({
 
   const handleAddContact = useCallback(async () => {
     if (!resolved || !pair) return;
+    // v4.32.1052: пока книга не прочитана, «добавить» — это перезапись. Имя
+    // сюда пришло бы от самого собеседника, а слияние строки ставит
+    // переданное выше хранимого: своя подпись контакта ушла бы молча.
+    if (bookUnknown) {
+      showError(CONTACTS_UNREADABLE_MESSAGE);
+      return;
+    }
     try {
       // v4.32.427: ключ проверяется до кривой. Раньше сюда уезжали любые
       // байты, отказ приходил из noble, и в русское окно попадал его текст —
@@ -637,7 +663,7 @@ export function UserProfilePeek({
       // сети, и их сообщения — английские строки чужих библиотек.
       showError('Не удалось добавить контакт');
     }
-  }, [resolved, pair, displayName]);
+  }, [resolved, pair, displayName, bookUnknown]);
 
   const handleSubmitRename = useCallback(async () => {
     if (!resolved) return;
