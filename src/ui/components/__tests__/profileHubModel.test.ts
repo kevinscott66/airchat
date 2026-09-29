@@ -21,6 +21,7 @@ const base: HubFacts = {
   inContacts: true,
   hasContactRecord: true,
   blocked: false,
+  blockUnknown: false,
   muted: false,
   copyGuard: false,
   copyGuardByPeer: false,

@@ -342,6 +342,15 @@ export function UserProfilePeek({
   // то, что было при прошлом открытии.
   const [muted, setMuted] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  /**
+   * v4.32.1051: список запретов не прочитался (то же, что в переписке с
+   * v4.32.1048). `isBlocked` на несостоявшемся чтении отвечает `false`, и
+   * карточка выдавала это за «не блокировал»: пункт «Заблокировать» красным,
+   * «Звонок» и «Видео» снова доступны — над уже заблокированным человеком
+   * карточка выглядела так, будто запрета никогда не было. Следующее открытие
+   * карточки зовёт `whenReady` заново, то есть пробует прочитать ещё раз.
+   */
+  const [blockUnknown, setBlockUnknown] = useState(false);
   const [copyGuard, setCopyGuardState] = useState(false);
   // v4.32.571: запрет, включённый собеседником. Отдельно от своего — снять его
   // своей рукой нельзя, и в карточке это должно быть написано, а не молчать.
@@ -411,6 +420,7 @@ export function UserProfilePeek({
     setOwn(null);
     setMuted(false);
     setBlocked(false);
+    setBlockUnknown(false);
     setCopyGuardState(false);
     setCopyGuardByPeer(false);
     setDisappearMs(null);
@@ -493,8 +503,15 @@ export function UserProfilePeek({
       }
       try {
         await rateLimiter.whenReady();
-        if (!cancelled) setBlocked(rateLimiter.isBlocked(pub));
-      } catch { /* блокировка неизвестна — покажем «Заблокировать» */ }
+        if (!cancelled) {
+          const readable = rateLimiter.blockedListReadable();
+          setBlockUnknown(!readable);
+          setBlocked(readable && rateLimiter.isBlocked(pub));
+        }
+      } catch {
+        // Сорвалось насовсем — это тоже «неизвестно», а не «не блокировал».
+        if (!cancelled) { setBlockUnknown(true); setBlocked(false); }
+      }
       const [guard, wasReported] = await Promise.all([
         copyGuardState(pub),
         hasReported(resolved.did),
@@ -556,6 +573,7 @@ export function UserProfilePeek({
     inContacts: identity.inContacts,
     hasContactRecord: !!contact,
     blocked,
+    blockUnknown,
     muted,
     copyGuard,
     copyGuardByPeer,
@@ -563,7 +581,7 @@ export function UserProfilePeek({
     reported,
     canOpenChat: !!onOpenChat,
     inChat: !!inChat,
-  }), [isSelf, identity.inContacts, contact, blocked, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
+  }), [isSelf, identity.inContacts, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
@@ -939,7 +957,7 @@ export function UserProfilePeek({
       void rateLimiter.unblockContact(pub)
         .then((ok) => {
           if (!ok) { showError(BLOCK_NOT_SAVED_OFF); return; }
-          setBlocked(false); showSuccess('Разблокировано');
+          setBlocked(false); setBlockUnknown(false); showSuccess('Разблокировано');
         })
         .catch((e: unknown) => showError(userErrorText(e, 'Не удалось разблокировать')));
       return;
@@ -954,7 +972,7 @@ export function UserProfilePeek({
         onPress: () => void rateLimiter.blockContact(pub)
           .then((ok) => {
             if (!ok) { showError(BLOCK_NOT_SAVED_ON); return; }
-            setBlocked(true); showSuccess('Заблокировано');
+            setBlocked(true); setBlockUnknown(false); showSuccess('Заблокировано');
           })
           .catch((e: unknown) => showError(userErrorText(e, 'Не удалось заблокировать'))),
       },

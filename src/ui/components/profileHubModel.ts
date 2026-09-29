@@ -51,6 +51,13 @@ export type HubFacts = {
    */
   hasContactRecord: boolean;
   blocked: boolean;
+  /**
+   * Список запретов не прочитался (v4.32.1051). Отдельно от `blocked`, потому
+   * что «не блокировал» и «выяснить не удалось» — разные вещи, а `isBlocked`
+   * отвечает на оба одинаково. Кнопки при этом не гасим: запрет мог и не
+   * стоять, а отнятый звонок из-за занятой базы — вред больше, чем подпись.
+   */
+  blockUnknown: boolean;
   muted: boolean;
   /** Запрет на копирование в этой переписке включён мной. */
   copyGuard: boolean;
@@ -195,7 +202,17 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
   }
   out.push({ id: 'clear_history', label: 'Удалить переписку', danger: true });
   if (!f.isSelf) {
-    out.push({ id: 'block', label: f.blocked ? 'Разблокировать' : 'Заблокировать', danger: !f.blocked });
+    // v4.32.1051: подпись та же, что в меню переписки (v4.32.1048) — одно
+    // событие обязано называться в приложении одним словом.
+    out.push({
+      id: 'block',
+      label: f.blocked
+        ? 'Разблокировать'
+        : f.blockUnknown
+          ? 'Заблокировать (список запретов не прочитан)'
+          : 'Заблокировать',
+      danger: !f.blocked,
+    });
     out.push({ id: 'report', label: f.reported ? 'Жалоба записана' : 'Пожаловаться', danger: !f.reported });
   }
   return out;
