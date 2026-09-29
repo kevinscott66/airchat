@@ -198,22 +198,28 @@ export async function deleteCachedBlobs(ids: Iterable<string>): Promise<number> 
  * Дешёвая проверка одним чтением каталога. Нужна, чтобы не платить полным
  * проходом по всей переписке ради удаления текстового сообщения, у которого
  * вложений не было вовсе, — а таких подавляющее большинство.
+ *
+ * v4.32.1024: отказ каталога отсюда не гасится. Пустой ответ значит ровно
+ * «таких файлов нет», и dropOrphanBlobCache верит ему дважды: сначала
+ * пропускает уборку целиком, потом — контрольным проходом — объявляет её
+ * удавшейся. Контрольный проход для того и заведён (v4.32.1001), что сами
+ * удаления молчат; кормить его отказом того же диска значило иметь свидетеля,
+ * который подтверждает что угодно. Наружу отказ не выходит: внешний `catch`
+ * уборки отвечает `kept`, и человек читает оговорку про оставшиеся копии
+ * вместо голого «удалено». Отсутствие самого каталога кэша — по-прежнему не
+ * отказ: файлов в нём тогда нет.
  */
 export async function cachedBlobIdsPresent(ids: Iterable<string>): Promise<string[]> {
   const wanted = new Set(ids);
   if (wanted.size === 0) return [];
-  try {
-    const dir = FileSystem.cacheDirectory;
-    if (!dir) return [];
-    const found = new Set<string>();
-    for (const name of await FileSystem.readDirectoryAsync(dir)) {
-      const id = cachedBlobIdOf(name);
-      if (id && wanted.has(id)) found.add(id);
-    }
-    return [...found];
-  } catch {
-    return [];
+  const dir = FileSystem.cacheDirectory;
+  if (!dir) return [];
+  const found = new Set<string>();
+  for (const name of await FileSystem.readDirectoryAsync(dir)) {
+    const id = cachedBlobIdOf(name);
+    if (id && wanted.has(id)) found.add(id);
   }
+  return [...found];
 }
 
 /**
@@ -243,17 +249,22 @@ export async function deleteCachedFileUris(uris: Iterable<string>): Promise<numb
   return removed;
 }
 
-/** Какие из перечисленных адресов кэша существуют на диске. */
+/**
+ * Какие из перечисленных адресов кэша существуют на диске.
+ *
+ * v4.32.1024: отказ `getInfoAsync` больше не выдаётся за «файла нет». Довод тот
+ * же, что у cachedBlobIdsPresent выше: этим ответом уборщик кэша и решает, что
+ * расшифрованных копий стёртой переписки не осталось. Настоящее отсутствие
+ * отказом не становится — его `getInfoAsync` отдаёт как `exists: false`.
+ */
 export async function cachedFileUrisPresent(uris: Iterable<string>): Promise<string[]> {
   const dir = FileSystem.cacheDirectory;
   if (!dir) return [];
   const out: string[] = [];
   for (const uri of uris) {
     if (!isInsideCacheDir(uri, dir)) continue;
-    try {
-      const info = await FileSystem.getInfoAsync(uri);
-      if (info.exists) out.push(uri);
-    } catch { /* недоступный файл считаем отсутствующим */ }
+    const info = await FileSystem.getInfoAsync(uri);
+    if (info.exists) out.push(uri);
   }
   return out;
 }
