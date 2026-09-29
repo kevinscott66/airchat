@@ -169,7 +169,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const ui = join(__dirname, '..', '..', '..', 'ui');
     const chat = readFileSync(join(ui, 'screens', 'ChatScreen.tsx'), 'utf8');
     const peek = readFileSync(join(ui, 'components', 'UserProfilePeek.tsx'), 'utf8');
-    expect(chat).toContain('if (res.synced || res.applied) setDisappearMs(ms);');
+    // v4.32.1047: в переписке под тем же условием снимается ещё и пометка
+    // «не удалось прочитать»; в карточке профиля её нет.
+    expect(chat).toContain(
+      'if (res.synced || res.applied) { setDisappearMs(ms); setDisappearUnknown(false); }'
+    );
     expect(peek).toContain('if (res.synced || res.applied) setDisappearMs(ms);');
   });
 });

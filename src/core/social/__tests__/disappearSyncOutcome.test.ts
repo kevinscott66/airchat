@@ -121,7 +121,11 @@ describe('v4.32.448 — экран проговаривает расхожден
     // действительно встал у себя. Пока отказ был один (собеседник не узнал),
     // «в любом случае» было правдой; теперь отказать может и запись в базу, и
     // оставленное на экране значение было бы обещанием пустого места.
-    expect(chatSrc).toContain('if (res.synced || res.applied) setDisappearMs(ms);');
+    // v4.32.1047: рядом снимается пометка «не удалось прочитать» — правило
+    // то же, условие то же.
+    expect(chatSrc).toContain(
+      'if (res.synced || res.applied) { setDisappearMs(ms); setDisappearUnknown(false); }'
+    );
     expect(chatSrc).not.toContain('            setDisappearMs(ms);\n');
   });
 

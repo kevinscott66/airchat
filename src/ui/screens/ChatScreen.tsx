@@ -78,7 +78,6 @@ import {
   touchConversation,
   setConversationMuted,
   setConversationMutedUntil,
-  listConversations,
   listConversationsRead,
   clearChatHistory,
   listAllChatMessages,
@@ -903,6 +902,13 @@ function ChatThreadView({
   const [pinnedMsgIdx, setPinnedMsgIdx] = useState(0);
   const [pinnedListVisible, setPinnedListVisible] = useState(false);
   const [disappearMs, setDisappearMs] = useState<number | null>(null);
+  /**
+   * Строку разговора прочитать не удалось, а прежнего значения нет
+   * (v4.32.1047). Утверждать «исчезновение выключено» тут нечем: шапка и меню
+   * говорят, что выяснить не вышло. Таймер при этом продолжает работать на
+   * той стороне, где он записан.
+   */
+  const [disappearUnknown, setDisappearUnknown] = useState(false);
   // v4.32.568: запрет на копирование по этой переписке. Держим подпиской, а не
   // одним чтением: переключить его можно из карточки профиля, которая
   // открывается прямо поверх экрана диалога.
@@ -1378,12 +1384,18 @@ function ChatThreadView({
       return exists ? null : opt;
     });
     // Load pinned message and disappear timer from conversation metadata
-    const convs = await listConversations(activeProfileId);
-    const conv = convs.find((c) => c.contactPubB64 === peerB64);
+    // v4.32.1047: чтение различающее. Отказ базы прежде значил ровно то же,
+    // что «строки разговора нет», а следом за этим экран утверждал три вещи
+    // подряд: закреплённого сообщения нет, исчезновение выключено,
+    // непрочитанного не было. Первые два человек читает как факт, третье
+    // снимается один раз за открытие — второй попытки уже не будет.
+    const convs = await listConversationsRead(activeProfileId);
+    const convUnknown = convs === null;
+    const conv = convs?.find((c) => c.contactPubB64 === peerB64);
     if (conv?.pinnedMessageId) {
       const pinned = filtered.find((m) => m.id === conv.pinnedMessageId) ?? null;
       setPinnedMsg(pinned);
-    } else {
+    } else if (!convUnknown) {
       setPinnedMsg(null);
     }
     // Load pinned message list (multiple pinned)
@@ -1400,9 +1412,11 @@ function ChatThreadView({
         if (first) setPinnedMsg(first);
       }
     } catch { /* */ }
-    setDisappearMs(conv?.disappearAfterMs ?? null);
+    setDisappearUnknown(convUnknown);
+    // Прежнее значение остаётся на месте: оно было прочитано, а это — нет.
+    if (!convUnknown) setDisappearMs(conv?.disappearAfterMs ?? null);
     // Capture unread count on first open only (before messages are auto-marked as read)
-    if (openUnreadRef.current === 0 && (conv?.unreadCount ?? 0) > 0) {
+    if (!convUnknown && openUnreadRef.current === 0 && (conv?.unreadCount ?? 0) > 0) {
       openUnreadRef.current = conv!.unreadCount;
       setOpenUnreadCount(conv!.unreadCount);
     }
@@ -1692,8 +1706,13 @@ function ChatThreadView({
         const list = await resolveDmPinned(peerB64, activeProfileId);
         setPinnedMsgList(list);
         if (!list.length) setPinnedMsg(null);
-        const convs = await listConversations(activeProfileId);
-        setDisappearMs(convs.find((c) => c.contactPubB64 === peerB64)?.disappearAfterMs ?? null);
+        // v4.32.1047: не прочитали — прежнее значение остаётся, а не сменяется
+        // на «выключено».
+        const convs = await listConversationsRead(activeProfileId);
+        setDisappearUnknown(convs === null);
+        if (convs !== null) {
+          setDisappearMs(convs.find((c) => c.contactPubB64 === peerB64)?.disappearAfterMs ?? null);
+        }
       })();
     });
   }, [peerB64, activeProfileId, tabRef]);
@@ -3488,6 +3507,10 @@ function ChatThreadView({
             <Text style={[s.headerStatus, { color: colors.warning }]}>
               {'⏱ '}Исчезают через {formatDisappearLabel(disappearMs)}
             </Text>
+          ) : disappearUnknown ? (
+            <Text style={[s.headerStatus, { color: colors.warning }]} numberOfLines={1}>
+              {'⏱ '}Исчезновение: не удалось прочитать
+            </Text>
           ) : presence.label || presence.status ? (
             // v4.32.375: раньше это были две ветки, и статус стоял первым —
             // значит собеседник, однажды написавший «на созвоне», навсегда
@@ -3550,7 +3573,9 @@ function ChatThreadView({
               onPress={() => {
                 const disappearLabel = disappearMs
                   ? `Исчезновение: ${formatDisappearLabel(disappearMs)}`
-                  : 'Установить исчезновение';
+                  : disappearUnknown
+                    ? 'Исчезновение: не удалось прочитать'
+                    : 'Установить исчезновение';
                 const blockLabel = isBlocked ? 'Разблокировать' : 'Заблокировать';
                 const muteLabel = isMuted
                   ? (mutedUntil ? `Снять без звука (${muteRemainingLabel(mutedUntil)})` : 'Включить звук')
@@ -3688,7 +3713,7 @@ function ChatThreadView({
                           // записи оставлял бы выбранное значение на экране —
                           // и человек считал бы, что автоудаление работает.
                           onPress: () => void setDisappearAndSync({ peerPubB64: peerB64, ms }).then((res) => {
-                            if (res.synced || res.applied) setDisappearMs(ms);
+                            if (res.synced || res.applied) { setDisappearMs(ms); setDisappearUnknown(false); }
                             if (!res.synced) showError(res.warning);
                           }),
                         })),
