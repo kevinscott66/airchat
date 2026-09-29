@@ -193,6 +193,35 @@ export function getCallLog(): CallLogEntry[] {
   return [...callLog];
 }
 
+/**
+ * Не прочитался ли журнал активного профиля (v4.32.1069).
+ *
+ * Отметку завели в v4.32.979 ради записи: не открыв столбец, писать поверх него
+ * нельзя. Спросить её было некому, и экран истории звонков строил вид по пустой
+ * памяти — значок трубки и «Нет звонков». Здесь то же самое состояние отдаётся
+ * тому, кто показывает журнал человеку.
+ */
+export function callLogUnreadable(): boolean {
+  return callProfileId !== null && callLogUnreadableFor === callProfileId;
+}
+
+/**
+ * Перечитать журнал активного профиля (v4.32.1069).
+ *
+ * Зовётся с экрана по «Повторить» и только тогда, когда в памяти пусто. Удачное
+ * чтение кладёт в память содержимое столбца целиком, а записи этого запуска, не
+ * легшие на диск (при стоящей отметке `persistCallLog` отвечает `false`), оно
+ * бы стёрло. Пока показывать нечего — терять тоже нечего.
+ *
+ * @returns `true`, если журнал после этого прочитан.
+ */
+export async function reloadCallLog(): Promise<boolean> {
+  const pid = callProfileId;
+  if (pid === null) return false;
+  await loadCallLog(pid);
+  return !callLogUnreadable();
+}
+
 export function subscribeCallLog(cb: (log: CallLogEntry[]) => void): () => void {
   callLogListeners.add(cb);
   return () => { callLogListeners.delete(cb); };

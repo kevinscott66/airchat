@@ -34,7 +34,15 @@ import {
 } from '../../core/backup/seedPhrase';
 import { listStarredMessagesRead, setMessageStarred, setGroupMessageStarred, type StarredMessageEntry } from '../../core/storage/local';
 import { isUnreadableMessage, UNREADABLE_MESSAGE_TEXT, UNREADABLE_STARRED_TEXT } from '../../core/storage/unreadableText';
-import { clearCallLog, getCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
+import { callLogUnreadable, clearCallLog, getCallLog, reloadCallLog, subscribeCallLog, type CallLogEntry } from '../../core/social/callService';
+import {
+  callLogNotice,
+  CALL_LOG_EMPTY_TITLE,
+  CALL_LOG_RETRY,
+  CALL_LOG_UNREAD_EMPTY,
+  CALL_LOG_UNREAD_SHOWN,
+  CALL_LOG_UNREAD_TITLE,
+} from '../utils/callLogUnread';
 import { profileManager } from '../../core/identity/profileManager';
 import { republishOwnUsernameToDirectory } from '../../core/identity/usernameRegistry';
 import { getOwnDisplayName, getOwnUsername, ownFieldGet, ownFieldSet, ownFieldTryGet } from '../../core/identity/ownProfile';
@@ -185,6 +193,10 @@ function ProfileScreenImpl({
   const [customStatus, setCustomStatus] = useState('');
   const [callLogVisible, setCallLogVisible] = useState(false);
   const [callLogEntries, setCallLogEntries] = useState<CallLogEntry[]>(() => getCallLog());
+  // v4.32.1069: пустая память значит одно из двух — звонков не было или
+  // журнал не открылся. Второе служба знает с v4.32.979, а экран не спрашивал.
+  const [callLogUnread, setCallLogUnread] = useState(() => callLogUnreadable());
+  const callNotice = callLogNotice(callLogUnread, callLogEntries.length);
   /** v4.32.30: список контактов открывается из Профиля в модалке (VK-style «Друзья»). */
   const [contactsVisible, setContactsVisible] = useState(false);
   // Pronouns
@@ -387,6 +399,7 @@ function ProfileScreenImpl({
     const unsub = subscribeCallLog((log) => {
       if (tabRef.current !== 'profile') return;
       setCallLogEntries(log);
+      setCallLogUnread(callLogUnreadable());
     });
     return unsub;
   }, [tabRef]);
@@ -822,6 +835,7 @@ function ProfileScreenImpl({
             // «Чатах», не появлялся до перезапуска приложения. Читаем журнал
             // заново ровно там, где его собираются смотреть.
             setCallLogEntries(getCallLog());
+            setCallLogUnread(callLogUnreadable());
             setCallLogVisible(true);
           }}
           testID="btn_call_log"
@@ -1036,10 +1050,48 @@ function ProfileScreenImpl({
                 </AppPressable>
               </View>
               <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
+                {/* v4.32.1069: прежний журнал не поднялся, а строки этого
+                    запуска на месте — сказать надо над ними, иначе короткий
+                    список читается как вся история. */}
+                {callNotice === 'unread_shown' ? (
+                  <Text
+                    style={{ color: colors.warning, fontSize: scaleFont(13), paddingHorizontal: 16, paddingTop: 12 }}
+                    testID="call_log_unread_shown"
+                  >
+                    {CALL_LOG_UNREAD_SHOWN}
+                  </Text>
+                ) : null}
                 {callLogEntries.length === 0 ? (
                   <View style={{ alignItems: 'center', paddingVertical: 40 }}>
                     <Ionicons name="call-outline" size={44} color={colors.textMuted} />
-                    <Text style={{ color: colors.textMuted, fontSize: scaleFont(15), marginTop: 12 }}>Нет звонков</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: scaleFont(15), marginTop: 12 }}>
+                      {callNotice === 'unread_empty' ? CALL_LOG_UNREAD_TITLE : CALL_LOG_EMPTY_TITLE}
+                    </Text>
+                    {callNotice === 'unread_empty' ? (
+                      <>
+                        <Text
+                          style={{ color: colors.warning, fontSize: scaleFont(13), marginTop: 8, paddingHorizontal: 24, textAlign: 'center' }}
+                          testID="call_log_unread_empty"
+                        >
+                          {CALL_LOG_UNREAD_EMPTY}
+                        </Text>
+                        <AppPressable
+                          style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 }}
+                          onPress={() => {
+                            // Показывать нечего — перечитывание ничего не уносит.
+                            void reloadCallLog().then((ok) => {
+                              setCallLogEntries(getCallLog());
+                              setCallLogUnread(!ok);
+                            });
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={CALL_LOG_RETRY}
+                          testID="call_log_unread_retry"
+                        >
+                          <Text style={{ color: colors.accent, fontSize: scaleFont(15), fontWeight: '600' }}>{CALL_LOG_RETRY}</Text>
+                        </AppPressable>
+                      </>
+                    ) : null}
                   </View>
                 ) : callLogEntries.map((entry) => {
                   const isOut = entry.direction === 'outgoing';
