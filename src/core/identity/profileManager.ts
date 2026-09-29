@@ -1006,9 +1006,21 @@ class ProfileManager {
     }
     try {
       const { collectAvatarsToKeep } = await import('./avatarKeep');
-      const { sweepAvatarFiles } = await import('../media/avatarFiles');
+      const { sweepAvatarFiles, survivingAvatarFiles } = await import('../media/avatarFiles');
       const keep = await collectAvatarsToKeep(ids);
       await sweepAvatarFiles(keep);
+      // v4.32.1026: ответ уборки тут не годится ни в каком виде — она не
+      // бросает никогда: непрочитанный каталог у неё `0`, неудавшееся удаление
+      // файла — строка в журнале. «Убрал» значило ровно «дошёл до конца
+      // цикла», и снимок лица удалённого аккаунта оставался в
+      // documentDirectory под зелёным «Профиль удалён». Перечитываем диск тем
+      // же списком `keep`: аватары живых профилей остатком не считаются, а
+      // непрочитанный каталог свидетель сам отдаёт как «осталось» (v4.32.1018).
+      const left = await survivingAvatarFiles(keep);
+      if (left.length > 0) {
+        log.warn('delete_profile_avatar_files_left', { left: left.length });
+        return false;
+      }
       return true;
     } catch (e) {
       log.warn('delete_profile_avatar_sweep_failed', {

@@ -98,6 +98,9 @@ jest.mock('../../storage/dialogBackup', () => ({
 jest.mock('../avatarKeep', () => ({ collectAvatarsToKeep: jest.fn(async () => new Set<string>()) }));
 jest.mock('../../media/avatarFiles', () => ({
   sweepAvatarFiles: jest.fn(async () => mockStep('avatars')),
+  // v4.32.1026: уборка отчитывается перечитыванием диска — пустой ответ
+  // свидетеля значит «ничего не осталось».
+  survivingAvatarFiles: jest.fn(async () => []),
 }));
 jest.mock('../../social/storyAlbums', () => ({
   // v4.32.991: уборка отвечает «да/нет». Отказ этот стенд изображает броском

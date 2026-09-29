@@ -72,7 +72,12 @@ jest.mock('../../social/composeDraft', () => ({ deleteLegacyComposeDraft: jest.f
 jest.mock('../../social/feedService', () => ({ cleanupFeedStorageForProfile: jest.fn(async () => undefined) }));
 jest.mock('../../storage/dialogBackup', () => ({ deleteDialogBackupForProfile: jest.fn(async () => undefined) }));
 jest.mock('../avatarKeep', () => ({ collectAvatarsToKeep: jest.fn(async () => new Set<string>()) }));
-jest.mock('../../media/avatarFiles', () => ({ sweepAvatarFiles: jest.fn(async () => undefined) }));
+jest.mock('../../media/avatarFiles', () => ({
+  sweepAvatarFiles: jest.fn(async () => undefined),
+  // v4.32.1026: уборка отчитывается перечитыванием диска — пустой ответ
+  // свидетеля значит «ничего не осталось».
+  survivingAvatarFiles: jest.fn(async () => []),
+}));
 jest.mock('../../social/storyAlbums', () => ({ sweepOrphanAlbumFiles: jest.fn(async () => true) }));
 jest.mock('../../social/liveLocationService', () => ({ stopAllLiveLocSessions: jest.fn() }));
 
