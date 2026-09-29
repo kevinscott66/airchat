@@ -32,7 +32,7 @@ import { loadConfig } from '../../core/config';
 import { DEFAULT_RELAY_BASE } from '../../core/transport/internet/relayConfig';
 import {
   formatAccessKey,
-  loadBridgeSecret,
+  loadBridgeSecretTry,
   loadOrCreateBridgeSecret,
   rotateBridgeSecret,
 } from '../../core/bridge/agentBridgeKeys';
@@ -78,6 +78,21 @@ const BACKGROUND_NOTE =
 const SETTING_UNREAD_NOTE =
   'Настройку прочитать не удалось. Показано, работает ли мост прямо сейчас; после перезапуска приложения состояние может оказаться другим.';
 
+/**
+ * Сам ключ прочитать не вышло (v4.32.1038).
+ *
+ * Прежде этот случай не отличался от «ключа ещё не заводили»: чтение шло
+ * через `loadBridgeSecret`, а нечитаемое хранилище оттуда БРОСАЕТ — бросок
+ * уносил весь эффект, `accessKey` оставался пустым, и блок под
+ * `enabled && accessKey` исчезал целиком. Вместе с ним исчезала кнопка
+ * «Новый ключ» — единственный отзыв доступа, — и молча: рычажок при этом
+ * честно показывал «включено», потому что отметка читается из другого
+ * хранилища. Показать нечего и теперь, но отозвать можно: новый ключ пишется
+ * поверх прежнего, читать прежний для этого не нужно.
+ */
+const KEY_UNREAD_NOTE =
+  'Ключ доступа прочитать не удалось — показать его нечем. «Новый ключ» работает по-прежнему: он выдаёт новый и тем же действием отзывает прежний, каким бы тот ни был.';
+
 export function AgentBridgeSettingsSection(): React.ReactElement {
   const [enabled, setEnabled] = useState(false);
   /**
@@ -86,17 +101,35 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
    */
   const [settingUnread, setSettingUnread] = useState(false);
   const [accessKey, setAccessKey] = useState<string | null>(null);
+  /** Ключ с диска прочитать не вышло — см. KEY_UNREAD_NOTE (v4.32.1038). */
+  const [keyUnread, setKeyUnread] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refreshKey = useCallback(async () => {
-    const secret = await loadBridgeSecret();
-    if (!secret) {
+    const got = await loadBridgeSecretTry();
+    if (got === null) {
+      setKeyUnread(true);
       setAccessKey(null);
       return;
     }
-    const cfg = await loadConfig();
-    setAccessKey(formatAccessKey(secret, cfg.internet?.relayBase ?? DEFAULT_RELAY_BASE));
+    if (!got.secret) {
+      setKeyUnread(false);
+      setAccessKey(null);
+      return;
+    }
+    try {
+      // Адрес сервера — половина ключа доступа: без него агенту некуда
+      // стучаться. Отказ настроек оставил бы блок пустым тем же молчанием,
+      // что и нечитаемое хранилище, поэтому исход у них общий.
+      const cfg = await loadConfig();
+      setAccessKey(formatAccessKey(got.secret, cfg.internet?.relayBase ?? DEFAULT_RELAY_BASE));
+      setKeyUnread(false);
+    } catch (e) {
+      log.warn('agent_bridge_key_show_failed', { err: rawErrorText(e) });
+      setAccessKey(null);
+      setKeyUnread(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -365,37 +398,46 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
 
         {settingUnread ? <Text style={styles.warn}>{SETTING_UNREAD_NOTE}</Text> : null}
 
-        {enabled && accessKey ? (
-          <>
-            <Pressable
-              style={styles.keyBox}
-              onPress={() => setRevealed((v) => !v)}
-              testID="agent_bridge_reveal"
-            >
-              {revealed ? (
-                <Text style={styles.keyText} selectable>
-                  {accessKey}
-                </Text>
-              ) : (
-                <Text style={styles.keyHidden}>Ключ доступа скрыт. Нажмите, чтобы показать.</Text>
-              )}
-            </Pressable>
+        {enabled && keyUnread ? <Text style={styles.warn}>{KEY_UNREAD_NOTE}</Text> : null}
 
-            {revealed ? (
-              <View style={styles.qrWrap}>
-                <BrandedQr value={accessKey} size={QR_SIZE} />
-                <Text style={styles.qrNote}>
-                  Ключ и адрес сервера в одной строке: агенту больше ничего вводить не нужно.
-                  Через код надёжнее, чем через буфер обмена.
-                </Text>
-              </View>
+        {enabled && (accessKey || keyUnread) ? (
+          <>
+            {/* Показать нечего, когда ключ не прочитался, — но отозвать можно. */}
+            {accessKey ? (
+              <>
+                <Pressable
+                  style={styles.keyBox}
+                  onPress={() => setRevealed((v) => !v)}
+                  testID="agent_bridge_reveal"
+                >
+                  {revealed ? (
+                    <Text style={styles.keyText} selectable>
+                      {accessKey}
+                    </Text>
+                  ) : (
+                    <Text style={styles.keyHidden}>Ключ доступа скрыт. Нажмите, чтобы показать.</Text>
+                  )}
+                </Pressable>
+
+                {revealed ? (
+                  <View style={styles.qrWrap}>
+                    <BrandedQr value={accessKey} size={QR_SIZE} />
+                    <Text style={styles.qrNote}>
+                      Ключ и адрес сервера в одной строке: агенту больше ничего вводить не нужно.
+                      Через код надёжнее, чем через буфер обмена.
+                    </Text>
+                  </View>
+                ) : null}
+              </>
             ) : null}
 
             <View style={styles.rowBtns}>
-              <Pressable accessibilityRole="button" style={styles.btn} onPress={onCopyPress} testID="agent_bridge_copy">
-                <Ionicons name="copy-outline" size={16} color={styles.accent.color} />
-                <Text style={styles.btnText}>{COPY_ACTION}</Text>
-              </Pressable>
+              {accessKey ? (
+                <Pressable accessibilityRole="button" style={styles.btn} onPress={onCopyPress} testID="agent_bridge_copy">
+                  <Ionicons name="copy-outline" size={16} color={styles.accent.color} />
+                  <Text style={styles.btnText}>{COPY_ACTION}</Text>
+                </Pressable>
+              ) : null}
               <Pressable accessibilityRole="button" style={styles.btn} onPress={onRevokePress} testID="agent_bridge_revoke">
                 <Ionicons name="refresh" size={16} color={styles.errColor.color} />
                 <Text style={styles.revokeText}>Новый ключ</Text>

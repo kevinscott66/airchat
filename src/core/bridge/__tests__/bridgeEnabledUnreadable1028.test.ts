@@ -156,7 +156,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('кнопка отзыва живёт внутри блока, который гасится рычажком', () => {
     const body = SECTION();
-    const block = body.indexOf('{enabled && accessKey ? (');
+    // v4.32.1038: у блока прибавилось второе условие — нечитаемый ключ его
+    // больше не гасит. Повод у закрепки прежний: «Новый ключ» стоит внутри
+    // блока, который зависит от `enabled`, и отметку сюда приносит свидетель.
+    const block = body.indexOf('{enabled && (accessKey || keyUnread) ? (');
     expect(block).toBeGreaterThan(0);
     const end = body.indexOf('    </View>\n  );', block);
     expect(end).toBeGreaterThan(block);

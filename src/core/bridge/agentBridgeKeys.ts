@@ -128,7 +128,35 @@ export function parseAccessKey(raw: string): ParsedAccessKey | null {
   }
 }
 
-/** Секрет из хранилища. `null` — моста на этом устройстве ещё не заводили. */
+/**
+ * Секрет исходом чтения (v4.32.1038).
+ *
+ * `{ secret }` — прочитали и он есть; `{ secret: null }` — прочитали, записи
+ * нет; `null` — прочитать не смогли. Разница между вторым и третьим в цене:
+ * «не заводили» гасит блок ключа правильно, а «не смогли» гасило вместе с
+ * ним кнопку «Новый ключ» — единственный отзыв доступа в приложении — ровно
+ * тогда, когда мост работает и отзывать есть что.
+ *
+ * Бросок сюда приходит от самого хранилища: контракт обёртки
+ * (`storage/secureStoreQueued`) — «нет записи» это `null`, «не читается» это
+ * исключение (сброс Keystore на Android, запертый Keychain).
+ */
+export async function loadBridgeSecretTry(): Promise<{ secret: Uint8Array | null } | null> {
+  try {
+    return { secret: await loadBridgeSecret() };
+  } catch (e) {
+    log.warn('agent_bridge_secret_read_failed', { err: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
+/**
+ * Секрет из хранилища. `null` — моста на этом устройстве ещё не заводили.
+ *
+ * Нечитаемое хранилище отсюда БРОСАЕТ: подъём моста на такой ответ обязан
+ * споткнуться, а не завести новый ключ. Экрану нужен другой ответ — см.
+ * `loadBridgeSecretTry` выше.
+ */
 export async function loadBridgeSecret(): Promise<Uint8Array | null> {
   const raw = await SecureStore.getItemAsync(SECRET_KEY);
   if (!raw) return null;
