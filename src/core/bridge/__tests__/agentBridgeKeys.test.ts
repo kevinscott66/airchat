@@ -9,6 +9,9 @@
  */
 const mockKv: Record<string, string> = {};
 jest.mock('../../storage/local', () => ({
+  // v4.32.1028: отметка моста читается тремя состояниями — `null` значит
+  // «не прочитали». Исправная база здесь отвечает всегда.
+  kvTryGet: jest.fn(async (k: string) => ({ value: mockKv[k] ?? null })),
   kvGet: jest.fn(async (k: string) => mockKv[k] ?? null),
   kvSet: jest.fn(async (k: string, v: string) => {
     mockKv[k] = v;

@@ -46,7 +46,7 @@
  * правда, но не безусловная: лучше именно тогда, когда туннель включён.
  */
 import { log } from '../logger';
-import { kvGet, kvSetChecked } from '../storage/local';
+import { kvSetChecked, kvTryGet } from '../storage/local';
 import { loadConfig } from '../config';
 import { DEFAULT_RELAY_BASE, DEFAULT_WS_BASE } from '../transport/internet/relayConfig';
 import {
@@ -67,7 +67,13 @@ import { KNOWN_COMMANDS, parseCommand, runBridgeCommand, type BridgeReply } from
 const ENABLED_KEY = 'agent_bridge_enabled';
 
 /**
- * Выключен, пока явно не включили.
+ * Отметка тремя состояниями: `null` — запись не прочиталась.
+ *
+ * v4.32.1028: раньше её не было, и `isBridgeEnabled` читала отказ базы как
+ * уверенное «выключено». Запуску такой ответ подходит (ниже), а экрану
+ * настроек — нет: мост живёт в памяти, и пока база молчит, сокет работает.
+ * Рычажок при этом вставал в «выкл», а вместе с ним пропадал весь блок ключа
+ * под `enabled && accessKey` — то есть единственная кнопка отзыва.
  *
  * Обратите внимание на сравнение: у настроек уведомлений в проекте
  * противоположное соглашение (`!== 'false'`, то есть по умолчанию включено).
@@ -75,8 +81,22 @@ const ENABLED_KEY = 'agent_bridge_enabled';
  * приложением не должен оказаться открытым из-за того, что ключа в хранилище
  * не нашлось.
  */
+export async function bridgeEnabledTry(): Promise<{ on: boolean } | null> {
+  const got = await kvTryGet(ENABLED_KEY);
+  return got === null ? null : { on: got.value === 'true' };
+}
+
+/**
+ * Выключен, пока явно не включили — и пока не доказано обратное.
+ *
+ * Отказ чтения здесь нарочно читается как «выключен»: канал управления
+ * телефоном не должен открываться оттого, что базу не прочитали. Этим
+ * ответом пользуется `startAgentBridgeIfEnabled`, и закрытый по
+ * недоразумению мост беды не делает — его включат рычажком. Экрану нужен
+ * другой ответ, и он спрашивает `bridgeEnabledTry`.
+ */
 export async function isBridgeEnabled(): Promise<boolean> {
-  return (await kvGet(ENABLED_KEY)) === 'true';
+  return (await bridgeEnabledTry())?.on === true;
 }
 
 /**

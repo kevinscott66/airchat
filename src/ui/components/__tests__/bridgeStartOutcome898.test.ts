@@ -87,7 +87,11 @@ describe('смена ключа не выдаёт половину новост�
   it('упавший перезапуск после смены ключа получает свои слова', () => {
     const body = codeOnly(SECTION);
     expect(body).not.toContain('if (await isBridgeEnabled()) await startAgentBridgeIfEnabled();');
-    const at = body.indexOf('if ((await isBridgeEnabled()) && !(await startAgentBridgeIfEnabled())) {');
+    // v4.32.1028: якорь переехал с диска на свидетеля из памяти. Вопрос здесь
+    // «жив ли сокет с прежними ключами», и отказ чтения диска пропускал
+    // перезапуск совсем. Повод у пиньона прежний: ответ перезапуска
+    // разбирается, и у неудачи свои слова.
+    const at = body.indexOf('if (isBridgeRunning() && !(await startAgentBridgeIfEnabled())) {');
     expect(at).toBeGreaterThan(0);
     const tail = body.slice(at, at + 400);
     expect(tail).toContain(MSG_REKEY);
@@ -141,12 +145,12 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('отметка читается гасящим чтением — «включено» на диске может не прочитаться', () => {
     const bridge = codeOnly('core/bridge/agentBridge.ts', SRC);
-    expect(bridge).toContain("return (await kvGet(ENABLED_KEY)) === 'true';");
-    // `kvGet` — тонкая обёртка над `kvTryGet`, а та ловит отказ базы и
-    // возвращает `null`: «не прочиталось» и «записано выключено» на выходе
-    // неразличимы. Значит `false` от запуска достижим и после удачной записи.
+    // v4.32.1028: чтение переехало на `bridgeEnabledTry`, но для ЗАПУСКА
+    // ответ прежний — отказ читается как «выключено», нарочно. Значит
+    // `false` от запуска достижим и после удачной записи.
+    expect(bridge).toContain("return (await bridgeEnabledTry())?.on === true;");
+    expect(bridge).toContain('const got = await kvTryGet(ENABLED_KEY);');
     const local = codeOnly('core/storage/local.ts', SRC);
-    expect(local).toContain('return (await kvTryGet(key))?.value ?? null;');
     const at = local.indexOf('export async function kvTryGet(key: string)');
     expect(at).toBeGreaterThan(0);
     const body2 = local.slice(at, at + 600);

@@ -38,6 +38,9 @@ const mockKvSet = jest.fn(async (k: string, v: string): Promise<void> => {
 });
 
 jest.mock('../../storage/local', () => ({
+  // v4.32.1028: отметка читается тремя состояниями. Здесь проверяется
+  // ЗАПИСЬ, поэтому чтение исправно всегда.
+  kvTryGet: jest.fn(async (k: string) => ({ value: mockKv[k] ?? null })),
   kvGet: jest.fn(async (k: string) => mockKv[k] ?? null),
   kvSet: (k: string, v: string) => mockKvSet(k, v),
   kvSetChecked: (k: string, v: string) => mockKvSetChecked(k, v),

@@ -37,7 +37,8 @@ import {
   rotateBridgeSecret,
 } from '../../core/bridge/agentBridgeKeys';
 import {
-  isBridgeEnabled,
+  bridgeEnabledTry,
+  isBridgeRunning,
   setBridgeEnabled,
   startAgentBridgeIfEnabled,
   stopAgentBridge,
@@ -67,8 +68,23 @@ const BACKGROUND_NOTE =
       ? 'Со свёрнутым приложением мост отвечает, пока включён туннель OpenFlux: туннель держит службу переднего плана, и вместе с ней работает приложение. Без туннеля система выгружает приложение из памяти когда сочтёт нужным, и мост замолкает.'
       : 'Мост отвечает, пока приложение запущено.';
 
+/**
+ * Отметку с диска прочитать не вышло (v4.32.1028).
+ *
+ * Молчать тут нельзя: рычажок показывает мост «прямо сейчас», из памяти, а
+ * после перезапуска его поднимет то, что записано на диске, — и это может
+ * оказаться другим.
+ */
+const SETTING_UNREAD_NOTE =
+  'Настройку прочитать не удалось. Показано, работает ли мост прямо сейчас; после перезапуска приложения состояние может оказаться другим.';
+
 export function AgentBridgeSettingsSection(): React.ReactElement {
   const [enabled, setEnabled] = useState(false);
+  /**
+   * Отметку с диска прочитать не вышло, и рычажок показывает свидетеля из
+   * памяти (v4.32.1028).
+   */
+  const [settingUnread, setSettingUnread] = useState(false);
   const [accessKey, setAccessKey] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -85,7 +101,16 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
 
   useEffect(() => {
     void (async () => {
-      setEnabled(await isBridgeEnabled());
+      // v4.32.1028: отметка спрашивается тремя состояниями. Отказ базы
+      // раньше приходил сюда как уверенное «выключено» — и гасил вместе с
+      // рычажком весь блок ключа, то есть единственную кнопку отзыва, в тот
+      // самый момент, когда мост работает. Непрочитанную отметку заменяем
+      // свидетелем из памяти: он отвечает не «что записано», а «жив ли
+      // сокет прямо сейчас», и это ровно тот вопрос, за которым сюда
+      // приходят. Про разницу говорим словами ниже.
+      const st = await bridgeEnabledTry();
+      setSettingUnread(st === null);
+      setEnabled(st === null ? isBridgeRunning() : st.on);
       await refreshKey();
     })();
   }, [refreshKey]);
@@ -139,6 +164,9 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
           // открытым на экране.
           setRevealed(false);
         }
+        // Запись легла — значит и отметка, и рычажок теперь верны, и
+        // оговорка про непрочитанную настройку больше не нужна.
+        setSettingUnread(false);
       } catch (e) {
         setEnabled(!on);
         // Слова разные, потому что положение дел разное. Не включилось — канал
@@ -224,7 +252,13 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
       // если поднять её обратно не вышло, «Выдан новый ключ» остаётся правдой
       // ровно наполовину: ключ выдан, а моста нет. Отдельные слова, потому
       // что «не удалось выдать новый ключ» было бы прямой неправдой.
-      if ((await isBridgeEnabled()) && !(await startAgentBridgeIfEnabled())) {
+      // v4.32.1028: спрашиваем свидетеля из памяти, а не диск. Вопрос здесь
+      // именно «жив ли сокет с прежними ключами»: `state.keys` выводятся
+      // один раз при подъёме, смена секрета их не трогает, и живой сокет
+      // продолжает открывать кадры ПРЕЖНИМ ключом. Пока тут спрашивали
+      // диск, отказ чтения пропускал перезапуск — и «Прежний больше не
+      // действует» говорилось поверх работающего прежнего ключа.
+      if (isBridgeRunning() && !(await startAgentBridgeIfEnabled())) {
         log.warn('agent_bridge_restart_failed');
         showError('Новый ключ выдан, но мост не перезапустился — выключите и включите его');
         return;
@@ -328,6 +362,8 @@ export function AgentBridgeSettingsSection(): React.ReactElement {
         </View>
 
         <Text style={styles.warn}>{BACKGROUND_NOTE}</Text>
+
+        {settingUnread ? <Text style={styles.warn}>{SETTING_UNREAD_NOTE}</Text> : null}
 
         {enabled && accessKey ? (
           <>
