@@ -1666,7 +1666,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       await new Promise<void>((r) => setTimeout(r, 0));
       if (!isMountedRef.current || loadVersionRef.current !== myVersion) return;
       const tB = Date.now();
-      setUnread(await getUnreadFeedCount());
+      // v4.32.1021: `null` — «не сосчитали». Прежнее число остаётся: оно
+      // устарело на одно обращение, а ноль снял бы полоску совсем.
+      const freshUnread = await getUnreadFeedCount();
+      if (freshUnread !== null) setUnread(freshUnread);
       log.info('ui_feed_load_unread_done', { ms: Date.now() - tB });
       // v4.32.29: resolve media URIs (inline:* → data:, остальные → gateway).
       if (list.length > 0) {
@@ -1851,6 +1854,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     setCommentCounts({});
     setTranslatedPosts({});
     setViewCounts({});
+    // v4.32.1021: раз «не сосчитали» больше не затирает число нулём, обнулить
+    // его при смене профиля обязан этот сброс — иначе в чужой ленте висело бы
+    // непрочитанное прошлого профиля до первого удачного счёта.
+    setUnread(0);
   }, [did]);
 
   useEffect(() => {
@@ -2502,7 +2509,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       }
       if (markedCount > 0) {
         void getUnreadFeedCount().then((n) => {
-          if (isMountedRef.current) setUnread(n);
+          if (isMountedRef.current && n !== null) setUnread(n);
         });
       }
       // v4.32.69: feed_view envelope — отправляется автору поста (не-своего, один раз).

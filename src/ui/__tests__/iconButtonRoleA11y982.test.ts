@@ -119,6 +119,20 @@ const at = (...parts: string[]): Site | undefined => {
   return sites.find((s) => s.file === file && s.line === line);
 };
 
+/**
+ * Галочка по тому, что она переключает (v4.32.1021).
+ *
+ * По номерам строк она и находилась — и номера уехали в третий раз, теперь от
+ * правки в другом месте FeedScreen. Довод тот же, что у соседей в v4.32.1016:
+ * у проверки с номером строки дела нет, а держаться она должна за место.
+ * Признак места здесь — сам обработчик: галочка ровно затем и стоит, чтобы
+ * перевернуть свой признак, и второй такой в файле нет.
+ */
+const toggleSite = (file: string[], flag: string): Site[] => {
+  const setter = `set${flag[0].toUpperCase()}${flag.slice(1)}((v) => !v)`;
+  return sites.filter((s) => s.file === join(...file) && s.tag.includes(setter));
+};
+
 describe('ПРОВЕРКА НЕ ПУСТАЯ: обход находит значок с надписью', () => {
   it('таких мест в доме не меньше девяноста', () => {
     expect(sites.length).toBeGreaterThanOrEqual(90);
@@ -197,18 +211,19 @@ describe('ЗАКРЕПКА: у каждого такого места роль �
 describe('ЗАКРЕПКА: выбор не назван командой', () => {
   it('галочки опроса объявлены галочками и говорят, отмечены ли', () => {
     const boxes: [string[], string][] = [
-      [['components', 'modals', 'chat', 'ChatPollCreatorModal.tsx', '109'], 'isQuiz'],
-      [['components', 'modals', 'chat', 'ChatPollCreatorModal.tsx', '113'], 'anonymous'],
-      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '123'], 'isQuiz'],
-      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '132'], 'allowMultiple'],
-      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx', '138'], 'anonymous'],
-      [['screens', 'FeedScreen.tsx', '3716'], 'pollAnonymous'],
-      [['screens', 'FeedScreen.tsx', '3724'], 'pollMultiSelect'],
+      [['components', 'modals', 'chat', 'ChatPollCreatorModal.tsx'], 'isQuiz'],
+      [['components', 'modals', 'chat', 'ChatPollCreatorModal.tsx'], 'anonymous'],
+      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx'], 'isQuiz'],
+      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx'], 'allowMultiple'],
+      [['components', 'modals', 'groups', 'GroupPollCreatorModal.tsx'], 'anonymous'],
+      [['screens', 'FeedScreen.tsx'], 'pollAnonymous'],
+      [['screens', 'FeedScreen.tsx'], 'pollMultiSelect'],
     ];
-    for (const [parts, flag] of boxes) {
-      const tag = at(...parts)?.tag;
-      expect(tag).toContain('accessibilityRole="checkbox"');
-      expect(tag).toContain(`accessibilityState={{ checked: ${flag} }}`);
+    for (const [file, flag] of boxes) {
+      const found = toggleSite(file, flag);
+      expect(found).toHaveLength(1);
+      expect(found[0].tag).toContain('accessibilityRole="checkbox"');
+      expect(found[0].tag).toContain(`accessibilityState={{ checked: ${flag} }}`);
     }
   });
 

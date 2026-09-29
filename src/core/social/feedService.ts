@@ -2818,12 +2818,27 @@ export async function listFeedPostViewers(postId: string): Promise<FeedViewerRow
   return await s.getViewers(postId);
 }
 
-export async function getUnreadFeedCount(): Promise<number> {
+/**
+ * Сколько в ленте непрочитанного. `null` — не сосчитали (v4.32.1021).
+ *
+ * Здесь стоял немой `catch { return 0 }`, и ноль отсюда был не ответом, а его
+ * отсутствием: полоска «N непрочитанных — обновить» стоит под `unread > 0`,
+ * то есть ноль её снимает. Счёт идёт в конце каждого `loadFeed` — в ту же
+ * занятую секунду, когда идёт разбор очереди и запись просмотров, — так что
+ * одного отказа базы хватало, чтобы погасить полоску с живым числом и сказать
+ * человеку «нового нет». Сам `getUnreadCount` в хранилище отказ не глотает.
+ *
+ * Различает исходы тот же способ, что и кружок непрочитанного в шапке
+ * (v4.32.1013): экран на `null` оставляет прежнее число — оно устарело на одно
+ * обращение, но не врёт про пустоту.
+ */
+export async function getUnreadFeedCount(): Promise<number | null> {
   try {
     const s = await ensureStorage();
     return await s.getUnreadCount();
-  } catch {
-    return 0;
+  } catch (e) {
+    log.warn('feed_unread_count_failed', { err: e instanceof Error ? e.message : String(e) });
+    return null;
   }
 }
 
