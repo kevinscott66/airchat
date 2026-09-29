@@ -31,7 +31,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { avatarFileName, avatarUriFromName, newAvatarUri } from '../media/avatarFiles';
 import { AVATAR_NAME_KEY } from './avatarKeep';
-import { ownFieldGetFor, ownFieldSetFor } from './ownProfile';
+import { ownFieldGetFor, ownFieldSetFor, ownFieldTryGetFor } from './ownProfile';
 import { profileManager } from './profileManager';
 import { log } from '../logger';
 
@@ -88,7 +88,23 @@ export async function ownAvatarName(): Promise<string> {
  * версию карточки: путь меняется от установки к установке, имя — нет.
  */
 export async function ownAvatarNameFor(pid: number): Promise<string> {
-  return avatarFileName(await ownFieldGetFor(pid, NAME_KEY));
+  return (await ownAvatarNameTryFor(pid)) ?? '';
+}
+
+/**
+ * То же имя файла, но с отдельным ответом «не прочитали» (v4.32.1023).
+ *
+ * `null` — запись на месте и не открылась; пустая строка — фотографии нет.
+ * Строчная форма выше сводит оба случая к пустой строке, и месту, которое
+ * просто показывает фотографию, этого довольно: рисовать нечего и там, и там.
+ * А рассылке карточки — нет: пустое имя означает у неё «фотографии нет», и
+ * получатель по такому конверту стирает `avatarCid` у себя (см. contacts,
+ * setPeerProfileForChecked). Отказ базы обходился бы контактам в пропавшее
+ * лицо.
+ */
+export async function ownAvatarNameTryFor(pid: number): Promise<string | null> {
+  const cell = await ownFieldTryGetFor(pid, NAME_KEY);
+  return cell === null ? null : avatarFileName(cell.text);
 }
 
 /** Путь к фотографии активного профиля; `null` — фотографии нет. */

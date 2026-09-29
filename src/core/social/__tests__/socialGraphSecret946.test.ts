@@ -94,20 +94,20 @@ jest.mock('../contacts', () => ({
 }));
 
 jest.mock('../../identity/ownProfile', () => ({
-  getOwnDisplayNameFor: async () => 'Рита',
-  getOwnUsernameFor: async () => 'rita',
-  ownFieldGetFor: async () => '',
+  getOwnDisplayNameTryFor: async () => ({ name: 'Рита' }),
+  getOwnUsernameTryFor: async () => ({ username: 'rita' }),
+  ownFieldTryGetFor: async () => ({ text: '' }),
 }));
 jest.mock('../../identity/ownAvatar', () => ({
-  ownAvatarNameFor: async () => null,
+  ownAvatarNameTryFor: async () => '',
   ownAvatarUriFor: async () => null,
   ownAvatarBytesFor: async () => null,
 }));
 jest.mock('../../settings/avatarVisibility', () => ({
   avatarVisibilityTryFor: async () => 'everybody',
 }));
-jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantFor: async () => null }));
-jest.mock('../../identity/ownLinks', () => ({ ownLinksFor: async () => [] }));
+jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantTryFor: async () => ({ grant: null }) }));
+jest.mock('../../identity/ownLinks', () => ({ ownLinksTryFor: async () => [] }));
 jest.mock('../../identity/verification', () => ({ badgeFor: () => false }));
 jest.mock('../../identity/did', () => ({ didFromPubB64: (p: string) => `did:key:${p}` }));
 jest.mock('./../publicAvatar', () => ({ publishOwnAvatarToDirectory: async () => null }));

@@ -71,21 +71,21 @@ jest.mock('../../identity/profileManager', () => ({
 /** Заполнено ли имя в своём профиле: с пустым слать нечего. */
 let mockOwnName: string | null = 'Рита';
 jest.mock('../../identity/ownProfile', () => ({
-  getOwnDisplayNameFor: jest.fn(async () => mockOwnName),
-  getOwnUsernameFor: jest.fn(async () => null),
-  ownFieldGetFor: jest.fn(async () => ''),
+  getOwnDisplayNameTryFor: jest.fn(async () => ({ name: mockOwnName })),
+  getOwnUsernameTryFor: jest.fn(async () => ({ username: null })),
+  ownFieldTryGetFor: jest.fn(async () => ({ text: '' })),
 }));
 jest.mock('../../identity/ownAvatar', () => ({
-  ownAvatarNameFor: jest.fn(async () => null),
+  ownAvatarNameTryFor: jest.fn(async () => ''),
   ownAvatarUriFor: jest.fn(async () => null),
 }));
 jest.mock('../../settings/avatarVisibility', () => ({
   avatarVisibilityTryFor: jest.fn(async () => 'everybody'),
 }));
-jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantFor: jest.fn(async () => null) }));
-// Пустой список привязок настоящий ownLinksFor отдаёт как null — с [] проверка
+jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantTryFor: jest.fn(async () => ({ grant: null })) }));
+// Пустой список привязок настоящий ownLinksTryFor отдаёт как null — с [] проверка
 // «есть ли что рассылать» не сработала бы, и пустой профиль всё равно уезжал.
-jest.mock('../../identity/ownLinks', () => ({ ownLinksFor: jest.fn(async () => null) }));
+jest.mock('../../identity/ownLinks', () => ({ ownLinksTryFor: jest.fn(async () => null) }));
 jest.mock('../../identity/verification', () => ({ badgeFor: jest.fn(() => false) }));
 jest.mock('../../identity/did', () => ({ didFromPubB64: (p: string) => `did:key:${p}` }));
 

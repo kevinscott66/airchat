@@ -22,8 +22,12 @@ import {
   scopedKvTryGetFor,
   scopedKvTryGetSecretFor,
 } from '../storage/profileScopedKv';
-import { getOwnDisplayNameFor, getOwnUsernameFor, ownFieldGetFor } from '../identity/ownProfile';
-import { ownAvatarNameFor, ownAvatarUriFor } from '../identity/ownAvatar';
+import {
+  getOwnDisplayNameTryFor,
+  getOwnUsernameTryFor,
+  ownFieldTryGetFor,
+} from '../identity/ownProfile';
+import { ownAvatarNameTryFor, ownAvatarUriFor } from '../identity/ownAvatar';
 import { listContactsFor, setPeerProfileForChecked } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
@@ -42,11 +46,11 @@ import {
 } from './profileEnvelope';
 import { normalizeOwnPronouns } from './peerPronouns';
 import { normalizeOwnStatus } from './peerStatus';
-import { ownBadgeGrantFor } from '../identity/ownBadge';
+import { ownBadgeGrantTryFor } from '../identity/ownBadge';
 // v4.32.575: привязки едут тем же конвертом, что и имя. Едут именем и адресом
 // публикации, а не признаком «подтверждено»: проверяет получатель — см.
 // identity/profileLinks.
-import { ownLinksFor } from '../identity/ownLinks';
+import { ownLinksTryFor } from '../identity/ownLinks';
 import { profileLinksKey, type ProfileLink } from '../identity/profileLinks';
 import { badgeFor } from '../identity/verification';
 import { didFromPubB64 } from '../identity/did';
@@ -101,6 +105,12 @@ type Built = { env: PeerProfileEnvelope; version: number };
  * первую). Не знаем номер версии — не рассылаем: отличить «то же самое» от
  * «уже другое» нечем, а ошибка в эту сторону уводит карточку всем контактам
  * заново. Исход временный, следующее открытие переписки попробует снова.
+ *
+ * v4.32.1023: тем же словом отвечает и нечитаемая ячейка любого поля карточки.
+ * Причина другая, а цена выше: пустое поле в конверте значит не «не знаем», а
+ * «стёрто», и получатель кладёт его поверх своего (`peerName: profile.name ??
+ * ''` и соседние строки в contacts). Один отказ SQLite или Keychain —
+ * и человек у всех своих контактов без имени, без фотографии и без «О себе».
  */
 type BuildOutcome = Built | 'empty' | 'unreadable';
 
@@ -257,31 +267,55 @@ function avatarAllowed(visibility: AvatarVisibility | null, audience: Audience):
  * Одно чтение на отправку такого расхождения не допускает, а отозвать
  * отправленную фотографию нельзя.
  */
+/** Ячейка поля карточки не открылась: назвать поле в журнале и промолчать. */
+function unreadableField(field: string, pid: number): 'unreadable' {
+  log.warn('profile_field_unreadable', { field, pid });
+  return 'unreadable';
+}
+
 async function buildEnvelope(
   pid: number,
   audience: Audience,
   visibility: AvatarVisibility | null,
 ): Promise<BuildOutcome> {
-  const name = await getOwnDisplayNameFor(pid);
-  const username = await getOwnUsernameFor(pid);
+  // v4.32.1023: все поля спрашиваются различающей формой. Ячейки читаются по
+  // одной, разными запросами: занята база на одном запросе из восьми —
+  // остальные семь отвечают, и конверт уходит непустым, с провалом на месте
+  // отказавшего поля. Рассылку зовут на запуске и из фона, то есть в занятую
+  // секунду и при запертом устройстве.
+  const readName = await getOwnDisplayNameTryFor(pid);
+  if (readName === null) return unreadableField('name', pid);
+  const name = readName.name;
+  const readUsername = await getOwnUsernameTryFor(pid);
+  if (readUsername === null) return unreadableField('username', pid);
+  const username = readUsername.username;
   // v4.32.378: тем же правилом, каким конверт чистится на сборке. Иначе
   // проверка «есть ли что рассылать» ниже считала «О себе» из одних невидимых
   // символов заполненным полем, и всем контактам уходил конверт, в котором
   // после чистки не оставалось ничего, кроме отметки времени.
-  const bio = normalizeOwnBio(await ownFieldGetFor(pid, 'user_bio')) || null;
+  const readBio = await ownFieldTryGetFor(pid, 'user_bio');
+  if (readBio === null) return unreadableField('bio', pid);
+  const bio = normalizeOwnBio(readBio.text) || null;
   // v4.32.616: местоимения и статус едут тем же конвертом, что имя и «О
   // себе», — это поля того же редактора профиля, и место им там же. Статус
   // ездил и раньше, но конвертом присутствия: значит доезжал только пока
   // человек в сети и только в шапку переписки, а в карточке профиля его не
   // было. Чистятся тем же правилом, каким чистятся на приёме.
-  const pronouns = normalizeOwnPronouns(await ownFieldGetFor(pid, 'user_pronouns')) || null;
-  const status = normalizeOwnStatus(await ownFieldGetFor(pid, 'user_custom_status')) || null;
+  const readPronouns = await ownFieldTryGetFor(pid, 'user_pronouns');
+  if (readPronouns === null) return unreadableField('pronouns', pid);
+  const pronouns = normalizeOwnPronouns(readPronouns.text) || null;
+  const readStatus = await ownFieldTryGetFor(pid, 'user_custom_status');
+  if (readStatus === null) return unreadableField('status', pid);
+  const status = normalizeOwnStatus(readStatus.text) || null;
   // v4.32.556: имя файла, а не путь к нему. Путь входил в свёртку версии ниже
   // и менялся при каждом обновлении приложения — то есть после каждого
   // обновления карточка заново уезжала всем контактам, не сообщая им ничего
   // нового.
-  const avatarName = await ownAvatarNameFor(pid);
-  const links = await ownLinksFor(pid);
+  const avatarName = await ownAvatarNameTryFor(pid);
+  if (avatarName === null) return unreadableField('avatar', pid);
+  const readLinks = await ownLinksTryFor(pid);
+  if (readLinks === 'unreadable') return unreadableField('links', pid);
+  const links = readLinks;
   if (!name && !username && !bio && !pronouns && !status && !avatarName && !links) return 'empty';
   const now = Date.now();
   // v4.32.960: отметку спрашиваем тремя состояниями. Прежде её читала
@@ -319,7 +353,9 @@ async function buildEnvelope(
   // Настройке «кто видит фото» она не подчиняется: галочка не про личное, она
   // существует, чтобы собеседник мог отличить настоящий аккаунт от похожего,
   // и спрятанная она бесполезна.
-  const badge = await ownBadgeGrantFor(pid);
+  const readBadge = await ownBadgeGrantTryFor(pid);
+  if (readBadge === null) return unreadableField('badge', pid);
+  const badge = readBadge.grant;
   return {
     env: { name, username, bio, pronouns, status, avatarCid, badge, links, ts: stamp },
     version: versionOf(

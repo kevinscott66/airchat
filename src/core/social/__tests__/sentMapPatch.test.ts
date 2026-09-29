@@ -110,7 +110,11 @@ describe('у захода один владелец от начала до ко�
       "await buildEnvelope(pid, 'contacts', await avatarVisibilityTryFor(pid))"
     );
     expect(profileSrc).not.toMatch(/buildEnvelope\(activeProfileId\(\)/);
-    expect(profileSrc).toContain('await getOwnDisplayNameFor(pid)');
+    // v4.32.1023: имя читается различающей формой — сводящая выдавала отказ
+    // базы за «имени нет», и карточка без имени уезжала всем контактам. Довод
+    // проверки прежний и к правке не относится: имя берётся у НАЗВАННОГО
+    // профиля, а не у активного.
+    expect(profileSrc).toContain('await getOwnDisplayNameTryFor(pid)');
   });
 
   it('рассылка решения о времени входа — так же', () => {

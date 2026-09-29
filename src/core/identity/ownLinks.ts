@@ -13,30 +13,53 @@
  */
 import { normalizeHandle, normalizeProofUrl, readLinkProofRecord } from './linkProof';
 import type { ProfileLink } from './profileLinks';
-import { ownFieldGet, ownFieldGetFor, type OwnProfileKey } from './ownProfile';
+import { ownFieldTryGet, ownFieldTryGetFor, type OwnProfileKey } from './ownProfile';
 
 const FIELDS = [
   { p: 'github' as const, handle: 'user_github' as const, proof: 'user_github_proof' as const },
   { p: 'x' as const, handle: 'user_twitter' as const, proof: 'user_twitter_proof' as const },
 ];
 
-async function collect(get: (key: OwnProfileKey) => Promise<string | null>): Promise<ProfileLink[] | null> {
+/**
+ * v4.32.1023: ячейки спрашиваются различающей формой, и `'unreadable'` доходит
+ * до вызывающего. Прежде здесь стояла сводящая форма, и не открывшаяся ячейка
+ * значила «привязки нет» — а пустой список привязок получатель записывает
+ * поверх своего (`peerLinks: []`, см. contacts): отказ базы отвязывал человеку
+ * учётные записи у всех его контактов разом.
+ */
+async function collect(
+  get: (key: OwnProfileKey) => Promise<{ text: string | null } | null>,
+): Promise<ProfileLink[] | null | 'unreadable'> {
   const out: ProfileLink[] = [];
   for (const f of FIELDS) {
-    const h = normalizeHandle(f.p, await get(f.handle));
+    const handle = await get(f.handle);
+    if (handle === null) return 'unreadable';
+    const h = normalizeHandle(f.p, handle.text);
     if (!h) continue;
-    const rec = readLinkProofRecord(await get(f.proof));
+    const proof = await get(f.proof);
+    if (proof === null) return 'unreadable';
+    const rec = readLinkProofRecord(proof.text);
     out.push({ p: f.p, h, u: rec ? normalizeProofUrl(f.p, rec.url) : null });
   }
   return out.length > 0 ? out : null;
 }
 
-/** Привязки заданного профиля — для рассылки конверта. */
-export async function ownLinksFor(pid: number): Promise<ProfileLink[] | null> {
-  return await collect((key) => ownFieldGetFor(pid, key));
+/**
+ * Привязки заданного профиля — для рассылки конверта.
+ *
+ * `'unreadable'` — хотя бы одна ячейка на месте и не открылась. Рассылке этого
+ * довольно, чтобы промолчать до следующего захода.
+ */
+export async function ownLinksTryFor(pid: number): Promise<ProfileLink[] | null | 'unreadable'> {
+  return await collect((key) => ownFieldTryGetFor(pid, key));
 }
 
-/** Привязки текущего профиля — для своей карточки. */
+/**
+ * Привязки текущего профиля — для своей карточки. Здесь «не прочитали» и «не
+ * задано» сводятся к одному: показать нечего и там, и там, а записывать
+ * карточка отсюда ничего не будет.
+ */
 export async function ownLinks(): Promise<ProfileLink[] | null> {
-  return await collect(ownFieldGet);
+  const links = await collect(ownFieldTryGet);
+  return links === 'unreadable' ? null : links;
 }

@@ -16,7 +16,7 @@
  * означало бы «проверено кем-то другим». Проверка — это одна подпись Ed25519,
  * её стоимость на фоне чтения из SQLite незаметна.
  */
-import { ownFieldGetFor, ownFieldSet, getOwnUsernameFor } from './ownProfile';
+import { ownFieldGetFor, ownFieldSet, ownFieldTryGetFor, getOwnUsernameFor } from './ownProfile';
 import { profileManager } from './profileManager';
 import { readGrant, type VerificationClaim } from './verification';
 import { log } from '../logger';
@@ -42,9 +42,22 @@ function didForProfile(pid: number): string | null {
   }
 }
 
-/** Бумага как есть — для отправки в конверте профиля. Не проверена. */
+/** Бумага как есть. Не проверена. */
 export async function ownBadgeGrantFor(pid: number): Promise<string | null> {
   return (await ownFieldGetFor(pid, OWN_BADGE_KEY))?.trim() || null;
+}
+
+/**
+ * Та же бумага с отдельным ответом «не прочитали» (v4.32.1023).
+ *
+ * `null` — запись на месте и не открылась. `{ grant: null }` — бумаги нет.
+ * Разница важна на отправке конверта: отсутствие бумаги получатель записывает
+ * как снятую галочку (`peerVerified: ''`), и отказ базы стоил бы контактам
+ * подтверждения, по которому они и отличают настоящий аккаунт от похожего.
+ */
+export async function ownBadgeGrantTryFor(pid: number): Promise<{ grant: string | null } | null> {
+  const cell = await ownFieldTryGetFor(pid, OWN_BADGE_KEY);
+  return cell === null ? null : { grant: cell.text?.trim() || null };
 }
 
 /**

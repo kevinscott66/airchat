@@ -88,17 +88,17 @@ jest.mock('../../identity/profileManager', () => ({
 /** Имя владельца; пустая строка — профиль не заполнен. */
 let mockOwnName = 'Аня';
 jest.mock('../../identity/ownProfile', () => ({
-  getOwnDisplayNameFor: async () => mockOwnName,
-  getOwnUsernameFor: async () => null,
-  ownFieldGetFor: async () => null,
+  getOwnDisplayNameTryFor: async () => ({ name: mockOwnName }),
+  getOwnUsernameTryFor: async () => ({ username: null }),
+  ownFieldTryGetFor: async () => ({ text: null }),
 }));
 jest.mock('../../identity/ownAvatar', () => ({
-  ownAvatarNameFor: async () => null,
+  ownAvatarNameTryFor: async () => '',
   ownAvatarUriFor: async () => null,
   ownAvatarBytesFor: async () => null,
 }));
-jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantFor: async () => null }));
-jest.mock('../../identity/ownLinks', () => ({ ownLinksFor: async () => null }));
+jest.mock('../../identity/ownBadge', () => ({ ownBadgeGrantTryFor: async () => ({ grant: null }) }));
+jest.mock('../../identity/ownLinks', () => ({ ownLinksTryFor: async () => null }));
 jest.mock('../../logger', () => ({
   log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 }));
