@@ -241,7 +241,12 @@ describe('форма исходников', () => {
   });
 
   it('о сохранении заметки сообщается после записи, а не до', () => {
-    expect(NOTE).toContain("if (res === 'unreadable') { showError(SECRET_UNREADABLE_TEXT); return; }");
+    // v4.32.1029: в той же строке теперь поднимается пометка о непрочитанном —
+    // карточка стала различать три состояния ячейки. Повод у пиньона прежний:
+    // отказ по нечитаемости назван своими словами и записью не заканчивается.
+    expect(NOTE).toContain(
+      "if (res === 'unreadable') { setNoteUnread(true); showError(SECRET_UNREADABLE_TEXT); return; }"
+    );
     expect(NOTE).toContain("showSuccess('Заметка сохранена');");
     expect(NOTE).not.toContain("setNoteEditVisible(false);\n                showSuccess('Заметка сохранена');");
   });

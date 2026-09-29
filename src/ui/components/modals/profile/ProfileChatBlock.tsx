@@ -46,6 +46,26 @@ import {
   type GroupRow,
 } from '../../../../core/storage/local';
 
+/**
+ * v4.32.1029: непрочитанная заметка называется непрочитанной.
+ *
+ * Строчное чтение (`kvGetSecretScoped`) сводило к `null` и «записи нет», и
+ * «база не ответила», и «шифртекст не открылся», а `?? ''` подмешивало к ним
+ * пустую строку. Карточка после этого обещала, что заметки нет.
+ *
+ * Обещание стоило дорого. Карточка открывается поверх диалога — в ту секунду,
+ * когда база занята выборкой истории, и `kvTryGet` отвечает на занятой базе
+ * `null`. Человек видел пустое поле, писал новую заметку и сохранял; к этому
+ * моменту база освобождалась, и запись проходила. Обновлятель здесь
+ * `() => draft`, прежнего содержимого он не смотрит, — старая заметка исчезала
+ * молча. А если шифртекст и правда не открывается, запись отклоняется, текст
+ * цел, но кнопка «Удалить» рисовалась под `contactNote` и была скрыта: выйти
+ * из этого положения было нечем.
+ */
+const NOTE_UNREAD_HINT = 'Заметку не удалось прочитать';
+const NOTE_UNREAD_NOTE =
+  'Заметку не удалось прочитать: пустое поле ниже — не прежний текст. Сохранение заменит его, «Удалить» уберёт запись совсем.';
+
 export function ProfileChatBlock({
   peerB64,
   myPubB64,
@@ -74,6 +94,7 @@ export function ProfileChatBlock({
   const [mediaCount, setMediaCount] = useState<number | null>(0);
   const [mutualGroups, setMutualGroups] = useState<GroupRow[]>([]);
   const [contactNote, setContactNote] = useState('');
+  const [noteUnread, setNoteUnread] = useState(false);
   const [noteEditVisible, setNoteEditVisible] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
   const [notifyOnline, setNotifyOnline] = useState(false);
@@ -98,10 +119,15 @@ export function ProfileChatBlock({
     // и лежит она в той же БД. Читается и пишется через секретный kv.
     // v4.32.278: и в пространстве имён профиля — заметка про этого человека у
     // каждого аккаунта своя.
+    // v4.32.1029: ячейкой, а не строкой — три ответа здесь разные.
     void import('../../../../core/storage/local')
-      .then((m) => m.kvGetSecretScoped(activeProfileId, m.contactNoteKey(peerB64)))
-      .then((n) => { if (!cancelled) setContactNote(n ?? ''); })
-      .catch(() => { /* заметки нет — строка предложит её завести */ });
+      .then((m) => m.kvGetSecretCellScoped(activeProfileId, m.contactNoteKey(peerB64)))
+      .then((cell) => {
+        if (cancelled) return;
+        setNoteUnread(cell.state === 'unreadable');
+        setContactNote(cell.state === 'plain' ? cell.text : '');
+      })
+      .catch(() => { if (!cancelled) setNoteUnread(true); });
     void import('../../../../core/settings/privacyPrefs')
       .then((m) => m.notifyOnlineGet(peerB64))
       .then((v) => { if (!cancelled) setNotifyOnline(v); })
@@ -199,8 +225,9 @@ export function ProfileChatBlock({
         m.contactNoteKey(peerB64),
         () => draft
       );
-      if (res === 'unreadable') { showError(SECRET_UNREADABLE_TEXT); return; }
+      if (res === 'unreadable') { setNoteUnread(true); showError(SECRET_UNREADABLE_TEXT); return; }
       if (res === 'failed') { showError('Не удалось сохранить заметку'); return; }
+      setNoteUnread(false);
       setContactNote(draft);
       showSuccess('Заметка сохранена');
     })();
@@ -221,6 +248,7 @@ export function ProfileChatBlock({
         showError(userErrorText(e, 'Не удалось удалить заметку'));
         return;
       }
+      setNoteUnread(false);
       setContactNote('');
     })();
   }, [activeProfileId, peerB64]);
@@ -318,8 +346,11 @@ export function ProfileChatBlock({
         <Ionicons name="document-text-outline" size={20} color={colors.text} />
         <View style={styles.rowBody}>
           <Text style={[styles.rowText, { color: colors.text }]}>Заметка</Text>
-          <Text style={[styles.rowHint, { color: colors.textSecondary }]} numberOfLines={2}>
-            {contactNote || 'Личная заметка — видна только вам'}
+          <Text
+            style={[styles.rowHint, { color: noteUnread ? colors.error : colors.textSecondary }]}
+            numberOfLines={2}
+          >
+            {noteUnread ? NOTE_UNREAD_HINT : contactNote || 'Личная заметка — видна только вам'}
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
@@ -369,6 +400,9 @@ export function ProfileChatBlock({
         >
           <View style={[styles.noteCard, { backgroundColor: colors.surface }]}>
             <Text style={[styles.noteTitle, { color: colors.text }]}>Заметка о контакте</Text>
+            {noteUnread ? (
+              <Text style={[styles.noteWarn, { color: colors.error }]}>{NOTE_UNREAD_NOTE}</Text>
+            ) : null}
             <TextInput
               style={[styles.noteInput, { borderColor: colors.border, color: colors.text }]}
               value={noteDraft}
@@ -382,7 +416,7 @@ export function ProfileChatBlock({
               <AppPressable onPress={() => setNoteEditVisible(false)} accessibilityRole="button">
                 <Text style={[styles.noteBtn, { color: colors.textSecondary }]}>Отмена</Text>
               </AppPressable>
-              {contactNote ? (
+              {contactNote || noteUnread ? (
                 <AppPressable onPress={deleteNote} accessibilityRole="button">
                   <Text style={[styles.noteBtn, { color: colors.error }]}>Удалить</Text>
                 </AppPressable>
@@ -437,6 +471,7 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1 },
   rowText: { fontSize: font.md },
   rowHint: { fontSize: font.xs, marginTop: spacing.xs / 2 },
+  noteWarn: { fontSize: font.xs, marginBottom: spacing.sm },
   groupsBox: { marginTop: spacing.xs },
   groupRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.sm },
   groupAvatar: { alignItems: 'center', justifyContent: 'center' },
