@@ -56,7 +56,11 @@ function codeOnly(src: string): string {
 
 describe('ПРОВЕРКА НЕ ПУСТАЯ', () => {
   it('все четыре места с блокировкой на месте', () => {
-    expect(CHAT).toContain("const blockLabel = isBlocked ? 'Разблокировать' : 'Заблокировать';");
+    // v4.32.1048: подпись стала трёхзначной — прибавился непрочитанный
+    // список. Две прежние ветки на месте, их и держим.
+    expect(CHAT).toContain('const blockLabel = isBlocked');
+    expect(CHAT).toContain("? 'Разблокировать'");
+    expect(CHAT).toContain("    : 'Заблокировать';");
     expect(CONTACTS.split("'Разблокировать' : 'Заблокировать'").length - 1).toBe(2);
     expect(PEEK).toContain('rateLimiter.blockContact(pub)');
   });

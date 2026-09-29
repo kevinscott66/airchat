@@ -882,6 +882,14 @@ function ChatThreadView({
   const loadingMoreRef = useRef(false);
   const [gateway, setGateway] = useState('');
   const [isBlocked, setIsBlocked] = useState(false);
+  /**
+   * Список запретов не прочитался (v4.32.1048). `isBlocked` на это отвечает
+   * «не заблокирован» кому угодно — тем же словом, что и про человека,
+   * которого я не блокировал. Пока список не прочитан, запреты не действуют,
+   * и говорить об этом надо здесь же, а не только на отдельном экране
+   * «Заблокированные» (см. BlockedContactsList, v4.32.635).
+   */
+  const [blockUnknown, setBlockUnknown] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [mutedUntil, setMutedUntil] = useState<number | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
@@ -1199,14 +1207,23 @@ function ChatThreadView({
   // messaging.ts ветка "Self-chat (Saved Messages) — store locally, no network delivery".
 
   useEffect(() => {
-    if (!peerB64) { setIsBlocked(false); return; }
+    if (!peerB64) { setIsBlocked(false); setBlockUnknown(false); return; }
     // v4.32.318: блок-лист поднимается с диска не мгновенно. Переписку
     // открывают и сразу после запуска — и тогда синхронный ответ был «не
     // заблокирован»: поле ввода активно, шапка обычная. Отправить не дало бы
     // ядро, но узнать об этом человек мог только по отказу.
+    // v4.32.1048: чтение могло и сорваться — `whenReady` даёт ему второй
+    // заход, но успеха не обещает. Прежде этот случай приходил сюда как
+    // «не заблокирован»: поле ввода обычное, в меню «Заблокировать» — и над
+    // уже заблокированным собеседником экран выглядел так, будто запрета
+    // никогда и не было. Следующий вход в переписку зовёт `whenReady` снова,
+    // то есть пробует прочитать заново.
     let alive = true;
     void rateLimiter.whenReady().then(() => {
-      if (alive) setIsBlocked(rateLimiter.isBlocked(peerB64));
+      if (!alive) return;
+      const readable = rateLimiter.blockedListReadable();
+      setBlockUnknown(!readable);
+      setIsBlocked(readable && rateLimiter.isBlocked(peerB64));
     });
     return () => { alive = false; };
   }, [peerB64]);
@@ -3576,7 +3593,11 @@ function ChatThreadView({
                   : disappearUnknown
                     ? 'Исчезновение: не удалось прочитать'
                     : 'Установить исчезновение';
-                const blockLabel = isBlocked ? 'Разблокировать' : 'Заблокировать';
+                const blockLabel = isBlocked
+                  ? 'Разблокировать'
+                  : blockUnknown
+                    ? 'Заблокировать (список запретов не прочитан)'
+                    : 'Заблокировать';
                 const muteLabel = isMuted
                   ? (mutedUntil ? `Снять без звука (${muteRemainingLabel(mutedUntil)})` : 'Включить звук')
                   : 'Беззвучно…';
@@ -3732,6 +3753,9 @@ function ChatThreadView({
                           const ok = await rateLimiter.unblockContact(peerB64);
                           Alert.alert('AirChat', ok ? 'Разблокировано' : BLOCK_NOT_SAVED_OFF);
                           setIsBlocked(false);
+                          // v4.32.1048: запись отказывает как раз тогда, когда
+                          // список не прочитан, — пометку ставим по нему же.
+                          setBlockUnknown(!rateLimiter.blockedListReadable());
                         }, 'Не удалось разблокировать', 'ui_chat_unblock_failed');
                       } else {
                         // v4.32.916: было «Сообщения будут отклонены.» — про
@@ -3742,6 +3766,7 @@ function ChatThreadView({
                             const ok = await rateLimiter.blockContact(peerB64);
                             Alert.alert('AirChat', ok ? 'Заблокировано' : BLOCK_NOT_SAVED_ON);
                             setIsBlocked(ok || rateLimiter.isBlocked(peerB64));
+                            setBlockUnknown(!rateLimiter.blockedListReadable());
                           }, 'Не удалось заблокировать', 'ui_chat_block_failed') },
                         ]);
                       }
@@ -3835,9 +3860,9 @@ function ChatThreadView({
               }}
             >
               <Ionicons
-                name={isBlocked ? 'ban' : 'ellipsis-vertical'}
+                name={isBlocked ? 'ban' : blockUnknown ? 'alert-circle-outline' : 'ellipsis-vertical'}
                 size={20}
-                color={isBlocked ? colors.error : colors.text}
+                color={isBlocked ? colors.error : blockUnknown ? colors.warning : colors.text}
               />
             </AppPressable>
           ) : null}
@@ -4368,7 +4393,16 @@ function ChatThreadView({
           <View style={[s.inputPill, { backgroundColor: colors.surfaceHigh, borderColor: colors.border }]}>
             <TextInput
               ref={msgInputRef}
-              placeholder={isBlocked ? 'Контакт заблокирован' : 'Сообщение'}
+              // v4.32.1048: третья подпись — про непрочитанный список. Поле
+              // остаётся рабочим: отправка сама откажет и назовёт причину
+              // (v4.32.1044), а текст при отказе остаётся на месте.
+              placeholder={
+                isBlocked
+                  ? 'Контакт заблокирован'
+                  : blockUnknown
+                    ? 'Блокировку проверить не удалось'
+                    : 'Сообщение'
+              }
               placeholderTextColor={colors.textMuted}
               editable={!isBlocked}
               value={msg}
