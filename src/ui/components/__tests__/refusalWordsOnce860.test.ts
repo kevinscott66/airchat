@@ -128,9 +128,17 @@ describe('об отказе говорят один раз', () => {
 
   it('ядро помечает объяснённым ровно те отказы, о которых само и сказало', () => {
     const src = MESSAGING();
-    expect(src.split("explained: true").length - 1).toBe(3);
+    // v4.32.1044: четвёртый объяснённый отказ — «не сумели прочитать список
+    // запретов». Повод у закрепки прежний: пометка стоит ровно там, где ядро
+    // само показало баннер, и нигде больше.
+    expect(src.split("explained: true").length - 1).toBe(4);
     // Каждая пометка стоит сразу за баннером, а не где придётся.
-    for (const code of ["code: 'BLOCKED_CONTACT',", "code: 'RATE_LIMIT_DM',", "code: 'NO_SESSION_DM',"]) {
+    for (const code of [
+      "code: 'BLOCKED_CONTACT',",
+      "code: 'BLOCK_LIST_UNREADABLE',",
+      "code: 'RATE_LIMIT_DM',",
+      "code: 'NO_SESSION_DM',",
+    ]) {
       const from = src.indexOf(code);
       expect(from).toBeGreaterThan(0);
       const next = src.indexOf("return { outcome: 'refused'", from);

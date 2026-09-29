@@ -9,6 +9,8 @@
 let mockBlocked = new Set<string>();
 let mockLimitReached = new Set<string>();
 let mockReadyResolved = false;
+/** Поднялся ли блок-лист с диска на самом деле (v4.32.1044). */
+let mockListReadable = true;
 
 jest.mock('../../security/rateLimiter', () => ({
   rateLimiter: {
@@ -19,6 +21,7 @@ jest.mock('../../security/rateLimiter', () => ({
       if (!mockReadyResolved) throw new Error('спросили до whenReady');
       return mockBlocked.has(k);
     },
+    blockedListReadable: (): boolean => mockListReadable,
     messageLimitReached: (k: string): boolean => mockLimitReached.has(k),
   },
 }));
@@ -31,6 +34,7 @@ beforeEach(() => {
   mockBlocked = new Set();
   mockLimitReached = new Set();
   mockReadyResolved = false;
+  mockListReadable = true;
 });
 
 it('обычный собеседник — дойдёт', async () => {
@@ -40,6 +44,19 @@ it('обычный собеседник — дойдёт', async () => {
 it('заблокированный — нет', async () => {
   mockBlocked.add(PEER);
   await expect(canReachPeer(PEER)).resolves.toBe(false);
+});
+
+it('список не прочитан — тоже нет: «не знаем» это не «не заблокирован»', async () => {
+  // v4.32.1044: `whenReady` даёт чтению второй заход, но не обещает успеха. При
+  // неудаче `isBlocked` отвечает «не заблокирован» кому угодно, и мимо запрета
+  // уходит мой профиль, моё имя, моя фотография и настройки присутствия.
+  mockListReadable = false;
+  await expect(canReachPeer(PEER)).resolves.toBe(false);
+});
+
+it('ПРОВЕРКА НЕ ПУСТАЯ: прочитанный и пустой список никого не задерживает', async () => {
+  mockListReadable = true;
+  await expect(canReachPeer(PEER)).resolves.toBe(true);
 });
 
 it('выбранный часовой лимит — тоже нет, но это временно', async () => {

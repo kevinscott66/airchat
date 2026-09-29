@@ -336,17 +336,31 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
 describe('форма исходников: правка стоит там, где сказано', () => {
   it('вопрос про прочитанность стоит ПЕРЕД вопросом про человека', () => {
+    // v4.32.1044: тот же вопрос задаёт теперь и исходящая половина (отправка
+    // текста, отметка о прочтении, `canReachPeer`), поэтому «последнее
+    // вхождение по файлу» перестало указывать на приём. Повод у закрепки
+    // прежний — здесь про ВХОД, и берём его именно там, где он стоит.
     const body = readSrc('messaging.ts');
-    const readable = body.lastIndexOf('rateLimiter.blockedListReadable()');
-    const blocked = body.lastIndexOf('rateLimiter.isBlocked(peerPubKeyB64)');
-    expect(readable).toBeGreaterThanOrEqual(0);
+    const at = body.indexOf('if (inbound && !survivesBlock(');
+    expect(at).toBeGreaterThan(0);
+    const readable = body.indexOf('rateLimiter.blockedListReadable()', at);
+    const blocked = body.indexOf('rateLimiter.isBlocked(peerPubKeyB64)', at);
+    expect(readable).toBeGreaterThan(at);
     expect(blocked).toBeGreaterThan(readable);
   });
 
   it('оба входа в личку закрыты: и заведение контакта, и разбор конверта', () => {
     const body = readSrc('messaging.ts');
-    expect(body.split('rateLimiter.blockedListReadable()').length - 1).toBe(2);
-    expect(body).toContain("return 'deferred';");
+    // v4.32.1044: счёт по файлу больше не про приём — вхождений стало четыре.
+    // Считаем то, что закрепка и имела в виду: два входа, и у каждого свой
+    // отказ «сейчас не разберём».
+    const intake = body.indexOf('if (needsImplicitContact) {');
+    expect(intake).toBeGreaterThan(0);
+    const dispatch = body.indexOf('if (inbound && !survivesBlock(');
+    expect(dispatch).toBeGreaterThan(intake);
+    expect(body.indexOf('rateLimiter.blockedListReadable()', intake)).toBeLessThan(dispatch);
+    expect(body.indexOf('rateLimiter.blockedListReadable()', dispatch)).toBeGreaterThan(dispatch);
+    expect(body.split("return 'deferred';").length - 1).toBeGreaterThanOrEqual(2);
   });
 
   it('приглашение в группу закрыто той же парой вопросов', () => {

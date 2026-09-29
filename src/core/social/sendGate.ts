@@ -29,6 +29,12 @@ import { rateLimiter } from '../security/rateLimiter';
 export async function canReachPeer(peerPubB64: string): Promise<boolean> {
   // Блок-лист поднимается с диска не мгновенно (v4.32.317).
   await rateLimiter.whenReady();
+  // v4.32.1044: `whenReady` даёт чтению второй заход, но не обещает успеха.
+  // Не удался и он — `isBlocked` отвечает «не заблокирован» кому угодно, и
+  // мимо запрета уходит мой профиль, моё имя, моя фотография и мои настройки
+  // присутствия. Ответ «нет» здесь ничего не теряет: он значит «не сейчас,
+  // спросим снова», отметка «сообщено» при нём не ставится.
+  if (!rateLimiter.blockedListReadable()) return false;
   if (rateLimiter.isBlocked(peerPubB64)) return false;
   return !rateLimiter.messageLimitReached(peerPubB64);
 }

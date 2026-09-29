@@ -1917,6 +1917,21 @@ export class MessagingService {
     // v4.32.318: отказ по блокировке и отказ по лимиту — разные вещи, а
     // человеку показывался один и тот же текст про «слишком много сообщений в
     // час». Заблокировавший ждал, пока «лимит» пройдёт, и пробовал снова.
+    // v4.32.1044: и прочитан ли он вообще. Не прочитав список, `isBlocked`
+    // отвечает «не заблокирован» кому угодно — то есть ровно то, что снимает
+    // запрет. Приём эту разницу спрашивает с v4.32.795, отправка — нет.
+    // Отказ тут ничего не теряет: текст остаётся в поле ввода, причина
+    // названа своими словами, повтор осмыслен.
+    if (!rateLimiter.blockedListReadable()) {
+      log.warn('dm_send_block_list_unreadable', { to: contactPubB64.slice(0, 12) });
+      void ErrorHandler.getInstance().handle({
+        code: 'BLOCK_LIST_UNREADABLE',
+        message: 'Не удалось проверить, не заблокирован ли контакт: хранилище не ответило. Сообщение не отправлено — попробуйте ещё раз.',
+        severity: ErrorSeverity.ERROR,
+        retryable: true,
+      });
+      return { outcome: 'refused', cid: null, explained: true };
+    }
     if (rateLimiter.isBlocked(contactPubB64)) {
       log.info('dm_send_blocked', { to: contactPubB64.slice(0, 12) });
       void ErrorHandler.getInstance().handle({
@@ -2679,6 +2694,14 @@ export class MessagingService {
     // при открытии переписки, а её открывают в том числе сразу после запуска —
     // то есть ровно тогда, когда список ещё читается с диска.
     await rateLimiter.whenReady();
+    // v4.32.1044: список не прочитан — `isBlocked` говорит «не заблокирован»
+    // про кого угодно, и отметка уходит тому, от кого её и прятали. Отметка
+    // о прочтении необязательна и повторяема: следующее открытие переписки
+    // отправит её снова, уже по прочитанному списку.
+    if (!rateLimiter.blockedListReadable()) {
+      log.warn('read_receipt_block_list_unreadable', { to: contactPubB64.slice(0, 12) });
+      return;
+    }
     if (rateLimiter.isBlocked(contactPubB64)) return;
     // v4.32.312: переключатель «не отправлять отметки о прочтении» спрашивали
     // три раза на экране переписки — по копии значения, прочитанной один раз при

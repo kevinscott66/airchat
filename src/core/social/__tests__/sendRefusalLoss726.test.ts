@@ -75,12 +75,15 @@ describe('отказ до строки в переписке зовётся от
   const body = (): string =>
     slice(codeOnly(MESSAGING()), '  async sendMessageResult(', '  private async sendMessageWork(');
 
-  it('блокировка и оба часовых лимита', () => {
+  it('блокировка, непрочитанный список запретов и оба часовых лимита', () => {
     const b = body();
-    // v4.32.860: два из трёх отказов помечены как уже объяснённые человеку —
+    // v4.32.860: три из четырёх отказов помечены как уже объяснённые человеку —
     // счёт ведётся по общему началу строки, а не по её точному виду.
-    expect(b.split("return { outcome: 'refused', cid: null").length - 1).toBe(3);
+    // v4.32.1044: четвёртый — не сумели прочитать список запретов. Повод у
+    // закрепки прежний: ни один ранний отказ не уходит молчаливым `null`.
+    expect(b.split("return { outcome: 'refused', cid: null").length - 1).toBe(4);
     expect(b).toContain("code: 'BLOCKED_CONTACT',");
+    expect(b).toContain("code: 'BLOCK_LIST_UNREADABLE',");
     expect(b).toContain("code: 'RATE_LIMIT_DM',");
     expect(b).toContain('if (!rateLimiter.canSendControl(contactPubB64)) {');
   });
