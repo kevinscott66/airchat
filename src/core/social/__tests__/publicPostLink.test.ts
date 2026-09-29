@@ -270,7 +270,9 @@ describe('причина отказа сервера', () => {
 
   it('а вот молчание сервера про копию — отказ, и он записан', async () => {
     refuse(503);
-    expect(await publicPostCopyExists('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBe(false);
+    // v4.32.1059: отказ и отвечает отказом. До этой версии он уходил тем же
+    // `false`, что и 404 выше, — то есть назывался ответом «копии нет».
+    expect(await publicPostCopyExists('f_1788696219251_88dbce61b8fda1002ea9bb32fa38a246')).toBe(null);
     const note = mockWarns.find((w) => w.event === 'public_post_head_failed');
     expect(note?.data.status).toBe(503);
   });

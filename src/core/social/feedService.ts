@@ -2756,7 +2756,16 @@ export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Pr
 export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
   if (!publicPostStoreAvailable()) return true;
   try {
-    if (!(await publicPostCopyExists(postId))) return true;
+    const copy = await publicPostCopyExists(postId);
+    // v4.32.1059: `null` — спросить у сервера не вышло. Класть копию вслепую
+    // нельзя (см. выше: не отдавали наружу — не кладём), но и молчать теперь
+    // не о чем: исход у правки ровно тот, ради которого `linkCopyStale` и
+    // заведён — по ссылке может открываться прежняя редакция.
+    if (copy === null) {
+      log.warn('public_post_refresh_state_unknown', { postId: postId.slice(0, 24) });
+      return false;
+    }
+    if (!copy) return true;
     // AC-04: копия на сервере есть — значит, запись опубликована по ссылке,
     // даже если отметку ставила версия, которая отметок ещё не вела. Без этого
     // отозвать такую ссылку было бы не из чего.
@@ -4966,7 +4975,19 @@ async function dropPublicPostCopy(pair: KeyPairBytes, postId: string): Promise<b
     if (await deletePublicPostCopy(pair, postId)) return true;
     // Отказ сервера ещё не значит, что копия осталась: запись могли не выкладывать
     // по ссылке вовсе или уже удалить с другого устройства. HEAD отвечает точно.
-    return !(await publicPostCopyExists(postId));
+    //
+    // v4.32.1059: отвечает — когда отвечает. Отказ чтения приходил сюда тем же
+    // `false`, что и честное «нет такой копии», и связка читалась как «копию
+    // сняли»: удаление не уходило в очередь повторов, `revokePostLinkCopy`
+    // рапортовал успех и снимал отметку — а с нею из меню исчезал единственный
+    // пункт, которым копию снимают. Незашифрованная копия при этом оставалась
+    // на сервере открытой всякому, у кого есть ссылка, и навсегда.
+    const left = await publicPostCopyExists(postId);
+    if (left === null) {
+      log.warn('public_post_copy_state_unknown', { postId: postId.slice(0, 24) });
+      return false;
+    }
+    return !left;
   } catch { return false; }
 }
 

@@ -281,8 +281,19 @@ export async function getPublicPostFrame(postId: string): Promise<Uint8Array | n
  * HEAD, а не GET: ответ нужен один — есть или нет, — а тело копии доходит до
  * двух мегабайт. Ничего нового о владельце это не сообщает: копия и так
  * открыта всякому, у кого есть ссылка, ради чего она и лежит.
+ *
+ * `null` — спросить не удалось (v4.32.1059). Комментарий ниже с v4.32.614
+ * говорил ровно это: «всё остальное означает, что мы про копию так ничего и не
+ * узнали», — но возвращалось при этом `false`, то же самое, что и у честного
+ * 404. Дальше по `false` решают, что копии нет: снятие копии называет отказ
+ * сети успешным удалением и снимает отметку «опубликовано по ссылке», после
+ * чего незашифрованная копия остаётся лежать открытой всем, а пункта меню,
+ * которым её снимают, в приложении больше нет.
+ *
+ * Тихий `false` остаётся там, где сервера в этой сборке нет и где id негоден
+ * для адреса: в обоих случаях копии взяться неоткуда, и наружу мы не ходили.
  */
-export async function publicPostCopyExists(postId: string): Promise<boolean> {
+export async function publicPostCopyExists(postId: string): Promise<boolean | null> {
   const base = cloudBaseUrl();
   if (!base) return false;
   if (!isPublicPostId(postId)) return false;
@@ -293,15 +304,17 @@ export async function publicPostCopyExists(postId: string): Promise<boolean> {
       async (response) => {
         // 404 — это не отказ, а ответ: копии на сервере нет. Всё остальное
         // означает, что мы про копию так ничего и не узнали.
-        if (!response.ok && response.status !== 404) {
+        if (response.status === 404) return false;
+        if (!response.ok) {
           log.warn('public_post_head_failed', { postId: postId.slice(0, 24), status: response.status });
+          return null;
         }
-        return response.ok;
+        return true;
       },
     );
   } catch (e) {
     log.warn('public_post_head_error', { err: e instanceof Error ? e.message : String(e) });
-    return false;
+    return null;
   }
 }
 

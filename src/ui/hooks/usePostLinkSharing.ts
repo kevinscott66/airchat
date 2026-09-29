@@ -157,20 +157,29 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
    * нажатию. Ответ «есть» тут же записывается отметкой: иначе следующий
    * запуск начнёт с того же незнания, а человек — с того же пустого меню.
    *
-   * HEAD отвечает «есть» только когда копия действительно есть; отказ сети от
-   * «копии нет» не отличается, но хуже прежнего не делает — раньше запись в
-   * обоих случаях считалась неопубликованной.
+   * HEAD отвечает «есть» только когда копия действительно есть.
+   *
+   * v4.32.1059: а «спросить не вышло» больше не запоминается за ответ. Отметка
+   * `askedRef` ставится до похода в сеть и не снималась никогда, поэтому один
+   * неудачный HEAD — метро, самолётный режим, отвернувшийся сервер — прятал
+   * «Отозвать ссылку» до конца сеанса, и снять открытую всем копию в этом
+   * сеансе было нечем. Отметку «опубликовано» по незнанию по-прежнему не
+   * ставим: это слово сервера, а он его не сказал.
    */
   const resolvePublished = useCallback(async (post: LinkablePost) => {
     if (!publicPostStoreAvailable()) return;
     if (post.authorDid !== did || publishedRef.current.has(post.id)) return;
     if (askedRef.current.has(post.id)) return;
     askedRef.current.add(post.id);
-    let exists = false;
+    let exists: boolean | null = null;
     try {
       exists = await publicPostCopyExists(post.id);
     } catch {
-      exists = false;
+      exists = null;
+    }
+    if (exists === null) {
+      askedRef.current.delete(post.id);
+      return;
     }
     if (!exists) return;
     publishedRef.current.add(post.id);
