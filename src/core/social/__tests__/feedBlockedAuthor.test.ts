@@ -31,10 +31,18 @@ jest.mock('../contacts', () => ({
   listContactsRead: jest.fn(async () => mockContacts),
   listContactsReadDetailed: jest.fn(async () => ({ contacts: mockContacts, missing: 0 })),
 }));
-jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
+// v4.32.1043: приём спрашивает исходом — «никого не заглушали» и «список не
+// прочитан» ведут себя по-разному.
+jest.mock('../mutedAuthors', () => ({
+  isAuthorMuted: jest.fn(async () => false),
+  isAuthorMutedTry: jest.fn(async () => ({ muted: false })),
+}));
 jest.mock('../../security/rateLimiter', () => ({
   rateLimiter: {
     whenReady: async () => {},
+    // v4.32.1043: приём спрашивает и это — пустой список запретов и
+    // несостоявшееся чтение значат разное.
+    blockedListReadable: () => true,
     isBlocked: (pub: string) => mockBlocked.has(pub),
   },
 }));

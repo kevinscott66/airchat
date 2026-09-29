@@ -30,9 +30,18 @@ jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn(async () => true) },
 }));
 jest.mock('../contacts', () => ({ listContacts: jest.fn(async () => []) }));
-jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
+// v4.32.1043: приём ленты спрашивает оба списка исходом чтения — здесь они
+// читаемые и пустые, что и было премиссой этих наборов.
+jest.mock('../mutedAuthors', () => ({
+  isAuthorMuted: jest.fn(async () => false),
+  isAuthorMutedTry: jest.fn(async () => ({ muted: false })),
+}));
 jest.mock('../../security/rateLimiter', () => ({
-  rateLimiter: { whenReady: async () => {}, isBlocked: () => false },
+  rateLimiter: {
+    whenReady: async () => {},
+    blockedListReadable: () => true,
+    isBlocked: () => false,
+  },
 }));
 
 type Row = { id: string; authorDid: string; text: string; timestamp: number };

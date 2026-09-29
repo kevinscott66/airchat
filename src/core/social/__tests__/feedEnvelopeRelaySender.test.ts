@@ -14,7 +14,19 @@ jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn() },
 }));
 jest.mock('../contacts', () => ({ listContacts: jest.fn(async () => []) }));
-jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
+// v4.32.1043: приём ленты спрашивает заглушение и запрет исходом чтения —
+// эти наборы про обычного автора при читаемых списках, так и говорим.
+jest.mock('../mutedAuthors', () => ({
+  isAuthorMuted: jest.fn(async () => false),
+  isAuthorMutedTry: jest.fn(async () => ({ muted: false })),
+}));
+jest.mock('../../security/rateLimiter', () => ({
+  rateLimiter: {
+    whenReady: async () => {},
+    blockedListReadable: () => true,
+    isBlocked: () => false,
+  },
+}));
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -23,7 +35,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 
 import { publicKeyToDidKey } from '../../identity/did';
 import { receiveFeedEnvelope } from '../feedService';
-import { isAuthorMuted } from '../mutedAuthors';
+import { isAuthorMutedTry } from '../mutedAuthors';
 import {
   serializeFeedEnvelope,
   parseAndVerifyFeedEnvelope,
@@ -194,7 +206,10 @@ describe('в локальной сети сверка «автор == сосед
 // пустым отправителем конверт ДОХОДИТ до обработки, а не отбраковывается на
 // разборе, как было до исправления.
 describe('приём конверта с пустым отправителем доходит до обработки', () => {
-  const muted = isAuthorMuted as unknown as jest.Mock;
+  // v4.32.1043: приём спрашивает заглушение исходом чтения — щуп прежний,
+  // повод прежний: конверт должен дойти до проверки автора, а не отсеяться
+  // на разборе.
+  const muted = isAuthorMutedTry as unknown as jest.Mock;
 
   beforeEach(() => {
     muted.mockClear();

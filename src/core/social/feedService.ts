@@ -56,7 +56,7 @@ import { NO_ATTACH_LOSS, attachLostCount } from './feedAttachLoss';
 import type { FeedAttachLoss } from './feedAttachLoss';
 import { ownerPidForPublicKey } from '../identity/ownerPidLookup';
 import { FEED_MAX_DOC_BYTES, FEED_MAX_DOCS, FEED_POST_MAX_BYTES } from './composeDraft';
-import { isAuthorMuted } from './mutedAuthors';
+import { isAuthorMutedTry } from './mutedAuthors';
 import { rateLimiter } from '../security/rateLimiter';
 import { FeedRelayBudget } from './feedRelayBudget';
 import { reactionAddRefusal } from './reactionMapPolicy';
@@ -792,22 +792,35 @@ function fnv1a32Hex(s: string): string {
  * via a mutual contact). Fire-and-forget; never blocks ingress.
  */
 /**
- * Заблокирован ли автор конверта (v4.32.617).
+ * Что известно про автора конверта: запрещён, разрешён или неизвестно.
+ *
+ * v4.32.617: лента про блокировку не знала вовсе.
+ *
+ * v4.32.1043: ответов стало три. `isBlocked` отвечает по списку в памяти, а
+ * тот бывает пустым не только потому, что никого не блокировали: при
+ * сорвавшемся чтении (занятая база, ещё не поднятый ключ при переключении
+ * профиля) `loadFailed` остаётся, и «не заблокирован» получает кто угодно —
+ * см. докблок у самого `loadFailed`. Экран «Заблокированные» эту разницу
+ * спрашивает с v4.32.635 (`blockedListReadable`), а вход ленты — нет, хотя
+ * цена тут выше: следом стоит пересылка чужой публикации моим контактам.
  *
  * Блок-лист держит base64 открытого ключа, лента — did:key; это один и тот же
  * человек. Не разобрали did — решать не о чем: конверт пойдёт обычным путём и
  * его отбракует проверка подписи.
  */
-async function isAuthorBlocked(authorDid: string): Promise<boolean> {
+type AuthorGateState = 'blocked' | 'allowed' | 'unknown';
+
+async function authorBlockState(authorDid: string): Promise<AuthorGateState> {
   try {
     const pk = parseDidKey(authorDid);
-    if (!pk) return false;
+    if (!pk) return 'allowed';
     // Блок-лист поднимается с диска асинхронно; до конца чтения isBlocked
     // отвечает «не заблокирован» на кого угодно.
     await rateLimiter.whenReady();
-    return rateLimiter.isBlocked(Buffer.from(pk).toString('base64'));
+    if (!rateLimiter.blockedListReadable()) return 'unknown';
+    return rateLimiter.isBlocked(Buffer.from(pk).toString('base64')) ? 'blocked' : 'allowed';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 
@@ -3831,7 +3844,8 @@ export async function receiveFeedEnvelope(
   // dropped at savePost — now we suppress both save AND relay.
   // v4.32.293: разбор и границы списка — в social/mutedAuthors, там же кэш
   // (эта проверка идёт на каждый входящий конверт).
-  if (await isAuthorMuted(payload.authorDid)) {
+  const muteState = await isAuthorMutedTry(payload.authorDid);
+  if (muteState?.muted) {
     log.info('feed_envelope_muted_drop', {
       type: payload.type,
       authorDid: payload.authorDid.slice(0, 24),
@@ -3844,12 +3858,33 @@ export async function receiveFeedEnvelope(
   // переписке его публикаций не касалась. Они сохранялись, показывались и
   // вдобавок расходились дальше через мою ноду. Проверка стоит там же, где
   // заглушка, — выше пересылки, иначе я усиливаю того, кого запретил.
-  if (await isAuthorBlocked(payload.authorDid)) {
+  const blockState = await authorBlockState(payload.authorDid);
+  if (blockState === 'blocked') {
     log.info('feed_envelope_blocked_drop', {
       type: payload.type,
       authorDid: payload.authorDid.slice(0, 24),
     });
     return 'consumed';
+  }
+
+  /**
+   * Ни один из двух списков не прочитан — значит про этого автора мы не знаем
+   * ничего (v4.32.1043).
+   *
+   * Выбрасывать конверт на таком основании нельзя: молча потерянная
+   * публикация ничем не отличима от неприсланной. Показать — можно, это
+   * обратимо, и ровно так рассуждает докблок getMutedAuthors. А вот пересылку
+   * снимаем: она уходит до 64 контактам от моего имени и не отменяется ничем.
+   * Усиливать того, кого я, возможно, сам и запретил, из-за заминки SQLite —
+   * цена не та.
+   */
+  const gateUnknown = muteState === null || blockState === 'unknown';
+  if (gateUnknown) {
+    log.warn('feed_envelope_gate_unreadable', {
+      type: payload.type,
+      muted: muteState === null ? 'unread' : 'read',
+      blocked: blockState,
+    });
   }
 
   // v4.32.208: mesh-gossip re-broadcast. If hop-limit not reached, wrap the
@@ -3873,6 +3908,7 @@ export async function receiveFeedEnvelope(
   // запретить пересылку этого конверта навсегда.
   if (
     opts?.gossip !== false &&
+    !gateUnknown &&
     incomingHops < FEED_RELAY_MAX_HOPS &&
     payload.type !== 'feed_view'
   ) {

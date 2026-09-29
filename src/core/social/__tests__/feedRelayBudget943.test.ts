@@ -32,7 +32,19 @@ jest.mock('../../transport/multiTransport', () => ({
   multiTransportRouter: { send: jest.fn(async () => undefined) },
 }));
 jest.mock('../contacts', () => ({ listContacts: jest.fn(async () => mockContacts) }));
-jest.mock('../mutedAuthors', () => ({ isAuthorMuted: jest.fn(async () => false) }));
+// v4.32.1043: приём ленты спрашивает заглушение и запрет исходом чтения —
+// эти наборы про обычного автора при читаемых списках, так и говорим.
+jest.mock('../mutedAuthors', () => ({
+  isAuthorMuted: jest.fn(async () => false),
+  isAuthorMutedTry: jest.fn(async () => ({ muted: false })),
+}));
+jest.mock('../../security/rateLimiter', () => ({
+  rateLimiter: {
+    whenReady: async () => {},
+    blockedListReadable: () => true,
+    isBlocked: () => false,
+  },
+}));
 
 jest.mock('../../storage/feedStorage', () => ({
   deleteFeedDbForProfile: jest.fn(async () => undefined),
