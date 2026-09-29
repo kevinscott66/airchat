@@ -20,6 +20,18 @@ const mockCalls: string[] = [];
 /** Шаги, которые должны бросить исключение. */
 const mockThrowingSteps = new Set<string>();
 
+/**
+ * Что хранилище отвечает про секретные слова (v4.32.1019).
+ *
+ * Ответов у него три, а `getStoredMnemonic` отдаёт два: «прочитали вот это»,
+ * «записи нет» и «запись есть, а открыть не смогли» — последние два приходят
+ * одинаковым `null`. Поэтому здесь два переключателя, а не один.
+ */
+let mockMnemonic: string | null =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+/** Лежит ли на устройстве запись о фразе — независимо от того, читается ли она. */
+let mockPhraseOnDisk = true;
+
 function mockRawDelete(key: string): void {
   const left = mockDeleteFailures.get(key) ?? 0;
   if (left > 0) {
@@ -78,8 +90,9 @@ jest.mock('../../storage/secureStoreQueued', () => ({
 
 jest.mock('../../backup/seedPhrase', () => ({
   ...jest.requireActual('../../backup/seedPhrase'),
-  getStoredMnemonic: async (): Promise<string | null> =>
-    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+  getStoredMnemonic: async (): Promise<string | null> => mockMnemonic,
+  // v4.32.1019: третий ответ хранилища — «запись есть, прочитать не смогли».
+  hasStoredMnemonicUncached: async (): Promise<boolean> => mockPhraseOnDisk,
   // Настоящая функция глотает ошибку по каждому ключу отдельно — мок повторяет
   // ровно это поведение, иначе проверка «пережившие секреты» проверяла бы мок.
   wipeMnemonicAndSessionFlags: async (): Promise<void> => {
@@ -289,6 +302,9 @@ beforeEach(() => {
   mockLeftOnDisk.clear();
   mockSweepMisses.clear();
   mockThrowingChecks.clear();
+  mockMnemonic =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  mockPhraseOnDisk = true;
   mockCalls.length = 0;
   // Устройство «в рабочем состоянии»: все секреты на месте.
   for (const key of ALL_SECRETS) mockStore.set(key, 'secret');
@@ -868,5 +884,105 @@ describe('уборка файлов проверяется, а не приним
     const cache = srcOf('core', 'media', 'cacheFiles.ts');
     expect(cache).toContain("'airchat_export_'");
     expect(cache).toContain("'ExpoAudio'");
+  });
+});
+
+/**
+ * Копия счёта на диске: «фразы нет» и «фразу не прочитали» (v4.32.1019).
+ *
+ * Дефект. Шаг `account_vault` спрашивал `getStoredMnemonic()` и на `null`
+ * тихо заканчивался успехом. Но `null` тут — два разных ответа: «фразы на
+ * устройстве нет» и «запись с фразой есть, а открыть её не вышло» (негодный
+ * ключ обёртки — v4.32.615 такие байты намеренно не стирает; заперт Keystore;
+ * `SecureStoreUnreadableError` в вебе). Различать их модуль умеет:
+ * `hasStoredMnemonicUncached` для того и написан. Сброс его не спрашивал.
+ *
+ * Цена. Каталог копии назван по фразе (`accountVaultIdFromMnemonic`), и
+ * адресовать его больше нечем. При нечитаемой фразе шаг отчитывался об
+ * успехе, а под `airchat_account_vault_v1/<id>/` оставались копии баз и
+ * снимки лиц (`avatar_*.jpg`) — ровно те данные, которые человек велел
+ * стереть. Следующими шагами сброс уносил и саму фразу: после этого о
+ * копии не узнать ничем, а человеку сказано «готово».
+ *
+ * Правка. «Не прочитали» — отдельный исход. Удалить нечем: снести корень
+ * целиком нельзя, под ним лежат копии других счетов. Значит, шаг падает и
+ * попадает в `leftBehind` — тот список v4.32.1017, по которому экран говорит
+ * человеку, что часть данных на устройстве осталась.
+ *
+ * Границы. «Фразы нет вовсе» — по-прежнему тихий успех: копии в этом случае
+ * и не заводилось. Падение шага сброс не останавливает, `ok` по-прежнему про
+ * пережившие секреты SecureStore.
+ */
+describe('копия счёта: «фразы нет» и «фразу не прочитали» — разные ответы', () => {
+  const srcOf = (...p: string[]): string =>
+    readFileSync(join(__dirname, '..', '..', '..', ...p), 'utf8');
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: фраза читается — копия удаляется', async () => {
+    const res = await performLocalWalletWipe();
+
+    expect(mockCalls).toContain('account_vault');
+    expect(res.leftBehind).toEqual([]);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: фразы на устройстве нет — молча дальше', async () => {
+    mockMnemonic = null;
+    mockPhraseOnDisk = false;
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual([]);
+    expect(res.failedSteps).toEqual([]);
+    expect(mockCalls).not.toContain('account_vault');
+  });
+
+  it('фразу не прочитали — это не «копии нет»', async () => {
+    mockMnemonic = null;
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['account_vault']);
+    expect(res.failedSteps).toEqual(['account_vault']);
+  });
+
+  it('ГРАНИЦА: вслепую не удаляем — адресовать каталог нечем', async () => {
+    mockMnemonic = null;
+
+    await performLocalWalletWipe();
+
+    expect(mockCalls).not.toContain('account_vault');
+  });
+
+  it('ГРАНИЦА: упавший шаг не останавливает сброс — секреты стёрты', async () => {
+    mockMnemonic = null;
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.ok).toBe(true);
+    expect(res.survivors).toEqual([]);
+    expect(mockCalls).toEqual(expect.arrayContaining(['mnemonic', 'keypair', 'local_db']));
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: нечитаемая запись приходит как «есть, но пусто»', () => {
+    const seed = srcOf('core', 'backup', 'seedPhrase.ts');
+    expect(seed).toContain('return { present: true, value: null };');
+    // И наличие записи спрашивается отдельно от её читаемости.
+    expect(seed).toContain('if (encPresent) return true;');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: каталог копии адресуется только фразой', () => {
+    const vault = srcOf('core', 'storage', 'accountVault.ts');
+    const at = vault.indexOf('export async function deleteAccountVault');
+    expect(at).toBeGreaterThan(0);
+    expect(vault.slice(at, at + 200)).toContain(
+      'const accountId = accountVaultIdFromMnemonic(mnemonic);',
+    );
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: корень копий общий — снести его целиком нельзя', () => {
+    // Убирается каталог своего счёта и застрявшие `.previous-…` ТОГО ЖЕ
+    // счёта: остальное под корнем — чужие копии, и они законны.
+    const vault = srcOf('core', 'storage', 'accountVault.ts');
+    expect(vault).toContain('.filter((n) => n.startsWith(prefix))');
+    expect(vault).toContain('const prefix = previousVaultPrefix(accountId);');
   });
 });

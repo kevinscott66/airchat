@@ -512,7 +512,16 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
 // real SecureStore read and back-fills the cache (self-healing).
 const HAS_MNEMONIC_KV = 'kv_has_mnemonic_v1';
 
-async function hasStoredMnemonicUncached(): Promise<boolean> {
+/**
+ * «Запись о фразе на устройстве есть» — без кэша и без чтения самой фразы.
+ *
+ * v4.32.1019: вынесено наружу. Сбросу («выйти и удалить данные») нужен ровно
+ * этот ответ: `getStoredMnemonic` отдаёт `null` и на «фразы нет», и на «есть,
+ * но не открылась», а второе значит, что копию счёта на диске нечем
+ * адресовать — её каталог назван по фразе. Кэшированная `hasStoredMnemonic`
+ * там не годится: базу к тому шагу уже закрыли.
+ */
+export async function hasStoredMnemonicUncached(): Promise<boolean> {
   // AC-03: нечитаемая запись — тоже «есть», см. readSeedRecord.
   const { present: encPresent } = await readSeedRecord(MNEMONIC_ENC_PAYLOAD_KEY);
   // v4.32.717: наличие записи больше не требует, чтобы она ещё и открылась.

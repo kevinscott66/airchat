@@ -294,10 +294,21 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // новую отсрочку. Отменённая здесь, она уже не переживёт удаление файлов.
   await erase('cancel_dialog_backup_late', () => cancelScheduledDialogBackup());
   await erase('account_vault', async () => {
-    const { getStoredMnemonic } = await import('../backup/seedPhrase');
+    const { getStoredMnemonic, hasStoredMnemonicUncached } = await import('../backup/seedPhrase');
     const { deleteAccountVault } = await import('../storage/accountVault');
     const mnemonic = await getStoredMnemonic();
-    if (mnemonic) await deleteAccountVault(mnemonic);
+    if (mnemonic) {
+      await deleteAccountVault(mnemonic);
+      return;
+    }
+    // v4.32.1019: `null` тут — два разных ответа. «Фразы нет» значит, что и
+    // копии не заводилось. «Фраза есть, но не прочиталась» значит, что копия
+    // на диске лежит, а адресовать её нечем: её каталог назван по фразе. Снести
+    // корень целиком нельзя — под ним копии других счетов. Честного действия
+    // не остаётся, остаётся честный отчёт: шаг падает и попадает в `leftBehind`.
+    if (await hasStoredMnemonicUncached()) {
+      throw new Error('секретные слова не прочитались: копия счёта адресуется только ими');
+    }
   });
   await erase('sync_device_credentials', () => clearSyncDeviceCredentials());
   await stop('dek_memory', () => clearDekMemory());
