@@ -174,8 +174,15 @@ describe('выбор отличён от команды', () => {
     sites.find((s) => s.file === file && s.line === line);
 
   it('чип «Все истории» сообщает, выбран ли он', () => {
-    const s = at(join('components', 'modals', 'profile', 'ProfilePostsModal.tsx'), 475);
-    expect(s?.tag).toContain('accessibilityState={{ selected: albumId === null }}');
+    // v4.32.1064: по ярлыку, а не по номеру строки. Номер уехал от правки
+    // выше по файлу (альбомы научились отличать непрочитанное от пустого), и
+    // закрепка упала там, где `selected` никуда не девался, — ровно то, за
+    // что номера уже выгнали отсюда в v4.32.1016 и из соседних проверок в
+    // v4.32.1021 и v4.32.1034. Ярлык у этого чипа один на весь дом.
+    const found = sites.filter((s) => s.tag.includes('accessibilityLabel="Все истории"'));
+    expect(found).toHaveLength(1);
+    expect(found[0].tag).toContain('accessibilityState={{ selected: albumId === null }}');
+    expect(found[0].file).toBe(join('components', 'modals', 'profile', 'ProfilePostsModal.tsx'));
   });
 
   it('переключатель «Завтра» сообщает, включён ли он', () => {

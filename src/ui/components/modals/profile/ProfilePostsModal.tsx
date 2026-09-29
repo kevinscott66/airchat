@@ -87,6 +87,24 @@ import { rawErrorText } from '../../userErrorText';
 /** Сколько записей ленты просматриваем в поисках записей этого автора. */
 const SCAN_LIMIT = 400;
 
+/**
+ * Прочитанное из базы: три состояния вместо двух (v4.32.1064).
+ *
+ * `reading` — ответа ещё нет, `failed` — не прочиталось, `ready` — вот строки.
+ * Пустой массив значит «там ничего нет», и это утверждение: под альбомами по
+ * нему пишут «Альбом пуст», а из полосы по нему исчезают плашки. Сводить к
+ * нему отказ чтения нельзя — см. докблок самого раздела.
+ */
+type Read<T> =
+  | { phase: 'reading' }
+  | { phase: 'failed' }
+  | { phase: 'ready'; rows: T[] };
+
+/** Строки, если они есть; во всех остальных случаях — пусто для отрисовки. */
+function rowsOf<T>(r: Read<T>): T[] {
+  return r.phase === 'ready' ? r.rows : [];
+}
+
 /** Что сейчас набирают в строке названия: новый альбом или переименование. */
 type AlbumDraft =
   | null
@@ -132,10 +150,10 @@ export function ProfilePostsPane({
   // Пока не дочитали — это «ещё не знаем», а не «пусто». Разница видна на
   // экране: подпись «Ничего не найдено» появляется только после чтения.
   const [loaded, setLoaded] = useState(false);
-  const [albums, setAlbums] = useState<StoryAlbumRow[]>([]);
+  const [albums, setAlbums] = useState<Read<StoryAlbumRow>>({ phase: 'reading' });
   /** `null` — открыты живые истории, иначе id открытого альбома. */
   const [albumId, setAlbumId] = useState<string | null>(null);
-  const [items, setItems] = useState<StoryAlbumItemRow[]>([]);
+  const [items, setItems] = useState<Read<StoryAlbumItemRow>>({ phase: 'reading' });
   /** Адреса плиток, скачанных по общему адресу: id строки → локальный файл. */
   const [itemUris, setItemUris] = useState<Record<string, string>>({});
   const [sheet, setSheet] = useState<ActionSheetState>(null);
@@ -149,9 +167,13 @@ export function ProfilePostsPane({
 
   const reloadAlbums = useCallback(async () => {
     try {
-      setAlbums(await listStoryAlbums(ownerProfileId));
+      setAlbums({ phase: 'ready', rows: await listStoryAlbums(ownerProfileId) });
     } catch (e) {
+      // Прочитанное раньше остаётся на месте: устаревший список честнее
+      // выдуманного. А вот первый отказ прежде оставлял пустой массив — то
+      // есть ровно то же, что и «альбомов нет».
       log.warn('ui_story_albums_failed', { err: rawErrorText(e) });
+      setAlbums((prev) => (prev.phase === 'ready' ? prev : { phase: 'failed' }));
     }
   }, [ownerProfileId]);
 
@@ -163,7 +185,8 @@ export function ProfilePostsPane({
     setStories([]);
     setMedia({});
     setAlbumId(null);
-    setItems([]);
+    setItems({ phase: 'reading' });
+    setAlbums({ phase: 'reading' });
     setDraft(null);
     setNote(null);
     // Истории не листают ленту: их раздел про сутки, а не про историю записей.
@@ -212,11 +235,21 @@ export function ProfilePostsPane({
   // Содержимое открытого альбома. Читается отдельно от полосы: в полосе
   // хватает счётчика и обложки, а строки нужны только раскрытому альбому.
   useEffect(() => {
-    if (!active || albumId === null) { setItems([]); setItemUris({}); return; }
+    if (!active || albumId === null) {
+      setItems({ phase: 'reading' });
+      setItemUris({});
+      return;
+    }
     let cancelled = false;
+    // Пока читаем — «ещё не знаем»: иначе на экране остаются плитки
+    // ПРЕДЫДУЩЕГО альбома, а подпись уже считает их за этот.
+    setItems({ phase: 'reading' });
     void listStoryAlbumItems(albumId, ownerProfileId)
-      .then((rows) => { if (!cancelled) setItems(rows); })
-      .catch((e) => log.warn('ui_story_album_items_failed', { err: rawErrorText(e) }));
+      .then((rows) => { if (!cancelled) setItems({ phase: 'ready', rows }); })
+      .catch((e) => {
+        log.warn('ui_story_album_items_failed', { err: rawErrorText(e) });
+        if (!cancelled) setItems({ phase: 'failed' });
+      });
     return () => { cancelled = true; };
   }, [active, albumId, ownerProfileId]);
 
@@ -226,7 +259,7 @@ export function ProfilePostsPane({
   // раз на альбом, а не на каждую отрисовку. По очереди, а не разом: альбом
   // из полусотни видео иначе полез бы в сеть всеми плитками сразу.
   useEffect(() => {
-    const pending = items.filter((it) => !it.mediaFile && it.mediaCid);
+    const pending = rowsOf(items).filter((it) => !it.mediaFile && it.mediaCid);
     if (pending.length === 0) return;
     let cancelled = false;
     void (async () => {
@@ -244,13 +277,17 @@ export function ProfilePostsPane({
     return () => { cancelled = true; };
   }, [items, ownerProfileId]);
 
-  const openAlbum = albums.find((a) => a.id === albumId) ?? null;
+  const openAlbum = rowsOf(albums).find((a) => a.id === albumId) ?? null;
 
   const refreshOpenAlbum = useCallback(async (id: string) => {
     try {
-      setItems(await listStoryAlbumItems(id, ownerProfileId));
+      setItems({ phase: 'ready', rows: await listStoryAlbumItems(id, ownerProfileId) });
     } catch (e) {
+      // Прежние строки оставлять нельзя: сюда приходят сразу после того, как
+      // одну из них убрали, и плитка убранной истории — обещание, которого
+      // уже нет.
       log.warn('ui_story_album_items_failed', { err: rawErrorText(e) });
+      setItems({ phase: 'failed' });
     }
   }, [ownerProfileId]);
 
@@ -279,11 +316,20 @@ export function ProfilePostsPane({
 
   const onStoryPress = useCallback((s: StoryRow) => {
     if (!albumsShown) return;
+    if (albums.phase !== 'ready') {
+      // Лист с одним «Новый альбом…» утверждал бы, что альбомов нет. Человек
+      // завёл бы второй с тем же названием поверх невидимого первого:
+      // занятость названия сверяется с этим же списком.
+      setNote(albums.phase === 'failed'
+        ? 'Альбомы не прочитались — попробуйте ещё раз.'
+        : 'Читаем альбомы…');
+      return;
+    }
     setSheet({
       title: 'В альбом',
       message: 'Альбом хранит копию снимка: история истечёт через сутки, плитка останется.',
       options: [
-        ...albums.map((a) => ({
+        ...albums.rows.map((a) => ({
           label: a.titleUnreadable ? UNREADABLE_MESSAGE_TEXT : (a.title || 'Без названия'),
           onPress: () => void putIntoAlbum(a.id, s),
         })),
@@ -323,7 +369,13 @@ export function ProfilePostsPane({
       title: a.titleUnreadable ? UNREADABLE_MESSAGE_TEXT : (a.title || 'Без названия'),
       options: [
         { label: 'Переименовать', onPress: () => startDraft({ kind: 'rename', id: a.id }, a.title) },
-        {
+        // Пока не знаем, что внутри, удалять нечего предлагать. Меню это
+        // открывается нажатием на плашку открытого альбома — а нажимают на
+        // неё как раз тогда, когда плиток под ней не видно. При
+        // непрочитанном альбоме «Удалить» оставалось единственным доступным
+        // действием («Убрать из альбома» живёт на плитках) и уносило копии
+        // снимков, которых больше нигде нет.
+        ...(items.phase !== 'ready' ? [] : [{
           label: 'Удалить альбом',
           destructive: true,
           // Копии снимков уходят вместе с альбомом: другого места, где на них
@@ -342,16 +394,16 @@ export function ProfilePostsPane({
               ? 'Альбом удалён вместе с копиями снимков.'
               : 'Не удалось удалить альбом.');
           })(),
-        },
+        }]),
       ],
     });
-  }, [ownerProfileId, reloadAlbums, startDraft]);
+  }, [items, ownerProfileId, reloadAlbums, startDraft]);
 
   // Названия, с которыми сверяется набранное. При переименовании своё
   // прежнее имя не считается занятым — иначе альбом нельзя было бы
   // переименовать, поправив в нём одну букву.
   const takenTitles = useMemo(
-    () => albums.filter((a) => !(draft?.kind === 'rename' && a.id === draft.id)).map((a) => a.title),
+    () => rowsOf(albums).filter((a) => !(draft?.kind === 'rename' && a.id === draft.id)).map((a) => a.title),
     [albums, draft]
   );
   const draftProblem = draft ? albumTitleProblem(draftText, takenTitles) : null;
@@ -487,7 +539,7 @@ export function ProfilePostsPane({
                 Все истории
               </Text>
             </AppPressable>
-            {albums.map((a) => {
+            {rowsOf(albums).map((a) => {
               const active = a.id === albumId;
               return (
                 <AppPressable
@@ -516,15 +568,26 @@ export function ProfilePostsPane({
                 </AppPressable>
               );
             })}
-            <AppPressable
-              accessibilityRole="button"
-              style={[styles.chip, { borderColor: colors.border }]}
-              onPress={() => startDraft({ kind: 'create', story: null }, '')}
-              accessibilityLabel="Новый альбом"
-            >
-              <Ionicons name="add" size={16} color={colors.text} />
-              <Text style={[styles.chipText, { color: colors.text }]}>Альбом</Text>
-            </AppPressable>
+            {albums.phase === 'failed' ? (
+              // Ни плашек, ни «Альбома»: и то и другое говорило бы, что
+              // альбомов нет. Названия новому проверить всё равно не с чем —
+              // список занятых берётся отсюда же.
+              <View style={[styles.chip, { borderColor: colors.border }]}>
+                <Text style={[styles.chipText, { color: colors.textMuted }]}>
+                  Альбомы не прочитались
+                </Text>
+              </View>
+            ) : albums.phase === 'reading' ? null : (
+              <AppPressable
+                accessibilityRole="button"
+                style={[styles.chip, { borderColor: colors.border }]}
+                onPress={() => startDraft({ kind: 'create', story: null }, '')}
+                accessibilityLabel="Новый альбом"
+              >
+                <Ionicons name="add" size={16} color={colors.text} />
+                <Text style={[styles.chipText, { color: colors.text }]}>Альбом</Text>
+              </AppPressable>
+            )}
           </ScrollView>
 
           {draft ? (
@@ -578,11 +641,13 @@ export function ProfilePostsPane({
 
       {openAlbum ? (
         <View style={styles.storiesBlock}>
-          <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
-            {albumCountLabel(items.length)}
-          </Text>
+          {items.phase === 'ready' ? (
+            <Text style={[styles.blockLabel, { color: colors.textMuted }]}>
+              {albumCountLabel(items.rows.length)}
+            </Text>
+          ) : null}
           <View style={styles.storiesGrid}>
-            {items.map((it) => renderTile(
+            {rowsOf(items).map((it) => renderTile(
               it.id,
               it.mediaFile ? storyAlbumUriFromName(it.mediaFile) : (itemUris[it.id] ?? null),
               !!it.mediaUnreadable,
@@ -590,7 +655,14 @@ export function ProfilePostsPane({
               () => onItemPress(it),
             ))}
           </View>
-          {items.length === 0 ? (
+          {items.phase === 'failed' ? (
+            // Не «пусто»: снимки на месте, их просто не прочитали. Прежняя
+            // подпись предлагала пойти и положить в альбом ещё одну историю —
+            // поверх тех, что там уже лежат.
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              Альбом не прочитался. Снимки на месте — откройте его ещё раз.
+            </Text>
+          ) : items.phase === 'ready' && items.rows.length === 0 ? (
             <Text style={[styles.emptyText, { color: colors.textMuted }]}>
               Альбом пуст. Откройте «Все истории» и нажмите на ту, что хотите оставить.
             </Text>
