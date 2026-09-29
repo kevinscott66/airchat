@@ -297,8 +297,12 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 describe('ЗАКРЕПКА', () => {
   it('столбец читается формой с тремя состояниями, а запись поверх запрещена', () => {
     const body = codeOnly(read('core/social/callService.ts'));
-    expect(body).toContain('const own = await kvGetSecretCell(callLogKey(pid));');
-    expect(body).toContain("if (own.state === 'unreadable') {");
+    // v4.32.1012: чтение ушло за `readCallLogCell` — та же форма с тремя
+    // состояниями, плюс четвёртый исход «обращение сорвалось». Запрет записи
+    // поверх непрочитанного от этого только шире.
+    expect(body).toContain('return await kvGetSecretCell(key);');
+    expect(body).toContain('const own = await readCallLogCell(callLogKey(pid));');
+    expect(body).toContain("if (own === 'failed' || own.state === 'unreadable') {");
     expect(body).toContain('if (callLogUnreadableFor === profileId) {');
   });
 });

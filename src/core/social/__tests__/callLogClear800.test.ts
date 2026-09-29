@@ -263,7 +263,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(body).toContain('export async function loadCallLog(pid: number): Promise<void> {');
     // v4.32.979: чтение перешло на форму с тремя состояниями — смысл тот же,
     // журнал по-прежнему поднимается с диска при каждом запуске.
-    expect(body).toContain('const own = await kvGetSecretCell(callLogKey(pid));');
+    // v4.32.1012: и на повторяющую её `readCallLogCell`.
+    expect(body).toContain('const own = await readCallLogCell(callLogKey(pid));');
     expect(body).toContain("let raw = own.state === 'plain' ? own.text : null;");
   });
 });

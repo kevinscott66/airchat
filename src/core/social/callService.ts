@@ -19,6 +19,7 @@ import { WebRTCSignaling, getIceServers } from '../transport/webrtc/signaling';
 import { loadConfig } from '../config';
 import { rateLimiter } from '../security/rateLimiter';
 import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../storage/readRetry';
+import type { AtRestCell } from '../storage/atRestCell';
 import { canonPubKeyB64, isEd25519PublicKey, isPubKeyB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { sealCallEnvelope, openCallEnvelope, MISSED_RECEIPT_MAX_AGE_MS } from './callEnvelope';
 import { didFromPubB64 } from '../identity/did';
@@ -481,6 +482,33 @@ export async function clearCallLog(): Promise<boolean> {
 }
 
 /**
+ * Прочитать столбец журнала, пережив занятую секунду (v4.32.1012).
+ *
+ * `kvGetSecretCell` различает «столбца нет» и «не открылся», но третий исход —
+ * когда чтения не было вовсе: занятая база отвечает отказом, и обращение
+ * срывается. Прежде такой срыв улетал в общий `catch { }` в самом низу
+ * `loadCallLog`, и наружу это выглядело как «журнал пуст». Здесь он повторяет
+ * обращение теми же паузами, что и запись (v4.32.749), и только потом
+ * отвечает `'failed'` — отдельным значением, а не пустым столбцом.
+ */
+async function readCallLogCell(key: string): Promise<AtRestCell | 'failed'> {
+  const { kvGetSecretCell } = await import('../storage/local');
+  let last: unknown = null;
+  for (let attempt = 0; attempt <= READ_RETRY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, readRetryDelayMs(attempt)); });
+    }
+    try {
+      return await kvGetSecretCell(key);
+    } catch (e) {
+      last = e;
+    }
+  }
+  log.warn('call_log_read_threw', { key, err: last instanceof Error ? last.message : String(last) });
+  return 'failed';
+}
+
+/**
  * v4.32.658: владелец журнала приходит параметром, а не выводится заново.
  *
  * Раньше здесь стояло `profileManager.getActiveProfile()?.id ?? 1`, тогда как
@@ -490,10 +518,19 @@ export async function clearCallLog(): Promise<boolean> {
  * человек переключил аккаунт, чтение брало журнал нового профиля, а
  * последующая запись (и перешифровка, и миграция legacy-ключа) клала его в
  * хранилище старого. Метаданные звонков одного аккаунта оказывались в другом.
+ *
+ * v4.32.1012: сорванное чтение больше не выглядит как пустой журнал. Весь
+ * разбор стоял в `try { … } catch { }`, и любой отказ базы оставлял `callLog`
+ * пустым, а отметку «не открылось» — неснятой: первый же звонок после этого
+ * записывал одну строку поверх сотни. Проверка v4.32.979 тут не помогала — она
+ * смотрит состояние прочитанной ячейки, а ячейки не было вовсе.
  */
 export async function loadCallLog(pid: number): Promise<void> {
+  // Содержимое столбца установлено: либо прочиталось, либо читать было нечего.
+  // Пока нет — любой срыв ниже значит «не прочитали», и писать поверх нельзя.
+  let known = false;
   try {
-    const { kvGetSecretCell, kvSetSecret, kvDelete } = await import('../storage/local');
+    const { kvSetSecret, kvDelete } = await import('../storage/local');
     // v4.32.979: своим столбцом — тремя состояниями. `kvGetSecret` сводит
     // «журнала нет» и «журнал не открылся» к одному null, а дальше по коду
     // разница между ними решающая: пустая память — это не пустой журнал.
@@ -502,8 +539,8 @@ export async function loadCallLog(pid: number): Promise<void> {
     // более) уходила в тот же столбец поверх шифртекста, который, возможно,
     // ещё открылся бы правильным ключом. Сто последних звонков — кому, когда
     // и чем кончилось — исчезали от одного входящего.
-    const own = await kvGetSecretCell(callLogKey(pid));
-    if (own.state === 'unreadable') {
+    const own = await readCallLogCell(callLogKey(pid));
+    if (own === 'failed' || own.state === 'unreadable') {
       callLogUnreadableFor = pid;
       log.warn('call_log_unreadable', { pid });
       return;
@@ -526,8 +563,8 @@ export async function loadCallLog(pid: number): Promise<void> {
       // закрыта навсегда. Журнал звонков до v4.32.277 оставался лежать на
       // диске непрочитанным. Выход из этого состояния есть: «Очистить» в
       // истории звонков стирает оба ключа и снимает запрет.
-      const legacyCell = await kvGetSecretCell(LEGACY_CALL_LOG_KEY);
-      if (legacyCell.state === 'unreadable') {
+      const legacyCell = await readCallLogCell(LEGACY_CALL_LOG_KEY);
+      if (legacyCell === 'failed' || legacyCell.state === 'unreadable') {
         callLogUnreadableFor = pid;
         log.warn('call_log_legacy_unreadable', { pid });
         return;
@@ -551,8 +588,12 @@ export async function loadCallLog(pid: number): Promise<void> {
         }
       }
     }
+    if (!raw) known = true;
     if (raw) {
       const parsed = JSON.parse(raw) as unknown;
+      // Разобралось — дальше срываться может только запись, а она поверх уже
+      // прочитанного, и запрещать её незачем.
+      known = true;
       if (Array.isArray(parsed)) {
         // v4.32.197 (Round-27 #7): validate each row. Corrupt or imported kv
         // values flow straight into UI render / export — per-row filter keeps
@@ -592,7 +633,12 @@ export async function loadCallLog(pid: number): Promise<void> {
         }
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (!known) {
+      callLogUnreadableFor = pid;
+      log.warn('call_log_load_failed', { pid, err: e instanceof Error ? e.message : String(e) });
+    }
+  }
 }
 
 // ─── Internal state ──────────────────────────────────────────────────────────
