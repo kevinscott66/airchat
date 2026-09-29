@@ -102,10 +102,15 @@ export function liveLocDetail(t: LiveLocTiming): string {
   const state = liveLocState(t);
   if (state === 'ended') return '';
   if (state === 'stale') {
+    // v4.32.1035: ветки «меньше минуты» здесь нет и быть не может. «Замерла»
+    // начинается с молчания дольше `liveLocStaleAfterMs`, а это минимум
+    // LIVELOC_TICK_MS × LIVELOC_STALE_TICKS = полторы минуты, — целое число
+    // минут всегда получается не меньше единицы. Мёртвая ветка хуже
+    // отсутствующей: она изображает заботу о случае, которого нет, и её
+    // молча заносят в покрытие. Что порог и правда не опускается ниже
+    // минуты, сторожит отдельная проверка.
     const mins = Math.floor((t.now - (t.updatedAt as number)) / 60_000);
-    return mins < 1
-      ? 'последняя точка меньше минуты назад'
-      : `последняя точка ${mins} ${ruPlural(mins, MINUTES)} назад`;
+    return `последняя точка ${mins} ${ruPlural(mins, MINUTES)} назад`;
   }
   const mins = Math.floor((t.expireAt - t.now) / 60_000);
   // v4.32.563 (косметика): в последнюю минуту сессии стояло «ещё 0 мин».

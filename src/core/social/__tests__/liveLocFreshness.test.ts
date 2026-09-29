@@ -119,6 +119,25 @@ describe('что написано в пузыре', () => {
   it('у законченной добавлять к координатам нечего', () => {
     expect(liveLocDetail({ expireAt: NOW - MIN, now: NOW, updatedAt: NOW })).toBe('');
   });
+
+  /**
+   * v4.32.1035: у замершей сессии ветки «меньше минуты» нет — она была
+   * недостижима. Здесь сторожится то, на чём эта недостижимость держится:
+   * опустится порог ниже минуты — и «последняя точка 0 минут назад»
+   * появится на экране, а проверка упадёт раньше человека.
+   */
+  it('замершей сессии меньше минуты не бывает: порог не ниже минуты', () => {
+    expect(liveLocStaleAfterMs(undefined)).toBeGreaterThanOrEqual(60_000);
+    // Такт меньше обычного порог не занижает — берётся больший из двух.
+    expect(liveLocStaleAfterMs(1_000)).toBeGreaterThanOrEqual(60_000);
+    // Первая же минута после порога называется целой минутой, а не нулём.
+    const silence = liveLocStaleAfterMs(undefined) + 1;
+    expect(liveLocDetail({ expireAt: NOW + 30 * MIN, now: NOW, updatedAt: NOW - silence }))
+      .toBe('последняя точка 1 минуту назад');
+    // И самой ветки в исходнике не осталось.
+    expect(read('core/social/liveLocFreshness.ts'))
+      .not.toContain('последняя точка меньше минуты назад');
+  });
 });
 
 describe('форма исходников', () => {
