@@ -12,13 +12,18 @@
  * проверка нужна ночной теме, и копия жила там отдельной строкой. Имя и место
  * вызова здесь прежние: фоновому обработчику по-прежнему хватает этого модуля,
  * а у нового импортов нет.
+ *
+ * v4.32.1036: туда же ушёл и разбор границы. Держать свою копию имело смысл,
+ * пока модуль был без единого импорта, — но с v4.32.975 он и так зовёт
+ * `core/time/hourOfDay`, и довод исчез, а копия осталась. Разбор часа теперь
+ * один на оба окна, тишину и ночную тему: подкрутят проверку — подкрутят
+ * сразу обеим, а не той, из-за которой пожаловались.
  */
-import { isWithinHourWindow } from '../core/time/hourOfDay';
+import { isWithinHourWindow, parseHourOfDay } from '../core/time/hourOfDay';
 
 /** Час границы окна: 0…23, всё остальное (мусор в kv, NaN) — запасное значение. */
 export function parseDndHour(raw: string | null | undefined, fallback: number): number {
-  const n = parseInt(raw ?? '', 10);
-  return Number.isFinite(n) && n >= 0 && n <= 23 ? n : fallback;
+  return parseHourOfDay(raw, fallback);
 }
 
 /**
