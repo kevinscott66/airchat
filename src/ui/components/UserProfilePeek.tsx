@@ -134,7 +134,7 @@ import { requestPeerProfile } from '../../core/social/profileSync';
 import { profileManager } from '../../core/identity/profileManager';
 import {
   clearChatHistory,
-  listConversations,
+  listConversationsRead,
   setConversationMuted,
   setConversationMutedUntil,
 } from '../../core/storage/local';
@@ -370,6 +370,18 @@ export function UserProfilePeek({
   // своей рукой нельзя, и в карточке это должно быть написано, а не молчать.
   const [copyGuardByPeer, setCopyGuardByPeer] = useState(false);
   const [disappearMs, setDisappearMs] = useState<number | null>(null);
+  /**
+   * v4.32.1053: строку разговора прочитать не вышло.
+   *
+   * `listConversations` сводила отказ к пустому списку, разговор в нём не
+   * находился, и `disappearMs` оставался `null` — а `formatDisappearLabel(null)`
+   * говорит «Выкл». То есть занятая база печатала в карточке утверждение о
+   * настройке безопасности: «сообщения не исчезают». Таймер при этом работает
+   * — он записан у обеих сторон и живёт в конверте, а не в этой строке. То же
+   * различие шапка переписки держит с v4.32.1047 (`disappearUnknown`), и
+   * подпись здесь ровно та же.
+   */
+  const [convUnknown, setConvUnknown] = useState(false);
   const [reported, setReported] = useState(false);
   const [gateway, setGateway] = useState('');
   const [wallpaper, setWallpaper] = useState<Wallpaper | null>(null);
@@ -439,6 +451,7 @@ export function UserProfilePeek({
     setCopyGuardState(false);
     setCopyGuardByPeer(false);
     setDisappearMs(null);
+    setConvUnknown(false);
     setReported(false);
     setWallpaper(null);
     if (!visible || !resolved) return;
@@ -508,12 +521,19 @@ export function UserProfilePeek({
     const pub = resolved.pubB64;
     void (async () => {
       try {
-        const convs = await listConversations(activeProfileId);
+        const convs = await listConversationsRead(activeProfileId);
         if (cancelled) return;
-        const conv = convs.find((c) => c.contactPubB64 === pub);
-        if (conv) {
-          setMuted(conv.muted);
-          setDisappearMs(conv.disappearAfterMs ?? null);
+        // v4.32.1053: `null` — строку не прочитали, а не «разговора нет».
+        if (convs === null) {
+          setConvUnknown(true);
+          log.warn('ui_peek_conv_read_failed', { err: 'unreadable' });
+        } else {
+          setConvUnknown(false);
+          const conv = convs.find((c) => c.contactPubB64 === pub);
+          if (conv) {
+            setMuted(conv.muted);
+            setDisappearMs(conv.disappearAfterMs ?? null);
+          }
         }
       } catch (e) {
         log.warn('ui_peek_conv_read_failed', { err: rawErrorText(e) });
@@ -597,10 +617,11 @@ export function UserProfilePeek({
     copyGuard,
     copyGuardByPeer,
     disappearMs,
+    convUnknown,
     reported,
     canOpenChat: !!onOpenChat,
     inChat: !!inChat,
-  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, reported, onOpenChat, inChat]);
+  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, convUnknown, reported, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);

@@ -76,6 +76,13 @@ export type HubFacts = {
   copyGuardByPeer: boolean;
   /** Таймер самоуничтожения, мс. null / 0 — выключен. */
   disappearMs: number | null;
+  /**
+   * Строку разговора прочитать не вышло (v4.32.1053). `disappearMs: null` при
+   * этом — не «таймер выключен», а «не знаем»: разница та же, что в шапке
+   * переписки с v4.32.1047. Утверждать «Выкл» нельзя — это утверждение о
+   * настройке безопасности, и оно живёт не только в этой строке.
+   */
+  convUnknown: boolean;
   /** Жалоба на этого человека уже записана. */
   reported: boolean;
   /**
@@ -200,7 +207,12 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
   out.push({ id: 'wallpaper', label: 'Изменить обои' });
   out.push({ id: 'share_contact', label: 'Поделиться этим контактом' });
   if (!f.isSelf) {
-    out.push({ id: 'disappear', label: 'Автоудаление', value: formatDisappearLabel(f.disappearMs) });
+    out.push({
+      id: 'disappear',
+      label: 'Автоудаление',
+      // v4.32.1053: подпись та же, что в меню переписки (v4.32.1047).
+      value: f.convUnknown ? 'не удалось прочитать' : formatDisappearLabel(f.disappearMs),
+    });
     out.push({
       id: 'copy_guard',
       label: 'Запрет копирования и пересылки',
