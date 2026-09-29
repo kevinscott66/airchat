@@ -20,6 +20,7 @@ import { font, primaryInk, radius, spacing } from '../theme';
 import { useColors, useThemedStyles } from '../ThemeContext';
 import type { PermissionStatus } from './permissionStatus';
 import { PERMISSION_DEFS, type PermissionDef } from './permissionDefs';
+import { STATUS_LABEL, statusHint } from './permissionHints';
 import { usePermissionsController } from '../hooks/usePermissionsController';
 
 interface Props {
@@ -36,23 +37,6 @@ interface Props {
    */
   embedded?: boolean;
 }
-
-const STATUS_LABEL: Record<PermissionStatus, string> = {
-  unknown: 'Не запрошено',
-  granted: 'Разрешено ✓',
-  limited: 'Частично',
-  denied:  'Отказано',
-  // «Отклонено» и «Отказано» на слух одно и то же, а состояния разные:
-  // первое чинится нажатием, второе — только настройками системы.
-  blocked: 'Запрещено',
-};
-
-/** Подсказка под карточкой — только там, где без неё непонятно, что делать. */
-const STATUS_HINT: Partial<Record<PermissionStatus, string>> = {
-  limited: 'Доступ только к выбранным фото. Расширить — в настройках системы, нажмите, чтобы открыть их.',
-  denied: 'Нажмите, чтобы спросить ещё раз.',
-  blocked: 'Выдать можно только в настройках системы — нажмите, чтобы открыть их.',
-};
 
 export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS, embedded = false }: Props): React.ReactElement {
   const colors = useColors();
@@ -153,7 +137,7 @@ export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS, embedded = f
             android_ripple={{ color: colors.ripple }}
             accessibilityRole="button"
             accessibilityLabel={`${item.title}: ${STATUS_LABEL[status]}`}
-            accessibilityHint={STATUS_HINT[status]}
+            accessibilityHint={statusHint(item.id, status)}
             accessibilityState={{ disabled: busy, busy: requesting === item.id }}
             testID={`perm_${item.id}`}
           >
@@ -166,8 +150,8 @@ export function PermissionsScreen({ onDone, defs = PERMISSION_DEFS, embedded = f
                 )}
               </View>
               <Text style={styles.permDesc}>{item.description}</Text>
-              {STATUS_HINT[status] ? (
-                <Text style={styles.permHint}>{STATUS_HINT[status]}</Text>
+              {statusHint(item.id, status) ? (
+                <Text style={styles.permHint}>{statusHint(item.id, status)}</Text>
               ) : null}
             </View>
             <View style={styles.permStatusWrap}>

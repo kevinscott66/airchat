@@ -14,6 +14,7 @@ import { Platform } from 'react-native';
 import {
   mapAndroidPermission,
   mapExpoPermission,
+  mapPushAuthorization,
   mergeAndroidCheck,
   type PermissionStatus,
 } from './permissionStatus';
@@ -38,12 +39,46 @@ function androidApi(): number {
     : (Platform.Version as number);
 }
 
-/** Уведомлениям нужен runtime-запрос только на Android 13+. */
+/**
+ * Уведомлениям нужен runtime-запрос на Android 13+ (v4.32.720) и на iOS всегда.
+ *
+ * До v4.32.1060 эта проверка была единственной, и всё, что под неё не
+ * попадало, объявлялось выданным. На Android до 13 это правда: разрешения
+ * такого там нет, уведомления включены по умолчанию. На iOS — нет: диалог
+ * показывают ровно один раз за установку, и человек мог тогда нажать
+ * «Не разрешать».
+ */
 function notificationsNeedPrompt(): boolean {
   return Platform.OS === 'android' && androidApi() >= 33;
 }
 
+/**
+ * Что система думает о наших уведомлениях — на iOS (v4.32.1060).
+ *
+ * До этой версии карточка «Уведомления» на iPhone писала «Разрешено ✓» не
+ * спросив никого, а `request` отвечал тем же словом, не показав диалога. Цена
+ * не в самой надписи: нажатие на выданную карточку не делает ничего
+ * (`permissionTapAction('granted')` → `none`), то есть человек, у которого
+ * уведомления не приходят, видел на экране «Разрешения» зелёную галочку и не
+ * мог с этого экрана ни спросить систему, ни уйти в её настройки. Про push
+ * приложение при этом знало: `pushNotifications` спрашивает ровно то же
+ * `hasPermission()` и пишет ответ в журнал с v4.32.623.
+ *
+ * `null` — спросить не удалось; вызывающий решает, чем это назвать.
+ */
+async function pushAuthorization(ask: boolean): Promise<PermissionStatus | null> {
+  try {
+    const messaging = (await import('@react-native-firebase/messaging')).default;
+    return mapPushAuthorization(
+      ask ? await messaging().requestPermission() : await messaging().hasPermission()
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function checkNotifications(known: PermissionStatus): Promise<PermissionStatus> {
+  if (Platform.OS === 'ios') return (await pushAuthorization(false)) ?? known;
   if (!notificationsNeedPrompt()) return 'granted';
   try {
     const { PermissionsAndroid } = await import('react-native');
@@ -57,6 +92,7 @@ async function checkNotifications(known: PermissionStatus): Promise<PermissionSt
 }
 
 async function requestNotifications(): Promise<PermissionStatus> {
+  if (Platform.OS === 'ios') return (await pushAuthorization(true)) ?? 'unknown';
   if (!notificationsNeedPrompt()) return 'granted';
   try {
     const { PermissionsAndroid } = await import('react-native');
@@ -68,7 +104,26 @@ async function requestNotifications(): Promise<PermissionStatus> {
   }
 }
 
+/**
+ * Микрофон на iOS спрашивает expo-audio (v4.32.1060).
+ *
+ * Тот же модуль и те же две функции, которыми пользуется сам голосовой пузырь
+ * (`VoiceMessage`): читает `getRecordingPermissionsAsync` при открытии, просит
+ * `requestRecordingPermissionsAsync` перед записью. До этой версии карточка
+ * «Микрофон» на iPhone отвечала на нажатие словом «Разрешено ✓», не показав
+ * диалога, — а система в этот момент ничего не выдавала, и первый же зажим
+ * кнопки записи упирался в тот самый диалог, про который карточка уже сказала,
+ * что он пройден.
+ */
 async function checkMicrophone(known: PermissionStatus): Promise<PermissionStatus> {
+  if (Platform.OS === 'ios') {
+    try {
+      const { getRecordingPermissionsAsync } = await import('expo-audio');
+      return mapExpoPermission(await getRecordingPermissionsAsync());
+    } catch {
+      return known;
+    }
+  }
   if (Platform.OS !== 'android') return known;
   try {
     const { PermissionsAndroid } = await import('react-native');
@@ -82,6 +137,14 @@ async function checkMicrophone(known: PermissionStatus): Promise<PermissionStatu
 }
 
 async function requestMicrophone(): Promise<PermissionStatus> {
+  if (Platform.OS === 'ios') {
+    try {
+      const { requestRecordingPermissionsAsync } = await import('expo-audio');
+      return mapExpoPermission(await requestRecordingPermissionsAsync());
+    } catch {
+      return 'unknown';
+    }
+  }
   if (Platform.OS !== 'android') return 'granted';
   try {
     const { PermissionsAndroid } = await import('react-native');

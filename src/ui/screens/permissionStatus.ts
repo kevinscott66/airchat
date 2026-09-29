@@ -42,6 +42,37 @@ export function mapExpoPermission(res: ExpoPermissionResponse | null | undefined
   return res.canAskAgain === false ? 'blocked' : 'denied';
 }
 
+/**
+ * Ответ iOS на разрешение уведомлений (v4.32.1060).
+ *
+ * Числа — те же, что у `messaging.AuthorizationStatus` в
+ * `@react-native-firebase/messaging`; держатся здесь своими, чтобы разбор
+ * ответов оставался модулем без зависимостей: его читают и тесты, и веб.
+ *
+ * `DENIED` — это `blocked`, а не `denied`: на iOS системный диалог показывают
+ * ровно один раз за установку, и повторный запрос вернёт тот же отказ без
+ * единого признака происходящего. Выдать можно только в настройках системы, и
+ * карточка должна вести туда.
+ *
+ * `PROVISIONAL` — тихая выдача: уведомления приходят, но без баннера и звука,
+ * в одну «Историю». Это не отказ и не полная выдача, то есть ровно `limited`.
+ */
+const PUSH_NOT_DETERMINED = -1;
+const PUSH_DENIED = 0;
+const PUSH_AUTHORIZED = 1;
+const PUSH_PROVISIONAL = 2;
+const PUSH_EPHEMERAL = 3;
+
+export function mapPushAuthorization(status: number | null | undefined): PermissionStatus {
+  if (typeof status !== 'number' || !Number.isFinite(status)) return 'unknown';
+  if (status === PUSH_AUTHORIZED || status === PUSH_EPHEMERAL) return 'granted';
+  if (status === PUSH_PROVISIONAL) return 'limited';
+  if (status === PUSH_DENIED) return 'blocked';
+  // NOT_DETERMINED — ещё не спрашивали; незнакомое число — тоже незнание.
+  if (status === PUSH_NOT_DETERMINED) return 'unknown';
+  return 'unknown';
+}
+
 /** Ответ PermissionsAndroid.request: granted | denied | never_ask_again. */
 export function mapAndroidPermission(result: string | null | undefined): PermissionStatus {
   if (result === 'granted') return 'granted';
