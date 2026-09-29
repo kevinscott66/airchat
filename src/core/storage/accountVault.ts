@@ -319,6 +319,41 @@ async function strandedVaultNames(root: string, accountId: string): Promise<stri
 }
 
 /**
+ * То же, но без поблажки: отказ чтения — не ответ (v4.32.1030).
+ *
+ * Разделение нарочное. Читающим путям (`restoreStrandedVault`) мягкий обход
+ * подходит: не увидели застрявшую — просто не подняли, при следующем спросе
+ * увидят. Уборке он не годится: там пустой список значит «убирать нечего»,
+ * то есть отказ диска читается как чистота.
+ */
+async function strandedVaultNamesStrict(root: string, accountId: string): Promise<string[]> {
+  if (!(await FileSystem.getInfoAsync(root)).exists) return [];
+  const prefix = previousVaultPrefix(accountId);
+  return (await FileSystem.readDirectoryAsync(root)).filter((n) => n.startsWith(prefix)).sort();
+}
+
+/**
+ * Что от копии счёта осталось на диске после уборки (v4.32.1030).
+ *
+ * Свидетель уборки, и потому смотрит сам, а не верит её словам. Местный
+ * `exists` тут не подходит намеренно: он гасит бросок `getInfoAsync` и
+ * отвечает «нет» — как раз то, чего свидетелю делать нельзя.
+ *
+ * @returns имена уцелевших каталогов в корне; пустой список — стёрто всё.
+ * Отказ опроса бросается наружу: неизвестность — не пустота.
+ */
+export async function survivingAccountVaultFiles(mnemonic: string): Promise<string[]> {
+  const accountId = accountVaultIdFromMnemonic(mnemonic);
+  const dir = vaultUri(accountId);
+  if (!dir) return [];
+  const rest: string[] = [];
+  if ((await FileSystem.getInfoAsync(dir)).exists) rest.push(accountId);
+  const root = vaultRootUri();
+  if (root) rest.push(...(await strandedVaultNamesStrict(root, accountId)));
+  return rest;
+}
+
+/**
  * Вернуть на место копию, застрявшую при прерванной замене (v4.32.968).
  *
  * Замена уводит прежнюю копию в `.previous-…` и возвращает её при отказе — так
@@ -456,8 +491,30 @@ export async function deleteAccountVault(mnemonic: string): Promise<void> {
   const root = vaultRootUri();
   if (root) {
     for (const stale of await strandedVaultNames(root, accountId)) {
-      await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true }).catch(() => {});
+      try {
+        await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true });
+      } catch (error) {
+        // v4.32.1030: раньше здесь стоял немой `.catch(() => {})`. Запись в
+        // журнал — не отчёт человеку; отчитывается проверка ниже.
+        log.warn('account_vault_previous_delete_failed', {
+          err: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
+  }
+  // v4.32.1030: уборка отвечает за сделанное перечитыванием диска, а не
+  // собственной уверенностью. Обход выше молчал дважды — пустой список при
+  // отказе чтения каталога и погашенный отказ удаления, — и шаг стирания
+  // кошелька записывался удачным. Копия счёта открывается одной секретной
+  // фразой и в свидетелях `wipeLocalWallet` не значится (там кэш медиа,
+  // аватары и копии историй), так что заметить остаток было некому. А остаток
+  // не мёртв: подъёмник застрявших вернёт его на место, и стёртый счёт снова
+  // предложат восстановить. Бросок ловит `erase` и кладёт шаг в `failedSteps`
+  // и `leftBehind` — человек видит, что стёрто не всё.
+  const left = await survivingAccountVaultFiles(mnemonic);
+  if (left.length > 0) {
+    log.warn('account_vault_delete_incomplete', { accountId, left: left.length });
+    throw new Error('account_vault_not_erased');
   }
   log.info('account_vault_deleted', { accountId });
 }
