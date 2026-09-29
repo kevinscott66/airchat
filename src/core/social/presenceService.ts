@@ -12,7 +12,6 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import {
   scopedKvDeleteFor,
-  scopedKvGetFor,
   scopedKvListKeysByPrefixFor,
   scopedKvSetCheckedFor,
   scopedKvSetFor,
@@ -124,6 +123,15 @@ export function presenceOwnerPid(): number {
 
 /** Map<peerPubB64, timestampMs> — in-memory кэш. */
 const lastSeenCache = new Map<string, number>();
+/**
+ * Собеседники, чью сохранённую отметку при старте прочитать не удалось
+ * (v4.32.1055). Отдельно от `lastSeenCache`, потому что «нет записи» и «не
+ * прочитали» — разные вещи: первое и правда значит «не в сети», второе не
+ * значит ничего. Список нужен повтору — см. scheduleLastSeenRetry.
+ */
+const lastSeenUnread = new Set<string>();
+let lastSeenRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSeenRetryAttempt = 0;
 
 /**
  * v4.32.238. Кто просил не показывать его «был(а) в сети». Решение принимает
@@ -498,13 +506,78 @@ export async function loadPersistedPresence(peerPubB64List: string[], ownerPid: 
   await runWithConcurrency(peerPubB64List, 12, async (k) => {
     try {
       if (hiddenPeers.has(k)) return;
-      const v = await scopedKvGetFor(presencePid, await presenceLastSeenKey(k));
-      if (v) {
-        const ts = parseInt(v, 10);
-        if (ts > 0) lastSeenCache.set(k, ts);
-      }
-    } catch { /* ignore */ }
+      // v4.32.1055: не прочиталось — это не «не был(а) в сети». Запоминаем и
+      // пробуем ещё раз: иначе отметка пропадала до перезапуска.
+      if (!(await readPersistedLastSeen(presencePid, k, false))) lastSeenUnread.add(k);
+    } catch { lastSeenUnread.add(k); }
   });
+  scheduleLastSeenRetry();
+}
+
+/**
+ * Одно чтение сохранённой отметки «был(а) в сети» (v4.32.1055).
+ *
+ * `false` — база не ответила. До этой версии здесь стоял двузначный
+ * `scopedKvGetFor`: он отдаёт `null` и когда записи нет, и когда прочитать не
+ * удалось, — то есть занятая при запуске база молча превращалась в «человек
+ * никогда не был в сети». Даже `catch` вокруг не срабатывал: обёртка гасит
+ * ошибку внутри себя. Различает их `scopedKvTryGetFor`, и рядом, в переносе
+ * имён ключей, он уже стоит ровно по этой причине.
+ */
+async function readPersistedLastSeen(pid: number, peerPubB64: string, emit: boolean): Promise<boolean> {
+  const read = await scopedKvTryGetFor(pid, await presenceLastSeenKey(peerPubB64));
+  if (read === null) return false;
+  const ts = read.value ? parseInt(read.value, 10) : 0;
+  // Свежее прочитанного не затираем: пока шло чтение, могло прийти сообщение,
+  // и оно знает о человеке больше, чем диск.
+  if (ts > 0 && ts > (lastSeenCache.get(peerPubB64) ?? 0)) {
+    lastSeenCache.set(peerPubB64, ts);
+    if (emit) emitPresence(peerPubB64);
+  }
+  return true;
+}
+
+/**
+ * Повтор для тех, чью отметку при старте не прочитали (v4.32.1055).
+ *
+ * Читается это место ровно один раз за запуск (`App.tsx`), и другого пути у
+ * отметки нет: `recordPeerActivity` оживляет только тех, от кого пришло
+ * сообщение, а обход раз в минуту на телефоне не заводится вовсе — pubsub там
+ * выключен, и `startPresenceBroadcast` выходит до таймеров. Поэтому один
+ * неудачный такт базы означал «не в сети» у человека на весь сеанс.
+ *
+ * Попыток три, с растущей паузой: причина отказа — занятость базы при старте,
+ * она проходит сама. Дальше молчим: бесконечный повтор на по-настоящему
+ * сломанной базе — это шум в журнале и работа впустую.
+ */
+const LAST_SEEN_RETRY_DELAYS_MS = [5_000, 30_000, 120_000];
+
+function scheduleLastSeenRetry(): void {
+  if (lastSeenUnread.size === 0) return;
+  log.warn('presence_last_seen_unread', { count: lastSeenUnread.size, attempt: lastSeenRetryAttempt });
+  const delay = LAST_SEEN_RETRY_DELAYS_MS[lastSeenRetryAttempt];
+  if (delay === undefined || lastSeenRetryTimer) return;
+  const pid = presencePid;
+  lastSeenRetryAttempt += 1;
+  lastSeenRetryTimer = setTimeout(() => {
+    lastSeenRetryTimer = null;
+    void retryUnreadLastSeen(pid);
+  }, delay);
+}
+
+async function retryUnreadLastSeen(pid: number): Promise<void> {
+  // Профиль успели переключить — чужое читать незачем: кэш уже очищен, а
+  // запись под чужим номером показала бы новому аккаунту прошлых знакомых.
+  if (pid !== presencePid) { lastSeenUnread.clear(); return; }
+  await runWithConcurrency([...lastSeenUnread], 12, async (k) => {
+    if (pid !== presencePid) return;
+    try {
+      // Просьба «не отмечать меня» могла дойти уже после старта.
+      if (hiddenPeers.has(k)) { lastSeenUnread.delete(k); return; }
+      if (await readPersistedLastSeen(pid, k, true)) lastSeenUnread.delete(k);
+    } catch { /* остаётся в списке — его возьмёт следующая попытка */ }
+  });
+  if (pid === presencePid) scheduleLastSeenRetry();
 }
 
 /** Получить текущий presence-стейт для пира. */
@@ -826,6 +899,10 @@ export async function stopPresenceBroadcast(): Promise<void> {
   }
   subscribedByPeer.clear();
   failedPeers.clear();
+  // v4.32.1055: повтор чтения отметок — вместе с остальными таймерами службы.
+  if (lastSeenRetryTimer) { clearTimeout(lastSeenRetryTimer); lastSeenRetryTimer = null; }
+  lastSeenRetryAttempt = 0;
+  lastSeenUnread.clear();
   myPresencePubB64 = null;
   // v4.32.188 (Round-18 #3): clear module-scoped caches too, otherwise
   // after profile switch the new profile's UI reads prior profile's
