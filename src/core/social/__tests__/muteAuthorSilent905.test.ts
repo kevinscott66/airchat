@@ -1,7 +1,8 @@
 /**
  * Дефект: заглушение, не дошедшее до базы, было неотличимо от удавшегося.
  *
- * v4.32.905. `toggleMutedAuthor` отвечал набором заглушённых и при удаче, и
+ * v4.32.905. `toggleMutedAuthor` (ныне `setAuthorMuted`, v4.32.1046) отвечал
+ * набором заглушённых и при удаче, и
  * при отказе — при отказе тем, что лежало в базе до попытки. Лента отличала от
  * него только `null` («список не прочитался»), а проверка была написана как
  * `if (!next)`: объект её проходил. Значит не легшая запись, предел в 2000
@@ -63,7 +64,7 @@ jest.mock('../../logger', () => ({ log: { warn: jest.fn(), info: jest.fn(), erro
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { MUTED_AUTHORS_KEY, getMutedAuthors, resetMutedAuthorsCache, toggleMutedAuthor } from '../mutedAuthors';
+import { MUTED_AUTHORS_KEY, getMutedAuthors, resetMutedAuthorsCache, setAuthorMuted } from '../mutedAuthors';
 
 const mockLocal = jest.requireMock('../../storage/local') as { __kv: Record<string, string> };
 
@@ -97,7 +98,7 @@ describe('заглушение, не дошедшее до базы, назыв�
   it('не легшая запись — это ok: false, а не прежний набор', async () => {
     put([OTHER]);
     mockWriteFails = true;
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     expect(res.ok).toBe(false);
     expect(res.ok ? null : res.why).toBe('write_failed');
   });
@@ -106,41 +107,41 @@ describe('заглушение, не дошедшее до базы, назыв�
     put([NOISY]);
     await getMutedAuthors();
     mockWriteFails = true;
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, false);
     expect(res.ok).toBe(false);
     expect(res.ok ? null : res.why).toBe('write_failed');
   });
 
   it('без активного профиля отказ, а не тихая пустота', async () => {
     mockActiveId = null;
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     expect(res.ok).toBe(false);
     expect(res.ok ? null : res.why).toBe('no_profile');
   });
 
   it('упёрлись в предел — говорим об этом отдельно', async () => {
     put(Array.from({ length: 2000 }, (_, i) => `did:key:z${String(i).padStart(40, '0')}`));
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     expect(res.ok).toBe(false);
     expect(res.ok ? null : res.why).toBe('limit');
   });
 
   it('нечитаемый список отличается от неудавшейся записи', async () => {
     mockReadFails = true;
-    expect(await toggleMutedAuthor(NOISY)).toEqual({ ok: false, why: 'unreadable', muted: null });
+    expect(await setAuthorMuted(NOISY, true)).toEqual({ ok: false, why: 'unreadable', muted: null });
   });
 
   it('удача так и говорит и несёт новый набор', async () => {
     put([OTHER]);
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     expect(res.ok).toBe(true);
     expect([...(res.muted ?? [])].sort()).toEqual([NOISY, OTHER].sort());
   });
 
   it('лента смотрит на исход, а не на «пришёл ли объект»', () => {
-    expect(feed).toContain('const res = await toggleMutedAuthor(authorDid);');
+    expect(feed).toContain('const res = await setAuthorMuted(authorDid, want);');
     expect(feed).toContain('if (!res.ok) {');
-    expect(feed).not.toContain('const next = await toggleMutedAuthor(authorDid);');
+    expect(feed).not.toContain('const next = await setAuthorMuted(authorDid, want);');
   });
 
   it('лента показывает именно тот набор, что записан', () => {
@@ -158,19 +159,19 @@ describe('до правки было верно и осталось верно',
   it('неудавшаяся запись не трогает базу', async () => {
     put([OTHER]);
     mockWriteFails = true;
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     expect(stored()).toEqual([OTHER]);
   });
 
   it('кэш не расходится с базой, когда запись не легла', async () => {
     await getMutedAuthors();
     mockWriteFails = true;
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     expect((await getMutedAuthors()).has(NOISY)).toBe(false);
   });
 
   it('удавшееся заглушение доходит до базы и до кэша', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     expect(stored()).toEqual([NOISY]);
     expect((await getMutedAuthors()).has(NOISY)).toBe(true);
   });
@@ -179,7 +180,7 @@ describe('до правки было верно и осталось верно',
     put([OTHER]);
     resetMutedAuthorsCache();
     mockReadFails = true;
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     mockReadFails = false;
     expect(stored()).toEqual([OTHER]);
   });
@@ -187,6 +188,6 @@ describe('до правки было верно и осталось верно',
   it('лента по-прежнему не пишет в состояние прямо из вызова', () => {
     // v4.32.293: запись шла side-effect'ом внутри setState-updater'а, и React
     // вправе вызвать его дважды. Эта форма не должна вернуться.
-    expect(feed).not.toContain('setMutedAuthors(await toggleMutedAuthor(authorDid));');
+    expect(feed).not.toContain('setMutedAuthors(await setAuthorMuted(authorDid, want));');
   });
 });

@@ -132,15 +132,24 @@ export type MuteWrite =
 export { MAX_MUTED };
 
 /**
- * Переключить заглушение и вернуть новый список — интерфейс показывает именно
- * то, что записано, а не то, что он предположил.
+ * Заглушить автора или расслышать обратно — по тому, что человек попросил.
  *
  * `ok: false` — не записано, и `why` говорит почему. «Не прочитали» выделено
  * отдельно: запись идёт целиком, так что «взять пустой набор и добавить
  * одного» означало бы вернуть человеку в ленту всех, кого он когда-либо
  * заглушил.
+ *
+ * v4.32.1046: направление приходит снаружи, а не выводится из базы. Прежде
+ * функция переключала: брала текущее состояние и меняла его на обратное. Но
+ * надпись на кнопке экран берёт из списка, прочитанного при открытии ленты, а
+ * `getMutedAuthors` на отказ базы отдаёт пустой набор — на запуске, когда
+ * связка ключей ещё не готова, это обычное дело. Заглушённый автор оказывался
+ * в меню с надписью «Скрыть автора», человек её нажимал, здесь список
+ * перечитывался уже успешно — и автор РАССЛЫШИВАЛСЯ. Просьба спрятать
+ * исполнялась наоборот и ложилась на диск. Теперь «скрыть» значит скрыть при
+ * любом исходе прежнего чтения.
  */
-export async function toggleMutedAuthor(did: string): Promise<MuteWrite> {
+export async function setAuthorMuted(did: string, want: boolean): Promise<MuteWrite> {
   const current = await currentMuted();
   if (current === null) {
     log.warn('muted_authors_unreadable', { didLen: did.length });
@@ -152,9 +161,9 @@ export async function toggleMutedAuthor(did: string): Promise<MuteWrite> {
     return { ok: false, why: 'no_profile', muted: current };
   }
   const next = new Set(current);
-  if (next.has(did)) {
+  if (!want) {
     next.delete(did);
-  } else if (next.size >= MAX_MUTED) {
+  } else if (!next.has(did) && next.size >= MAX_MUTED) {
     log.warn('muted_authors_limit', { size: next.size });
     return { ok: false, why: 'limit', muted: current };
   } else {

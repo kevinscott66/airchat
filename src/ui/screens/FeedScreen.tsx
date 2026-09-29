@@ -147,7 +147,7 @@ import {
   saveComposeDraft,
   selectComposeDocs,
 } from '../../core/social/composeDraft';
-import { getMutedAuthors, MAX_MUTED, toggleMutedAuthor } from '../../core/social/mutedAuthors';
+import { getMutedAuthors, MAX_MUTED, setAuthorMuted } from '../../core/social/mutedAuthors';
 import { atTimestamp, hasMoreAfterRefresh, mergeByRowId, mergeListHead } from '../../core/storage/listHeadMerge';
 import { decidePage, shouldApplyRows, type DbRead } from '../../core/storage/readResult';
 import { READ_RETRY_ATTEMPTS, readRetryDelayMs } from '../../core/storage/readRetry';
@@ -1430,7 +1430,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     // ответ уходил в ветку ЗАПИСИ: человек просил уведомления вернуть, а
     // получал бессрочное глушение поверх отсрочки, которую сам ставил до
     // утра. Не прочитали — не пишем; ровно это правило соблюдает соседний
-    // toggleMuteAuthor (v4.32.699).
+    // setMuteAuthor (v4.32.699).
     const state = await getMuteState('post', postId);
     if (state === null) { showError('Не удалось прочитать, отключены ли уведомления'); return; }
     // v4.32.630: оба вызова гасят отказ базы, а список отключённых постов
@@ -1448,14 +1448,18 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // v4.32.293: показываем то, что записалось. Запись шла side-effect'ом внутри
   // setState-updater'а — React вправе вызвать его дважды, и провал записи
   // интерфейс всё равно не замечал.
-  const toggleMuteAuthor = useCallback(async (authorDid: string) => {
+  //
+  // v4.32.1046: направление передаётся явно. Надпись на кнопке берётся из
+  // списка, прочитанного при открытии ленты, а он на отказе базы приходит
+  // пустым — и «Скрыть автора» над уже заглушённым снимало заглушение.
+  const setMuteAuthor = useCallback(async (authorDid: string, want: boolean) => {
     // v4.32.699: список не прочитался, и записи не было. Взять его за пустой
     // значило бы показать, что заглушённых больше нет.
     //
     // v4.32.905: остальные отказы приходили сюда прежним набором — объектом, —
     // и проверка их пропускала. Лента перерисовывалась прежним списком без
     // единого слова: человек заглушал автора и видел его записи дальше.
-    const res = await toggleMutedAuthor(authorDid);
+    const res = await setAuthorMuted(authorDid, want);
     if (!res.ok) {
       showError(
         res.why === 'unreadable' ? 'Не удалось прочитать список заглушённых'
@@ -4762,7 +4766,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
                   {!isSelfP ? row(
                     isMutedP ? 'eye-outline' : 'eye-off-outline',
                     isMutedP ? t('feed.menuShowAuthor') : t('feed.menuHideAuthor'),
-                    () => runFeedOp(() => toggleMuteAuthor(p.authorDid), t('feed.muteAuthorFailed')),
+                    () => runFeedOp(() => setMuteAuthor(p.authorDid, !isMutedP), t('feed.muteAuthorFailed')),
                   ) : null}
                   {row(
                     mutedPosts.has(p.id) ? 'notifications' : 'notifications-off-outline',

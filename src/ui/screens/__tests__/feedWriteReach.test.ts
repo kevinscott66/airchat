@@ -142,7 +142,8 @@ describe('действия над публикацией идут через о�
     expect(SCREEN).toContain("const reach = await deleteFeedPost(pair, p.id);");
     expect(SCREEN).toContain("await deleteFeedPostLocal(p.id);");
     expect(SCREEN).toContain("}, t('feed.deletePostFailed'));");
-    expect(SCREEN).toContain("runFeedOp(() => toggleMuteAuthor(p.authorDid), t('feed.muteAuthorFailed'))");
+    // v4.32.1046: направление скрытия передаётся явно — вход тот же.
+    expect(SCREEN).toContain("runFeedOp(() => setMuteAuthor(p.authorDid, !isMutedP), t('feed.muteAuthorFailed'))");
     expect(SCREEN).toContain("}, t('feed.archiveFailed'))");
   });
 
@@ -152,7 +153,7 @@ describe('действия над публикацией идут через о�
 
   it('прежних необработанных обещаний в меню не осталось', () => {
     expect(SCREEN).not.toContain('void toggleMutePost(p.id)');
-    expect(SCREEN).not.toContain('void toggleMuteAuthor(p.authorDid)');
+    expect(SCREEN).not.toContain('void setMuteAuthor(p.authorDid, !isMutedP)');
     expect(SCREEN).not.toContain('void deleteFeedPost(pair, p.id)');
     expect(SCREEN).not.toContain('void deleteFeedPostLocal(p.id)');
     expect(SCREEN).not.toContain('void setFeedPostArchived(p.id, !isArchivedP)');

@@ -68,7 +68,7 @@ import {
   getMutedAuthors,
   isAuthorMuted,
   resetMutedAuthorsCache,
-  toggleMutedAuthor,
+  setAuthorMuted,
 } from '../../social/mutedAuthors';
 import { FOLDER_NAMES_KEY, loadFolderNames, setFolderName } from '../chatFolders';
 import { tryReadProfileSharedSecret } from '../profileSharedKv';
@@ -130,7 +130,7 @@ describe('повод для правки жив', () => {
 describe('проверка не пустая: база отвечает — всё как было', () => {
   it('заглушение переключается и список читается', async () => {
     put(mutedKey(1), [DID_A, DID_B]);
-    const next = await toggleMutedAuthor(DID_C);
+    const next = await setAuthorMuted(DID_C, true);
     expect(next.ok).toBe(true);
     expect([...(next.muted ?? [])].sort()).toEqual([DID_A, DID_B, DID_C].sort());
     expect(read(mutedKey(1))).toEqual(expect.arrayContaining([DID_A, DID_B, DID_C]));
@@ -154,7 +154,7 @@ describe('набор не прочитался — его не переписы�
     put(mutedKey(1), [DID_A, DID_B]);
     const before = read(mutedKey(1));
     mockDbFails = true;
-    expect(await toggleMutedAuthor(DID_C)).toEqual({ ok: false, why: 'unreadable', muted: null });
+    expect(await setAuthorMuted(DID_C, true)).toEqual({ ok: false, why: 'unreadable', muted: null });
     mockDbFails = false;
     expect(read(mutedKey(1))).toEqual(before);
   });
@@ -217,7 +217,7 @@ describe('исходник: чтение общей записи объявле�
     // v4.32.905: тип стал шире — отказ объявляется не только при нечитаемом
     // списке, но и при неудавшейся записи, переполнении и пустом профиле.
     expect(SRC('../../social/mutedAuthors.ts')).toContain(
-      'export async function toggleMutedAuthor(did: string): Promise<MuteWrite> {',
+      'export async function setAuthorMuted(did: string, want: boolean): Promise<MuteWrite> {',
     );
     expect(SRC('../../social/mutedAuthors.ts')).toContain(
       "return { ok: false, why: 'unreadable', muted: null };",
@@ -238,10 +238,10 @@ describe('исходник: чтение общей записи объявле�
       path.join(__dirname, '../../../ui/screens/FeedScreen.tsx'),
       'utf8',
     );
-    expect(feed).toContain('const res = await toggleMutedAuthor(authorDid);');
+    expect(feed).toContain('const res = await setAuthorMuted(authorDid, want);');
     // v4.32.905: текст ушёл в разбор причины — отказов стало несколько.
     expect(feed).toContain("res.why === 'unreadable' ? 'Не удалось прочитать список заглушённых'");
-    expect(feed).not.toContain('setMutedAuthors(await toggleMutedAuthor(authorDid));');
+    expect(feed).not.toContain('setMutedAuthors(await setAuthorMuted(authorDid, want));');
     const list = fs.readFileSync(
       path.join(__dirname, '../../../ui/screens/ChatListScreen.tsx'),
       'utf8',

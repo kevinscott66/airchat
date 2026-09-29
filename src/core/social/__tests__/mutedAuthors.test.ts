@@ -58,7 +58,7 @@ import {
   getMutedAuthors,
   isAuthorMuted,
   resetMutedAuthorsCache,
-  toggleMutedAuthor,
+  setAuthorMuted,
 } from '../mutedAuthors';
 
 const mockLocal = jest.requireMock('../../storage/local') as {
@@ -86,7 +86,7 @@ beforeEach(() => {
 
 describe('заглушённые принадлежат профилю', () => {
   it('пишутся шифртекстом под ключ профиля', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     expect(mockLocal.__kv[key1]).toBeDefined();
     expect(mockLocal.__kv[key1]).not.toContain(NOISY);
     expect(mockLocal.__kv[MUTED_AUTHORS_KEY]).toBeUndefined();
@@ -94,15 +94,15 @@ describe('заглушённые принадлежат профилю', () => {
   });
 
   it('второй профиль не наследует заглушения первого', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     mockActiveId = 2;
     resetMutedAuthorsCache();
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
 
-  it('повторное переключение снимает', async () => {
-    await toggleMutedAuthor(NOISY);
-    const after = await toggleMutedAuthor(NOISY);
+  it('просьба расслышать снимает', async () => {
+    await setAuthorMuted(NOISY, true);
+    const after = await setAuthorMuted(NOISY, false);
     expect(after.ok).toBe(true);
     expect(after.muted?.has(NOISY)).toBe(false);
     resetMutedAuthorsCache();
@@ -111,7 +111,7 @@ describe('заглушённые принадлежат профилю', () => {
 
   it('без активного профиля не пишет ничего', async () => {
     mockActiveId = null;
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     // v4.32.905: раньше отказ приходил прежним набором и был неотличим от удачи.
     expect(res.ok).toBe(false);
     expect(res.ok ? null : res.why).toBe('no_profile');
@@ -150,7 +150,7 @@ describe('общая запись из версий до v4.32.293', () => {
   });
 
   it('не затирает уже перенесённое', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     resetMutedAuthorsCache();
     mockLocal.__kv[MUTED_AUTHORS_KEY] = JSON.stringify([OTHER]);
     const set = await getMutedAuthors();
@@ -182,7 +182,7 @@ describe('разбор записи', () => {
 
 describe('кэш', () => {
   it('повторная проверка не ходит в базу', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     mockLocal.kvGet.mockClear();
     expect(await isAuthorMuted(NOISY)).toBe(true);
     expect(await isAuthorMuted(OTHER)).toBe(false);
@@ -190,7 +190,7 @@ describe('кэш', () => {
   });
 
   it('смена профиля кэш не переживает', async () => {
-    await toggleMutedAuthor(NOISY);
+    await setAuthorMuted(NOISY, true);
     mockActiveId = 2;
     expect(await isAuthorMuted(NOISY)).toBe(false);
   });
@@ -198,7 +198,7 @@ describe('кэш', () => {
   it('не расходится с базой, если запись не удалась', async () => {
     await getMutedAuthors();
     mockWriteFails = true;
-    const res = await toggleMutedAuthor(NOISY);
+    const res = await setAuthorMuted(NOISY, true);
     expect(res.ok).toBe(false);
     expect(res.muted?.has(NOISY)).toBe(false);
     expect(await isAuthorMuted(NOISY)).toBe(false);
