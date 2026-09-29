@@ -1,0 +1,118 @@
+/**
+ * Непрочитанное «О себе» показывалось пустым и молча (v4.32.1040).
+ *
+ * ДЕФЕКТ. Окно «Редактировать профиль» наполняется девятью полями. Пять из
+ * них — сайт, два имени на площадках и две бумаги к ним — читаются исходом с
+ * v4.32.994: «поля нет» и «поле не открылось» там разные ответы. Три
+ * оставшихся — местоимения, статус и «О себе» — читались через `ownFieldGet`,
+ * то есть строкой, где оба ответа сведены к одному `null`. Ячейки шифрованные
+ * (OWN_PROFILE_KEYS), занятый SQLite и недоступный ключ дают ровно такой
+ * ответ.
+ *
+ * ЦЕНА. Стереть их этим уже нельзя: каждое поле пишется по сравнению с
+ * прежним значением, а прежнее тоже пусто, и записи не случается. Цена
+ * другая. Человек открывает редактор и видит пустое «О себе» там, где лежит
+ * текст. Вывод из пустого поля один — «пропало», — и дальше он пишет заново.
+ * Новый текст записывается как осмысленная правка, потому что она такой и
+ * выглядит; прежнего, которого он не собирался трогать, после этого нет.
+ * Ссылку можно посмотреть на площадке, а набранное «О себе» не лежит больше
+ * нигде.
+ *
+ * ПРАВКА. Читать исходом и назвать над формой те поля, которые не открылись:
+ * показать нечего, записанное на месте, заменится только написанным здесь.
+ * Правку не запрещаем — человек может как раз и хотеть написать заново.
+ *
+ * ГРАНИЦЫ. Пустое поле без отказа чтения — обычная пустота, и над формой
+ * тогда молчание. Отказ не вечный: он про то чтение, которым наполнялось
+ * окно, поэтому в тексте сказано «откройте окно ещё раз».
+ */
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+import { ownTextFieldsUnreadText } from '../ownTextFieldsUnread';
+
+/** Только код: пояснения не должны сами удовлетворять проверку. */
+const codeOnly = (src: string): string =>
+  src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+const MODAL = (): string =>
+  codeOnly(
+    readFileSync(
+      join(__dirname, '..', '..', '..', 'ui', 'components', 'modals', 'profile', 'ProfileEditModal.tsx'),
+      'utf8'
+    )
+  );
+
+describe('что сказать над формой', () => {
+  it('всё прочиталось — говорить нечего', () => {
+    expect(ownTextFieldsUnreadText([])).toBeNull();
+  });
+
+  it('одно поле названо в единственном числе', () => {
+    const t = ownTextFieldsUnreadText(['bio']);
+    expect(t).toContain('«О себе»');
+    expect(t).toContain('Поле показано пустым');
+    expect(t).not.toContain('местоимения');
+    expect(t).not.toContain('статус');
+  });
+
+  it('три поля перечислены сверху вниз по форме, а не по порядку аргумента', () => {
+    const t = ownTextFieldsUnreadText(['bio', 'status', 'pronouns']);
+    expect(t).toContain('местоимения, статус и «О себе»');
+    expect(t).toContain('Поля показаны пустыми');
+  });
+
+  it('сказано и то, что записанное на месте, и то, чем оно заменится', () => {
+    const t = ownTextFieldsUnreadText(['status']) ?? '';
+    // Без первой половины человек решит, что текст пропал, и напишет заново —
+    // ровно то, ради чего всё это.
+    expect(t).toContain('записанное на месте');
+    expect(t).toContain('заменится, только если написать здесь');
+    // Отказ не вечный: он про одно чтение, а не про поле навсегда.
+    expect(t).toContain('откройте окно ещё раз');
+  });
+
+  it('ГРАНИЦА: повтор в списке не удваивает название', () => {
+    const t = ownTextFieldsUnreadText(['bio', 'bio']) ?? '';
+    expect(t.split('«О себе»').length - 1).toBe(1);
+  });
+});
+
+describe('форма исходников', () => {
+  it('три поля читаются исходом, собирающей формы в окне не осталось', () => {
+    const m = MODAL();
+    expect(m).toContain("ownFieldTryGet('user_pronouns'),");
+    expect(m).toContain("ownFieldTryGet('user_custom_status'),");
+    expect(m).toContain("ownFieldTryGet('user_bio'),");
+    // Собирающая форма сводит «нет» и «не открылось»; в этом окне её быть не
+    // должно ни у одного поля.
+    expect(m).not.toContain('ownFieldGet(');
+  });
+
+  it('исход чтения попадает в отметку, а отметка — в текст над формой', () => {
+    const m = MODAL();
+    expect(m).toContain('pronouns: pronouns === null,');
+    expect(m).toContain('status: status === null,');
+    expect(m).toContain('bio: bio === null,');
+    expect(m).toContain('const unreadNote = ownTextFieldsUnreadText(');
+    expect(m).toContain('testID="profile_edit_unread_note"');
+  });
+
+  it('текст показан янтарём — вторым сигналом, а не обычной подписью', () => {
+    const m = MODAL();
+    const at = m.indexOf('testID="profile_edit_unread_note"');
+    expect(at).toBeGreaterThan(0);
+    expect(m.slice(at - 200, at)).toContain('colors.warning');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: соседние поля того же окна давно читаются исходом', () => {
+    const m = MODAL();
+    expect(m).toContain("ownFieldTryGet('user_website'),");
+    expect(m).toContain('website: website === null,');
+  });
+
+  it('ЗАКРЕПКА: правило лежит отдельно от экрана и без импортов', () => {
+    const rule = readFileSync(join(__dirname, '..', 'ownTextFieldsUnread.ts'), 'utf8');
+    expect(codeOnly(rule)).not.toContain('import ');
+  });
+});

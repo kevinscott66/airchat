@@ -52,7 +52,6 @@ import {
   OWN_DISPLAY_NAME_KEY,
   getOwnDisplayName,
   getOwnUsername,
-  ownFieldGet,
   ownFieldSet,
   ownFieldTryGet,
   sanitizeOwnDisplayName,
@@ -63,6 +62,10 @@ import {
   linkFieldsKeptText,
   type LinkFieldName,
 } from '../../../../core/identity/linkFieldWrite';
+import {
+  ownTextFieldsUnreadText,
+  type OwnTextFieldName,
+} from '../../../../core/identity/ownTextFieldsUnread';
 import { checkUsernameClaim } from '../../../../core/identity/reservedUsernames';
 import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
 import { applyOwnBadgeGrant, ownBadgeClaim } from '../../../../core/identity/ownBadge';
@@ -138,6 +141,15 @@ export function ProfileEditModal({
   const [linkUnread, setLinkUnread] = useState<Record<LinkFieldName, boolean>>({
     website: false, twitter: false, github: false, twitter_proof: false, github_proof: false,
   });
+  /**
+   * Какие из текстовых полей при наполнении окна не открылись (v4.32.1040).
+   * Пустота в них — не ответ базы «ничего не записано», а отказ чтения. См.
+   * ownTextFieldsUnread: стереть их этим нельзя, а вот переписать вслепую —
+   * можно, если человеку не сказать.
+   */
+  const [textUnread, setTextUnread] = useState<Record<OwnTextFieldName, boolean>>({
+    pronouns: false, status: false, bio: false,
+  });
   const [pubB64, setPubB64] = useState('');
 
   // Читается на каждое открытие: между открытиями профиль мог измениться и с
@@ -150,9 +162,9 @@ export function ProfileEditModal({
         await Promise.all([
           getOwnDisplayName(),
           getOwnUsername(),
-          ownFieldGet('user_pronouns'),
-          ownFieldGet('user_custom_status'),
-          ownFieldGet('user_bio'),
+          ownFieldTryGet('user_pronouns'),
+          ownFieldTryGet('user_custom_status'),
+          ownFieldTryGet('user_bio'),
           ownFieldTryGet('user_website'),
           ownFieldTryGet('user_twitter'),
           ownFieldTryGet('user_github'),
@@ -168,9 +180,9 @@ export function ProfileEditModal({
       const next: Loaded = {
         name: name ?? '',
         handle: handle ?? '',
-        pronouns: cleanPronouns(pronouns),
-        status: normalizeOwnStatus(status),
-        bio: normalizeOwnBio(bio),
+        pronouns: cleanPronouns(pronouns?.text ?? null),
+        status: normalizeOwnStatus(status?.text ?? null),
+        bio: normalizeOwnBio(bio?.text ?? null),
         website: website?.text ?? '',
         twitter: twitter?.text ?? '',
         github: github?.text ?? '',
@@ -180,6 +192,11 @@ export function ProfileEditModal({
       setAvatar(face ?? null);
       setBadge(claim);
       setProofs({ x: readLinkProofRecord(xProof?.text ?? null), github: readLinkProofRecord(ghProof?.text ?? null) });
+      setTextUnread({
+        pronouns: pronouns === null,
+        status: status === null,
+        bio: bio === null,
+      });
       setLinkUnread({
         website: website === null,
         twitter: twitter === null,
@@ -191,6 +208,10 @@ export function ProfileEditModal({
     })();
     return () => { alive = false; };
   }, [visible]);
+
+  const unreadNote = ownTextFieldsUnreadText(
+    (Object.keys(textUnread) as OwnTextFieldName[]).filter((f) => textUnread[f])
+  );
 
   const completion = profileCompletionPct({
     name: draft.name,
@@ -575,6 +596,14 @@ export function ProfileEditModal({
               По нему вас находят и узнают. Латиница, цифры и «_».
             </Text>
 
+            {/* v4.32.1040: поле, которое не открылось, показано пустым — и
+                молчание об этом читается как «здесь ничего нет». */}
+            {unreadNote ? (
+              <Text style={[styles.unreadNote, { color: colors.warning }]} testID="profile_edit_unread_note">
+                {unreadNote}
+              </Text>
+            ) : null}
+
             <Text style={[styles.label, { color: colors.textSecondary }]}>Местоимения</Text>
             <TextInput
               style={fieldStyle}
@@ -776,6 +805,7 @@ const styles = StyleSheet.create({
   handleAt: { fontSize: font.md },
   handleInput: { flex: 1, paddingVertical: spacing.sm, fontSize: font.md },
   hint: { fontSize: font.xs, marginTop: spacing.xs },
+  unreadNote: { fontSize: font.xs, marginTop: spacing.md, lineHeight: 16 },
   badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
