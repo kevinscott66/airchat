@@ -98,6 +98,8 @@ export function ProfileChatBlock({
   const [noteEditVisible, setNoteEditVisible] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
   const [notifyOnline, setNotifyOnline] = useState(false);
+  /** v4.32.1061: просьбу не прочитали — это не «её нет». */
+  const [notifyUnknown, setNotifyUnknown] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,8 +132,15 @@ export function ProfileChatBlock({
       .catch(() => { if (!cancelled) setNoteUnread(true); });
     void import('../../../../core/settings/privacyPrefs')
       .then((m) => m.notifyOnlineGet(peerB64))
-      .then((v) => { if (!cancelled) setNotifyOnline(v); })
-      .catch(() => { /* настройка неизвестна — считаем выключенной */ });
+      .then((v) => {
+        if (cancelled) return;
+        // v4.32.1061: `null` — базу не прочитали. Перехват ниже до этой
+        // версии не срабатывал ни разу: чтение гасило ошибку внутри себя и
+        // отвечало тем же, чем отвечает нетронутая просьба.
+        setNotifyUnknown(v === null);
+        setNotifyOnline(v === true);
+      })
+      .catch(() => { if (!cancelled) setNotifyUnknown(true); });
     void (async () => {
       try {
         const groups = await listGroups(activeProfileId);
@@ -161,6 +170,24 @@ export function ProfileChatBlock({
   }, [safetyCode]);
 
   const toggleNotifyOnline = useCallback(() => {
+    // v4.32.1061: пока просьба не прочитана, переключать нечего — вслепую
+    // нажатие ушло бы в сторону «попросить», а пришли сюда, скорее всего,
+    // отменить. Нажатие перечитывает; получилось — дальше работает как всегда.
+    if (notifyUnknown) {
+      void (async () => {
+        let again: boolean | null = null;
+        try {
+          const m = await import('../../../../core/settings/privacyPrefs');
+          again = await m.notifyOnlineGet(peerB64);
+        } catch {
+          again = null;
+        }
+        if (again === null) { showError('Не удалось прочитать'); return; }
+        setNotifyUnknown(false);
+        setNotifyOnline(again);
+      })();
+      return;
+    }
     const next = !notifyOnline;
     setNotifyOnline(next);
     void (async () => {
@@ -183,7 +210,7 @@ export function ProfileChatBlock({
       setNotifyOnline(!next);
       showError('Не удалось изменить уведомление');
     })();
-  }, [notifyOnline, peerB64, displayName]);
+  }, [notifyOnline, notifyUnknown, peerB64, displayName]);
 
   const exportChat = useCallback(() => {
     void (async () => {
@@ -314,6 +341,7 @@ export function ProfileChatBlock({
         onPress={toggleNotifyOnline}
         accessibilityRole="button"
         accessibilityLabel="Уведомить когда онлайн"
+        accessibilityHint={notifyUnknown ? 'Просьбу не удалось прочитать — нажмите, чтобы попробовать снова' : undefined}
         testID="profile_notify_online"
       >
         <Ionicons
@@ -323,9 +351,11 @@ export function ProfileChatBlock({
         />
         <View style={styles.rowBody}>
           <Text style={[styles.rowText, { color: colors.text }]}>
-            {notifyOnline ? 'Уведомление: онлайн вкл.' : 'Уведомить когда онлайн'}
+            {notifyUnknown ? 'Уведомление: не удалось прочитать' : notifyOnline ? 'Уведомление: онлайн вкл.' : 'Уведомить когда онлайн'}
           </Text>
-          {presence.bucket === 'online' ? (
+          {notifyUnknown ? (
+            <Text style={[styles.rowHint, { color: colors.textSecondary }]}>Нажмите, чтобы попробовать снова</Text>
+          ) : presence.bucket === 'online' ? (
             <Text style={[styles.rowHint, { color: colors.success }]}>Сейчас онлайн</Text>
           ) : (
             <Text style={[styles.rowHint, { color: colors.textSecondary }]}>
@@ -333,7 +363,7 @@ export function ProfileChatBlock({
             </Text>
           )}
         </View>
-        {notifyOnline ? <Ionicons name="checkmark-circle" size={20} color={colors.accent} /> : null}
+        {notifyOnline && !notifyUnknown ? <Ionicons name="checkmark-circle" size={20} color={colors.accent} /> : null}
       </AppPressable>
 
       <AppPressable

@@ -19,7 +19,7 @@
  * правила про имена ключей уже стоили чужих заметок в соседнем профиле
  * (v4.32.278) и потерянных контактов при восстановлении (v4.32.280).
  */
-import { kvDelete, kvGet, kvSetChecked } from '../storage/local';
+import { kvDelete, kvSetChecked, kvTryGet } from '../storage/local';
 import { notifyOnlineKey, profileScopedKey, type PrivacyPrefKey } from '../storage/kvKeys';
 import { scopedKvGet, scopedKvGetFor, scopedKvTryGetFor, scopedKvSetChecked } from '../storage/profileScopedKv';
 import { profileManager } from '../identity/profileManager';
@@ -173,14 +173,35 @@ export async function readReceiptsAllowedFor(pid: number): Promise<boolean> {
  * контакты у профилей разные, и второй аккаунт получал уведомление про
  * человека, которого сам не добавлял и, возможно, не знает вовсе, — то есть
  * связь между двумя аккаунтами всплывала прямо на экране блокировки.
+ *
+ * `null` — прочитать не удалось (v4.32.1061). Обе строки читались `kvGet`,
+ * который гасит ошибку базы и отвечает `null` — тем же ответом, что и «такой
+ * просьбы нет». Соседние `privacyPrefTryGetFor` и `privacyPrefTryBoolFor` в
+ * этом же файле заведены с v4.32.474 ровно под это, а сюда не дошли. Цена —
+ * не в самой надписи на карточке: просьба лежит одноразовая, и карточка,
+ * решив, что её нет, разворачивает нажатие в другую сторону. Человек,
+ * который пришёл просьбу отменить, вместо отмены записывал её заново, а
+ * уведомление о появлении приходило, когда он был уверен, что отписался.
  */
-export async function notifyOnlineGet(peerPubB64: string): Promise<boolean> {
+export async function notifyOnlineGet(peerPubB64: string): Promise<boolean | null> {
   const pid = activeProfileId();
   const key = notifyOnlineKey(peerPubB64);
-  const own = await kvGet(profileScopedKey(pid, key));
-  if (own != null) return own === '1';
+  const own = await kvTryGet(profileScopedKey(pid, key));
+  if (own === null) {
+    log.warn('notify_online_unreadable', { pid, own: true });
+    return null;
+  }
+  if (own.value != null) return own.value === '1';
   if (pid !== 1) return false;
-  return (await kvGet(key)) === '1';
+  // Общее имя осталось от времён до v4.32.311 и есть только у первого
+  // профиля. Отказ чтения и здесь остаётся отказом: пустая строка тут
+  // означала бы «не просили», а мы этого не знаем.
+  const legacy = await kvTryGet(key);
+  if (legacy === null) {
+    log.warn('notify_online_unreadable', { pid, own: false });
+    return null;
+  }
+  return legacy.value === '1';
 }
 
 /**

@@ -165,3 +165,38 @@ describe('отметки о прочтении', () => {
     expect(await readReceiptsAllowed()).toBe(true);
   });
 });
+
+describe('непрочитанная просьба «сообщить, когда появится» (v4.32.1061)', () => {
+  const PEER = 'AAAAbbbbCCCC';
+
+  it('отказ базы не выдаётся за отсутствие просьбы', async () => {
+    // kvGet гасил ошибку и отвечал null — тем же, чем отвечает нетронутая
+    // просьба. Карточка на этом разворачивала нажатие в другую сторону.
+    expect(await notifyOnlineSet(PEER, true)).toBe(true);
+    mockKvBroken = true;
+    expect(await notifyOnlineGet(PEER)).toBeNull();
+  });
+
+  it('общее имя тоже читается различающим чтением', async () => {
+    // Своей записи нет, падает чтение старого общего имени: «просьбы нет»
+    // отсюда тоже брать нельзя.
+    kv[`notify_online_${PEER}`] = '1';
+    expect(await notifyOnlineGet(PEER)).toBe(true);
+    mockKvBroken = true;
+    expect(await notifyOnlineGet(PEER)).toBeNull();
+  });
+
+  it('ГРАНИЦА: чужой аккаунт по-прежнему отвечает «не просили», а не «не знаю»', async () => {
+    // Наружу мы не ходили и базу не спрашивали: у второго профиля своей
+    // записи нет, а общая ему не принадлежит с v4.32.311.
+    expect(await notifyOnlineSet(PEER, true)).toBe(true);
+    mockActiveProfileId = 2;
+    expect(await notifyOnlineGet(PEER)).toBe(false);
+  });
+
+  it('ГРАНИЦА: рабочая база отвечает как прежде', async () => {
+    expect(await notifyOnlineGet(PEER)).toBe(false);
+    expect(await notifyOnlineSet(PEER, true)).toBe(true);
+    expect(await notifyOnlineGet(PEER)).toBe(true);
+  });
+});
