@@ -20,7 +20,7 @@ import { mnemonicSeedCached, clearMnemonicSeedCache } from '../crypto/mnemonicSe
 import { acceptKdfIters } from '../crypto/kdfIters';
 import { kvGet, kvSet } from '../storage/local';
 import { log } from '../logger';
-import { hasAccountVaultSnapshot, restoreAccountVault } from '../storage/accountVault';
+import { accountVaultSnapshotState, restoreAccountVault } from '../storage/accountVault';
 import { PROFILE_STATE_KEY } from '../identity/profileStateKey';
 
 /** Plaintext mnemonic (legacy). Migrated into {@link MNEMONIC_ENC_PAYLOAD_KEY}. */
@@ -476,8 +476,17 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
   const sameWallet =
     previous !== null ? previous === normalized : await sameWalletBehindUnreadablePhrase(pair);
   if (!sameWallet) {
-    if (previous && !(await hasAccountVaultSnapshot(normalized))) {
-      throw new Error('Сначала выйдите из текущего кошелька, затем восстановите новый.');
+    if (previous) {
+      // v4.32.1031: остаться без выхода разрешает как раз местная копия
+      // нового seed'а. Пока о ней ничего не известно, «сначала выйдите» —
+      // это совет стереть данные текущего кошелька зря.
+      const local = await accountVaultSnapshotState(normalized);
+      if (local === 'unknown') {
+        throw new Error('Копию этого кошелька на устройстве не удалось проверить. Попробуйте ещё раз, не выходя из текущего кошелька.');
+      }
+      if (local === 'absent') {
+        throw new Error('Сначала выйдите из текущего кошелька, затем восстановите новый.');
+      }
     }
     // Do not let the previous wallet's profile registry be reused by a new seed.
     await SecureStore.deleteItemAsync(PROFILE_STATE_KEY);
@@ -497,7 +506,14 @@ export async function restoreFromMnemonic(mnemonic: string): Promise<KeyPairByte
   // одного слова об этом ему не говорилось. Снимка может не быть вовсе — это
   // законно (профиль заведётся чистым), поэтому спрашиваем отдельно, а не
   // толкуем «нечего восстанавливать» как сбой.
-  if ((await hasAccountVaultSnapshot(normalized)) && !(await restoreAccountVault(normalized))) {
+  // v4.32.1031: «посмотреть не смогли» больше не читается как «нечего
+  // восстанавливать». Тихий вход в пустой аккаунт при целой копии на диске
+  // подталкивал выйти и попробовать заново — а выход уносит копию совсем.
+  const local = await accountVaultSnapshotState(normalized);
+  if (local === 'unknown') {
+    throw new Error('Копию этого кошелька на устройстве не удалось проверить. Попробуйте ещё раз: пустой аккаунт сейчас не значил бы, что данных нет.');
+  }
+  if (local === 'present' && !(await restoreAccountVault(normalized))) {
     throw new Error('Копия этого кошелька на устройстве не восстановилась. Попробуйте ещё раз.');
   }
   return pair;

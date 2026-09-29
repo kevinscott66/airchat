@@ -104,7 +104,7 @@ import { PROFILE_STATE_KEY } from '../../identity/profileStateKey';
 import {
   accountVaultIdFromMnemonic,
   deleteAccountVault,
-  hasAccountVaultSnapshot,
+  accountVaultSnapshotState,
   restoreAccountVault,
   snapshotAccountVault,
 } from '../accountVault';
@@ -163,7 +163,7 @@ describe('копия, застрявшая под чужим именем, на�
     await snapshotWithStuckReplace();
     // До правки здесь было `false`: копия лежала под `.previous-…`, а это имя
     // не читал никто.
-    expect(await hasAccountVaultSnapshot(MNEMONIC)).toBe(true);
+    expect(await accountVaultSnapshotState(MNEMONIC)).toBe('present');
     expect(stranded(MNEMONIC)).toEqual([]);
   });
 
@@ -194,7 +194,7 @@ describe('копия, застрявшая под чужим именем, на�
     await snapshotWithStuckReplace();
     await deleteAccountVault(MNEMONIC);
     expect(stranded(MNEMONIC)).toEqual([]);
-    expect(await hasAccountVaultSnapshot(MNEMONIC)).toBe(false);
+    expect(await accountVaultSnapshotState(MNEMONIC)).toBe('absent');
   });
 });
 
@@ -221,7 +221,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обычный ход не изм�
   });
 
   it('ГРАНИЦА: копии не было — «нет» так и остаётся', async () => {
-    expect(await hasAccountVaultSnapshot(MNEMONIC)).toBe(false);
+    expect(await accountVaultSnapshotState(MNEMONIC)).toBe('absent');
     expect(await restoreAccountVault(MNEMONIC)).toBe(false);
   });
 
@@ -230,7 +230,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обычный ход не изм�
     await snapshotWithStuckReplace();
     // Подъём идёт по имени счёта: чужая застрявшая копия своей не становится
     // ни до правки, ни после.
-    expect(await hasAccountVaultSnapshot(OTHER)).toBe(false);
+    expect(await accountVaultSnapshotState(OTHER)).toBe('absent');
   });
 
   it('ГРАНИЦА: откат удался — прежняя копия на месте, мусора нет', async () => {
@@ -246,7 +246,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обычный ход не изм�
 
     expect(mockFiles.get(`${vaultDir(MNEMONIC)}manifest.json`)).toBe(before);
     expect(stranded(MNEMONIC)).toEqual([]);
-    expect(await hasAccountVaultSnapshot(MNEMONIC)).toBe(true);
+    expect(await accountVaultSnapshotState(MNEMONIC)).toBe('present');
   });
 });
 
@@ -271,8 +271,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ: терялось имя, а н�
   });
 
   it('возврат из мнемоники сначала спрашивает «копия есть?» и на «нет» не пробует', () => {
+    // v4.32.1031: вопрос стал трёхсловным, и у «не знаем» появилась своя
+    // ветка. Повод у пиньона прежний: на «копии нет» возврат не пробуют.
     expect(SEED).toContain(
-      'if ((await hasAccountVaultSnapshot(normalized)) && !(await restoreAccountVault(normalized)))'
+      "if (local === 'present' && !(await restoreAccountVault(normalized)))"
     );
   });
 });
@@ -281,11 +283,16 @@ describe('форма исходников: застрявшую копию ищ�
   it('у отодвинутого имени есть и создатель, и подъёмник', () => {
     expect(SRC).toContain('function previousVaultPrefix(accountId: string): string {');
     expect(SRC).toContain('async function strandedVaultNames(root: string, accountId: string): Promise<string[]> {');
-    expect(SRC).toContain('async function restoreStrandedVault(accountId: string): Promise<void> {');
+    // v4.32.1031: подъёмник стал докладывать, удалось ли ему посмотреть.
+    // Повод у пиньона прежний: он есть и зовётся по имени счёта.
+    expect(SRC).toContain('async function restoreStrandedVault(accountId: string): Promise<boolean> {');
   });
 
   it('все три читателя копии поднимают её перед чтением', () => {
-    expect(SRC.split('await restoreStrandedVault(accountId);').length - 1).toBe(3);
+    // v4.32.1031: у всех трёх ответ подъёмника теперь читается, поэтому
+    // точки с запятой на конце больше нет. Повод прежний: перед чтением
+    // копии её поднимают, и делают это все три читателя.
+    expect(SRC.split('await restoreStrandedVault(accountId)').length - 1).toBe(3);
   });
 
   it('отказ возврата больше не молчит', () => {

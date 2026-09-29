@@ -366,14 +366,43 @@ export async function survivingAccountVaultFiles(mnemonic: string): Promise<stri
  *
  * Зовётся перед каждым чтением копии. Молча ничего не делает в единственном
  * обычном случае: копия на своём месте.
+ *
+ * v4.32.1031: докладывает, удалось ли ему посмотреть. Раньше отдавал `void`,
+ * и три его отказа — не опросили своё место, не прочитали корень, не
+ * переехали — были снаружи неотличимы от «застрявших не было». Спрашивающий
+ * получал «копии нет» и вёл себя так, будто диск чист.
+ *
+ * @returns `false`, если посмотреть или довести дело до конца не вышло.
+ * Копия при этом может быть на диске целой: `false` — это «не знаем», а не
+ * «нет».
  */
-async function restoreStrandedVault(accountId: string): Promise<void> {
+async function restoreStrandedVault(accountId: string): Promise<boolean> {
   const root = vaultRootUri();
   const finalDir = vaultUri(accountId);
-  if (!root || !finalDir) return;
-  if (await exists(finalDir)) return;
-  const names = await strandedVaultNames(root, accountId);
-  if (names.length === 0) return;
+  if (!root || !finalDir) return true;
+  let inPlace: boolean;
+  try {
+    inPlace = (await FileSystem.getInfoAsync(finalDir)).exists;
+  } catch (error) {
+    // Местный `exists` здесь не годится намеренно: он гасит бросок и
+    // отвечает «нет», а «нет» отсюда уводит искать застрявшую копию вместо
+    // той, что, возможно, лежит на своём месте.
+    log.warn('account_vault_place_probe_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+  if (inPlace) return true;
+  let names: string[];
+  try {
+    names = await strandedVaultNamesStrict(root, accountId);
+  } catch (error) {
+    log.warn('account_vault_previous_scan_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+  if (names.length === 0) return true;
   const newest = names[names.length - 1];
   try {
     await FileSystem.moveAsync({ from: `${root}${newest}/`, to: finalDir });
@@ -382,11 +411,15 @@ async function restoreStrandedVault(accountId: string): Promise<void> {
     log.error('account_vault_restore_from_previous_failed', {
       err: error instanceof Error ? error.message : String(error),
     });
-    return;
+    return false;
   }
+  // Остальные — старее поднятой и потому лишние. Не убрались — не беда:
+  // следующий удачный снимок или стирание кошелька заберут их, и об этом
+  // отчитается уборка (v4.32.1030).
   for (const stale of names.slice(0, -1)) {
     await FileSystem.deleteAsync(`${root}${stale}/`, { idempotent: true }).catch(() => {});
   }
+  return true;
 }
 
 async function replaceVaultDirectory(stageDir: string, finalDir: string, root: string, accountId: string): Promise<void> {
@@ -519,18 +552,48 @@ export async function deleteAccountVault(mnemonic: string): Promise<void> {
   log.info('account_vault_deleted', { accountId });
 }
 
-/** Restore the seed-bound snapshot, if one exists on this installation. */
-export async function hasAccountVaultSnapshot(mnemonic: string): Promise<boolean> {
+/**
+ * Что известно о местной копии счёта: три ответа, не два (v4.32.1031).
+ *
+ * `absent` — копии нет, и это законный, обычный случай: профиль заведётся
+ * чистым. `unknown` — посмотреть не смогли; копия может лежать на диске
+ * целой.
+ */
+export type AccountVaultSnapshot = 'present' | 'absent' | 'unknown';
+
+/**
+ * Состояние местной копии, привязанной к этим секретным словам.
+ *
+ * Прежний `hasAccountVaultSnapshot` отвечал одним `boolean` на два вопроса:
+ * опрос манифеста шёл через `exists`, гасящий бросок, а подъёмник застрявших
+ * молчал о своих отказах. Наружу уходило «копии нет» — неотличимо от чистого
+ * устройства. Спрашивает об этом `restoreFromMnemonic`, и «нет» там значит
+ * «восстанавливать нечего»: человек вводил свои слова, видел успех и попадал
+ * в пустой аккаунт при целой копии на диске. Дальше он делал то, что
+ * подсказывает такой экран, — выходил и восстанавливал заново, — а выход
+ * зовёт `deleteAccountVault`. Копия уносилась совсем.
+ */
+export async function accountVaultSnapshotState(mnemonic: string): Promise<AccountVaultSnapshot> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
-  await restoreStrandedVault(accountId);
+  if (!(await restoreStrandedVault(accountId))) return 'unknown';
   const dir = vaultUri(accountId);
-  return !!dir && (await exists(`${dir}${MANIFEST_FILE}`));
+  if (!dir) return 'absent';
+  try {
+    return (await FileSystem.getInfoAsync(`${dir}${MANIFEST_FILE}`)).exists ? 'present' : 'absent';
+  } catch (error) {
+    log.warn('account_vault_manifest_probe_failed', {
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return 'unknown';
+  }
 }
 
 /** Restore the seed-bound snapshot, if one exists on this installation. */
 export async function restoreAccountVault(mnemonic: string): Promise<boolean> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
-  await restoreStrandedVault(accountId);
+  // v4.32.1031: не посмотрели — не возвращаем. `false` здесь и раньше значил
+  // «не восстановилась», и вызывающий говорит об этом словами.
+  if (!(await restoreStrandedVault(accountId))) return false;
   const dir = vaultUri(accountId);
   const base = FileSystem.documentDirectory;
   if (!dir || !base) return false;
@@ -667,7 +730,10 @@ export function missingArchiveDbFiles(archive: AccountVaultArchive): string[] {
  */
 export async function readAccountVaultArchive(mnemonic: string): Promise<AccountVaultArchive | null> {
   const accountId = accountVaultIdFromMnemonic(mnemonic);
-  await restoreStrandedVault(accountId);
+  // v4.32.1031: `null` отсюда вызывающий превращает в «Не удалось прочитать
+  // локальную копию аккаунта» и копию в облако не отправляет — то есть
+  // отказ здесь и так назван словами.
+  if (!(await restoreStrandedVault(accountId))) return null;
   const dir = vaultUri(accountId);
   if (!dir) return null;
   const manifestUri = `${dir}${MANIFEST_FILE}`;

@@ -30,7 +30,9 @@ jest.mock('../../crypto/keyManager', () => ({
 }));
 
 jest.mock('../../storage/accountVault', () => ({
-  hasAccountVaultSnapshot: jest.fn(async () => false),
+  // v4.32.1031: о копии спрашивают тремя словами. Здесь копии нет —
+  // проверяется не она, а поведение при нечитаемой фразе.
+  accountVaultSnapshotState: jest.fn(async () => 'absent'),
   restoreAccountVault: jest.fn(async () => true),
 }));
 

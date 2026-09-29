@@ -33,7 +33,8 @@ jest.mock('../../storage/local', () => ({
 jest.mock('../../crypto/keyManager', () => ({ persistKeyPair: async () => undefined }));
 
 jest.mock('../../storage/accountVault', () => ({
-  hasAccountVaultSnapshot: async () => false,
+  // v4.32.1031: о копии спрашивают тремя словами; здесь её нет.
+  accountVaultSnapshotState: async () => 'absent',
   restoreAccountVault: async () => undefined,
 }));
 

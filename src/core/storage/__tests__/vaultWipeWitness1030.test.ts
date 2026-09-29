@@ -14,7 +14,7 @@
  * чтобы этого на устройстве не осталось, — телефон отдают и продают. Шаг
  * `account_vault` при отказе обхода записывался удачным, в `leftBehind` не
  * попадал ничего, и экран говорил о полном стирании. Хуже того, остаток не
- * лежит мёртвым грузом: `hasAccountVaultSnapshot` перед каждым чтением зовёт
+ * лежит мёртвым грузом: `accountVaultSnapshotState` перед каждым чтением зовёт
  * подъёмник застрявших копий — тот находит `.previous-…` и возвращает её на
  * законное место. Стёртый счёт предлагался к восстановлению.
  *
@@ -113,8 +113,8 @@ import { join } from 'path';
 import { PROFILE_STATE_KEY } from '../../identity/profileStateKey';
 import {
   accountVaultIdFromMnemonic,
+  accountVaultSnapshotState,
   deleteAccountVault,
-  hasAccountVaultSnapshot,
   snapshotAccountVault,
 } from '../accountVault';
 
@@ -228,7 +228,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     await expect(deleteAccountVault(MNEMONIC)).resolves.toBeUndefined();
     mockDirs.add(`${ROOT}${name}/`);
     mockFiles.set(`${ROOT}${name}/manifest.json`, '{}');
-    expect(await hasAccountVaultSnapshot(MNEMONIC)).toBe(true);
+    // v4.32.1031: ответ стал трёхсловным. Повод прежний: поднятая копия
+    // числится на устройстве, и её предложат восстановить.
+    expect(await accountVaultSnapshotState(MNEMONIC)).toBe('present');
   });
 
   it('свидетеля у шага нет: копия счёта не перечитывается в конце стирания', () => {

@@ -10,15 +10,20 @@
  *
  * Отсутствие снимка — случай законный и отдельный: профиль просто заведётся
  * чистым. `restoreAccountVault` отвечает `false` и на него тоже, поэтому
- * спрашивать надо `hasAccountVaultSnapshot`, а не толковать один `false` в
- * два смысла.
+ * спрашивать надо у отдельной двери, а не толковать один `false` в два
+ * смысла.
+ *
+ * v4.32.1031: дверь эта стала трёхсловной (`accountVaultSnapshotState`),
+ * потому что и она сама отвечала «нет» на «посмотреть не смогли». Повод у
+ * здешних проверок прежний: один `false` от возврата в два смысла не
+ * толкуется. Третье слово проверяет `restoreSnapshotUnknown1031`.
  */
 let mockHasSnapshot = false;
 let mockRestoreOk = true;
 const mockCalls: string[] = [];
 
 jest.mock('../../storage/accountVault', () => ({
-  hasAccountVaultSnapshot: jest.fn(async () => mockHasSnapshot),
+  accountVaultSnapshotState: jest.fn(async () => (mockHasSnapshot ? 'present' : 'absent')),
   restoreAccountVault: jest.fn(async () => { mockCalls.push('restore'); return mockRestoreOk; }),
 }));
 
