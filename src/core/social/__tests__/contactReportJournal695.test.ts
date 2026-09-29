@@ -61,7 +61,7 @@ jest.mock('../../logger', () => ({
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { hasReported, listContactReports, recordContactReport } from '../contactReport';
+import { hasReportedRead, listContactReports, recordContactReport } from '../contactReport';
 
 const SRC = readFileSync(join(__dirname, '..', 'contactReport.ts'), 'utf8');
 
@@ -78,7 +78,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: журнал вообще рабо
     expect(all.map((r) => r.did)).toEqual([DID]);
     expect(all[0].reason).toBe('spam');
     expect(all[0].blocked).toBe(true);
-    await expect(hasReported(DID)).resolves.toBe(true);
+    await expect(hasReportedRead(DID)).resolves.toBe(true);
   });
 
   it('новая жалоба встаёт впереди прежних, а прежние остаются', async () => {
@@ -117,7 +117,9 @@ describe('отказ чтения не стирает журнал', () => {
   it('но саму карточку открыть не мешает', async () => {
     mockFailReads.add(JOURNAL_KEY);
     await expect(listContactReports()).resolves.toEqual([]);
-    await expect(hasReported(DID)).resolves.toBe(false);
+    // v4.32.1054: `null`, а не `false`. Открыть карточку это по-прежнему не
+    // мешает — но и объявлять «не жаловался» на непрочитанном журнале нельзя.
+    await expect(hasReportedRead(DID)).resolves.toBeNull();
   });
 });
 

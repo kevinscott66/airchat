@@ -94,9 +94,20 @@ export async function listContactReports(): Promise<ContactReport[]> {
   return (await readReports()) ?? [];
 }
 
-/** Была ли уже жалоба на этого человека. Карточка подписывает пункт по-другому. */
-export async function hasReported(did: string): Promise<boolean> {
-  return (await listContactReports()).some((r) => r.did === did);
+/**
+ * Была ли уже жалоба на этого человека — с третьим ответом (v4.32.1054).
+ *
+ * `null` — журнал не прочитался. До этой версии функция шла через
+ * `listContactReports`, а та сводит отказ к пустому журналу: занятая база или
+ * неподнятый ключ шифрования означали «жалоб нет», и карточка подписывала
+ * пункт «Пожаловаться», подсвечивая его как опасный. То есть приложение
+ * говорило человеку, что он на этого собеседника не жаловался, хотя запись
+ * лежит на диске. Запись такой ошибки не делает с v4.32.695: там отказ
+ * чтения уходит броском, чтобы не затереть прежний след, — чтение отстало.
+ */
+export async function hasReportedRead(did: string): Promise<boolean | null> {
+  const all = await readReports();
+  return all === null ? null : all.some((r) => r.did === did);
 }
 
 /**

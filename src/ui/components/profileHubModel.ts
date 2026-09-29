@@ -86,6 +86,12 @@ export type HubFacts = {
   /** Жалоба на этого человека уже записана. */
   reported: boolean;
   /**
+   * Журнал жалоб не прочитался (v4.32.1054). `reported: false` при этом — не
+   * ответ, а незнание, и подписывать пункт «Пожаловаться» им нельзя: это
+   * утверждение о том, что человек сделал сам.
+   */
+  reportUnknown: boolean;
+  /**
    * Умеет ли вызывающий экран открыть переписку. Карточка живёт и в ленте, и
    * в сторис, и не в каждом месте есть куда переходить: пункт, который никуда
    * не ведёт, честнее не рисовать вовсе.
@@ -232,7 +238,15 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
           : 'Заблокировать',
       danger: !f.blocked,
     });
-    out.push({ id: 'report', label: f.reported ? 'Жалоба записана' : 'Пожаловаться', danger: !f.reported });
+    out.push({
+      id: 'report',
+      label: f.reported
+        ? 'Жалоба записана'
+        : f.reportUnknown
+          ? 'Пожаловаться (журнал не прочитался)'
+          : 'Пожаловаться',
+      danger: !f.reported,
+    });
   }
   return out;
 }

@@ -146,7 +146,7 @@ import { callStartText } from '../callStartText';
 import { copyGuardState } from '../../core/social/copyGuard';
 import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
-import { hasReported, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
+import { hasReportedRead, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
 import { SharedMediaModal, SharedMediaPane, type SharedMediaTab } from './modals/chat/ChatSharedMediaModal';
 import { ProfileChatBlock } from './modals/profile/ProfileChatBlock';
 import { WallpaperPickerModal } from './modals/chat/ChatWallpaperPickerModal';
@@ -383,6 +383,13 @@ export function UserProfilePeek({
    */
   const [convUnknown, setConvUnknown] = useState(false);
   const [reported, setReported] = useState(false);
+  /**
+   * v4.32.1054: журнал жалоб не прочитался. Отдельно от `reported`, потому что
+   * «не жаловался» и «не смогли посмотреть» — разные вещи, а прежнее чтение
+   * отвечало на оба одинаково. Жалоба — собственное прошлое действие человека,
+   * и приложению незачем сообщать о нём догадку.
+   */
+  const [reportUnknown, setReportUnknown] = useState(false);
   const [gateway, setGateway] = useState('');
   const [wallpaper, setWallpaper] = useState<Wallpaper | null>(null);
 
@@ -453,6 +460,7 @@ export function UserProfilePeek({
     setDisappearMs(null);
     setConvUnknown(false);
     setReported(false);
+    setReportUnknown(false);
     setWallpaper(null);
     if (!visible || !resolved) return;
     let cancelled = false;
@@ -551,12 +559,14 @@ export function UserProfilePeek({
       }
       const [guard, wasReported] = await Promise.all([
         copyGuardState(pub),
-        hasReported(resolved.did),
+        hasReportedRead(resolved.did),
       ]);
       if (cancelled) return;
       setCopyGuardState(guard.mine);
       setCopyGuardByPeer(guard.theirs);
-      setReported(wasReported);
+      // v4.32.1054: `null` — журнал не прочитался, а не «жалоб не было».
+      setReportUnknown(wasReported === null);
+      setReported(wasReported === true);
     })();
     void loadConfig()
       .then((c) => { if (!cancelled) setGateway(c.ipfs.gatewayUrl.replace(/\/$/, '')); })
@@ -619,9 +629,10 @@ export function UserProfilePeek({
     disappearMs,
     convUnknown,
     reported,
+    reportUnknown,
     canOpenChat: !!onOpenChat,
     inChat: !!inChat,
-  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, convUnknown, reported, onOpenChat, inChat]);
+  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, convUnknown, reported, reportUnknown, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);

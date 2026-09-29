@@ -54,6 +54,7 @@ const facts: HubFacts = {
   disappearMs: null,
   convUnknown: false,
   reported: false,
+  reportUnknown: false,
   canOpenChat: true,
   inChat: false,
 };

@@ -37,6 +37,7 @@ const FACTS = {
   disappearMs: null,
   convUnknown: false,
   reported: false,
+  reportUnknown: false,
   canOpenChat: true,
   inChat: false,
 };

@@ -86,7 +86,7 @@ import {
   subscribeCopyGuard,
 } from '../copyGuard';
 import {
-  hasReported,
+  hasReportedRead,
   listContactReports,
   recordContactReport,
   REPORT_REASONS,
@@ -245,9 +245,9 @@ describe('запрет на копирование', () => {
 
 describe('жалоба на контакт', () => {
   it('записывается местно и видна как уже поданная', async () => {
-    await expect(hasReported(DID)).resolves.toBe(false);
+    await expect(hasReportedRead(DID)).resolves.toBe(false);
     await recordContactReport(DID, 'spam', true);
-    await expect(hasReported(DID)).resolves.toBe(true);
+    await expect(hasReportedRead(DID)).resolves.toBe(true);
     const [r] = await listContactReports();
     expect(r.did).toBe(DID);
     expect(r.reason).toBe('spam');
@@ -284,7 +284,8 @@ describe('жалоба на контакт', () => {
   it('сбой чтения не мешает открыть карточку', async () => {
     mockBroken = true;
     await expect(listContactReports()).resolves.toEqual([]);
-    await expect(hasReported(DID)).resolves.toBe(false);
+    // v4.32.1054: сбой чтения отвечает «не знаю», а не «не жаловался».
+    await expect(hasReportedRead(DID)).resolves.toBeNull();
   });
 
   it('у каждой причины есть человеческая подпись и ни одна не обещает отправки', () => {
