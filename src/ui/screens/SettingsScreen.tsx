@@ -249,6 +249,8 @@ function SettingsScreenImpl({
    */
   const [pwdStep, setPwdStep] = useState<'old' | 'new' | 'repeat'>('new');
   const [bioEnabled, setBioEnabled] = useState(false);
+  /** v4.32.1062: признак не прочитался — это не «выключено». */
+  const [bioUnknown, setBioUnknown] = useState(false);
   const [bioModal, setBioModal] = useState(false);
   const [bioPwdInput, setBioPwdInput] = useState('');
   const [bioBusy, setBioBusy] = useState(false);
@@ -983,7 +985,12 @@ function SettingsScreenImpl({
   };
 
   const refreshBiometricFlag = useCallback(() => {
-    void isBiometricUnlockEnabled().then(setBioEnabled);
+    void isBiometricUnlockEnabled()
+      .then((v) => {
+        setBioUnknown(v === null);
+        setBioEnabled(v === true);
+      })
+      .catch(() => setBioUnknown(true));
   }, []);
 
   useEffect(() => { refreshBiometricFlag(); }, [refreshBiometricFlag]);
@@ -996,7 +1003,13 @@ function SettingsScreenImpl({
    * спрашивает — отказ от удобства не должен упираться в проверку.
    */
   const handleToggleBiometric = useCallback((next: boolean) => {
-    if (!next) {
+    // v4.32.1062: состояние не прочитано — переключатель стоит в «выкл», хотя
+    // копия пароля, возможно, лежит на устройстве. Нажатие отсюда уходило бы
+    // в «включить» — предлагать включить включённое и заново класть пароль.
+    // Убрать копию умеет только эта ветка, значит из незнания нажатие ведёт
+    // сюда: стирание идемпотентно, и если класть было нечего, не произойдёт
+    // ничего, кроме честно прочитанного «выключено».
+    if (!next || bioUnknown) {
       setBioBusy(true);
       void disableBiometricUnlock()
         .then((removed) => {
@@ -1007,14 +1020,16 @@ function SettingsScreenImpl({
           setBioEnabled(false);
           if (!removed) {
             showError('Вход по биометрии выключен, но убрать сохранённую копию пароля не удалось: система не подтвердила доступ. Попробуйте включить и выключить ещё раз.');
+            return;
           }
+          setBioUnknown(false);
         })
         .finally(() => setBioBusy(false));
       return;
     }
     setBioPwdInput('');
     setBioModal(true);
-  }, []);
+  }, [bioUnknown]);
 
   const submitEnableBiometric = async (): Promise<void> => {
     setBioBusy(true);
@@ -1028,6 +1043,7 @@ function SettingsScreenImpl({
         return;
       }
       setBioEnabled(true);
+      setBioUnknown(false);
       setBioModal(false);
       setBioPwdInput('');
       showSuccess('Вход по биометрии включён');
@@ -2349,11 +2365,14 @@ function SettingsScreenImpl({
             <View style={styles.rowBody}>
               <Text style={styles.label}>{Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}</Text>
               <Text style={styles.desc}>
-                Пароль остаётся прежним и хранится в защищённом хранилище устройства — биометрия только избавляет от набора.
+                {bioUnknown
+                  ? 'Состояние прочитать не удалось: система не ответила, лежит ли на устройстве сохранённая копия пароля. Нажмите переключатель, чтобы убрать её.'
+                  : 'Пароль остаётся прежним и хранится в защищённом хранилище устройства — биометрия только избавляет от набора.'}
               </Text>
             </View>
             <AppSwitch
               accessibilityLabel={Platform.OS === 'ios' ? 'Вход по Face ID' : 'Вход по отпечатку'}
+              accessibilityHint={bioUnknown ? 'Состояние прочитать не удалось — нажмите, чтобы убрать сохранённую копию пароля' : undefined}
               value={bioEnabled}
               onValueChange={handleToggleBiometric}
               disabled={bioBusy}

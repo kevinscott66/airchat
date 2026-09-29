@@ -305,7 +305,10 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const enabled = await isBiometricUnlockEnabled();
+      // v4.32.1062: `null` — признак не прочитали. Лицо не спрашиваем: пустой
+      // системный запрос хуже клавиатуры, а клавиатура здесь и есть выход —
+      // пароль набирается руками, и экран открывается как обычно.
+      const enabled = (await isBiometricUnlockEnabled()) === true;
       if (cancelled) return;
       setBiometricReady(enabled);
       if (!enabled) {

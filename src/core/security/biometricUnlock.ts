@@ -47,11 +47,32 @@ export function isBiometricAvailable(): boolean {
   }
 }
 
-export async function isBiometricUnlockEnabled(): Promise<boolean> {
+/**
+ * Включён ли вход по биометрии. `null` — спросить не удалось (v4.32.1062).
+ *
+ * У хранилища три ответа, и это записано в его собственном договоре
+ * (`secureStoreQueued`): «нет записи» — это `null`, «не читается» —
+ * исключение. Здесь третий ответ схлопывался в тот же `false`, что и
+ * «выключено», и молча — без единой строки в журнале.
+ *
+ * Цена не в надписи. Под замком лежит САМ пароль приложения, и оба
+ * вызывающих ведут себя по этому ответу так, будто его там нет:
+ *   - `authGuard.setPassword` пропускал перешифровку, и под биометрией
+ *     оставался ПРЕЖНИЙ пароль. Дальше Face ID на экране блокировки отдавал
+ *     его сам, без участия человека, и тот получал «Неверный пароль.
+ *     Осталось попыток: N», не набрав ни цифры, — пять открытий экрана, и
+ *     пятнадцать минут блокировки;
+ *   - экран настроек ставил переключатель в «выкл» (то есть «копии пароля на
+ *     устройстве нет»), а убрать копию умеет только ветка выключения —
+ *     нажатие из положения «выкл» уходило в противоположную, предлагая
+ *     включить то, что и так включено.
+ */
+export async function isBiometricUnlockEnabled(): Promise<boolean | null> {
   try {
     return (await SecureStore.getItemAsync(BIOMETRIC_FLAG_KEY)) === '1';
-  } catch {
-    return false;
+  } catch (e) {
+    log.warn('biometric_flag_unreadable', { err: e instanceof Error ? e.message : String(e) });
+    return null;
   }
 }
 
@@ -117,7 +138,10 @@ export async function disableBiometricUnlock(): Promise<boolean> {
  * все три один: набрать пароль руками.
  */
 export async function readBiometricPassword(): Promise<string | null> {
-  if (!(await isBiometricUnlockEnabled())) return null;
+  // v4.32.1062: непрочитанный признак (`null`) — тоже повод не спрашивать:
+  // поднимать системный запрос, не зная, лежит ли там что-нибудь, значит
+  // показать лицу пустой вопрос.
+  if ((await isBiometricUnlockEnabled()) !== true) return null;
   try {
     const value = await SecureStore.getItemAsync(BIOMETRIC_SECRET_KEY, SECRET_OPTIONS);
     return value || null;
