@@ -113,7 +113,16 @@ export function DiagnosticScreen({ onClose }: Props): React.ReactElement {
     try {
       const running = await getEmbeddedVpnRunning();
       if (!aliveRef.current) return;
-      setVpnLine(running ? 'Туннель запущен (локальный SOCKS активен)' : 'Туннель не запущен');
+      // v4.32.1057: `null` — спросить не удалось. Диагностика затем и нужна,
+      // чтобы отличать «не работает» от «не знаем»; сводить второе к первому
+      // здесь хуже, чем где-либо ещё.
+      setVpnLine(
+        running === null
+          ? 'Состояние туннеля не удалось прочитать'
+          : running
+            ? 'Туннель запущен (локальный SOCKS активен)'
+            : 'Туннель не запущен',
+      );
 
       const cfg = await loadConfig();
       if (!aliveRef.current) return;

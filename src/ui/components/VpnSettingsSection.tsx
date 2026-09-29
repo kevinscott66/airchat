@@ -65,6 +65,15 @@ export function VpnSettingsSection(): React.ReactElement {
   const [fingerprint, setFingerprint] = useState('chrome');
   const [autoStart, setAutoStart] = useState(false);
   const [status, setStatus] = useState<AirChatVpnUiStatus>('off');
+  /**
+   * v4.32.1057: состояние туннеля прочитать не удалось.
+   *
+   * Отдельно от `status`, а не шестым значением `AirChatVpnUiStatus`: этот тип
+   * — итог запуска и остановки, и `maybeStartEmbeddedVpn` такого исхода не
+   * возвращает. Полоска наверху экрана (`VpnStatusBanner`) неизвестное
+   * значение считала бы включённым каналом — то есть ложь переехала бы туда.
+   */
+  const [statusUnknown, setStatusUnknown] = useState(false);
 
   // Префилл из текущего конфига при монтировании.
   useEffect(() => {
@@ -82,11 +91,12 @@ export function VpnSettingsSection(): React.ReactElement {
       setFlow(v.flow ?? 'xtls-rprx-vision');
       setFingerprint(v.fingerprint ?? 'chrome');
       setAutoStart(!!v.autoStart);
-      try {
-        if (await getEmbeddedVpnRunning()) setStatus('on');
-      } catch {
-        /* статус останется off */
-      }
+      // v4.32.1057: `null` — спросить не удалось, а не «канал опущен».
+      // `catch` тут стоял зря: обёртка свой отказ гасила внутри себя.
+      const live = await getEmbeddedVpnRunning();
+      if (!alive) return;
+      setStatusUnknown(live === null);
+      if (live === true) setStatus('on');
     })();
     return () => {
       alive = false;
@@ -190,6 +200,7 @@ export function VpnSettingsSection(): React.ReactElement {
       return;
     }
     setStatus('starting');
+    setStatusUnknown(false);
     const s = await retryEmbeddedVpn(cfg);
     setStatus(s);
     if (s === 'on') showSuccess('VPN подключён');
@@ -208,10 +219,12 @@ export function VpnSettingsSection(): React.ReactElement {
       await stopEmbeddedVpn();
     } catch (e) {
       setStatus('on');
+      setStatusUnknown(false);
       showError(userErrorText(e, 'VPN остался включённым: отключить не удалось'));
       return;
     }
     setStatus('off');
+    setStatusUnknown(false);
     showSuccess('VPN отключён');
   });
 
@@ -269,6 +282,7 @@ export function VpnSettingsSection(): React.ReactElement {
     statusDot: { width: 10, height: 10, borderRadius: 5 },
     statusText: { fontSize: 13, fontWeight: '600' as const },
     btnRow: { flexDirection: 'row' as const, gap: 10, marginTop: 4 },
+    unknownBlock: { gap: 8, marginBottom: 8 },
     primaryBtn: {
       flex: 1,
       backgroundColor: c.primary,
@@ -304,8 +318,13 @@ export function VpnSettingsSection(): React.ReactElement {
     placeholderColor: { color: c.textMuted },
   }));
 
-  const statusStyle =
-    status === 'on'
+  // v4.32.1057: непрочитанное состояние — не «Отключён». Слово то же, что
+  // у остальных непрочитанных настроек, и лампочка не серая: серая читается
+  // как «всё выключено, беспокоиться не о чем».
+  const statusText = statusUnknown ? 'Состояние не удалось прочитать' : STATUS_LABEL[status];
+  const statusStyle = statusUnknown
+    ? { text: styles.statusColorWarn, dot: styles.dotWarn }
+    : status === 'on'
       ? { text: styles.statusColorOn, dot: styles.dotOn }
       : status === 'starting'
         ? { text: styles.statusColorWarn, dot: styles.dotWarn }
@@ -347,8 +366,31 @@ export function VpnSettingsSection(): React.ReactElement {
       <View style={styles.card}>
         <View style={styles.statusRow}>
           <View style={[styles.statusDot, statusStyle.dot]} />
-          <Text style={[styles.statusText, statusStyle.text]}>{STATUS_LABEL[status]}</Text>
+          <Text style={[styles.statusText, statusStyle.text]}>{statusText}</Text>
         </View>
+
+        {statusUnknown && (
+          <View style={styles.unknownBlock}>
+            <Text style={styles.hint}>
+              Приложение не смогло спросить у системы, поднят ли канал. Он мог остаться
+              включённым — тогда часть запросов по-прежнему идёт через ваш сервер.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Отключить канал на всякий случай"
+              style={styles.secondaryBtn}
+              onPress={disconnectBtn.onPress}
+              disabled={disconnectBtn.loading}
+              accessibilityState={{ disabled: disconnectBtn.loading, busy: disconnectBtn.loading }}
+            >
+              {disconnectBtn.loading ? (
+                <ActivityIndicator color={styles.primaryColor.color} />
+              ) : (
+                <Text style={styles.secondaryBtnText}>Отключить на всякий случай</Text>
+              )}
+            </Pressable>
+          </View>
+        )}
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>Ссылка vless://</Text>
