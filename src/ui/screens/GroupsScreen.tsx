@@ -1022,11 +1022,29 @@ function GroupChatScreen({
     // размонтируется, а ключ меняется — ответ по прежнему ключу завёл бы
     // чужой отсчёт.
     let cancelled = false;
-    void scopedKvGet(slowKey).then((raw) => {
+    /**
+     * v4.32.1050: чтение различающее и с повтором. `scopedKvGet` сводит отказ
+     * базы к null, то есть к «здесь я ещё не писал», — и отсчёт просто не
+     * заводился. Это ровно та дыра, которую закрывал v4.32.271: пауза
+     * снималась выходом из группы и повторным входом, только теперь для этого
+     * хватало занятой SQLite (та же база отвечает отказом при блокировке на
+     * пару секунд, см. ui_kv_get_slow). Отказ поэтому не выдаётся за пустоту,
+     * а перечитывается: блокировки короткие, а решение по отметке принимается
+     * не сейчас, а при следующей отправке.
+     */
+    const load = async (attempt: number): Promise<void> => {
+      const read = await scopedKvTryGet(slowKey);
       if (cancelled) return;
-      const ts = raw ? Number(raw) : 0;
-      if (Number.isFinite(ts) && ts > 0) startSlowCooldown(ts);
-    });
+      if (read !== null) {
+        const ts = read.value ? Number(read.value) : 0;
+        if (Number.isFinite(ts) && ts > 0) startSlowCooldown(ts);
+        return;
+      }
+      log.warn('group_slow_mark_unreadable', { attempt });
+      if (attempt >= 3) return;
+      slowScopeRef.current?.timeout(() => { void load(attempt + 1); }, 1200);
+    };
+    void load(1);
     return () => { cancelled = true; };
   }, [slowKey, startSlowCooldown]);
   const [showGrpFormatBar, setShowGrpFormatBar] = useState(false);
@@ -3067,8 +3085,23 @@ function GroupChatScreen({
         // иначе задержка снималась выходом из чата и повторным входом.
         if (slowModeSeconds > 0) {
           const sentAt = Date.now();
-          await scopedKvSet(slowKey, String(sentAt));
+          // v4.32.1050: запись проверяется. `scopedKvSet` возвращает void и
+          // гасит отказ внутри: отметка не ложилась, а экран считал, что
+          // легла. Пауза в этом случае живёт только в ref — то есть ровно до
+          // выхода из группы, и обход из v4.32.271 возвращается. Отсчёт
+          // заводим сразу (он от записи не зависит), а запись повторяем;
+          // повтор идёт после startSlowCooldown, потому что тот снимает все
+          // таймеры области.
+          const stored = await scopedKvSetChecked(slowKey, String(sentAt));
           startSlowCooldown(sentAt);
+          if (!stored) {
+            log.warn('group_slow_mark_write_failed', {});
+            slowScopeRef.current?.timeout(() => {
+              void scopedKvSetChecked(slowKey, String(sentAt)).then((ok) => {
+                if (!ok) log.warn('group_slow_mark_write_failed_twice', {});
+              });
+            }, 1200);
+          }
         }
       } catch (e) {
         showError(userErrorText(e, 'Не удалось отправить сообщение'));

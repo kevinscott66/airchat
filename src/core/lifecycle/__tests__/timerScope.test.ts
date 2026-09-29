@@ -304,11 +304,16 @@ describe('форма исходников — v4.32.505', () => {
   });
 
   test('восстановление отметки медленного режима отменяемо', () => {
-    const m = groups.match(/void scopedKvGet\(slowKey\)\.then\(\(raw\) => \{[\s\S]*?\}, \[slowKey, startSlowCooldown\]\);/);
+    // v4.32.1050: чтение стало различающим и с повтором (scopedKvTryGet вместо
+    // scopedKvGet), поэтому закрепка теперь на `load`. Повод у неё прежний:
+    // запоздавший ответ не должен трогать экран, с которого уже ушли, — а с
+    // повтором ответов стало больше, и живёт он в области таймеров.
+    const m = groups.match(/const load = async \(attempt: number\)[\s\S]*?\}, \[slowKey, startSlowCooldown\]\);/);
     expect(m).not.toBeNull();
     const block = m?.[0] ?? '';
     expect(block).toContain('if (cancelled) return;');
     expect(block).toContain('return () => { cancelled = true; };');
+    expect(block).toContain('slowScopeRef.current?.timeout(');
   });
 
   test('startSlowCooldown не работает с разобранной областью', () => {
