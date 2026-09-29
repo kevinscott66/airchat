@@ -159,7 +159,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     // Иначе речь шла бы о надписи в настройках; здесь речь о том, исчезнет
     // переписка или нет.
     const local = codeOnly(read('core', 'storage', 'local.ts'));
-    expect(local).toContain('const defaultDisappear = await getDefaultDisappearMsFor(t.ownerProfileId);');
+    // v4.32.1037: чтение стало исходом — «не прочитали» отличается от
+    // «выключено». Повод у закрепки прежний: значение доходит до правила,
+    // по которому переписка удаляется, а не только до надписи в настройках.
+    expect(local).toContain('const read = await getDefaultDisappearMsReadFor(t.ownerProfileId);');
     expect(local).toContain('defaultMs: defaultDisappear,');
   });
 

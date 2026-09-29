@@ -75,7 +75,13 @@ import {
 // profileScopedKey импортируют отсюда — поэтому реэкспорт.
 export { profileScopedKey } from './kvKeys';
 import { shouldApplyDefaultAutoDelete } from './autoDeletePolicy';
-import { forgetDefaultDisappear, getDefaultDisappearMsFor } from './defaultDisappear';
+import {
+  clearDefaultDisappearPending,
+  forgetDefaultDisappear,
+  getDefaultDisappearMsReadFor,
+  isDefaultDisappearPending,
+  markDefaultDisappearPending,
+} from './defaultDisappear';
 import {
   isColorTag,
   sanitizeConversationMetaRows,
@@ -5289,7 +5295,13 @@ export type ConvTouch = {
 };
 
 /** Всё, что для следа надо добыть ДО BEGIN: шифрование превью и настройка. */
-type ConvTouchPrep = { previewTrunc: string; previewEnc: string; defaultDisappear: number | null };
+type ConvTouchPrep = {
+  previewTrunc: string;
+  previewEnc: string;
+  defaultDisappear: number | null;
+  /** Настройку прочитать не удалось — это не то же самое, что «выключено». */
+  defaultUnknown: boolean;
+};
 
 async function prepareConvTouch(t: ConvTouch, dek: Uint8Array): Promise<ConvTouchPrep> {
   // v4.32.218 (Paranoid CRIT-4 part 2): encrypt message preview at rest.
@@ -5302,8 +5314,17 @@ async function prepareConvTouch(t: ConvTouch, dek: Uint8Array): Promise<ConvTouc
   const previewEnc = previewTrunc ? encryptAtRestString(previewTrunc, dek) : '';
   // Читаем ДО BEGIN IMMEDIATE по той же причине, что и DEK: внутри
   // транзакции этот запрос держал бы write-lock.
-  const defaultDisappear = await getDefaultDisappearMsFor(t.ownerProfileId);
-  return { previewTrunc, previewEnc, defaultDisappear };
+  //
+  // v4.32.1037: исходом, а не числом. Короткая форма отвечала одним `null` и
+  // на «выключено», и на «не прочитали», а решение здесь одноразовое: не
+  // поставили таймер первому сообщению — не поставят уже никогда.
+  const read = await getDefaultDisappearMsReadFor(t.ownerProfileId);
+  return {
+    previewTrunc,
+    previewEnc,
+    defaultDisappear: read?.ms ?? null,
+    defaultUnknown: read === null,
+  };
 }
 
 /** Сам след. Зовётся ТОЛЬКО внутри уже открытой транзакции. */
@@ -5313,7 +5334,7 @@ async function runConvTouch(
   prep: ConvTouchPrep
 ): Promise<void> {
   const { contactPubB64, ownerProfileId, direction, incrementUnread } = t;
-  const { previewTrunc, previewEnc, defaultDisappear } = prep;
+  const { previewTrunc, previewEnc, defaultDisappear, defaultUnknown } = prep;
   const existing = await d.getFirstAsync<{
     unread_count: number;
     disappear_after_ms: number | null;
@@ -5333,7 +5354,17 @@ async function runConvTouch(
     exists: !!existing,
     currentMs: existing?.disappear_after_ms ?? null,
     lastMessageAt: existing?.last_message_at ?? null,
+    pendingDefault: isDefaultDisappearPending(ownerProfileId, contactPubB64),
   });
+  // v4.32.1037: долг по умолчанию. Свой выбор человека (таймер или явное
+  // «Выкл») закрывает его насовсем; удачное чтение — тоже, чем бы оно ни
+  // кончилось. Остаётся случай, ради которого всё и заведено: настройку не
+  // прочитали в тот единственный раз, когда её применяют.
+  if (existing?.disappear_after_ms != null || !defaultUnknown) {
+    clearDefaultDisappearPending(ownerProfileId, contactPubB64);
+  } else if (!existing || !existing.last_message_at) {
+    markDefaultDisappearPending(ownerProfileId, contactPubB64);
+  }
   const now = Date.now();
   if (existing) {
     const newUnread = incrementUnread ? existing.unread_count + 1 : existing.unread_count;

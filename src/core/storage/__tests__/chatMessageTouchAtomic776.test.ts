@@ -144,8 +144,13 @@ jest.mock('../../logger', () => ({
 
 // Настройка «автоудаление новых чатов» читается из kv и к неделимости
 // отношения не имеет — важно лишь, что читается она ДО BEGIN.
+// v4.32.1037: читается исходом, а не числом; отметку долга ведёт тот же
+// модуль. Здесь всё это подменено — важно лишь, что чтение идёт ДО BEGIN.
 jest.mock('../defaultDisappear', () => ({
-  getDefaultDisappearMsFor: jest.fn(async () => { mockTrace.push('default'); return null; }),
+  getDefaultDisappearMsReadFor: jest.fn(async () => { mockTrace.push('default'); return { ms: null }; }),
+  isDefaultDisappearPending: jest.fn(() => false),
+  markDefaultDisappearPending: jest.fn(),
+  clearDefaultDisappearPending: jest.fn(),
 }));
 
 jest.mock('../localEncryption', () => ({

@@ -140,8 +140,11 @@ describe('форма исходников', () => {
     fs.readFileSync(path.join(__dirname, '..', '..', '..', rel), 'utf8');
 
   it('разговор берёт значение у своего владельца, а не у экрана', () => {
+    // v4.32.1037: чтение стало исходом — «не прочитали» разговору не то же
+    // самое, что «выключено». Повод у закрепки прежний: значение берётся у
+    // владельца разговора, а не у активного профиля.
     expect(src('core/storage/local.ts')).toContain(
-      'const defaultDisappear = await getDefaultDisappearMsFor(t.ownerProfileId);'
+      'const read = await getDefaultDisappearMsReadFor(t.ownerProfileId);'
     );
   });
 
@@ -169,6 +172,6 @@ describe('форма исходников', () => {
   });
 
   it('проверка не пустая', () => {
-    expect(src('core/storage/local.ts')).toContain('getDefaultDisappearMsFor');
+    expect(src('core/storage/local.ts')).toContain('getDefaultDisappearMsReadFor');
   });
 });

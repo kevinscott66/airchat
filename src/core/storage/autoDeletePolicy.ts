@@ -49,6 +49,12 @@ export type DefaultApplicability = {
   currentMs: number | null;
   /** Время последнего сообщения; 0/null — сообщений ещё не было. */
   lastMessageAt: number | null;
+  /**
+   * Умолчание этому разговору задолжали: на первом сообщении его не
+   * прочитали (v4.32.1037). Окно «нового разговора» тогда не закрывается —
+   * см. рассуждение у самого правила.
+   */
+  pendingDefault: boolean;
 };
 
 /**
@@ -57,15 +63,28 @@ export type DefaultApplicability = {
  * «Новый разговор» — это разговор без сообщений, а не отсутствие строки:
  * строка появляется раньше первого сообщения, если контакт закрепили,
  * заархивировали, заглушили или начали писать ему черновик.
+ *
+ * v4.32.1037: у правила появилась отсрочка. Оно одноразовое — строка
+ * заводится сразу с непустым `last_message_at`, и второй попытки применить
+ * умолчание у разговора нет никогда. Поэтому попытка, сорвавшаяся не по
+ * решению человека, а потому что настройку не удалось прочитать, окно не
+ * закрывает: `pendingDefault` держит его открытым до первого удачного
+ * чтения. Без этого одна занятая база в момент первого сообщения оставляла
+ * разговор без таймера навсегда, и отличить его от обычного было нечем —
+ * человек писал в него как в исчезающий.
+ *
+ * Свой выбор человека сильнее отсрочки: `currentMs` проверяется раньше.
  */
 export function shouldApplyDefaultAutoDelete({
   defaultMs,
   exists,
   currentMs,
   lastMessageAt,
+  pendingDefault,
 }: DefaultApplicability): boolean {
   if (defaultMs == null || defaultMs <= 0) return false;
   if (!exists) return true;
   if (currentMs != null) return false;
-  return !lastMessageAt;
+  if (!lastMessageAt) return true;
+  return pendingDefault;
 }

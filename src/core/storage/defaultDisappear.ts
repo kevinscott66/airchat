@@ -61,6 +61,43 @@ export async function getDefaultDisappearMsFor(profileId: number): Promise<numbe
   return (await getDefaultDisappearMsReadFor(profileId))?.ms ?? null;
 }
 
+/**
+ * Разговоры, которым умолчание задолжали (v4.32.1037).
+ *
+ * Правило «ставить умолчание» одноразовое: оно срабатывает на первом
+ * сообщении разговора и больше не вернётся — строка остаётся с непустым
+ * `last_message_at` навсегда. Пока короткая форма чтения выше сводила
+ * «не прочитали» и «выключено» к одному `null`, одна занятая база в эту
+ * секунду оставляла разговор без таймера до конца его жизни, и увидеть это
+ * было негде: чат выглядит ровно как обычный.
+ *
+ * Провал чтения в кэш не кладётся, значит следующее сообщение прочитает
+ * настройку заново. Здесь помечается, какому разговору тогда вернуться, —
+ * список живёт в памяти процесса и нарочно не пишется на диск: писать в ту
+ * самую базу, которая только что не ответила, смысла нет. Перезапуск
+ * приложения до следующего сообщения отсрочку теряет — остаток дыры, но от
+ * прежнего «навсегда и молча» он отличается на порядок.
+ */
+const pendingKeys = new Set<string>();
+
+const pendingKey = (profileId: number, contactPubB64: string): string =>
+  `${profileId}\u0000${contactPubB64}`;
+
+/** Запомнить, что умолчание этому разговору не досталось из-за отказа чтения. */
+export function markDefaultDisappearPending(profileId: number, contactPubB64: string): void {
+  pendingKeys.add(pendingKey(profileId, contactPubB64));
+}
+
+/** Задолжали ли этому разговору умолчание. */
+export function isDefaultDisappearPending(profileId: number, contactPubB64: string): boolean {
+  return pendingKeys.has(pendingKey(profileId, contactPubB64));
+}
+
+/** Долг закрыт: настройку прочитали или человек выбрал таймер сам. */
+export function clearDefaultDisappearPending(profileId: number, contactPubB64: string): void {
+  pendingKeys.delete(pendingKey(profileId, contactPubB64));
+}
+
 /** То же у активного профиля — для экрана настроек. */
 export async function getDefaultDisappearMs(): Promise<number | null> {
   return getDefaultDisappearMsFor(activeProfileId());
@@ -112,6 +149,10 @@ export async function setDefaultDisappearMs(ms: number | null): Promise<boolean>
  */
 export function forgetDefaultDisappear(profileId: number): void {
   cache.delete(profileId);
+  // Долги удалённого профиля уходят вместе с ним: иначе они достались бы
+  // новому профилю с тем же номером и его разговорам с теми же контактами.
+  const prefix = `${profileId}\u0000`;
+  for (const k of [...pendingKeys]) if (k.startsWith(prefix)) pendingKeys.delete(k);
 }
 
 function activeProfileId(): number {
