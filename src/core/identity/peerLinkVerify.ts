@@ -31,7 +31,7 @@
  * Выходило хуже, чем до v4.32.573: тогда чужое имя было просто словами, а
  * стало словами с зелёной галочкой.
  */
-import { scopedKvGet, scopedKvSet } from '../storage/profileScopedKv';
+import { scopedKvSet, scopedKvTryGet } from '../storage/profileScopedKv';
 import { checkLinkProof } from './linkProofCheck';
 import { encodeLinkProofRecord, readLinkProofRecord, sameHandle, type ProofFailure } from './linkProof';
 import type { ProfileLink } from './profileLinks';
@@ -59,11 +59,39 @@ export async function peerLinkVerifiedAt(
   peerPubB64: string,
   link: ProfileLink
 ): Promise<number | null> {
-  if (!link.u) return null;
-  const rec = readLinkProofRecord(await scopedKvGet(key(peerPubB64, link.p)));
-  if (!rec || rec.url !== link.u) return null;
-  if (!rec.h || !sameHandle(rec.h, link.h)) return null;
-  return rec.verifiedAt;
+  return (await peerLinkVerifiedAtTry(peerPubB64, link))?.at ?? null;
+}
+
+/**
+ * То же исходом чтения (v4.32.1041).
+ *
+ * `{ at }` — запись прочитали: внутри либо дата ответа, либо `null`, то есть
+ * «этой пары мы не проверяли». `null` — прочитать не смогли.
+ *
+ * Разница здесь не про галочку. Кнопка «Проверить привязку» показывается
+ * ровно непроверенным, а нажатие на неё уходит на github.com или x.com с IP
+ * человека — тем самым запросом, которого весь этот модуль и избегает делать
+ * сам. Пока оба ответа были одним `null`, занятый SQLite превращался в
+ * предложение сходить на площадку и в строчку «Пока вы её не проверили» — то
+ * есть в утверждение о том, чего мы не знаем, и в повод нажать. Отказ базы не
+ * должен уговаривать человека рассказать двум чужим площадкам, чей профиль он
+ * сейчас открыл.
+ */
+export async function peerLinkVerifiedAtTry(
+  peerPubB64: string,
+  link: ProfileLink
+): Promise<{ at: number | null } | null> {
+  // Адреса публикации нет вовсе — это полноценный ответ, и база тут не нужна.
+  if (!link.u) return { at: null };
+  const read = await scopedKvTryGet(key(peerPubB64, link.p));
+  if (read === null) {
+    log.warn('peer_link_state_unreadable', { platform: link.p });
+    return null;
+  }
+  const rec = readLinkProofRecord(read.value);
+  if (!rec || rec.url !== link.u) return { at: null };
+  if (!rec.h || !sameHandle(rec.h, link.h)) return { at: null };
+  return { at: rec.verifiedAt };
 }
 
 export type PeerLinkResult = { ok: true; verifiedAt: number } | { ok: false; reason: ProofFailure };

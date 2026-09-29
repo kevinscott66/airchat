@@ -29,7 +29,7 @@ import { openExternal } from '../../../utils/openExternal';
 import { showError, showSuccess } from '../../userFeedback';
 import { PLATFORM_LABEL, profileUrl, proofFailureText } from '../../../../core/identity/linkProof';
 import type { ProfileLink } from '../../../../core/identity/profileLinks';
-import { peerLinkVerifiedAt, verifyPeerLink } from '../../../../core/identity/peerLinkVerify';
+import { peerLinkVerifiedAtTry, verifyPeerLink } from '../../../../core/identity/peerLinkVerify';
 import { rawErrorText } from '../../userErrorText';
 import { log } from '../../../../core/logger';
 import { dayMonthShortYear } from '../../../../core/time/ruDateTime';
@@ -44,8 +44,17 @@ export function ProfileLinksRow({
   isSelf: boolean;
 }): React.ReactElement | null {
   const colors = useColors();
-  // Когда эта привязка проверена ЭТИМ устройством. null — ещё нет.
-  const [checked, setChecked] = useState<Record<string, number | null>>({});
+  /**
+   * Когда эта привязка проверена ЭТИМ устройством. `null` — ещё нет,
+   * `'unread'` — запись не открылась (v4.32.1041).
+   *
+   * Третий ответ нужен не ради галочки, а ради кнопки: «Проверить привязку»
+   * показывается непроверенным, а нажатие уходит на площадку с IP человека.
+   * Пока отказ базы был неотличим от «не проверяли», занятый SQLite
+   * предлагал сходить в GitHub или X и уверял, что человек этого ещё не
+   * делал.
+   */
+  const [checked, setChecked] = useState<Record<string, number | null | 'unread'>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,9 +62,10 @@ export function ProfileLinksRow({
     setChecked({});
     if (isSelf) return;
     void (async () => {
-      const out: Record<string, number | null> = {};
+      const out: Record<string, number | null | 'unread'> = {};
       for (const l of links) {
-        out[l.p] = await peerLinkVerifiedAt(peerPubB64, l);
+        const read = await peerLinkVerifiedAtTry(peerPubB64, l);
+        out[l.p] = read === null ? 'unread' : read.at;
       }
       if (!cancelled) setChecked(out);
     })().catch((e: unknown) => {
@@ -91,7 +101,9 @@ export function ProfileLinksRow({
     (link: ProfileLink) => {
       const label = PLATFORM_LABEL[link.p];
       const url = profileUrl(link.p, link.h);
-      const at = checked[link.p] ?? null;
+      const state = checked[link.p] ?? null;
+      const unread = state === 'unread';
+      const at = typeof state === 'number' ? state : null;
       const verified = isSelf ? !!link.u : at !== null;
       const buttons: { text: string; style?: 'cancel'; onPress?: () => void }[] = [];
       if (url) {
@@ -113,9 +125,12 @@ export function ProfileLinksRow({
           ? isSelf
             ? 'Подтверждено вашей публикацией.'
             : `Вы проверили это ${dayMonthShortYear(at ?? 0)}: публикация по указанному адресу принадлежит @${link.h}, и подписана она ключом этого аккаунта.`
-          : link.u
-            ? 'Имя заявлено, и указан адрес публикации с доказательством. Пока вы её не проверили, это остаётся словами: проверка сходит по адресу с вашего устройства.'
-            : 'Имя указано владельцем аккаунта и ничем не подтверждено.',
+          : unread
+            ? // v4.32.1041: «вы не проверяли» — утверждение, а мы не знаем.
+              'Проверяли ли вы эту привязку, выяснить не удалось: запись на этом устройстве не открылась. Проверить можно и сейчас — но запрос уйдёт на площадку с вашего устройства, и она увидит, что вы смотрите этот профиль. Если это лишнее, откройте карточку ещё раз.'
+            : link.u
+              ? 'Имя заявлено, и указан адрес публикации с доказательством. Пока вы её не проверили, это остаётся словами: проверка сходит по адресу с вашего устройства.'
+              : 'Имя указано владельцем аккаунта и ничем не подтверждено.',
         buttons
       );
     },
@@ -127,7 +142,9 @@ export function ProfileLinksRow({
   return (
     <View style={styles.row}>
       {links.map((l) => {
-        const at = checked[l.p] ?? null;
+        const state = checked[l.p] ?? null;
+        const unread = state === 'unread';
+        const at = typeof state === 'number' ? state : null;
         const verified = isSelf ? !!l.u : at !== null;
         return (
           <AppPressable
@@ -142,7 +159,9 @@ export function ProfileLinksRow({
             onPress={() => onPress(l)}
             disabled={busy === l.p}
             accessibilityRole="button"
-            accessibilityLabel={`${PLATFORM_LABEL[l.p]}: @${l.h}, ${verified ? 'подтверждено' : 'без подтверждения'}`}
+            accessibilityLabel={`${PLATFORM_LABEL[l.p]}: @${l.h}, ${
+              verified ? 'подтверждено' : unread ? 'состояние проверки неизвестно' : 'без подтверждения'
+            }`}
           >
             <Ionicons
               name={l.p === 'x' ? 'logo-twitter' : 'logo-github'}
@@ -156,7 +175,13 @@ export function ProfileLinksRow({
               <Ionicons name="checkmark-circle" size={14} color={colors.success} />
             ) : (
               <Text style={[styles.state, { color: colors.textSecondary }]} numberOfLines={1}>
-                {busy === l.p ? 'проверка…' : l.u && !isSelf ? 'проверить' : 'заявлено'}
+                {busy === l.p
+                  ? 'проверка…'
+                  : unread
+                    ? 'неизвестно'
+                    : l.u && !isSelf
+                      ? 'проверить'
+                      : 'заявлено'}
               </Text>
             )}
           </AppPressable>

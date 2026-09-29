@@ -9,8 +9,12 @@ import { peerLinkVerifiedAt, verifyPeerLink } from '../peerLinkVerify';
 import type { ProfileLink } from '../profileLinks';
 
 const mockStore = new Map<string, string>();
+/** База не отвечает — не то же самое, что «записи нет» (v4.32.1041). */
+let mockReadFails = false;
 jest.mock('../../storage/profileScopedKv', () => ({
-  scopedKvGet: jest.fn(async (k: string) => mockStore.get(k) ?? null),
+  scopedKvTryGet: jest.fn(async (k: string) =>
+    mockReadFails ? null : { value: mockStore.get(k) ?? null }
+  ),
   scopedKvSet: jest.fn(async (k: string, v: string) => {
     mockStore.set(k, v);
   }),
@@ -28,6 +32,7 @@ const link: ProfileLink = { p: 'github', h: 'octocat', u: GIST };
 
 beforeEach(() => {
   mockStore.clear();
+  mockReadFails = false;
   mockCheck.mockReset();
   mockCheck.mockResolvedValue({ ok: true });
 });
