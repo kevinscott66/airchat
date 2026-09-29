@@ -3805,8 +3805,13 @@ export async function rebuildConversationsFromMessages(ownerProfileId: number): 
     if (created > 0) emitChatWrites();
     return created;
   } catch (e) {
+    // v4.32.1025: отказ отсюда больше не выдаётся за «переписок не появилось».
+    // Восстановление копии ведёт step() в dialogBackup, и узнаёт он о провале
+    // только по броску; ноль он читает как успешный шаг и печатает зелёное
+    // «Восстановлено», когда списка чатов нет вовсе. Настоящий ноль остаётся
+    // выше: сообщений не было — переписок и не прибавилось.
     log.warn('conversations_rebuild_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    throw e;
   }
 }
 
@@ -3934,8 +3939,11 @@ export async function importConversationMetaRows(
     emitChatWrites();
     return rows.length;
   } catch (e) {
+    // v4.32.1025: довод тот же, что у rebuildConversationsFromMessages выше.
+    // Пустая копия и отброшенные строки по-прежнему отвечают нулём — до этой
+    // ловушки они не доходят.
     log.warn('conversation_meta_import_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    throw e;
   }
 }
 
@@ -4065,8 +4073,12 @@ export async function importGroupBackupRows(
     emitChatWrites();
     return { groups: groups.rows.length, messages: messages.rows.length, members: members.rows.length };
   } catch (e) {
+    // v4.32.1025: здесь молчание стоило дороже всего. Локальный файл копии —
+    // единственное, чем группа восстанавливается вообще, а повторить импорт в
+    // эту же историю уже не дадут (db_not_empty). Отвечая `none`, шаг выдавал
+    // потерю всех групп за копию без групп.
     log.warn('group_backup_import_failed', { err: e instanceof Error ? e.message : String(e) });
-    return none;
+    throw e;
   }
 }
 

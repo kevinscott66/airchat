@@ -572,6 +572,10 @@ async function applyPulledMutation(mnemonic: string, mutation: SyncMutation): Pr
       // v4.32.619: отказ проверки больше не проходит молча. Импорт возвращает
       // число принятых строк; ноль значил «строка отброшена», а голова сущности
       // всё равно писалась ниже — устройство считало, что диалог у него есть.
+      // v4.32.1025: с этого выпуска отказ базы приходит сюда броском, а не
+      // нулём. Исход тот же и там и там — заход не считает правку применённой
+      // и переиграет её, — но в журнале теперь видно, что именно случилось:
+      // строку отвергла проверка или база не ответила.
       if ((await importConversationMetaRows([entity.value as ConversationMetaRow], mutation.ownerProfileId)) !== 1) {
         throw new Error('Диалог синхронизации не прошёл проверку.');
       }
@@ -697,7 +701,24 @@ async function runLiveSync(
           || mutation.entityKind === 'story_album_item') albumsChanged = true;
       },
       afterProjection: async () => {
-        if (messagesChanged) await rebuildConversationsFromMessages(ownerProfileId);
+        // v4.32.1025: перестроение списка теперь признаётся в отказе базы —
+        // это нужно восстановлению копии, где молчание выдавало потерю за
+        // пустую копию. Здесь отказ подавлен нарочно: это проекция ПОСЛЕ
+        // переноса, а не часть переноса. Бросок отсюда увёл бы из runSync мимо
+        // saveSyncState, курсор захода остался бы на месте, и весь заход —
+        // включая уже применённые правки — переигрывался бы заново. Список
+        // чатов до следующего захода останется прежним; сами сообщения уже в
+        // базе. Тот же довод, что у уборки осиротевших строк альбома ниже.
+        if (messagesChanged) {
+          try {
+            await rebuildConversationsFromMessages(ownerProfileId);
+          } catch (e) {
+            log.warn('live_sync_conversations_rebuild_failed', {
+              ownerProfileId,
+              err: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
         // v4.32.684: строка альбома и сам альбом — разные сущности с разными
         // счётчиками ревизий, и порядок между ними ничем не закреплён. Строка,
         // приехавшая к альбому, которого здесь нет, не видна ни в одном списке,
