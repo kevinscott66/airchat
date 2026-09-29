@@ -6332,8 +6332,17 @@ export async function setConversationColorTag(
   }
 }
 
-/** Общий счётчик непрочитанных по всем диалогам профиля (для badge). */
-export async function getTotalUnreadCount(ownerProfileId: number): Promise<number> {
+/**
+ * Общий счётчик непрочитанных по всем диалогам профиля (для badge).
+ *
+ * `null` — не сосчитали, и это не то же самое, что ноль. v4.32.1013: отказ
+ * базы отвечал нулём, а ноль в кружке — это отсутствие кружка, то есть
+ * «непрочитанного нет». Первый счёт идёт на маунте, в ту самую занятую
+ * секунду, когда база чаще всего и отказывает, а следующий — только при
+ * записи в чаты: кому не пишут, тот до перезапуска так и не увидел бы, что
+ * его ждут.
+ */
+export async function getTotalUnreadCount(ownerProfileId: number): Promise<number | null> {
   try {
     const d = await db();
     const r = await d.getFirstAsync<{ n: number }>(
@@ -6343,11 +6352,12 @@ export async function getTotalUnreadCount(ownerProfileId: number): Promise<numbe
     return r?.n ?? 0;
   } catch (e) {
     log.warn('total_unread_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    return null;
   }
 }
 
-export async function getTotalGroupUnreadCount(ownerProfileId: number): Promise<number> {
+/** То же для групп; `null` — не сосчитали (см. {@link getTotalUnreadCount}). */
+export async function getTotalGroupUnreadCount(ownerProfileId: number): Promise<number | null> {
   try {
     const d = await db();
     const r = await d.getFirstAsync<{ n: number }>(
@@ -6357,7 +6367,7 @@ export async function getTotalGroupUnreadCount(ownerProfileId: number): Promise<
     return r?.n ?? 0;
   } catch (e) {
     log.warn('total_group_unread_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    return null;
   }
 }
 

@@ -543,9 +543,21 @@ function MainTabs({
    * `profileManager.switchProfile`) и на каждое изменение чатов —
    * `subscribeChatWrites` уже схлопнут дебаунсом 100мс в local.ts, так что
    * массовая доставка очереди DM не даст 50 запросов подряд.
+   *
+   * v4.32.1013: «не сосчитали» — не ноль. Отказ базы отвечал нулём, и кружок
+   * пропадал: на экране это читается как «непрочитанного нет». Первый счёт
+   * идёт на маунте — в занятую секунду, когда отказ и случается, — а
+   * следующий только при записи в чаты, так что кружка можно было не увидеть
+   * до перезапуска. Теперь `null` оставляет прежнее число: оно устарело на
+   * одно обращение, но не врёт про пустоту.
    */
   useEffect(() => {
     let cancelled = false;
+    // Счётчики прежней личности — не наши. Раз «не сосчитали» больше не
+    // затирает число, обнулить его при смене профиля обязано это место:
+    // иначе до первого удачного счёта в шапке висел бы чужой кружок.
+    setChatUnread(0);
+    setGroupUnread(0);
     const refresh = (): void => {
       const pidAtCall = profileManager.getActiveProfile()?.id ?? 1;
       void (async () => {
@@ -557,8 +569,8 @@ function MainTabs({
           if (cancelled) return;
           // Профиль мог переключиться, пока шёл запрос — чужие счётчики не показываем.
           if ((profileManager.getActiveProfile()?.id ?? 1) !== pidAtCall) return;
-          setChatUnread(chat);
-          setGroupUnread(groups);
+          if (chat !== null) setChatUnread(chat);
+          if (groups !== null) setGroupUnread(groups);
         } catch (e) {
           log.warn('unread_badges_refresh_failed', {
             err: e instanceof Error ? e.message : String(e),
