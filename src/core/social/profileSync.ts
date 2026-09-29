@@ -27,7 +27,7 @@ import {
   getOwnUsernameTryFor,
   ownFieldTryGetFor,
 } from '../identity/ownProfile';
-import { ownAvatarNameTryFor, ownAvatarUriFor } from '../identity/ownAvatar';
+import { ownAvatarNameTryFor, ownAvatarUriTryFor } from '../identity/ownAvatar';
 import { listContactsFor, setPeerProfileForChecked } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentVersion, trimSentMap } from './sentMap';
@@ -175,7 +175,22 @@ async function recordSent(pid: number, patch: SentMap): Promise<void> {
  * образца (с полем `uri`) под это условие не подходит и просто считается
  * промахом — один лишний перезалив на устройство.
  */
-async function currentAvatarCid(pid: number, name: string, now: number): Promise<string | null> {
+/*
+ * v4.32.1039: третий ответ — `'unreadable'`. Путь собирается из шифрованных
+ * ячеек карточки, и раньше их отказ приходил сюда неотличимо от «фотографии
+ * нет»: конверт уходил без `avatarCid`, а получатель по такому конверту
+ * стирает снимок у себя (contacts, setPeerProfileForChecked). Остальные
+ * восемь полей конверта отказ ячейки уже отличают — см. `unreadableField`;
+ * фотография оставалась последней, кто этого не делал.
+ *
+ * Неудача ЗАЛИВКИ — по-прежнему `null`: это сеть, она вернётся сама, и
+ * останавливать из-за неё рассылку имени и «о себе» незачем.
+ */
+async function currentAvatarCid(
+  pid: number,
+  name: string,
+  now: number,
+): Promise<string | null | 'unreadable'> {
   try {
     const raw = await scopedKvGetFor(pid, UPLOAD_KEY);
     if (raw) {
@@ -192,7 +207,9 @@ async function currentAvatarCid(pid: number, name: string, now: number): Promise
 
   try {
     // Путь собирается здесь и сейчас: он годен ровно до следующей установки.
-    const uri = await ownAvatarUriFor(pid);
+    const read = await ownAvatarUriTryFor(pid);
+    if (read === null) return 'unreadable';
+    const uri = read.uri;
     if (!uri) return null;
     const { uploadEncryptedBlob, makeNbCid } = await import('../media/mediaBlob');
     const { guessImageMime } = await import('../media/blobRef');
@@ -347,7 +364,11 @@ async function buildEnvelope(
     }
   }
   const shareAvatar = avatarAllowed(visibility, audience);
-  const avatarCid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
+  const cid = avatarName && shareAvatar ? await currentAvatarCid(pid, avatarName, now) : null;
+  // Имя снимка прочиталось, а сам снимок — нет. Уйди конверт так, получатель
+  // стёр бы фотографию у себя (v4.32.1039).
+  if (cid === 'unreadable') return unreadableField('avatar_bytes', pid);
+  const avatarCid = cid;
   // v4.32.547: бумага на галочку едет тем же конвертом, что и имя, — иначе ей
   // понадобился бы свой транспорт, а она нужна ровно там же и ровно тогда же.
   // Настройке «кто видит фото» она не подчиняется: галочка не про личное, она

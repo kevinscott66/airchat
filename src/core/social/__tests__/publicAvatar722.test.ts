@@ -20,15 +20,22 @@ const PEER_FILE = `file:///cache/pubavatar-${PEER_URL}-${HASH}.img`;
 
 let mockVisibility: 'everybody' | 'contacts' | 'nobody' | null = 'everybody';
 let mockImg: string | null = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]).toString('base64');
+/** Ячейку со снимком открыть не удалось — не то же самое, что «снимка нет». */
+let mockBytesUnreadable = false;
 let mockContacts: { peerPublicKey: string; avatarCid?: string }[] = [];
 const mockFetch = jest.fn();
 
 jest.mock('../../backup/cloudVault', () => ({ cloudBaseUrl: () => 'https://vault.test' }));
 jest.mock('../../settings/avatarVisibility', () => ({ avatarVisibilityTryFor: jest.fn(async () => mockVisibility) }));
 // v4.32.1010: байты своего снимка отдаёт identity/ownAvatar целиком — он же
-// решает, дочитать ли их с диска. Отсюда `null` значит «фотографии нет».
+// решает, дочитать ли их с диска.
+// v4.32.1039: и отдаёт исходом. `{ b64: null }` — «фотографии нет»,
+// `null` — «прочитать не смогли»; здесь ячейки читаются, поэтому исход есть
+// всегда. Случай отказа проверяется отдельно, ниже по файлу.
 jest.mock('../../identity/ownAvatar', () => ({
+  ownAvatarBytesTryFor: jest.fn(async () => (mockBytesUnreadable ? null : { b64: mockImg })),
   ownAvatarBytesFor: jest.fn(async () => mockImg),
+  ownAvatarUriTryFor: jest.fn(async () => ({ uri: mockImg ? 'file:///me.jpg' : null })),
   ownAvatarUriFor: jest.fn(async () => (mockImg ? 'file:///me.jpg' : null)),
   ownAvatarUri: jest.fn(async () => null),
 }));
@@ -85,6 +92,7 @@ const flush = () => new Promise((r) => setTimeout(r, 100));
 beforeEach(() => {
   mockVisibility = 'everybody';
   mockImg = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]).toString('base64');
+  mockBytesUnreadable = false;
   mockContacts = [];
   mockFetch.mockReset();
   resetPublicAvatars();
@@ -122,6 +130,28 @@ test('непрочитанная настройка ничего не трога
   mockFetch.mockResolvedValueOnce(ok({ ok: true }));
   await publishOwnAvatarToDirectory(1);
   expect(mockFetch).toHaveBeenCalledTimes(2);
+});
+
+/**
+ * v4.32.1039: нечитаемая ячейка снимка — не «снимка нет».
+ *
+ * Прежде рассылка читала байты собирающей формой, и отказ приходил к ней как
+ * пустой ответ, то есть как `del`: фото снималось у всех, кто смотрит
+ * карточку по @имени. Ячейка шифрованная (при закрытом устройстве ключа нет
+ * вовсе), а зовут рассылку в том числе из фона.
+ */
+test('непрочитанный снимок ничего не снимает, а прочитанный — снимает', async () => {
+  mockBytesUnreadable = true;
+  await publishOwnAvatarToDirectory(1);
+  expect(mockFetch).not.toHaveBeenCalled();
+
+  // ПРОВЕРКА НЕ ПУСТАЯ: та же пустота, но прочитанная, — это `del`.
+  mockBytesUnreadable = false;
+  mockImg = null;
+  mockFetch.mockResolvedValue(ok({ ok: true }));
+  await publishOwnAvatarToDirectory(1);
+  expect(mockFetch).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(mockFetch.mock.calls[0][1].payload)).toMatchObject({ act: 'del' });
 });
 
 test('фото незнакомца находится по ключу и по did, объект один и тот же', async () => {

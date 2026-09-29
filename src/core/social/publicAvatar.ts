@@ -24,7 +24,7 @@ import { signJson, verifySignedJson } from '../crypto/signature';
 import { publicKeyFromB64, publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { bytesToBase64Url } from '../utils/base64url';
 import { fetchWithDeadline } from '../net/timedFetch';
-import { ownAvatarBytesFor } from '../identity/ownAvatar';
+import { ownAvatarBytesTryFor } from '../identity/ownAvatar';
 import { profileManager } from '../identity/profileManager';
 import { avatarVisibilityTryFor } from '../settings/avatarVisibility';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -104,6 +104,13 @@ async function sendAvatarRequest(pair: KeyPairBytes, body: Record<string, unknow
  *
  * Непрочитанная настройка — ничего не делаем: ни выставить фото тому, кто его
  * прятал, ни снять его у того, кто показывал, по сбою базы нельзя.
+ *
+ * v4.32.1039: то же правило и для самой фотографии. Раньше её читала
+ * собирающая форма, и нечитаемая ячейка приходила сюда как «фотографии нет»
+ * — то есть как `del`. Ячейка шифрованная: при закрытом устройстве ключа нет
+ * вовсе, а рассылку зовут в том числе из фона. Снимок пропадал у всех, кто
+ * смотрит карточку по @имени, и возвращался лишь со следующим удачным
+ * запуском — `published` живёт в памяти процесса.
  */
 export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
   if (!cloudBaseUrl()) return;
@@ -111,11 +118,18 @@ export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
   try {
     const visibility = await avatarVisibilityTryFor(pid);
     if (visibility === null) return;
-    // `null` от identity/ownAvatar значит «фотографии нет» — и только это:
-    // байты он при нужде дочитывает с диска. Разница здесь ценой в снимок:
-    // «нет» уходит на сервер запросом `del`, то есть снимает выставленное
-    // фото у всех, кто смотрит карточку по @имени.
-    const b64 = visibility === 'everybody' ? await ownAvatarBytesFor(pid) : null;
+    // Разница здесь ценой в снимок: «нет» уходит на сервер запросом `del`,
+    // то есть снимает выставленное фото у всех, кто смотрит карточку по
+    // @имени. Поэтому «нет» принимается только от прочитанной ячейки.
+    let b64: string | null = null;
+    if (visibility === 'everybody') {
+      const read = await ownAvatarBytesTryFor(pid);
+      if (read === null) {
+        log.warn('public_avatar_bytes_unreadable', { pid });
+        return;
+      }
+      b64 = read.b64;
+    }
     const bytes = b64 ? Buffer.from(b64, 'base64') : null;
     const share = bytes !== null && bytes.length > 0 && bytes.length <= MAX_IMAGE_BYTES;
     marker = share && bytes

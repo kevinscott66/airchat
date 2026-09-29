@@ -31,7 +31,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { avatarFileName, avatarUriFromName, newAvatarUri } from '../media/avatarFiles';
 import { AVATAR_NAME_KEY } from './avatarKeep';
-import { ownFieldGetFor, ownFieldSetFor, ownFieldTryGetFor } from './ownProfile';
+import { ownFieldSetFor, ownFieldTryGetFor } from './ownProfile';
 import { profileManager } from './profileManager';
 import { log } from '../logger';
 
@@ -59,22 +59,30 @@ async function fileExists(uri: string): Promise<boolean> {
  * по-разному: сохранению снимка важно, что запись состоялась (без неё снимок
  * не переживёт обновления), а рассылке важны байты — записались они или нет,
  * отправить наружу можно те, что уже в руках.
+ *
+ * v4.32.1039: `read` разводит два пустых ответа. Пустой файл — это «снимка
+ * нет», и справочник по @имени правильно снимает выставленное фото. Отказ
+ * диска — не утверждение ни о чём, и такой же ответ означал бы, что фото
+ * пропадает у всех по осечке чтения.
  */
-async function keepBytes(pid: number, uri: string): Promise<{ b64: string | null; stored: boolean }> {
+async function keepBytes(
+  pid: number,
+  uri: string,
+): Promise<{ b64: string | null; stored: boolean; read: 'ok' | 'empty' | 'failed' }> {
   let b64: string;
   try {
     b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
   } catch (e) {
     log.warn('avatar_bytes_read_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { b64: null, stored: false };
+    return { b64: null, stored: false, read: 'failed' };
   }
   if (!b64) {
     log.warn('avatar_bytes_empty', { pid });
-    return { b64: null, stored: false };
+    return { b64: null, stored: false, read: 'empty' };
   }
   const stored = await ownFieldSetFor(pid, IMG_KEY, b64);
   if (!stored) log.warn('avatar_bytes_not_stored', { pid });
-  return { b64, stored };
+  return { b64, stored, read: 'ok' };
 }
 
 /** Имя файла фотографии активного профиля; пустая строка — фотографии нет. */
@@ -115,12 +123,35 @@ export async function ownAvatarUri(): Promise<string | null> {
 /**
  * Путь к фотографии заданного профиля, годный прямо сейчас.
  *
+ * Сводит «фотографии нет» и «прочитать не смогли» к одному `null`. Месту,
+ * которое просто рисует кружок на экране, этого довольно: показать нечего и
+ * там, и там. Всем, кто из ответа делает ВЫВОД о фотографии, — нет, см.
+ * `ownAvatarUriTryFor`.
+ */
+export async function ownAvatarUriFor(pid: number): Promise<string | null> {
+  return (await ownAvatarUriTryFor(pid))?.uri ?? null;
+}
+
+/**
+ * То же, но «не прочитали» отдельно от «фотографии нет» (v4.32.1039).
+ *
+ * `null` — ячейка на месте и не открылась; `{ uri: null }` — фотографии нет.
+ * Оба чтения здесь идут в шифрованные ячейки карточки, и отказ у них общий:
+ * нет ключа шифрования при закрытом устройстве, занят SQLite. Разница ценой
+ * в лицо — и не только на своём экране: на пустой ответ отсюда рассылка
+ * карточки (social/profileSync) отправляла конверт БЕЗ `avatarCid`, а
+ * получатель по такому конверту стирает фотографию у себя
+ * (`setPeerProfileForChecked`), и справочник по @имени получал `del`
+ * (social/publicAvatar) — то есть снимок пропадал разом у всех.
+ *
  * Файла может не оказаться — тогда он пересобирается из базы, за этим байты
  * там и лежат. Запись в kv по дороге приводится к имени: пока там путь,
  * следующее обновление сломает её снова.
  */
-export async function ownAvatarUriFor(pid: number): Promise<string | null> {
-  const stored = (await ownFieldGetFor(pid, NAME_KEY)) ?? '';
+export async function ownAvatarUriTryFor(pid: number): Promise<{ uri: string | null } | null> {
+  const readName = await ownFieldTryGetFor(pid, NAME_KEY);
+  if (readName === null) return null;
+  const stored = readName.text ?? '';
   let name = avatarFileName(stored);
   let uri = avatarUriFromName(name);
   if (uri && (await fileExists(uri))) {
@@ -129,8 +160,10 @@ export async function ownAvatarUriFor(pid: number): Promise<string | null> {
     // сюда мы больше не заходим.
     if (stored !== name) await keepBytes(pid, uri);
   } else {
-    const b64 = await ownFieldGetFor(pid, IMG_KEY);
-    if (!b64) return null;
+    const readImg = await ownFieldTryGetFor(pid, IMG_KEY);
+    if (readImg === null) return null;
+    const b64 = readImg.text;
+    if (!b64) return { uri: null };
     // Имени может не быть вовсе — тогда запись сделана так давно, что от неё
     // остались одни байты; заводим файлу новое имя.
     const dst = uri || newAvatarUri(Date.now());
@@ -138,6 +171,7 @@ export async function ownAvatarUriFor(pid: number): Promise<string | null> {
       await FileSystem.writeAsStringAsync(dst, b64, { encoding: FileSystem.EncodingType.Base64 });
     } catch (e) {
       log.warn('avatar_restore_failed', { err: e instanceof Error ? e.message : String(e) });
+      // Байты есть, а положить их файлом не вышло: это не «фотографии нет».
       return null;
     }
     uri = dst;
@@ -145,7 +179,7 @@ export async function ownAvatarUriFor(pid: number): Promise<string | null> {
     log.info('avatar_restored_from_db', { pid });
   }
   if (name && stored !== name) await ownFieldSetFor(pid, NAME_KEY, name);
-  return uri || null;
+  return { uri: uri || null };
 }
 
 /**
@@ -211,9 +245,28 @@ export async function saveOwnAvatar(srcUri: string): Promise<string | null> {
  * справочнике снимок, который человек только что выбрал и видит перед собой.
  */
 export async function ownAvatarBytesFor(pid: number): Promise<string | null> {
-  const uri = await ownAvatarUriFor(pid);
-  if (!uri) return null;
-  const stored = await ownFieldGetFor(pid, IMG_KEY);
-  if (stored && stored.length > 0) return stored;
-  return (await keepBytes(pid, uri)).b64;
+  return (await ownAvatarBytesTryFor(pid))?.b64 ?? null;
+}
+
+/**
+ * То же, но «не прочитали» отдельно от «фотографии нет» (v4.32.1039).
+ *
+ * `null` — ячейку открыть не удалось; `{ b64: null }` — фотографии нет.
+ * Единственный спрашивающий — справочник по @имени: на «нет» он шлёт `del`,
+ * то есть снимает выставленное фото у всех, кто смотрит карточку. Вывести
+ * такое из нечитаемой ячейки нельзя, поэтому разница и заведена.
+ */
+export async function ownAvatarBytesTryFor(pid: number): Promise<{ b64: string | null } | null> {
+  const read = await ownAvatarUriTryFor(pid);
+  if (read === null) return null;
+  if (!read.uri) return { b64: null };
+  const stored = await ownFieldTryGetFor(pid, IMG_KEY);
+  if (stored === null) return null;
+  if (stored.text) return { b64: stored.text };
+  // Байты в базе пусты, а файл есть: снимок выбран версией до v4.32.556 либо
+  // его запись не приняли. Дочитываем с диска. Отказ диска здесь тоже не
+  // «фотографии нет» — файл мы только что видели; а вот пустой файл именно
+  // это и значит (см. keepBytes).
+  const kept = await keepBytes(pid, read.uri);
+  return kept.read === 'failed' ? null : { b64: kept.b64 };
 }
