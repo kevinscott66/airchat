@@ -2791,13 +2791,29 @@ export async function fetchPostByLink(postId: string): Promise<FeedPostRow | nul
 
 /**
  * v4.32.68: батч-счётчики для списка постов — одна SQL вместо N.
+ *
+ * v4.32.1022: `null` — «не прочитали». Здесь стоял немой `catch { return {} }`,
+ * и пустая карта была для экрана неотличима от «ни один пост не смотрели»:
+ * число он берёт как `viewCounts[id] ?? 0`. Отсутствие ключа на удачном
+ * чтении законно — SQL группирует, и строки для поста без просмотров нет, — а
+ * на отказе значит «не знаем». Поэтому ноль теперь проставляется явно каждому
+ * спрошенному посту, и после этого отсутствие ключа значит ровно одно.
+ *
+ * Цена ошибки здесь — утверждение о чужом поведении под своей же публикацией:
+ * «никто не открыл» вместо «не сосчитали».
  */
-export async function getFeedPostViewCountsMap(postIds: string[]): Promise<Record<string, number>> {
+export async function getFeedPostViewCountsMap(
+  postIds: string[]
+): Promise<Record<string, number> | null> {
   try {
     const s = await ensureStorage();
-    return await s.getViewCountsForPosts(postIds);
-  } catch {
-    return {};
+    const rows = await s.getViewCountsForPosts(postIds);
+    const out: Record<string, number> = {};
+    for (const id of postIds) out[id] = rows[id] ?? 0;
+    return out;
+  } catch (e) {
+    log.warn('feed_view_counts_failed', { err: e instanceof Error ? e.message : String(e) });
+    return null;
   }
 }
 

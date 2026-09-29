@@ -487,7 +487,7 @@ interface FeedPostItemProps {
   /** v4.32.852: слот на каждое вложение публикации; null — не открылось. */
   mediaUrls: MediaSlot[];
   commentCount: number;
-  viewCount: number;
+  viewCount: number | null;
   translatedText: string | undefined;
   /** AC-04: своя запись опубликована по ссылке — копия на сервере открыта. */
   linkPublished: boolean;
@@ -783,11 +783,20 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
                 style={[styles.reactionAddBtn, { flexDirection: 'row', width: 'auto', paddingHorizontal: 8, gap: 4 }]}
                 onPress={() => onViewersPress(item.id)}
                 hitSlop={8}
-                accessibilityLabel={t('feed.a11yViews')}
+                accessibilityLabel={
+                  // v4.32.1022: знак вопроса значит «сколько посмотрело —
+                  // не прочитали», и сказать это надо словами: озвучка читала
+                  // бы сам знак. Так же у счётчика под историей с v4.32.948.
+                  viewCount === null ? t('feed.a11yViewsUnknown') : t('feed.a11yViews')
+                }
               >
-                <Ionicons name="eye-outline" size={15} color={colors.textSecondary} />
+                <Ionicons
+                  name={viewCount === null ? 'eye-off-outline' : 'eye-outline'}
+                  size={15}
+                  color={colors.textSecondary}
+                />
                 <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600' }}>
-                  {viewCount}
+                  {viewCount === null ? '?' : viewCount}
                 </Text>
               </AppPressable>
             ) : null}
@@ -1708,8 +1717,10 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         if (ownIds.length > 0) {
           await new Promise<void>((r) => setTimeout(r, 0));
           if (!isMountedRef.current || loadVersionRef.current !== myVersion) return;
+          // v4.32.1022: `null` — «не сосчитали». Прежние числа остаются, а
+          // непрочитанные посты остаются без ключа — экран покажет «?».
           const vc = await getFeedPostViewCountsMap(ownIds);
-          if (isMountedRef.current)
+          if (isMountedRef.current && vc !== null)
             setViewCounts((prev) => {
               const next = mergeByRowId(prev, vc, keepIds);
               return jsonEq(prev, next) ? prev : next;
@@ -1814,7 +1825,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       if (ownIds.length > 0) {
         const vc = await getFeedPostViewCountsMap(ownIds);
         if (!stillOurs()) return;
-        setViewCounts((prev) => ({ ...prev, ...vc }));
+        if (vc !== null) setViewCounts((prev) => ({ ...prev, ...vc }));
       }
     } catch (e) {
       log.warn('feed_load_more_failed', { err: rawErrorText(e) });
@@ -3281,7 +3292,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         colors={colors}
         mediaUrls={mediaUrlsMap[item.id] ?? []}
         commentCount={commentCounts[item.id] ?? 0}
-        viewCount={viewCounts[item.id] ?? 0}
+        viewCount={viewCounts[item.id] ?? null}
         translatedText={translatedPosts[item.id]}
         linkPublished={item.authorDid === did && isLinkPublished(item.id)}
         linkBusy={isLinkBusy(item.id)}
