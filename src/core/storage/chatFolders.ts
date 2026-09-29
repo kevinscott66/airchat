@@ -106,8 +106,13 @@ export function parseFolderNames(raw: string | null): FolderNames {
 /**
  * Названия папок активного профиля (со снятием старой общей записи).
  * `null` — не прочитали.
+ *
+ * v4.32.1067: отдаётся наружу, и собирающей формы рядом больше нет. Прежде
+ * рядом стоял `loadFolderNames` — «не прочитали → {}», — и шапка списка
+ * переписок звала именно его. Пустой набор значит там «папок нет», а это
+ * другое утверждение: см. folderNamesUnread1067.
  */
-async function readFolderNames(): Promise<FolderNames | null> {
+export async function tryReadFolderNames(): Promise<FolderNames | null> {
   try {
     const read = await tryReadProfileSharedSecret(FOLDER_NAMES_KEY);
     return read === null ? null : parseFolderNames(read.value);
@@ -115,11 +120,6 @@ async function readFolderNames(): Promise<FolderNames | null> {
     log.warn('folder_names_read_failed', { err: e instanceof Error ? e.message : String(e) });
     return null;
   }
-}
-
-/** Для показа: не прочитали — рисуем шапку без вкладок, ничего при этом не теряя. */
-export async function loadFolderNames(): Promise<FolderNames> {
-  return (await readFolderNames()) ?? {};
 }
 
 /**
@@ -138,7 +138,7 @@ export async function loadFolderNames(): Promise<FolderNames> {
  * её не отличал — окно закрывалось как после удачи.
  */
 export async function setFolderName(color: string, rawName: string): Promise<FolderWrite> {
-  const current = await readFolderNames();
+  const current = await tryReadFolderNames();
   if (current === null) {
     log.warn('folder_names_unreadable', { color });
     return { ok: false, why: 'unreadable', names: null };

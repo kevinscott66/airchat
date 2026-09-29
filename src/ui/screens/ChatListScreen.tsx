@@ -66,12 +66,17 @@ import { subscribeChatWrites } from '../../core/storage/local';
 import {
   FOLDER_COLORS,
   FOLDER_NAME_MAX_LEN,
-  loadFolderNames,
   MAX_FOLDERS,
   removeFolderName,
   setFolderName,
+  tryReadFolderNames,
   type FolderNames,
 } from '../../core/storage/chatFolders';
+import {
+  folderTagAction,
+  FOLDER_TAG_UNKNOWN_HINT,
+  FOLDERS_UNREAD_NOTE,
+} from '../utils/folderNamesUnread';
 // v4.32.168: зеркалим mute в muteStore (источник правды для FCM gate).
 import { setMuted as muteSet, unmute as muteUnset } from '../../core/notifications/muteStore';
 import { reportErased, showError, showSuccess } from '../components/userFeedback';
@@ -698,6 +703,11 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   // Папки чатов: цвет метки → название. Хранение, разбор и границы —
   // в core/storage/chatFolders (v4.32.294).
   const [folderNames, setFolderNames] = useState<FolderNames>({});
+  /**
+   * Набор названий не прочитался (v4.32.1067). Отдельно от самого набора:
+   * пустой набор значит здесь «папок нет», а это другое утверждение.
+   */
+  const [folderNamesUnread, setFolderNamesUnread] = useState(false);
   const [renameFolderColor, setRenameFolderColor] = useState<string | null>(null);
   const [renameFolderInput, setRenameFolderInput] = useState('');
 
@@ -765,8 +775,14 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
   // списком: до v4.32.294 запись была общей, и смена аккаунта вкладки не меняла.
   useEffect(() => {
     let alive = true;
-    void loadFolderNames().then((names) => {
-      if (alive) setFolderNames(names);
+    // v4.32.1067: `null` — не прочитали. Прежде здесь стоял `loadFolderNames`
+    // с «не прочитали → {}», и отказ базы приходил в шапку как «папок нет»:
+    // вкладки исчезали, а окно метки предлагало создать папку поверх
+    // существующей. Прочитанное прежде не затираем — оно было правдой.
+    void tryReadFolderNames().then((names) => {
+      if (!alive) return;
+      setFolderNamesUnread(names === null);
+      if (names) setFolderNames(names);
     });
     return () => { alive = false; };
   }, [refreshTick]);
@@ -1146,7 +1162,8 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
                 </AppPressable>
               ))}
             </View>
-            {colorPickerItem?.colorTag && !folderNames[colorPickerItem.colorTag] ? (
+            {colorPickerItem?.colorTag
+              && folderTagAction(!!folderNames[colorPickerItem.colorTag], folderNamesUnread) === 'create' ? (
               <AppPressable
                 onPress={() => {
                   const color = colorPickerItem?.colorTag;
@@ -1161,6 +1178,15 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
               >
                 <Text style={{ color: colors.accent, fontSize: 14 }}>Создать папку с этой меткой</Text>
               </AppPressable>
+            ) : null}
+            {colorPickerItem?.colorTag
+              && folderTagAction(!!folderNames[colorPickerItem.colorTag], folderNamesUnread) === 'unknown' ? (
+              <Text
+                style={{ color: colors.warning, fontSize: font.sm, textAlign: 'center', paddingVertical: 6 }}
+                testID="chat_list_folder_tag_unknown"
+              >
+                {FOLDER_TAG_UNKNOWN_HINT}
+              </Text>
             ) : null}
             {colorPickerItem?.colorTag && folderNames[colorPickerItem.colorTag] ? (
               <AppPressable
@@ -1510,6 +1536,14 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             );
           })}
           </ScrollView>
+        ) : null}
+        {!showArchived && !searchVisible && folderNamesUnread ? (
+          <Text
+            style={{ color: colors.warning, fontSize: font.xs, paddingHorizontal: 12, paddingBottom: 6 }}
+            testID="chat_list_folders_unread_note"
+          >
+            {FOLDERS_UNREAD_NOTE}
+          </Text>
         ) : null}
       </GlassSurface>
       </View>

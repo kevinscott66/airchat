@@ -64,7 +64,7 @@ jest.mock('../../logger', () => ({ log: { warn: jest.fn(), info: jest.fn(), erro
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { FOLDER_NAMES_KEY, loadFolderNames, removeFolderName, setFolderName } from '../chatFolders';
+import { FOLDER_NAMES_KEY, removeFolderName, setFolderName, tryReadFolderNames } from '../chatFolders';
 
 const mockLocal = jest.requireMock('../local') as { __kv: Record<string, string> };
 
@@ -168,10 +168,14 @@ describe('до правки было верно и осталось верно',
     expect(stored()).toEqual({ [RED]: 'Врач' });
   });
 
-  it('для показа отказ чтения — пустая шапка, а не падение', async () => {
+  it('для показа отказ чтения назван, а не выдан за «папок нет»', async () => {
+    // v4.32.1067: прежде рядом стояла собирающая форма `loadFolderNames`, и
+    // отказ приходил в шапку списка переписок тем же пустым набором, что и
+    // «папок нет». Повод у проверки прежний и живой: чтение для показа отказ
+    // переживает — теперь оно о нём и говорит.
     put({ [RED]: 'Врач' });
     mockReadFails = true;
-    await expect(loadFolderNames()).resolves.toEqual({});
+    await expect(tryReadFolderNames()).resolves.toBeNull();
   });
 
   it('экран по-прежнему отпускает вкладку удалённой папки и закрывает окно', () => {

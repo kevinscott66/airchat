@@ -70,7 +70,7 @@ import {
   resetMutedAuthorsCache,
   setAuthorMuted,
 } from '../../social/mutedAuthors';
-import { FOLDER_NAMES_KEY, loadFolderNames, setFolderName } from '../chatFolders';
+import { FOLDER_NAMES_KEY, setFolderName, tryReadFolderNames } from '../chatFolders';
 import { tryReadProfileSharedSecret } from '../profileSharedKv';
 
 const mockLocal = jest.requireMock('../local') as { __kv: Record<string, string> };
@@ -229,8 +229,12 @@ describe('исходник: чтение общей записи объявле�
       'export async function setFolderName(color: string, rawName: string): Promise<FolderWrite> {',
     );
     expect(folders).toContain("return { ok: false, why: 'unreadable', names: null };");
-    expect(folders).toContain('const current = await readFolderNames();');
-    expect(folders).not.toContain('const current = await loadFolderNames();');
+    // v4.32.1067: чтение исходом переименовано в `tryReadFolderNames` и отдано
+    // наружу, а собирающей формы рядом не осталось вовсе. Повод у закрепки
+    // прежний: запись обязана перечитывать набор тем чтением, которое умеет
+    // сказать «не прочитали».
+    expect(folders).toContain('const current = await tryReadFolderNames();');
+    expect(folders).not.toContain('await loadFolderNames()');
   });
 
   it('экраны различают отказ, а не показывают пустоту', () => {
@@ -253,9 +257,11 @@ describe('исходник: чтение общей записи объявле�
 });
 
 describe('загрузка для показа отказ переживает', () => {
-  it('названия папок при нечитаемой базе — пустая шапка, а не падение', async () => {
+  it('названия папок при нечитаемой базе — «не прочитали», а не падение', async () => {
+    // v4.32.1067: ответом стал `null`. Пустой набор значит «папок нет», и в
+    // шапке списка переписок эти два ответа выглядели одинаково.
     put(foldersKey(1), { [RED]: 'Врач' });
     mockDbFails = true;
-    expect(await loadFolderNames()).toEqual({});
+    expect(await tryReadFolderNames()).toBeNull();
   });
 });

@@ -56,10 +56,10 @@ jest.mock('../../identity/profileManager', () => ({
 import {
   FOLDER_NAMES_KEY,
   FOLDER_NAME_MAX_LEN,
-  loadFolderNames,
   parseFolderNames,
   removeFolderName,
   setFolderName,
+  tryReadFolderNames,
 } from '../chatFolders';
 
 const mockLocal = jest.requireMock('../local') as {
@@ -88,13 +88,13 @@ describe('названия папок принадлежат профилю', ()
     expect(mockLocal.__kv[key1]).not.toContain('Врач');
     expect(mockLocal.__kv[FOLDER_NAMES_KEY]).toBeUndefined();
     expect(mockLocal.kvSet).not.toHaveBeenCalled();
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
   });
 
   it('второй профиль не наследует папки первого', async () => {
     await setFolderName(RED, 'Врач');
     mockActiveId = 2;
-    expect(await loadFolderNames()).toEqual({});
+    expect(await tryReadFolderNames()).toEqual({});
   });
 
   it('без активного профиля не пишет ничего', async () => {
@@ -117,35 +117,35 @@ describe('названия папок принадлежат профилю', ()
 describe('общая запись из версий до v4.32.294', () => {
   it('копируется каждому профилю и исчезает', async () => {
     mockLocal.__kv[FOLDER_NAMES_KEY] = JSON.stringify({ [RED]: 'Врач' });
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
     expect(mockLocal.__kv[FOLDER_NAMES_KEY]).toBeUndefined();
     expect(mockLocal.__kv[key1]).toBeDefined();
     // Вкладки действовали во всех профилях сразу: отдать их одному значило бы
     // для остальных молча стереть названия.
     expect(mockLocal.__kv[key2]).toBeDefined();
     mockActiveId = 2;
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
   });
 
   it('не трогается, пока профили неизвестны', async () => {
     mockProfiles = [];
     mockActiveId = null;
     mockLocal.__kv[FOLDER_NAMES_KEY] = JSON.stringify({ [RED]: 'Врач' });
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
     expect(mockLocal.__kv[FOLDER_NAMES_KEY]).toBeDefined();
   });
 
   it('остаётся на месте, если копия не легла', async () => {
     mockLocal.__kv[FOLDER_NAMES_KEY] = JSON.stringify({ [RED]: 'Врач' });
     mockWriteFails = true;
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
     expect(mockLocal.__kv[FOLDER_NAMES_KEY]).toBeDefined();
   });
 
   it('не затирает уже перенесённое', async () => {
     await setFolderName(RED, 'Врач');
     mockLocal.__kv[FOLDER_NAMES_KEY] = JSON.stringify({ [BLUE]: 'Старое' });
-    expect(await loadFolderNames()).toEqual({ [RED]: 'Врач' });
+    expect(await tryReadFolderNames()).toEqual({ [RED]: 'Врач' });
   });
 });
 
