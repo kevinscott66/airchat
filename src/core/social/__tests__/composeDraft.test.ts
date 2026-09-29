@@ -322,27 +322,30 @@ describe('отбор документов из ответа picker\'а (v4.32.32
  * того, как вторая копия записи ушла всем контактам.
  */
 describe('planComposeRestore', () => {
+  // v4.32.1045: вход стал трёхзначным — «не прочиталось» отделено от «нет её».
+  // Наборы ниже про два прежних исхода, поэтому говорят прямо, что чтение
+  // состоялось: 'gone' — это прочитали и записи нет.
   it('обычный черновик восстанавливается как новая публикация', () => {
-    expect(planComposeRestore({ editingPostId: null, editTargetExists: false })).toEqual({
+    expect(planComposeRestore({ editingPostId: null, editTarget: 'gone' })).toEqual({
       kind: 'new',
     });
   });
 
   it('правка возвращается правкой той же записи', () => {
-    expect(planComposeRestore({ editingPostId: 'post-1', editTargetExists: true })).toEqual({
+    expect(planComposeRestore({ editingPostId: 'post-1', editTarget: 'found' })).toEqual({
       kind: 'edit',
       postId: 'post-1',
     });
   });
 
   it('исчезнувшая запись — черновик выбрасывается, а НЕ публикуется заново', () => {
-    const plan = planComposeRestore({ editingPostId: 'post-1', editTargetExists: false });
+    const plan = planComposeRestore({ editingPostId: 'post-1', editTarget: 'gone' });
     expect(plan).toEqual({ kind: 'discard', reason: 'edit_target_gone' });
     // Ровно то, чего быть не должно: молчаливый переход в режим публикации.
     expect(plan.kind).not.toBe('new');
   });
 
   it('пустая строка идентификатора не считается правкой', () => {
-    expect(planComposeRestore({ editingPostId: '', editTargetExists: false }).kind).toBe('new');
+    expect(planComposeRestore({ editingPostId: '', editTarget: 'gone' }).kind).toBe('new');
   });
 });

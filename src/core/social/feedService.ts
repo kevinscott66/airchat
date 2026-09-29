@@ -2470,22 +2470,35 @@ export async function notifyFeedPostViewed(
 }
 
 /**
- * v4.32.333: один пост по идентификатору.
+ * v4.32.1045: один пост по идентификатору, исходом чтения.
  *
- * Нужен восстановлению черновика: экран правки держит саму строку поста, а
- * пережить убийство активности может только идентификатор. Возвращает null и
- * когда поста нет, и когда его не удалось прочитать — вызывающий обязан
- * различать «правим этот пост» и «не знаем, что правим», а не подставлять
- * вместо второго публикацию нового.
+ * `null` — база не ответила: заблокирована другим проходом, ключ шифрования
+ * ещё не поднялся из связки (а восстановление черновика происходит ровно на
+ * запуске, когда связка чаще всего и не готова). `{ post: null }` — прочитали
+ * и записи нет. Прежний `getFeedPost` отдавал на оба случая один null, и
+ * обязанность различать, записанную в его же комментарии, выполнить было
+ * нечем.
  */
-export async function getFeedPost(postId: string): Promise<FeedPostRow | null> {
+export async function getFeedPostTry(postId: string): Promise<{ post: FeedPostRow | null } | null> {
   try {
     const s = await ensureStorage();
-    return await s.getPost(postId);
+    return { post: await s.getPost(postId) };
   } catch (e) {
     log.warn('feed_get_post_failed', { postId: postId.slice(0, 24), err: e instanceof Error ? e.message : String(e) });
     return null;
   }
+}
+
+/**
+ * v4.32.333: один пост по идентификатору.
+ *
+ * Нужен восстановлению черновика: экран правки держит саму строку поста, а
+ * пережить убийство активности может только идентификатор. Возвращает null и
+ * когда поста нет, и когда его не удалось прочитать — кому эта разница важна,
+ * тот берёт `getFeedPostTry`, а не гадает по null.
+ */
+export async function getFeedPost(postId: string): Promise<FeedPostRow | null> {
+  return (await getFeedPostTry(postId))?.post ?? null;
 }
 
 

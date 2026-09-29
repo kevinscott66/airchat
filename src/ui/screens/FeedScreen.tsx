@@ -88,6 +88,7 @@ import {
   deleteFeedPostLocal,
   editFeedPost,
   getFeedPost,
+  getFeedPostTry,
   fetchPostByLink,
   toggleCommentReaction,
   notifyFeedPostViewed,
@@ -1188,12 +1189,23 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         if (!snap || cancelled) return;
 
         // v4.32.333: режим правки тоже восстанавливается — см. planComposeRestore.
-        const restoredEditing = snap.editingPostId ? await getFeedPost(snap.editingPostId) : null;
+        // v4.32.1045: и спрашивается исходом чтения — отказ базы это не «поста
+        // нет», а черновик за него стирали с диска безвозвратно.
+        const targetRead = snap.editingPostId ? await getFeedPostTry(snap.editingPostId) : { post: null };
         if (cancelled) return;
+        const restoredEditing = targetRead?.post ?? null;
         const plan = planComposeRestore({
           editingPostId: snap.editingPostId,
-          editTargetExists: !!restoredEditing,
+          editTarget: targetRead === null ? 'unreadable' : restoredEditing ? 'found' : 'gone',
         });
+        if (plan.kind === 'defer') {
+          // Черновик остаётся на диске нетронутым: следующий запуск попробует
+          // снова. Композер не открываем — ни правкой (неизвестно, что правим),
+          // ни тем более новой публикацией.
+          log.warn('ui_feed_compose_recover_deferred', { reason: plan.reason });
+          showError(t('feed.editTargetUnreadable'));
+          return;
+        }
         if (plan.kind === 'discard') {
           log.warn('ui_feed_compose_recover_discarded', { reason: plan.reason });
           await clearPersistedComposeDraft(did);

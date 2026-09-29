@@ -90,19 +90,33 @@ export type ComposeDraft = {
  * Если правленой записи больше нет, черновик выбрасывается. Открыть его как
  * новую публикацию — то же самое разослать не спрошенное; текст правки дороже
  * не стоит.
+ *
+ * v4.32.1045: третий исход. Прежде вход был двузначным — «нашлась» или нет, —
+ * и «база не ответила» попадало во второе. Восстановление идёт на запуске,
+ * когда связка ключей чаще всего ещё не готова, а лента заблокирована первым
+ * проходом; получалось, что человеку стирали текст правки с диска и вдобавок
+ * говорили «публикацию уже удалили» про запись, которая цела. Стирание
+ * необратимо, поэтому неизвестность больше не выдаётся за отсутствие:
+ * черновик остаётся лежать, композер не открывается вовсе (открыть его «новой
+ * публикацией» — та самая рассылка не спрошенного, что запрещена выше), а
+ * следующий запуск спросит базу снова.
  */
+export type ComposeEditTarget = 'found' | 'gone' | 'unreadable';
+
 export type ComposeRestorePlan =
   | { kind: 'new' }
   | { kind: 'edit'; postId: string }
-  | { kind: 'discard'; reason: 'edit_target_gone' };
+  | { kind: 'discard'; reason: 'edit_target_gone' }
+  | { kind: 'defer'; reason: 'edit_target_unreadable' };
 
 export function planComposeRestore(input: {
   editingPostId: string | null;
-  /** Нашлась ли правленая запись. false и при «нет», и при «не прочиталась». */
-  editTargetExists: boolean;
+  /** Чем кончился поиск правленой записи: нашлась, нет её, или не прочиталось. */
+  editTarget: ComposeEditTarget;
 }): ComposeRestorePlan {
   if (!input.editingPostId) return { kind: 'new' };
-  if (!input.editTargetExists) return { kind: 'discard', reason: 'edit_target_gone' };
+  if (input.editTarget === 'unreadable') return { kind: 'defer', reason: 'edit_target_unreadable' };
+  if (input.editTarget === 'gone') return { kind: 'discard', reason: 'edit_target_gone' };
   return { kind: 'edit', postId: input.editingPostId };
 }
 
