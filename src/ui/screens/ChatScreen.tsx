@@ -891,6 +891,16 @@ function ChatThreadView({
    */
   const [blockUnknown, setBlockUnknown] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  /**
+   * v4.32.1056: строку разговора прочитать не удалось.
+   *
+   * `isMuted` на непрочитанной строке остаётся `false`, и меню предлагало
+   * «Беззвучно…» уже заглушённой переписке, а «Включить звук» не показывало
+   * вовсе. Выйти из тишины становилось нечем: глушит уведомления отдельная
+   * запись (`muteStore`), она продолжает работать, а единственная кнопка,
+   * которая её снимает, появляется только при `isMuted`.
+   */
+  const [convRowUnknown, setConvRowUnknown] = useState(false);
   const [mutedUntil, setMutedUntil] = useState<number | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const peerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1231,23 +1241,38 @@ function ChatThreadView({
   // Load and restore draft + mute state when opening chat
   useEffect(() => {
     if (!peerB64) return;
-    void listConversationsRead(activeProfileId).then((convs) => {
-      // v4.32.650: null — сбой чтения, а не «переписки нет». Разница важна для
-      // черновика: пустое поле ввода тогда ничего не говорит о том, что лежит
-      // в базе, и стирать её содержимое пустотой нельзя.
-      if (convs === null) {
-        draftRowUnknownRef.current = true;
+    let alive = true;
+    void (async () => {
+      // v4.32.1056: попыток несколько. Отказ здесь — занятая при открытии
+      // база, и он проходит сам; а одного промаха хватало, чтобы до выхода из
+      // переписки черновик не сохранялся, а тишину нечем было снять.
+      for (const pause of [0, 1_000, 4_000]) {
+        if (pause) await new Promise((r) => setTimeout(r, pause));
+        if (!alive) return;
+        const convs = await listConversationsRead(activeProfileId);
+        if (!alive) return;
+        // v4.32.650: null — сбой чтения, а не «переписки нет». Разница важна
+        // для черновика: пустое поле ввода тогда ничего не говорит о том, что
+        // лежит в базе, и стирать её содержимое пустотой нельзя.
+        if (convs === null) {
+          draftRowUnknownRef.current = true;
+          setConvRowUnknown(true);
+          continue;
+        }
+        draftRowUnknownRef.current = false;
+        setConvRowUnknown(false);
+        const conv = convs.find((c) => c.contactPubB64 === peerB64);
+        draftUnreadableRef.current = draftIsUnreadable(conv?.draftUnreadable);
+        if (conv?.draftText && hasReadableDraft(conv.draftText, conv.draftUnreadable)) setMsg(conv.draftText);
+        if (conv) {
+          setIsMuted(conv.muted);
+          setMutedUntil(conv.mutedUntil ?? null);
+        }
         return;
       }
-      draftRowUnknownRef.current = false;
-      const conv = convs.find((c) => c.contactPubB64 === peerB64);
-      draftUnreadableRef.current = draftIsUnreadable(conv?.draftUnreadable);
-      if (conv?.draftText && hasReadableDraft(conv.draftText, conv.draftUnreadable)) setMsg(conv.draftText);
-      if (conv) {
-        setIsMuted(conv.muted);
-        setMutedUntil(conv.mutedUntil ?? null);
-      }
-    });
+      log.warn('chat_conv_row_unread', {});
+    })();
+    return () => { alive = false; };
   }, [peerB64, activeProfileId]);
 
   // Load chat wallpaper
@@ -3600,7 +3625,11 @@ function ChatThreadView({
                     : 'Заблокировать';
                 const muteLabel = isMuted
                   ? (mutedUntil ? `Снять без звука (${muteRemainingLabel(mutedUntil)})` : 'Включить звук')
-                  : 'Беззвучно…';
+                  // v4.32.1056: подпись та же, что у списка запретов (v4.32.1048)
+                  // — про непрочитанное приложение говорит одним словом.
+                  : convRowUnknown
+                    ? 'Беззвучно… (настройка не прочиталась)'
+                    : 'Беззвучно…';
                 const autoTranslateLabel = autoTranslate ? '🌐 Автоперевод: вкл' : '🌐 Автоперевод: выкл';
                 Alert.alert('Чат', localDisplayName, [
                   {
@@ -3680,13 +3709,14 @@ function ChatThreadView({
                       // v4.32.630: обе записи гасили свой отказ, а шапка чата
                       // переключалась безусловно — она показывала не то, что в
                       // базе. Молчание обещано, уведомления идут.
+                      const unmute = async (): Promise<void> => {
+                        const okRow = await setConversationMuted(peerB64, activeProfileId, false);
+                        const okMute = await muteUnset('chat', peerB64);
+                        if (!okRow || !okMute) { showError('Не удалось включить звук'); return; }
+                        setIsMuted(false); setMutedUntil(null);
+                      };
                       if (isMuted) {
-                        void (async () => {
-                          const okRow = await setConversationMuted(peerB64, activeProfileId, false);
-                          const okMute = await muteUnset('chat', peerB64);
-                          if (!okRow || !okMute) { showError('Не удалось включить звук'); return; }
-                          setIsMuted(false); setMutedUntil(null);
-                        })();
+                        void unmute();
                       } else {
                         const snooze = (ms: number | null) => async () => {
                           const untilMs = ms === null ? null : Date.now() + ms;
@@ -3696,6 +3726,13 @@ function ChatThreadView({
                           setIsMuted(true); setMutedUntil(untilMs);
                         };
                         Alert.alert('Беззвучный режим', 'Выберите длительность:', [
+                          // v4.32.1056: строку не прочитали — переписка может
+                          // быть уже заглушена, и без этого пункта снять тишину
+                          // было нечем: «Включить звук» показывается только при
+                          // прочитанном `isMuted`.
+                          ...(convRowUnknown
+                            ? [{ text: 'Включить звук', onPress: () => void unmute() }]
+                            : []),
                           { text: '1 час', onPress: () => void snooze(3_600_000)() },
                           { text: '8 часов', onPress: () => void snooze(8 * 3_600_000)() },
                           { text: '1 день', onPress: () => void snooze(86_400_000)() },
