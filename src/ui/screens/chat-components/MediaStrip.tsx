@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Image, Text, View, useWindowDimensions } from 'react-native';
 import { AppPressable } from '../../components/AppPressable';
 import { VOICE_UNAVAILABLE_TEXT, VoicePlayer } from '../../components/VoiceMessage';
 import { isVoiceMessage, parseVoiceMeta } from '../../../core/social/voiceEnvelope';
@@ -45,7 +45,10 @@ export function MediaStrip({
   // is not an array — guard before `.map` to avoid thread-render crash.
   const entries = parseMediaCidsColumn(mediaCids);
   const isVoice = !!(messageText && isVoiceMessage(messageText));
-  const holdBack = gated && !wanted;
+  // v4.32.1063: `unknown` — настройку ещё читают, и это тоже «придержать»:
+  // первый кадр монтировал `<Image>` со шлюзовым адресом ДО того, как ответ
+  // приходил, и запрос уходил необратимо.
+  const holdBack = gated !== 'open' && !wanted;
   const { slots, retry } = useResolvedMediaSlots(isVoice || holdBack ? [] : entries, gateway);
 
   // Voice note — rendered as VoicePlayer, not image strip
@@ -89,9 +92,22 @@ export function MediaStrip({
   // запускает загрузку, дальше снимок открывается как обычно.
   if (holdBack) {
     return (
-      <AppPressable accessibilityRole="button" onPress={() => setWanted(true)}>
+      <AppPressable
+        accessibilityRole="button"
+        accessibilityLabel={`Медиа (${entries.length}) — нажмите, чтобы загрузить`}
+        // Пока настройку читают, содержимое подменено крутилкой: озвучке надо
+        // сказать «занято», иначе кнопка для неё просто молчит (v4.32.949).
+        accessibilityState={{ busy: gated === 'unknown' }}
+        onPress={() => setWanted(true)}
+      >
         <View style={{ width: 220, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: bubble.plate.fill }}>
-          <Text style={{ fontSize: 13, color: bubble.plate.ink.text }}>📷 Медиа ({entries.length}) — нажмите, чтобы загрузить</Text>
+          {/* Пока ответа нет, писать «нажмите, чтобы загрузить» нельзя: это
+              утверждало бы, что человек запретил, а его ещё не спросили. */}
+          {gated === 'unknown' ? (
+            <ActivityIndicator color={bubble.plate.ink.text} />
+          ) : (
+            <Text style={{ fontSize: 13, color: bubble.plate.ink.text }}>📷 Медиа ({entries.length}) — нажмите, чтобы загрузить</Text>
+          )}
         </View>
       </AppPressable>
     );

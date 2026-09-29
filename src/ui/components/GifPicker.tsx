@@ -133,19 +133,31 @@ export function GifBubble({ url, isMe }: { url: string | null; isMe: boolean }):
       </View>
     );
   }
-  if (gated && !wanted) {
+  // v4.32.1063: `unknown` — настройку ещё читают, и ходить на Tenor нельзя
+  // тоже. Прежде первый кадр уходил туда всегда, а заглушка появлялась уже
+  // поверх ушедшего запроса.
+  if (gated !== 'open' && !wanted) {
     const ink = bubble.plate.ink;
     return (
       <AppPressable
         onPress={() => setWanted(true)}
         accessibilityRole="button"
         accessibilityLabel="GIF — нажмите, чтобы загрузить"
+        // Пока настройку читают, содержимое подменено крутилкой: озвучке надо
+        // сказать «занято», иначе кнопка для неё просто молчит (v4.32.949).
+        accessibilityState={{ busy: gated === 'unknown' }}
       >
         <View style={[gb.wrap, { backgroundColor: bubble.plate.fill }]}>
-          <Ionicons name="cloud-download-outline" size={32} color={ink.secondary} />
-          <Text style={{ color: ink.text, fontSize: font.xs, marginTop: 4, textAlign: 'center' }}>
-            GIF — нажмите, чтобы загрузить
-          </Text>
+          {gated === 'unknown' ? (
+            <ActivityIndicator color={ink.secondary} />
+          ) : (
+            <>
+              <Ionicons name="cloud-download-outline" size={32} color={ink.secondary} />
+              <Text style={{ color: ink.text, fontSize: font.xs, marginTop: 4, textAlign: 'center' }}>
+                GIF — нажмите, чтобы загрузить
+              </Text>
+            </>
+          )}
         </View>
       </AppPressable>
     );

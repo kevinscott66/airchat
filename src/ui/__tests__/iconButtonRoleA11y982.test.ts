@@ -209,10 +209,26 @@ describe('ЗАКРЕПКА: у каждого такого места роль �
   it('заглушка «нажмите, чтобы загрузить» тоже кнопка — она вне обхода', () => {
     // Внутри у неё `View` с надписью, спутника-значка нет: правило её не
     // ловит, поэтому сторожим по имени.
+    //
+    // v4.32.1063: держимся за сам тег, а не за его написание в одну строку.
+    // Заглушка получила третье состояние («настройку ещё читают») и вместе с
+    // ним `accessibilityState`, тег переехал на несколько строк — и закрепка
+    // упала там, где роль никуда не девалась. Повод у неё прежний и живой:
+    // обход это место по-прежнему не видит (внутри `View`, а теперь ещё и
+    // развилка), значит роль сюда никто не поставит, кроме этой проверки.
     for (const rel of [['screens', 'chat-components', 'GroupPhotoGrid.tsx'],
                        ['screens', 'chat-components', 'MediaStrip.tsx']]) {
       const src = readFileSync(join(UI, ...rel), 'utf8');
-      expect(src).toContain('<AppPressable accessibilityRole="button" onPress={() => setWanted(true)}>');
+      const tags = [...src.matchAll(/<AppPressable\b/g)]
+        .map((m) => openingTag(src, m.index))
+        .filter((t) => t.includes('onPress={() => setWanted(true)}'));
+      expect([rel.join('/'), tags.length]).toEqual([rel.join('/'), 1]);
+      expect(tags[0]).toContain('accessibilityRole="button"');
+      // Одной роли мало: «кнопка» без имени звучит как «кнопка» и только.
+      expect(tags[0]).toContain('accessibilityLabel=');
+      // Место это обходом и правда не ловится — иначе закрепка сторожила бы
+      // то, что и без неё под правилом.
+      expect(sites.filter((s) => s.file === join(...rel) && s.tag === tags[0])).toEqual([]);
     }
   });
 });

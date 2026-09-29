@@ -63,7 +63,8 @@ describe('GIF слушается «Автозагрузки медиа» (v4.32.
   it('решение принимается до того, как картинка пойдёт грузиться', () => {
     const body = bubbleBody(PICKER);
     expect(body).toContain('const gated = useAutoDownloadGate();');
-    const gate = body.indexOf('if (gated && !wanted)');
+    // v4.32.1063: ответ хука стал трёхзначным — развилка та же, слова другие.
+    const gate = body.indexOf("if (gated !== 'open' && !wanted)");
     const image = body.indexOf('source={{ uri: url }}');
     expect(gate).toBeGreaterThan(0);
     expect(image).toBeGreaterThan(gate);
@@ -75,7 +76,7 @@ describe('GIF слушается «Автозагрузки медиа» (v4.32.
     // не будет: нажатие ничего не откроет.
     const body = bubbleBody(PICKER);
     const bad = body.indexOf('if (!url || errored)');
-    const gate = body.indexOf('if (gated && !wanted)');
+    const gate = body.indexOf("if (gated !== 'open' && !wanted)");
     expect(bad).toBeGreaterThan(0);
     expect(gate).toBeGreaterThan(bad);
   });

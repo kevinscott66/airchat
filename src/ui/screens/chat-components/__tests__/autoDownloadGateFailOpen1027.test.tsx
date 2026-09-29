@@ -27,6 +27,12 @@
  * ГРАНИЦЫ. Отсутствие записи по-прежнему значит «всегда»: это первый запуск,
  * а не беда, и так же читает её экран настроек (v4.32.248). Незнакомое
  * значение тоже остаётся «всегда» — разбор здесь не меняется.
+ *
+ * v4.32.1063: у хука стало три ответа вместо булева — `'open' | 'closed' |
+ * 'unknown'`, потому что первый кадр не ждал чтения вовсе (см.
+ * autoDownloadFirstFrame1063). Разбор настройки, ради которого стоит эта
+ * проверка, не изменился ни в одной ветке: ниже переписаны только слова,
+ * которыми называется тот же самый ответ.
  */
 import React, { act } from 'react';
 
@@ -84,8 +90,8 @@ const PICKER = (): string => codeOnly(read('src/ui/components/GifPicker.tsx'));
 const SETTINGS = (): string => codeOnly(read('src/ui/screens/SettingsScreen.tsx'));
 const LOCAL = (): string => codeOnly(read('src/core/storage/local.ts'));
 
-/** Ответ хука наружу. */
-let gated = false;
+/** Ответ хука наружу: 'open' | 'closed' | 'unknown' (v4.32.1063). */
+let gated: string = 'unknown';
 
 function Harness(): null {
   gated = useAutoDownloadGate();
@@ -95,7 +101,7 @@ function Harness(): null {
 let mounted: Array<{ unmount: () => void }> = [];
 
 /** Поднять хук и дождаться, пока асинхронное чтение осядет в состоянии. */
-async function ask(): Promise<boolean> {
+async function ask(): Promise<string> {
   let tree!: { unmount: () => void };
   await act(async () => {
     tree = TestRenderer.create(<Harness />);
@@ -116,14 +122,14 @@ beforeEach(() => {
   mockValue = null;
   mockReadFails = false;
   mockNetType = 'wifi';
-  gated = false;
+  gated = 'unknown';
 });
 
 describe('отказ базы — не разрешение качать', () => {
   it('базу не прочитали — ворота закрыты, а не открыты настежь', async () => {
     mockReadFails = true;
 
-    await expect(ask()).resolves.toBe(true);
+    await expect(ask()).resolves.toBe('closed');
   });
 
   it('в базе стоит «никогда» — и отказ чтения этого не отменяет', async () => {
@@ -132,14 +138,14 @@ describe('отказ базы — не разрешение качать', () =>
     mockValue = 'never';
     mockReadFails = true;
 
-    await expect(ask()).resolves.toBe(true);
+    await expect(ask()).resolves.toBe('closed');
   });
 
   it('режим Wi-Fi, а сеть не назвалась — тоже придерживаем', async () => {
     mockValue = 'wifi';
     mockNetType = null;
 
-    await expect(ask()).resolves.toBe(true);
+    await expect(ask()).resolves.toBe('closed');
   });
 });
 
@@ -147,27 +153,27 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: исправная база реш
   it('«всегда» — качаем без нажатия', async () => {
     mockValue = 'always';
 
-    await expect(ask()).resolves.toBe(false);
+    await expect(ask()).resolves.toBe('open');
   });
 
   it('«никогда» — придерживаем', async () => {
     mockValue = 'never';
 
-    await expect(ask()).resolves.toBe(true);
+    await expect(ask()).resolves.toBe('closed');
   });
 
   it('«только Wi-Fi» на Wi-Fi — качаем', async () => {
     mockValue = 'wifi';
     mockNetType = 'wifi';
 
-    await expect(ask()).resolves.toBe(false);
+    await expect(ask()).resolves.toBe('open');
   });
 
   it('«только Wi-Fi» на мобильном — придерживаем', async () => {
     mockValue = 'wifi';
     mockNetType = 'cellular';
 
-    await expect(ask()).resolves.toBe(true);
+    await expect(ask()).resolves.toBe('closed');
   });
 
   it('ГРАНИЦА: записи нет — это первый запуск, а не беда', async () => {
@@ -175,13 +181,13 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: исправная база реш
     // настроек (v4.32.248). Правка не имеет права трогать этот случай.
     mockValue = null;
 
-    await expect(ask()).resolves.toBe(false);
+    await expect(ask()).resolves.toBe('open');
   });
 
   it('ГРАНИЦА: незнакомое значение по-прежнему читается как «всегда»', async () => {
     mockValue = 'мусор';
 
-    await expect(ask()).resolves.toBe(false);
+    await expect(ask()).resolves.toBe('open');
   });
 });
 
@@ -194,10 +200,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('закрытые ворота человеку не стоят ничего, кроме нажатия', () => {
     for (const [name, src] of Object.entries({ переписка: STRIP(), группа: GRID() })) {
-      expect([name, src.includes('const holdBack = gated && !wanted;')]).toEqual([name, true]);
+      // v4.32.1063: та же развилка, новые слова — ответ хука стал трёхзначным.
+      expect([name, src.includes("const holdBack = gated !== 'open' && !wanted;")]).toEqual([name, true]);
       expect([name, src.includes('onPress={() => setWanted(true)}')]).toEqual([name, true]);
     }
-    expect(PICKER()).toContain('if (gated && !wanted)');
+    expect(PICKER()).toContain("if (gated !== 'open' && !wanted)");
     expect(PICKER()).toContain('GIF — нажмите, чтобы загрузить');
   });
 
@@ -223,6 +230,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
 describe('ЗАКРЕПКА', () => {
   it('настройка спрашивается тремя состояниями, а не kvGet', () => {
+    // v4.32.1063: `setGated(true)` здесь звалось `setGated`, а стало `put`
+    // с именованным исходом. Повод прежний: обе развилки отказа обязаны
+    // вести к придержанному пузырю.
     const src = GATE();
     expect(src).toContain("await kvTryGet('auto_download_media')");
     expect(src).not.toContain("kvGet('auto_download_media')");
@@ -237,7 +247,7 @@ describe('ЗАКРЕПКА', () => {
     // одному и тому же придержанному пузырю.
     const at = src.indexOf('} catch {');
     expect(at).toBeGreaterThan(0);
-    expect(src.slice(at, at + 90)).toContain('setGated(true)');
-    expect(src.match(/setGated\(true\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(src.slice(at, at + 90)).toContain("put('closed')");
+    expect(src.match(/put\('closed'\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 });

@@ -3,10 +3,19 @@ import NetInfo from '@react-native-community/netinfo';
 import { kvTryGet } from '../../../core/storage/local';
 
 /**
+ * Что сейчас с «Автозагрузкой медиа» (v4.32.1063).
+ *
+ * `unknown` — настройку ещё читают. Это не «можно» и не «нельзя»: в сеть не
+ * ходим, но и заглушку «нажмите, чтобы загрузить» не показываем — она
+ * утверждала бы, что человек это запретил, а его пока не спросили.
+ */
+export type AutoDownloadGate = 'unknown' | 'open' | 'closed';
+
+/**
  * Настройка «Автозагрузка медиа»: 'always' | 'wifi' | 'never'.
  *
- * Возвращает true, когда скачивать самим НЕЛЬЗЯ и вместо снимка нужно
- * показать «нажмите, чтобы загрузить».
+ * `open` — скачивать можно; `closed` — вместо снимка показать «нажмите, чтобы
+ * загрузить»; `unknown` — ответа ещё нет.
  *
  * v4.32.178: настройка появилась в личных чатах.
  * v4.32.248: вынесена из MediaStrip. Во-первых, в группах её не спрашивали
@@ -30,36 +39,61 @@ import { kvTryGet } from '../../../core/storage/local';
  * получил IP-адрес и время. По той же причине придерживает и отказ
  * `NetInfo.fetch()` в режиме «только Wi-Fi»: не узнали сеть — не тратим
  * мобильный трафик.
+ *
+ * v4.32.1063: третий ответ — «ещё не знаем». Прежде хук начинал с `false`,
+ * то есть «качать можно», а узнать настоящий ответ мог только внутри
+ * асинхронного эффекта — уже ПОСЛЕ первой отрисовки. Ровно этим вся правка
+ * v4.32.1027 и обходилась: сколько бы состояний ни различало чтение, первый
+ * кадр не ждал его вовсе. А в первом кадре запрос уже уходит: у обычного CID
+ * `initialSlot` (см. `useResolvedMediaUrls`) синхронно собирает адрес шлюза и
+ * отдаёт `phase: 'ready'`, так что `<Image>` монтируется в том же коммите, а
+ * пузырь GIF тем же кадром идёт на Tenor. Перерисовка, которая приходит
+ * следом, рисует поверх этого «нажмите, чтобы загрузить» — то есть человек,
+ * выбравший «Никогда», видел подтверждение, что запрет работает, ровно в тот
+ * момент, когда чужой сервер уже получил его адрес и время. Отменить нечем,
+ * поднимается любым собеседником, приславшим GIF.
+ *
+ * Отсюда и `unknown` вместо «пока нельзя»: держать ворота закрытыми на первом
+ * кадре обязательно, но называть это запретом нельзя — у большинства выбрано
+ * «всегда», и мигать им заглушкой про запрет значит врать. Пузырь на это
+ * время рисует ожидание, и нажатие на него по-прежнему грузит.
  */
-export function useAutoDownloadGate(): boolean {
-  const [gated, setGated] = useState(false);
+export function useAutoDownloadGate(): AutoDownloadGate {
+  const [gate, setGate] = useState<AutoDownloadGate>('unknown');
   useEffect(() => {
     let cancelled = false;
+    const put = (next: AutoDownloadGate): void => {
+      if (!cancelled) setGate(next);
+    };
     void (async () => {
       const got = await kvTryGet('auto_download_media');
       if (got === null) {
-        if (!cancelled) setGated(true);
+        put('closed');
         return;
       }
       // Записи нет — это первый запуск, а не беда: значение по умолчанию
       // «всегда», и таким же его показывает экран настроек (v4.32.248).
       const mode = got.value ?? 'always';
       if (mode === 'never') {
-        if (!cancelled) setGated(true);
+        put('closed');
         return;
       }
       if (mode === 'wifi') {
         try {
           const st = await NetInfo.fetch();
-          if (!cancelled) setGated(st.type !== 'wifi');
+          put(st.type !== 'wifi' ? 'closed' : 'open');
         } catch {
-          if (!cancelled) setGated(true);
+          put('closed');
         }
         return;
       }
-      if (!cancelled) setGated(false);
-    })();
+      put('open');
+      // v4.32.1063: `unknown` теперь видно на экране, поэтому у чтения не
+      // должно остаться пути, на котором ответ не придёт никогда. Сейчас
+      // такого нет (`kvTryGet` не бросает), но ожидание без конца стоило бы
+      // дороже, чем эта строка.
+    })().catch(() => put('closed'));
     return () => { cancelled = true; };
   }, []);
-  return gated;
+  return gate;
 }

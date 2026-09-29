@@ -47,7 +47,9 @@ export function GroupPhotoGrid({
    */
   const gated = useAutoDownloadGate();
   const [wanted, setWanted] = useState(false);
-  const holdBack = gated && !wanted;
+  // v4.32.1063: `unknown` — ответа ещё нет, и это тоже «придержать»: первый
+  // кадр уходил на шлюз, не дождавшись настройки.
+  const holdBack = gated !== 'open' && !wanted;
   const { slots, retry } = useResolvedMediaSlots(holdBack ? [] : entries, gateway);
   /** Просмотрщик листает только готовые адреса, поэтому индекс считаем по ним. */
   const ready = slots.map((s) => s.url).filter((u): u is string => typeof u === 'string' && u.length > 0);
@@ -62,11 +64,22 @@ export function GroupPhotoGrid({
 
   if (holdBack) {
     return (
-      <AppPressable accessibilityRole="button" onPress={() => setWanted(true)}>
+      <AppPressable
+        accessibilityRole="button"
+        accessibilityLabel={`Медиа (${entries.length}) — нажмите, чтобы загрузить`}
+        // Пока настройку читают, содержимое подменено крутилкой: озвучке надо
+        // сказать «занято», иначе кнопка для неё просто молчит (v4.32.949).
+        accessibilityState={{ busy: gated === 'unknown' }}
+        onPress={() => setWanted(true)}
+      >
         <View style={{ width: TOTAL_W, height: 80, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: tileBackground }}>
-          <Text style={{ fontSize: 13, color: mutedColor }}>
-            📷 Медиа ({entries.length}) — нажмите, чтобы загрузить
-          </Text>
+          {gated === 'unknown' ? (
+            <ActivityIndicator color={mutedColor} />
+          ) : (
+            <Text style={{ fontSize: 13, color: mutedColor }}>
+              📷 Медиа ({entries.length}) — нажмите, чтобы загрузить
+            </Text>
+          )}
         </View>
       </AppPressable>
     );
