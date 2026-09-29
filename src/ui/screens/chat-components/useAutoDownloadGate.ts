@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import NetInfo from '@react-native-community/netinfo';
-import { kvGet } from '../../../core/storage/local';
+import { kvTryGet } from '../../../core/storage/local';
 
 /**
  * Настройка «Автозагрузка медиа»: 'always' | 'wifi' | 'never'.
@@ -19,13 +19,31 @@ import { kvGet } from '../../../core/storage/local';
  * Режим читается один раз при появлении пузыря на экране: смена настройки
  * подхватится на следующем открытии чата. Опрашивать хранилище на каждый
  * пузырь при каждой перерисовке дороже, чем польза от мгновенной реакции.
+ *
+ * v4.32.1027: настройка спрашивается тремя состояниями, и непрочитанная
+ * запись придерживает пузырь. Раньше здесь стоял `kvGet(...) ?? 'always'`,
+ * то есть отказ базы отвечал самым разрешительным из трёх вариантов —
+ * ровно тем, который человек и запрещал. Хук поднимается на каждый
+ * медиа-пузырь, десятками разом, в ту самую секунду, когда база занята
+ * чтением истории. Цена ошибки несимметрична: закрытые ворота стоят одного
+ * нажатия, открытые — необратимого похода на чужой сервер, который уже
+ * получил IP-адрес и время. По той же причине придерживает и отказ
+ * `NetInfo.fetch()` в режиме «только Wi-Fi»: не узнали сеть — не тратим
+ * мобильный трафик.
  */
 export function useAutoDownloadGate(): boolean {
   const [gated, setGated] = useState(false);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const mode = (await kvGet('auto_download_media')) ?? 'always';
+      const got = await kvTryGet('auto_download_media');
+      if (got === null) {
+        if (!cancelled) setGated(true);
+        return;
+      }
+      // Записи нет — это первый запуск, а не беда: значение по умолчанию
+      // «всегда», и таким же его показывает экран настроек (v4.32.248).
+      const mode = got.value ?? 'always';
       if (mode === 'never') {
         if (!cancelled) setGated(true);
         return;
@@ -35,7 +53,7 @@ export function useAutoDownloadGate(): boolean {
           const st = await NetInfo.fetch();
           if (!cancelled) setGated(st.type !== 'wifi');
         } catch {
-          if (!cancelled) setGated(false);
+          if (!cancelled) setGated(true);
         }
         return;
       }

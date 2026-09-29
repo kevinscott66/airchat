@@ -45,7 +45,10 @@ function bubbleBody(src: string): string {
 describe('GIF слушается «Автозагрузки медиа» (v4.32.939)', () => {
   it('ПРОВЕРКА НЕ ПУСТАЯ: пузырь и настройка на месте', () => {
     expect(PICKER).toContain('export function GifBubble(');
-    expect(GATE).toContain("kvGet('auto_download_media')");
+    // v4.32.1027: хук перешёл на kvTryGet — отказ базы больше не выдаётся
+    // за «всегда». Повод у пиньона прежний: GIF опирается на общий хук, и
+    // тот и правда читает именно эту запись.
+    expect(GATE).toContain("kvTryGet('auto_download_media')");
     expect(GATE).toContain('export function useAutoDownloadGate()');
   });
 
@@ -88,6 +91,6 @@ describe('GIF слушается «Автозагрузки медиа» (v4.32.
     expect(PICKER).toContain(
       "import { useAutoDownloadGate } from '../screens/chat-components/useAutoDownloadGate';"
     );
-    expect(PICKER).not.toContain("kvGet('auto_download_media')");
+    expect(PICKER).not.toContain("auto_download_media");
   });
 });
