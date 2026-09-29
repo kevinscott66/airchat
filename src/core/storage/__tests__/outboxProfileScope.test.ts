@@ -237,7 +237,10 @@ describe('вызывающие стороны передают профиль', 
   });
 
   it('баннер спрашивает профиль на каждом подсчёте', () => {
-    expect(BANNER).toContain('outboxCount(profileManager.getActiveProfile()?.id ?? null)');
+    // v4.32.1042: подсчёт стал исходом (`outboxCountTry`) — отказ базы больше
+    // не выглядит как пустая очередь. Повод у закрепки прежний: номер профиля
+    // берётся в момент подсчёта, а не запоминается на срок жизни экрана.
+    expect(BANNER).toContain('outboxCountTry(profileManager.getActiveProfile()?.id ?? null)');
   });
 
   it('мёртвой обёртки, которая считала очередь без профиля, больше нет', () => {

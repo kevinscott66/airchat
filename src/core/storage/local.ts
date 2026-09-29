@@ -3082,7 +3082,9 @@ export async function outboxEnqueue(
  * фоне. `null` — профилей ещё нет вовсе (установка без сид-фразы): тогда
  * считаем всё, как раньше.
  */
-export async function outboxCount(ownerProfileId: number | null): Promise<number> {
+export async function outboxCountTry(
+  ownerProfileId: number | null
+): Promise<{ n: number } | null> {
   try {
     const d = await db();
     const mine = ownerProfileId === null
@@ -3094,11 +3096,20 @@ export async function outboxCount(ownerProfileId: number | null): Promise<number
       `SELECT COUNT(*) as n FROM outbox WHERE COALESCE(attempts, 0) < ?${mine}`,
       args
     );
-    return r?.n ?? 0;
+    return { n: r?.n ?? 0 };
   } catch (e) {
     log.warn('outbox_count_failed', { err: e instanceof Error ? e.message : String(e) });
-    return 0;
+    return null;
   }
+}
+
+/**
+ * То же числом. `0` тут значит и «очередь пуста», и «спросить не вышло», —
+ * форма для тех, кому этого довольно. Полоске «В очереди на отправку» не
+ * довольно: см. v4.32.1042 у OfflineStatus.
+ */
+export async function outboxCount(ownerProfileId: number | null): Promise<number> {
+  return (await outboxCountTry(ownerProfileId))?.n ?? 0;
 }
 
 /**
