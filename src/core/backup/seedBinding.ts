@@ -139,8 +139,21 @@ function bindingError(status: number): Error {
   return new Error(`Облачный сервер недоступен (HTTP ${status}).`);
 }
 
-/** Какие входы включены на сервере. Пустой список — кнопок не рисуем. */
-export async function listSeedBindingProviders(): Promise<SeedBindingProvider[]> {
+/**
+ * Какие входы включены на сервере. Пустой список — входов нет, кнопок не
+ * рисуем; `null` — спросить не вышло.
+ *
+ * v4.32.1068: ответов стало два вместо одного. Прежде и молчащий сервер, и
+ * отказ разбора, и брошенный запрос отвечали пустым списком — тем же, каким
+ * сервер говорит «вход через Apple ID выключен». Экран восстановления делает
+ * из этого списка кнопку «Войти через Apple ID»: не спросив сервер, он просто
+ * не рисовал её и ничего не говорил. Человек, у которого слова лежат только в
+ * конверте на сервере, видит при этом единственный путь — «введите секретные
+ * слова», которых у него нет.
+ */
+export async function trySeedBindingProviders(): Promise<SeedBindingProvider[] | null> {
+  // Облака в сборке нет вовсе — это твёрдый ответ, а не неизвестность:
+  // спрашивать некого и входу неоткуда взяться (v4.32.596).
   const base = cloudBaseUrl();
   if (!base) return [];
   try {
@@ -158,12 +171,12 @@ export async function listSeedBindingProviders(): Promise<SeedBindingProvider[]>
         return Array.isArray(body.providers) ? body.providers : null;
       },
     );
-    if (!providers) return [];
+    if (!providers) return null;
     return providers.filter(
       (value): value is SeedBindingProvider => value === 'apple' || value === 'google',
     );
   } catch {
-    return [];
+    return null;
   }
 }
 

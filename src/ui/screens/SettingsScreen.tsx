@@ -110,7 +110,12 @@ import type { CloudVaultCopyHint } from '../../core/backup/cloudVaultCopy';
 // v4.32.595: привязка секретных слов к Apple ID — второй путь домой, когда
 // слова потеряны. Сервер хранит только шифртекст, ключ выводится из пароля
 // приложения, а Apple отвечает лишь на вопрос «кто пришёл» (см. seedBinding).
-import { deleteSeedBinding, listSeedBindingProviders, putSeedBinding } from '../../core/backup/seedBinding';
+import { deleteSeedBinding, putSeedBinding, trySeedBindingProviders } from '../../core/backup/seedBinding';
+import {
+  appleAskState,
+  APPLE_ASK_UNKNOWN_SETTINGS,
+  APPLE_ASK_UNKNOWN_TITLE,
+} from '../utils/appleAskState';
 import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 // v4.32.540: фотография профиля — отдельное решение от «когда я в сети»:
 // лицо прячут не по тем же причинам, по которым прячут активность.
@@ -264,6 +269,12 @@ function SettingsScreenImpl({
    * Apple, а дёргать системное окно ради надписи в настройках нечестно.
    */
   const [appleBindReady, setAppleBindReady] = useState(false);
+  /**
+   * v4.32.1068: сервер не ответил про входы. Прежде это приходило сюда тем же
+   * пустым списком, что и «вход выключен», и строка привязки просто исчезала —
+   * вместе со строкой «Слова привязаны к Apple ID» у тех, у кого привязка есть.
+   */
+  const [appleBindUnknown, setAppleBindUnknown] = useState(false);
   /**
    * v4.32.1016: состояний у подсказки четыре, а не три.
    *
@@ -1089,14 +1100,16 @@ function SettingsScreenImpl({
       }
       if (!alive) return;
       setAppleHint(hint);
-      let providers: readonly string[] = [];
+      let providers: readonly string[] | null = null;
       try {
-        providers = await listSeedBindingProviders();
+        providers = await trySeedBindingProviders();
       } catch {
-        return;
+        providers = null;
       }
-      if (!alive || !providers.includes('apple')) return;
-      setAppleBindReady(true);
+      if (!alive) return;
+      const ask = appleAskState(providers);
+      setAppleBindUnknown(ask === 'unknown');
+      if (ask === 'ready') setAppleBindReady(true);
     })();
     return () => { alive = false; };
   }, []);
@@ -2416,6 +2429,19 @@ function SettingsScreenImpl({
             ? <ActivityIndicator color={colors.textMuted} />
             : <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />}
         </AppPressable>
+      ) : null}
+
+      {/* Нажимать тут нечего: сервер не ответил, и привязать сейчас не выйдет.
+          Но и пустого места на этом месте быть не должно — оно читается как
+          «такого способа нет» (v4.32.1068). */}
+      {appleBindUnknown && !appleBindReady && hasAppPassword ? (
+        <View style={styles.linkRow} testID="settings_bind_apple_unknown">
+          <Ionicons name="logo-apple" size={22} color={colors.textMuted} />
+          <View style={styles.rowBody}>
+            <Text style={[styles.label, { color: colors.warning }]}>{APPLE_ASK_UNKNOWN_TITLE}</Text>
+            <Text style={styles.desc}>{APPLE_ASK_UNKNOWN_SETTINGS}</Text>
+          </View>
+        </View>
       ) : null}
 
       {/*

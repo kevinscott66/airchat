@@ -43,7 +43,7 @@ jest.mock('../../logger', () => ({
 }));
 
 import { lookupSyncUsername } from '../../sync/syncApi';
-import { listSeedBindingProviders } from '../../backup/seedBinding';
+import { trySeedBindingProviders } from '../../backup/seedBinding';
 
 /** Срок у обоих один и тот же — 15 секунд; ждём заведомо дольше. */
 const WAY_PAST_ANY_DEADLINE_MS = 60_000;
@@ -117,16 +117,18 @@ describe('поиск юзернейма', () => {
 });
 
 describe('список входов для привязки слов', () => {
-  it('молчание сервера кончается пустым списком, а не вечным ожиданием', async () => {
+  it('молчание сервера кончается ответом, а не вечным ожиданием', async () => {
+    // v4.32.1068: ответом стало `null` — «спросить не вышло». Повод у проверки
+    // прежний и живой: запрос обрывается по сроку, а не висит навсегда.
     const state = serveSilence();
-    const out = await settleWithin(listSeedBindingProviders());
+    const out = await settleWithin(trySeedBindingProviders());
     expect(state.calls).toBe(1);
-    expect(out).toEqual([]);
+    expect(out).toBeNull();
   });
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: отвечающий сервер разбирается как раньше', async () => {
     serveJson({ providers: ['apple', 'нет-такого', 'google'] });
-    const out = await settleWithin(listSeedBindingProviders());
+    const out = await settleWithin(trySeedBindingProviders());
     expect(out).toEqual(['apple', 'google']);
   });
 });

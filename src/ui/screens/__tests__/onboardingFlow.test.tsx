@@ -93,7 +93,7 @@ jest.mock('../../../core/backup/cloudVault', () => ({
 jest.mock('../../../core/backup/seedBinding', () => ({
   decryptSeedBinding: jest.fn(),
   fetchSeedBinding: jest.fn(),
-  listSeedBindingProviders: jest.fn(async () => []),
+  trySeedBindingProviders: jest.fn(async () => []),
 }));
 jest.mock('../../../core/auth/appleSignIn', () => ({
   isAppleSignInAvailable: jest.fn(async () => false),

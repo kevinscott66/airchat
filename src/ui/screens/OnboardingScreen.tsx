@@ -49,10 +49,17 @@ import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/clo
 import {
   decryptSeedBinding,
   fetchSeedBinding,
-  listSeedBindingProviders,
+  trySeedBindingProviders,
   type SeedBindingEnvelope,
 } from '../../core/backup/seedBinding';
 import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
+import {
+  appleAskState,
+  APPLE_ASK_RETRY,
+  APPLE_ASK_UNKNOWN_RESTORE,
+  APPLE_ASK_UNKNOWN_TITLE,
+  type AppleAskState,
+} from '../utils/appleAskState';
 
 type Step = 'welcome' | 'restore' | 'showSeed' | 'verifySeed';
 
@@ -224,7 +231,14 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
    * вход через Apple отвечает «кто пришёл», а не «пустить».
    */
   const [appleBinding, setAppleBinding] = useState<SeedBindingEnvelope | null>(null);
-  const [appleReady, setAppleReady] = useState(false);
+  /**
+   * v4.32.1068: три ответа вместо двух. `'off'` — сервер сказал «входа нет»,
+   * `'unknown'` — спросить не вышло, и тогда вместо кнопки стоят слова.
+   */
+  const [appleAsk, setAppleAsk] = useState<AppleAskState>('off');
+  /** Повторная попытка спросить сервер: счётчик поднимает эффект заново. */
+  const [appleAskTick, setAppleAskTick] = useState(0);
+  const appleReady = appleAsk === 'ready';
   const [cloudReady, setCloudReady] = useState(false);
   /**
    * v4.32.651: на устройстве есть запись фразы, но открыть её не удалось.
@@ -363,11 +377,11 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
       // Кнопку рисуем, только если вход есть и на телефоне, и на сервере.
       // Мёртвая кнопка хуже отсутствующей: она обещает и не делает.
       if (!(await isAppleSignInAvailable())) return;
-      const providers = await listSeedBindingProviders();
-      if (!cancelled) setAppleReady(providers.includes('apple'));
+      const providers = await trySeedBindingProviders();
+      if (!cancelled) setAppleAsk(appleAskState(providers));
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [appleAskTick]);
 
   const handleAppleRestore = async (): Promise<void> => {
     setBusy(true);
@@ -553,6 +567,31 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
     void handleAppleRestore();
   };
 
+  /**
+   * Слова вместо кнопки, когда сервер про вход не ответил (v4.32.1068).
+   *
+   * Кнопку рисовать нельзя — она не сработает; молчать нельзя тем более:
+   * человек, привязавший слова к Apple ID, прочтёт пустое место как «такого
+   * входа тут нет» и решит, что аккаунт потерян. Повторить можно прямо
+   * отсюда — эффект поднимается счётчиком.
+   */
+  const appleAskNote = (testID: string): React.ReactElement => (
+    <>
+      <Text style={styles.warn} testID={testID}>{APPLE_ASK_UNKNOWN_TITLE}</Text>
+      <Text style={styles.encHint}>{APPLE_ASK_UNKNOWN_RESTORE}</Text>
+      <AppPressable
+        style={styles.linkBtn}
+        onPress={() => setAppleAskTick((t) => t + 1)}
+        disabled={busy}
+        testID={`${testID}_retry`}
+        accessibilityRole="button"
+        accessibilityLabel={APPLE_ASK_RETRY}
+      >
+        <Text style={styles.linkText}>{APPLE_ASK_RETRY}</Text>
+      </AppPressable>
+    </>
+  );
+
   const doWipeAndGoBack = useCallback(async (): Promise<void> => {
     // Важно: чистим реально сохранённые seed/флаги и ключи, иначе boot пропустит экран сидки.
     //
@@ -702,6 +741,7 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
               </Text>
             </>
           ) : null}
+          {appleAsk === 'unknown' ? appleAskNote('welcome_apple_unknown') : null}
         </GlassSurface>
         </WelcomeLayout>
       </ScrollView>
@@ -762,6 +802,9 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
                   </Text>
                 </>
               ) : null}
+              {appleAsk === 'unknown' && !appleBinding && !isBackupPaste
+                ? appleAskNote('restore_apple_unknown')
+                : null}
               {appleBinding ? (
                 <AppPressable
                   style={styles.linkBtn}

@@ -226,7 +226,7 @@ describe('свидетелю на экране разрешено не знат�
   it('подсказку читают до сервера: его отказ больше не уносит чтение', () => {
     const s = settings();
     const hint = s.indexOf('const cell = await scopedKvTryGet(APPLE_BINDING_HINT_KEY);');
-    const providers = s.indexOf('providers = await listSeedBindingProviders();');
+    const providers = s.indexOf('providers = await trySeedBindingProviders();');
 
     expect(hint).toBeGreaterThan(-1);
     expect(providers).toBeGreaterThan(hint);
