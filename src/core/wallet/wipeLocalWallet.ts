@@ -64,10 +64,26 @@ const SECRET_KEYS: readonly string[] = [
 ];
 
 export type WalletWipeResult = {
-  /** Ни один секрет не пережил сброс. Единственный признак, по которому можно говорить «данные удалены». */
+  /** Ни один секрет не пережил сброс. Отвечает только за SecureStore — см. `leftBehind`. */
   ok: boolean;
   /** Шаги, упавшие по дороге. Сброс продолжается несмотря на них. */
   failedSteps: string[];
+  /**
+   * Из упавших — те, после которых от прежнего владельца что-то осталось
+   * (v4.32.1017).
+   *
+   * `ok` отвечает на вопрос «пуст ли SecureStore», а человек, нажавший
+   * «выйти и удалить данные», спрашивает другое: «можно ли отдавать
+   * телефон». Вопросы расходятся ровно там, где шаг стирания честно сказал,
+   * что не справился. Самый ясный случай — `local_db`: он бросает после
+   * того, как ДВАЖДЫ перечитал каталог и увидел файл базы на месте, — и до
+   * v4.32.1017 этот бросок не доходил никуда, потому что вызывающий смотрел
+   * только на `ok`.
+   *
+   * Остановка служб сюда не попадает: погасший слушатель или неснятый
+   * таймер не переживут перезапуск, который идёт сразу за сбросом.
+   */
+  leftBehind: string[];
   /** Ключи SecureStore, оставшиеся на устройстве после двух попыток удаления. */
   survivors: string[];
 };
@@ -83,12 +99,18 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
  * устройстве», получил сообщение об ошибке — и остался с нетронутой
  * сид-фразой, ключом и всей перепиской на диске.
  */
-async function step(name: string, fn: () => unknown, failed: string[]): Promise<void> {
+async function step(
+  name: string,
+  fn: () => unknown,
+  failed: string[],
+  leftBehind?: string[]
+): Promise<void> {
   try {
     await fn();
   } catch (e) {
     failed.push(name);
-    log.warn('wallet_wipe_step_failed', { step: name, err: errText(e) });
+    if (leftBehind) leftBehind.push(name);
+    log.warn('wallet_wipe_step_failed', { step: name, kind: leftBehind ? 'erase' : 'stop', err: errText(e) });
   }
 }
 
@@ -130,17 +152,30 @@ async function survivingSecrets(): Promise<string[]> {
 export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   log.info('wallet_wipe_start');
   const failed: string[] = [];
-  await step('cancel_dialog_backup', () => cancelScheduledDialogBackup(), failed);
-  await step('auth_data', () => authGuard.clearAllAuthData(), failed);
-  await step('feed_inbox_listener', () => stopFeedInboxListener(), failed);
+  const leftBehind: string[] = [];
+  /**
+   * Шаг-остановка: снять слушателя, погасить таймер, закрыть соединение.
+   * Провал ничего за собой не оставляет — перезапуск идёт сразу за сбросом.
+   */
+  const stop = (name: string, fn: () => unknown): Promise<void> => step(name, fn, failed);
+  /**
+   * Шаг-стирание: после его провала от прежнего владельца остаётся файл,
+   * секрет или поставленное уведомление. Вид проставлен на каждом месте
+   * вызова, а не списком в стороне: список рядом с тридцатью четырьмя
+   * шагами разошёлся бы с ними на первом же добавленном.
+   */
+  const erase = (name: string, fn: () => unknown): Promise<void> => step(name, fn, failed, leftBehind);
+  await stop('cancel_dialog_backup', () => cancelScheduledDialogBackup());
+  await erase('auth_data', () => authGuard.clearAllAuthData());
+  await stop('feed_inbox_listener', () => stopFeedInboxListener());
   // v4.32.174: presence heartbeat держал интервал-таймер + pubsub подписку, после
   // wipe они продолжали палить ключом следующего владельца устройства.
-  await step('presence_broadcast', () => stopPresenceBroadcast(), failed);
+  await stop('presence_broadcast', () => stopPresenceBroadcast());
   // v4.32.176: диспозим push-сервис (onMessage/onTokenRefresh listeners
   // оставались привязаны к старой identity) + сбрасываем in-memory блок-лист
   // чтобы следующий владелец устройства не унаследовал blocked контакты.
-  await step('push_service', () => disposePushNotificationService(), failed);
-  await step('rate_limiter', () => rateLimiter.resetForProfileSwitch(), failed);
+  await stop('push_service', () => disposePushNotificationService());
+  await stop('rate_limiter', () => rateLimiter.resetForProfileSwitch());
   // v4.32.923: ключ агента — это право включить туннель и переписать
   // настройки приложения, и сброс не трогал его вовсе. «Удалить данные на
   // устройстве» отвечало `ok: true`, а прежний владелец сохранял управление
@@ -151,42 +186,42 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // Мост гасим здесь же, и порядок не косметика: живая подписка держит
   // выведенные из секрета темы в памяти и принимает команды до самого
   // перезапуска — сколько бы ключей мы ни стёрли с диска после неё.
-  await step('agent_bridge', async () => {
+  await erase('agent_bridge', async () => {
     const { stopAgentBridge } = await import('../bridge/agentBridge');
     stopAgentBridge();
     const { clearBridgeSecrets } = await import('../bridge/agentBridgeKeys');
     await clearBridgeSecrets();
-  }, failed);
-  await step('live_account_sync', async () => {
+  });
+  await stop('live_account_sync', async () => {
     const { cancelLiveAccountSync } = await import('../sync/liveAccountSync');
     cancelLiveAccountSync();
-  }, failed);
+  });
   // v4.32.192 (Round-22 #8): live-location intervals и опрос планировщика
   // продолжают срабатывать со старой парой ключей между wipe() и перезапуском.
   //
   // v4.32.615: подписки на сторис в этом списке больше нет — вместе с самим
   // pubsub-путём (см. storyService). Сторис приходят личными сообщениями, а их
   // слушатель снимается вместе с messaging.
-  await step('live_location', async () => {
+  await stop('live_location', async () => {
     const { stopAllLiveLocSessions } = await import('../social/liveLocationService');
     stopAllLiveLocSessions();
-  }, failed);
-  await step('scheduler', async () => {
+  });
+  await stop('scheduler', async () => {
     const { stopScheduler } = await import('../social/scheduledMessages');
     stopScheduler();
-  }, failed);
-  await step('ipfs_client', () => resetIpfsClient(), failed);
-  await step('messaging_service', () => disposeMessagingService(), failed);
-  await step('call_service', () => disposeCallService(), failed);
+  });
+  await stop('ipfs_client', () => resetIpfsClient());
+  await stop('messaging_service', () => disposeMessagingService());
+  await stop('call_service', () => disposeCallService());
   // v4.32.857: отложенные напоминания о сообщениях. Снимать их не умел никто —
   // во всём проекте не было ни одного вызова отмены, — и поставленное «через
   // неделю» срабатывало уже после сброса: на телефоне, где от этой личности не
   // осталось ничего, всплывала строка с текстом её сообщения. Тем же заходом
   // гасится и то, что уже висит в шторке.
-  await step('reminders', async () => {
+  await erase('reminders', async () => {
     const { cancelAllReminders } = await import('../../notifications/reminderNotifications');
     await cancelAllReminders();
-  }, failed);
+  });
   // v4.32.314: если seed-фразу копировали только что, она ещё в буфере обмена
   // — а из неё восстанавливается ровно та личность, которую мы сейчас стираем.
   // v4.32.834: шаг переехал сюда с самого конца. Расписка об отложенной уборке
@@ -194,34 +229,34 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // `wipeLocalDatabase` читать было бы нечего, а сам вызов поднял бы стёртую
   // базу заново. В памяти расписка обычно тоже есть — но ровно её отсутствие
   // после перезапуска и есть тот случай, ради которого всё это писалось.
-  await step('clipboard', () => clearSecretClipboardNow(), failed);
-  await step('close_databases', async () => {
+  await erase('clipboard', () => clearSecretClipboardNow());
+  await stop('close_databases', async () => {
     await closeFeedStorage();
     await closeLocalDatabase();
-  }, failed);
-  await step('dialog_backups', () => deleteAllDialogBackups(), failed);
+  });
+  await erase('dialog_backups', () => deleteAllDialogBackups());
   // v4.32.970: вторая отмена — не суеверие. Между первым шагом и этим местом
   // проходит два десятка шагов, и любая запись в чат за это время заводит
   // новую отсрочку. Отменённая здесь, она уже не переживёт удаление файлов.
-  await step('cancel_dialog_backup_late', () => cancelScheduledDialogBackup(), failed);
-  await step('account_vault', async () => {
+  await erase('cancel_dialog_backup_late', () => cancelScheduledDialogBackup());
+  await erase('account_vault', async () => {
     const { getStoredMnemonic } = await import('../backup/seedPhrase');
     const { deleteAccountVault } = await import('../storage/accountVault');
     const mnemonic = await getStoredMnemonic();
     if (mnemonic) await deleteAccountVault(mnemonic);
-  }, failed);
-  await step('sync_device_credentials', () => clearSyncDeviceCredentials(), failed);
-  await step('dek_memory', () => clearDekMemory(), failed);
+  });
+  await erase('sync_device_credentials', () => clearSyncDeviceCredentials());
+  await stop('dek_memory', () => clearDekMemory());
   // v4.32.308: номера профилей забираем ДО clearForWalletWipe — после него
   // список пуст, а базы лент названы по номеру. Номера растут монотонно
   // (nextProfileId), поэтому перебор «от 1 до MAX_PROFILES» не годится.
   let profileIds: number[] = [];
-  await step('collect_profile_ids', () => {
+  await erase('collect_profile_ids', () => {
     profileIds = profileManager.getProfileIds();
-  }, failed);
-  await step('profiles', () => profileManager.clearForWalletWipe(), failed);
-  await step('mnemonic', () => wipeMnemonicAndSessionFlags(), failed);
-  await step('keypair', () => deleteKeyPairFromStore(), failed);
+  });
+  await erase('profiles', () => profileManager.clearForWalletWipe());
+  await erase('mnemonic', () => wipeMnemonicAndSessionFlags());
+  await erase('keypair', () => deleteKeyPairFromStore());
   // v4.32.603: канарейка уходит ПЕРЕД ключом, и порядок здесь не косметика.
   // Удаление ключа её не трогало вовсе, и после «выйти и удалить данные»
   // на устройстве оставалась запись «данные зашифрованы ключом, которого
@@ -232,37 +267,37 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
   // Порядок выбран из двух возможных исходов частичного сбоя: ключ без
   // канарейки принимается на следующем запуске как есть (`stored_adopted`),
   // а канарейка без ключа делает запуск невозможным.
-  await step('dek_canary', () => SecureStore.deleteItemAsync(DEK_CANARY_KEY), failed);
-  await step('dek_key', () => SecureStore.deleteItemAsync(DEK_KEY), failed);
-  await step('fcm_token', () => SecureStore.deleteItemAsync(FCM_TOKEN_KEY), failed);
-  await step('local_db', () => wipeLocalDatabase(), failed);
+  await erase('dek_canary', () => SecureStore.deleteItemAsync(DEK_CANARY_KEY));
+  await erase('dek_key', () => SecureStore.deleteItemAsync(DEK_KEY));
+  await erase('fcm_token', () => SecureStore.deleteItemAsync(FCM_TOKEN_KEY));
+  await erase('local_db', () => wipeLocalDatabase());
   // v4.32.308: «удалить данные на устройстве» удаляло главную базу и ключ, а всё
   // остальное оставляло. Каждый пункт — в своём try: сбой одного не вправе
   // прервать сброс и оставить нетронутыми следующие.
-  await step('feed_dbs', () => deleteAllFeedDbs(profileIds), failed);
+  await erase('feed_dbs', () => deleteAllFeedDbs(profileIds));
   // В кэше лежат РАСШИФРОВАННЫЕ снимки, голосовые, документы и выгруженные
   // .txt с перепиской. Своя чистка у вложений суточная и только при следующем
   // запуске — то есть до неё «удалённые» данные жили на устройстве ещё сутки,
   // в открытом виде; за выгруженной перепиской до v4.32.310 не убирал никто.
-  await step('media_cache', () => purgeSensitiveCache(), failed);
+  await erase('media_cache', () => purgeSensitiveCache());
   // Пустой список «оставить»: живых профилей после сброса не осталось ни
   // одного, значит ни один файл аватара больше никому не принадлежит.
-  await step('avatars', () => sweepAvatarFiles([]), failed);
+  await erase('avatars', () => sweepAvatarFiles([]));
   // v4.32.924: альбомы историй сброс не трогал. Уборка кэша сюда не достаёт по
   // устройству: альбом — это СВОЯ копия в documentDirectory, и сделана она
   // именно затем, чтобы пережить любую чистку кэша. Пустой список «оставить»
   // здесь честен ровно потому же, почему у аватаров: живых профилей после
   // сброса нет ни одного, и ни одна сохранённая история больше ничья.
-  await step('story_albums', () => sweepStoryAlbumFiles([]), failed);
+  await erase('story_albums', () => sweepStoryAlbumFiles([]));
   // Журнал приложения — опись переписки, а не её содержание: DID собеседников,
   // номера сообщений, состояние молчания, времена сетевых путей. Файл лежит
   // рядом с базой и переживал сброс целиком, причём молча: включается он
   // скрытым режимом разработчика, и человек, включивший его однажды, о файле
   // уже не помнит.
-  await step('app_log', async () => {
+  await erase('app_log', async () => {
     const { deleteAppLogFile } = await import('../fileLogSink');
     await deleteAppLogFile();
-  }, failed);
+  });
 
   // Проверка и одна повторная попытка. Разовый сбой SecureStore (устройство
   // заблокировано, keystore занят) со второго раза проходит; если не прошёл —
@@ -279,7 +314,7 @@ export async function performLocalWalletWipe(): Promise<WalletWipeResult> {
     }
     survivors = await survivingSecrets();
   }
-  const result: WalletWipeResult = { ok: survivors.length === 0, failedSteps: failed, survivors };
+  const result: WalletWipeResult = { ok: survivors.length === 0, failedSteps: failed, leftBehind, survivors };
   log.info('wallet_wipe_done', result);
   return result;
 }

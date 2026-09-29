@@ -172,6 +172,9 @@ import { AUTH_SECURE_KEYS } from '../../security/authGuard';
 import { SYNC_DEVICE_SECURE_KEYS } from '../../sync/syncApi';
 import { DEK_CANARY_KEY, DEK_KEY } from '../../storage/localEncryption';
 import { PROFILE_STATE_KEY } from '../../identity/profileStateKey';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import { performLocalWalletWipe } from '../wipeLocalWallet';
 
 const FCM_TOKEN_KEY = 'airchat_fcm_token_v1';
@@ -252,7 +255,7 @@ describe('performLocalWalletWipe', () => {
   it('стирает все секреты, несмотря на упавшие по дороге шаги', async () => {
     const res = await performLocalWalletWipe();
 
-    expect(res).toEqual({ ok: true, failedSteps: [], survivors: [] });
+    expect(res).toEqual({ ok: true, failedSteps: [], leftBehind: [], survivors: [] });
     expect([...mockStore.keys()]).toEqual([]);
   });
 
@@ -372,7 +375,7 @@ describe('performLocalWalletWipe', () => {
 
     const res = await performLocalWalletWipe();
 
-    expect(res).toEqual({ ok: true, failedSteps: [], survivors: [] });
+    expect(res).toEqual({ ok: true, failedSteps: [], leftBehind: [], survivors: [] });
     expect(mockStore.has(SEED_KEY)).toBe(false);
   });
 
@@ -398,6 +401,10 @@ describe('performLocalWalletWipe', () => {
   it('сбой уборки файлов не делает сброс неуспешным', async () => {
     // Кэш, аватары и буфер обмена — важно, но это не секреты в SecureStore:
     // ok отвечает именно за них, иначе признак обесценится.
+    //
+    // v4.32.1017: решение в силе, и `ok` здесь по-прежнему `true`. Изменилось
+    // другое: молчанием это больше не кончается — те же три шага попадают в
+    // `leftBehind`, и разговор с человеком идёт уже оттуда (см. стенд ниже).
     mockThrowingSteps.add('media_cache');
     mockThrowingSteps.add('avatars');
     mockThrowingSteps.add('clipboard');
@@ -524,5 +531,159 @@ describe('performLocalWalletWipe', () => {
     // Иначе «проверили всё» означало бы «проверили один и тот же ключ дважды».
     expect(ALL_SECRETS.length).toBeGreaterThanOrEqual(9);
     expect(new Set(ALL_SECRETS).size).toBe(ALL_SECRETS.length);
+  });
+});
+
+/**
+ * Упавший шаг стирания не доходил до человека (v4.32.1017).
+ *
+ * Дефект. Итог сброса нёс два списка, а вызывающий смотрел на одно поле.
+ * `ok` считается только по SecureStore — так и написано в его докблоке, — а
+ * `App.tsx` по одному `ok` решал, показывать ли «Данные удалены не
+ * полностью». Всё, что упало по дороге, оставалось в `failedSteps` и не
+ * покидало журнала.
+ *
+ * Цена. Самый ясный случай — `local_db`. Он единственный проверяет себя
+ * перечитыванием: удаляет базу, читает каталог, при живом файле пробует
+ * второй раз и только тогда бросает. То есть бросок означает буквально
+ * «файл базы лежит на диске». В базе шифротекстом только тексты сообщений;
+ * ключи собеседников, времена, счётчики и предпросмотр последней строки —
+ * открытым текстом. Человек в этот момент отдаёт телефон, потому что ему
+ * сказали «выход выполнен». Тем же путём молча оставались копия диалогов,
+ * журнал приложения (опись переписки) и копия аккаунта на сервере.
+ *
+ * Правка. У каждого из тридцати четырёх шагов теперь объявлен вид: остановка
+ * службы или стирание. Упавшее стирание идёт в `leftBehind`, и разговор
+ * начинается с него, а не только с `ok`.
+ *
+ * Границы. `ok` остался тем же признаком и по-прежнему считается только по
+ * секретам: расширить его значило бы обесценить. Остановка службы тревоги не
+ * поднимает — погасший слушатель не переживёт перезапуск, который идёт сразу
+ * за сбросом.
+ */
+describe('упавший шаг стирания больше не молчит', () => {
+  /** Только код: пересказ в комментарии не должен закрывать закрепку. */
+  const codeOnly = (src: string): string =>
+    src
+      .split('\n')
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+      })
+      .join('\n');
+  const src = (...p: string[]): string => codeOnly(readFileSync(join(__dirname, '..', '..', '..', ...p), 'utf8'));
+
+  it('файл базы остался на диске — шаг назван', async () => {
+    mockThrowingSteps.add('local_db');
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['local_db']);
+    expect(res.failedSteps).toEqual(['local_db']);
+  });
+
+  it('копия диалогов, журнал приложения и кэш — тоже стирание', async () => {
+    for (const name of ['dialog_backups', 'media_cache', 'app_log']) mockThrowingSteps.add(name);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['dialog_backups', 'media_cache', 'app_log']);
+  });
+
+  it('копия аккаунта на сервере — стирание, хотя она и не на этом телефоне', async () => {
+    mockThrowingSteps.add('account_vault');
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['account_vault']);
+  });
+
+  it('базы лент остались — тоже стирание', async () => {
+    // Своя база у каждого профиля, и названы они по номерам, собранным на
+    // шаге выше: упасть тут значит оставить на диске все ленты сразу.
+    mockThrowingSteps.add('feed_dbs');
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual(['feed_dbs']);
+  });
+
+  it('ГРАНИЦА: остановка службы за собой ничего не оставляет', async () => {
+    for (const name of ['feed_inbox_listener', 'presence_broadcast', 'ipfs_client', 'call_service']) {
+      mockThrowingSteps.add(name);
+    }
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.failedSteps).toEqual([
+      'feed_inbox_listener', 'presence_broadcast', 'ipfs_client', 'call_service',
+    ]);
+    expect(res.leftBehind).toEqual([]);
+  });
+
+  it('ГРАНИЦА: `ok` остался признаком SecureStore и на упавшем стирании держится', async () => {
+    mockThrowingSteps.add('local_db');
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.ok).toBe(true);
+    expect(res.survivors).toEqual([]);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: без сбоев список пуст', async () => {
+    const res = await performLocalWalletWipe();
+
+    expect(res.leftBehind).toEqual([]);
+  });
+
+  it('ПРОВЕРКА НЕ ПУСТАЯ: переживший секрет по-прежнему делает ok ложным', async () => {
+    mockDeleteFailures.set(SEED_KEY, 99);
+
+    const res = await performLocalWalletWipe();
+
+    expect(res.ok).toBe(false);
+    expect(res.leftBehind).toEqual([]);
+  });
+
+  it('вид объявлен у каждого шага, а не списком в стороне', () => {
+    const wipe = src('core', 'wallet', 'wipeLocalWallet.ts');
+    const erase = wipe.match(/await erase\('/g)?.length ?? 0;
+    const stop = wipe.match(/await stop\('/g)?.length ?? 0;
+    expect(erase + stop).toBe(34);
+    expect(erase).toBeGreaterThanOrEqual(20);
+    // Безвидных не осталось: иначе новый шаг молча попадал бы в «остановку».
+    expect(wipe).not.toContain("await step('");
+  });
+
+  it('экран выхода смотрит не только на `ok`', () => {
+    expect(src('App.tsx')).toContain('if (!wipe.ok || wipe.leftBehind.length > 0) {');
+  });
+
+  it('причина названа та, которая есть', () => {
+    // «Устройство было заблокировано» — догадка про хранилище ключей, и к
+    // оставшемуся на диске файлу она не относится.
+    const app = src('App.tsx');
+    expect(app).toContain('wipe.survivors.length > 0');
+    expect(app).toContain('Часть данных осталась на устройстве: один из шагов стирания не прошёл. ');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: `ok` считается только по секретам', () => {
+    expect(src('core', 'wallet', 'wipeLocalWallet.ts')).toContain('ok: survivors.length === 0');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: удаление базы бросает именно на оставшемся файле', () => {
+    // Если бы бросок исчез, `leftBehind` про базу не узнал бы ничего: других
+    // способов заметить её у сброса нет.
+    const local = src('core', 'storage', 'local.ts');
+    expect(local).toContain('`Локальная база не удалена${lastError instanceof Error ? `: ${lastError.message}` : \'\'}`');
+    expect(local).toContain('for (let attempt = 0; attempt < 2; attempt += 1) {');
+  });
+
+  it('ПОВОД ДЛЯ ПРАВКИ ЖИВ: в базе открытым текстом лежит опись переписки', () => {
+    // Шифруются тексты сообщений, а не колонки вокруг них. Уцелевший файл —
+    // это список собеседников и времён, а не просто «непрочитаемый мусор».
+    const local = src('core', 'storage', 'local.ts');
+    expect(local).toContain('contact_pub_b64 TEXT NOT NULL,');
+    expect(local).toContain('last_message_at INTEGER NOT NULL DEFAULT 0,');
   });
 });

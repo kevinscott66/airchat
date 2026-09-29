@@ -412,9 +412,14 @@ describe('уборка переживает снятие приложения', 
 
     it('сброс устройства зовёт уборку, пока местная база ещё открыта', () => {
       const wipe = read('core', 'wallet', 'wipeLocalWallet.ts');
-      const clip = wipe.indexOf("await step('clipboard'");
-      const close = wipe.indexOf("await step('close_databases'");
-      const wipeDb = wipe.indexOf("await step('local_db'");
+      // v4.32.1017: помощников стало два — `stop(` для остановки службы и
+      // `erase(` для стирания. Порядок шагов, ради которого стенд и стоит,
+      // от этого не изменился, поэтому ищем по имени шага.
+      const stepAt = (name: string): number =>
+        wipe.search(new RegExp(`await (?:erase|stop)\\('${name}'`));
+      const clip = stepAt('clipboard');
+      const close = stepAt('close_databases');
+      const wipeDb = stepAt('local_db');
       expect(clip).toBeGreaterThan(0);
       expect(close).toBeGreaterThan(clip);
       expect(wipeDb).toBeGreaterThan(clip);

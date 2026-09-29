@@ -348,10 +348,12 @@ describe('форма исходников: отмена — обещание, а
   });
 
   it('сброс отменяет ещё раз — сразу за удалением файлов', () => {
-    const at = WIPE.indexOf("await step('dialog_backups'");
+    // v4.32.1017: шаг стирания зовётся `erase(`, остановка службы — `stop(`.
+    // Здесь оба шага — стирание: после их провала копия остаётся на диске.
+    const at = WIPE.search(/await erase\('dialog_backups'/);
     expect(at).toBeGreaterThan(0);
     expect(WIPE.slice(at, at + 220)).toContain(
-      "await step('cancel_dialog_backup_late', () => cancelScheduledDialogBackup(), failed);",
+      "await erase('cancel_dialog_backup_late', () => cancelScheduledDialogBackup());",
     );
   });
 });
