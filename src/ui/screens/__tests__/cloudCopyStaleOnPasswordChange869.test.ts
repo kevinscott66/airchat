@@ -153,7 +153,19 @@ describe('подсказка о копии: три состояния', () => {
 describe('текст про запертые копии', () => {
   it('молчит, когда копий не было', () => {
     expect(passwordChangeAftermathText({ apple: 'not_bound', cloud: 'not_bound' })).toBeNull();
-    expect(passwordChangeAftermathText({ apple: 'unknown', cloud: 'unknown' })).toBeNull();
+  });
+
+  it('о непрочитанном не молчит: пометка не легла, и сказать больше некому', () => {
+    // v4.32.1016. Прежде эта строка стояла рядом с «копий не было» и требовала
+    // того же молчания, а довод был — свидетеля ищет экран. У сброса пароля по
+    // словам свидетеля нет вовсе, у настроек он приходит из той же отказавшей
+    // базы, и главное: `'unknown'` значит, что подсказку не переписали. На
+    // диске осталось «копия отправлена» — настройки будут обещать её и дальше.
+    const text = passwordChangeAftermathText({ apple: 'unknown', cloud: 'unknown' });
+
+    expect(text).not.toBeNull();
+    expect(text).toContain('Apple ID');
+    expect(text).toContain('облаке');
   });
 
   it('называет ровно те копии, которые заперты', () => {

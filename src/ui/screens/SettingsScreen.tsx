@@ -68,7 +68,7 @@ import { PrivacyPolicyScreen } from './PrivacyPolicyScreen';
 import { DiagnosticScreen } from './DiagnosticScreen';
 import { ProfileSelector } from '../components/ProfileSelector';
 import { profileManager } from '../../core/identity/profileManager';
-import { scopedKvGet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
+import { scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';
 import { TRANSLATION_TARGET_LANG_KEY, type OwnProfileKey, type PrivacyPrefKey } from '../../core/storage/kvKeys';
 import { ownFieldSet, ownFieldTryGet } from '../../core/identity/ownProfile';
 import { reportErased, showConfirm, showError, showPasswordRejected, showSuccess } from '../components/userFeedback';
@@ -262,7 +262,23 @@ function SettingsScreenImpl({
    * Apple, а дёргать системное окно ради надписи в настройках нечестно.
    */
   const [appleBindReady, setAppleBindReady] = useState(false);
-  const [appleBound, setAppleBound] = useState(false);
+  /**
+   * v4.32.1016: состояний у подсказки четыре, а не три.
+   *
+   * Прежде экран держал два флажка, `appleBound` и `appleBindStale`, и оба
+   * начинались с `false`. Значит «привязки нет» и «прочитать не смогли» на
+   * экране выглядели одинаково — а ниже, в `markCopiesStaleAfterPasswordChange`,
+   * этот же `false` работал свидетелем, разрешающим ответ ядра `'unknown'`.
+   * Свидетель был отравлен тем же отказом базы, о котором его спрашивали: одна
+   * занятая база давала и `'unknown'` от ядра, и `false` на экране, и вместе
+   * это читалось как «привязки не было — предупреждать не о чем».
+   *
+   * Теперь `'unknown'` — отдельное состояние, и свидетель умеет промолчать.
+   * Флажки остались, но выведены из него: строку в интерфейсе они рисуют как
+   * рисовали.
+   */
+  const [appleHint, setAppleHint] = useState<AppleBindingHint | 'unknown'>('none');
+  const appleBound = appleHint === 'bound';
   /**
    * v4.32.615: привязка пережила смену пароля и больше не откроется.
    *
@@ -272,7 +288,7 @@ function SettingsScreenImpl({
    * перешифровать нечем: для записи нужен вход через Apple, то есть системное
    * окно. Поэтому — честная пометка и предложение привязать заново.
    */
-  const [appleBindStale, setAppleBindStale] = useState(false);
+  const appleBindStale = appleHint === 'stale';
   const [appleBindModal, setAppleBindModal] = useState(false);
   const [appleBindPwd, setAppleBindPwd] = useState('');
   const [appleBindBusy, setAppleBindBusy] = useState(false);
@@ -916,18 +932,31 @@ function SettingsScreenImpl({
     const report = await markPasswordBoundCopiesStale();
     // «Не прочиталось» судим по тому, что стоит на экране: это последнее, что
     // человек видел про копии, и другого свидетеля здесь нет.
+    //
+    // v4.32.1016: свидетелю разрешено не знать. Его показания приходят из той
+    // же базы, что отказала ядру, и раньше он молча повторял её отказ своим
+    // начальным значением: `appleBound === false`, `cloudCopy === null` — то
+    // есть «копии не было, предупреждать не о чем». Теперь непрочитанное
+    // состояние экрана остаётся `'unknown'` и уходит в текст как есть.
     const apple = report.apple !== 'unknown'
       ? report.apple
-      : !appleBound
-        ? 'not_bound'
-        : (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';
+      : appleHint === 'unknown'
+        ? 'unknown'
+        : !appleBound
+          ? 'not_bound'
+          : (await storeAppleBindingHint('stale')) ? 'marked' : 'unwritten';
     const cloud = report.cloud !== 'unknown'
       ? report.cloud
-      : cloudCopy !== 'uploaded'
-        ? 'not_bound'
-        : (await storeCloudVaultCopy('stale')) ? 'marked' : 'unwritten';
-    if (apple !== 'not_bound') { setAppleBound(false); setAppleBindStale(true); }
-    if (cloud !== 'not_bound') setCloudCopy('stale');
+      : cloudCopy === null
+        ? 'unknown'
+        : cloudCopy !== 'uploaded'
+          ? 'not_bound'
+          : (await storeCloudVaultCopy('stale')) ? 'marked' : 'unwritten';
+    // Помечаем на экране только то, что и правда помечено: сказать «устарела»
+    // про привязку, о которой мы ничего не знаем, значит соврать в другую
+    // сторону. Про непрочитанное говорит текст, а не строка в настройках.
+    if (apple === 'marked' || apple === 'unwritten') setAppleHint('stale');
+    if (cloud === 'marked' || cloud === 'unwritten') setCloudCopy('stale');
     const text = passwordChangeAftermathText({ apple, cloud });
     if (text) showError(text);
   };
@@ -1012,11 +1041,38 @@ function SettingsScreenImpl({
    * Показывать ли строку привязки. Спрашиваем и устройство, и сервер: без
    * `expo-apple-authentication` окна не будет, а без настроенной аудитории на
    * сервере токен всё равно отвергнут — обещать в таком случае нечего.
+   *
+   * v4.32.1016. Порядок здесь поменялся, и это не косметика. Подсказка лежит
+   * на устройстве, а список провайдеров приходит с сервера — но читали их в
+   * обратном порядке, и бросок `listSeedBindingProviders` уносил с собой
+   * чтение подсказки целиком. Недоступный сервер оставлял на экране «привязки
+   * нет»: тот самый ответ, которым ниже разрешается `'unknown'`.
    */
   useEffect(() => {
     let alive = true;
     void (async () => {
       if (!(await isAppleSignInAvailable())) return;
+      // v4.32.870: чтение стояло голым внутри `void (async …)()` — отказ базы
+      // уходил необработанным reject, а строка молча оставалась «привязать».
+      // v4.32.1016: читаем формой, различающей отказ базы и пустую ячейку.
+      // `scopedKvGet` их складывал в один `null`, а `parseAppleBindingHint`
+      // всё незнакомое читает как «привязки не было» — ровно та подмена,
+      // из-за которой свидетель на экране повторял ошибку ядра.
+      let hint: AppleBindingHint | 'unknown' = 'none';
+      try {
+        const cell = await scopedKvTryGet(APPLE_BINDING_HINT_KEY);
+        if (cell) {
+          hint = parseAppleBindingHint(cell.value);
+        } else {
+          hint = 'unknown';
+          log.warn('apple_binding_hint_unreadable', { key: APPLE_BINDING_HINT_KEY });
+        }
+      } catch (e) {
+        hint = 'unknown';
+        log.warn('apple_binding_hint_read_failed', { err: rawErrorText(e) });
+      }
+      if (!alive) return;
+      setAppleHint(hint);
       let providers: readonly string[] = [];
       try {
         providers = await listSeedBindingProviders();
@@ -1025,17 +1081,6 @@ function SettingsScreenImpl({
       }
       if (!alive || !providers.includes('apple')) return;
       setAppleBindReady(true);
-      // v4.32.870: чтение стояло голым внутри `void (async …)()` — отказ базы
-      // уходил необработанным reject, а строка молча оставалась «привязать».
-      let hint: AppleBindingHint = 'none';
-      try {
-        hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));
-      } catch (e) {
-        log.warn('apple_binding_hint_read_failed', { err: rawErrorText(e) });
-      }
-      if (!alive) return;
-      setAppleBound(hint === 'bound');
-      setAppleBindStale(hint === 'stale');
     })();
     return () => { alive = false; };
   }, []);
@@ -1059,8 +1104,7 @@ function SettingsScreenImpl({
       const identity = await signInWithApple();
       if (!identity) return;
       await putSeedBinding('apple', identity.idToken, mnemonic, appleBindPwd);
-      setAppleBound(true);
-      setAppleBindStale(false);
+      setAppleHint('bound');
       setAppleBindModal(false);
       // Конверт на сервере уже лежит: дальше речь только о подсказке, и отказ
       // на ней не делает привязку несостоявшейся — но и молчать о нём нельзя,
@@ -1096,8 +1140,7 @@ function SettingsScreenImpl({
                 const identity = await signInWithApple();
                 if (!identity) return;
                 const removed = await deleteSeedBinding('apple', identity.idToken);
-                setAppleBound(false);
-                setAppleBindStale(false);
+                setAppleHint('none');
                 if (await storeAppleBindingHint('none')) {
                   showSuccess(removed ? 'Apple ID отвязан' : 'Привязки на сервере не было');
                 } else {

@@ -40,10 +40,22 @@ export async function markPasswordBoundCopiesStale(): Promise<PasswordChangeAfte
  *
  * Две строки вместо одной склеенной фразы: новости разные, и каждая называет
  * своё действие — привязать заново и отправить заново.
+ *
+ * v4.32.1016. Молчал на `'unknown'`, и довод был такой: свидетеля ищет экран.
+ * Довод не держится с двух сторон сразу. У сброса пароля по словам свидетеля
+ * нет вовсе — там отчёт уходит сюда как есть. А у настроек он приходит из той
+ * же базы, что и отказала: одна занятая база давала и `'unknown'` от ядра, и
+ * начальное «копии не было» на экране.
+ *
+ * Главное же вот что: `'unknown'` значит, что пометка НЕ ЛЕГЛА. На диске
+ * осталось прежнее «привязаны»/«копия отправлена», и настройки будут обещать
+ * запасной путь и завтра, и через год. Расчёт «настройки покажут сами» был
+ * ровно наоборот: показывать они будут именно то, что не успели поправить.
+ * Сказать больше некому — значит говорим здесь.
  */
 export function passwordChangeAftermathText(r: PasswordChangeAftermath): string | null {
   const lines: string[] = [];
-  if (r.apple === 'marked' || r.apple === 'unwritten') lines.push(APPLE_BINDING_STALE_TEXT[r.apple]);
-  if (r.cloud === 'marked' || r.cloud === 'unwritten') lines.push(CLOUD_VAULT_STALE_TEXT[r.cloud]);
+  if (r.apple !== 'not_bound') lines.push(APPLE_BINDING_STALE_TEXT[r.apple]);
+  if (r.cloud !== 'not_bound') lines.push(CLOUD_VAULT_STALE_TEXT[r.cloud]);
   return lines.length > 0 ? lines.join('\n\n') : null;
 }

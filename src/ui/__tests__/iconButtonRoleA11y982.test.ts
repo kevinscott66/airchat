@@ -109,6 +109,10 @@ function scanIconButtons(): Site[] {
 }
 
 const sites = scanIconButtons();
+/** Место в настройках по надписи: номера строк там уезжают от любой правки. */
+const settingsSites = (label: string): Site[] =>
+  sites.filter((s) => s.file === join('screens', 'SettingsScreen.tsx') && s.label === label);
+
 const at = (...parts: string[]): Site | undefined => {
   const line = Number(parts[parts.length - 1]);
   const file = join(...parts.slice(0, -1));
@@ -150,9 +154,12 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: обход находит знач
 
   it('найдены и «Удалить», и кружок ожидания в настройках', () => {
     expect(sites.filter((s) => s.label === 'Удалить').length).toBeGreaterThanOrEqual(2);
-    // v4.32.1001: строки уехали на три вниз — очистка истории в настройках
-    // стала разбирать исход стирания. Места те же.
-    expect(at('screens', 'SettingsScreen.tsx', '3019')?.label).toBe('Открыть');
+    // v4.32.1016: держимся за само место, а не за номер его строки. Номер
+    // уезжал уже дважды (v4.32.1001 и здесь) от правок выше по файлу, и
+    // каждый раз это ломало проверку, у которой с номером дела нет. Надпись
+    // «Открыть» в настройках одна, и именно она тут нужна.
+    const opens = settingsSites('Открыть');
+    expect(opens).toHaveLength(1);
   });
 });
 
@@ -167,8 +174,12 @@ describe('ЗАКРЕПКА: у каждого такого места роль �
   it('«Открыть» и «Включить» в настройках слышны так же, как соседняя «Отмена»', () => {
     // Ровно тот диалог, на котором виден перекос: отказ находился на ощупь,
     // подтверждение — нет.
-    for (const line of ['3019', '3046', '3075']) {
-      expect(at('screens', 'SettingsScreen.tsx', line)?.tag).toContain('accessibilityRole="button"');
+    //
+    // v4.32.1016: по надписям, а не по номерам строк — см. соседнюю запись.
+    for (const label of ['Открыть', 'Включить', 'Продолжить']) {
+      const found = settingsSites(label);
+      expect(found).toHaveLength(1);
+      expect(found[0].tag).toContain('accessibilityRole="button"');
     }
   });
 

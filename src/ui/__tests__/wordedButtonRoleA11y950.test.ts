@@ -147,10 +147,13 @@ describe('у каждой такой кнопки озвучка слышит «
      * подряд. Назвав её кнопкой, разметка выдала бы озвучке спрятанное — а
      * заодно пообещала бы действие, которого от одного нажатия не будет.
      */
+    // v4.32.1016: раньше исключение называлось номером строки, и номер уезжал
+    // от любой правки выше по файлу. Сказано то же самое, но словами: место
+    // ровно одно, и это строка версии.
     const others = sites
       .filter((s) => !/accessibilityRole="button"/.test(s.tag))
-      .map((s) => `${s.file}:${s.line}`);
-    expect(others).toEqual([join('screens', 'SettingsScreen.tsx') + ':1678']);
+      .map((s) => `${s.file} ${s.tag.includes('styles.versionTap') ? 'строка версии' : s.label}`);
+    expect(others).toEqual([join('screens', 'SettingsScreen.tsx') + ' строка версии']);
     const settings = readFileSync(join(UI, 'screens', 'SettingsScreen.tsx'), 'utf8');
     expect(settings).toContain('style={styles.versionTap} accessibilityRole="text"');
   });

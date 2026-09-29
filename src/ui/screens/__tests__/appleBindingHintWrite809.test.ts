@@ -63,7 +63,10 @@ describe('подсказка о привязке пишется проверяе
     expect(SETTINGS).toContain(
       // v4.32.1000: рядом приехал scopedKvTryGet — чтение настроек тремя
       // состояниями. Закрепка здесь про запись: имени scopedKvSet в строке нет.
-      "import { scopedKvGet, scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';",
+      // v4.32.1016: складывающая scopedKvGet ушла с экрана совсем — последним
+      // её звало чтение подсказки о привязке, и как раз оно и давало подмену
+      // «база отказала» → «привязки не было».
+      "import { scopedKvSetChecked, scopedKvTryGet } from '../../core/storage/profileScopedKv';",
     );
   });
 
@@ -94,8 +97,13 @@ describe('подсказка о привязке пишется проверяе
     expect(end).toBeGreaterThan(at);
     const body = SETTINGS.slice(at, end);
     expect(body).toContain('const report = await markPasswordBoundCopiesStale();');
-    expect(body).toContain("if (apple !== 'not_bound') { setAppleBound(false); setAppleBindStale(true); }");
-    expect(body).toContain("if (cloud !== 'not_bound') setCloudCopy('stale');");
+    // v4.32.1016: повод у закрепки прежний — ни один исход записи не уносит с
+    // собой пометку в интерфейсе. Список исходов, однако, сузился: `'unknown'`
+    // теперь доходит сюда живым, а ставить «устарела» по нему нельзя — мы не
+    // знаем, была ли привязка. Про непрочитанное говорит текст (см. стенд
+    // passwordCopiesUnknown1016).
+    expect(body).toContain("if (apple === 'marked' || apple === 'unwritten') setAppleHint('stale');");
+    expect(body).toContain("if (cloud === 'marked' || cloud === 'unwritten') setCloudCopy('stale');");
     // Досрочных выходов нет вовсе: раньше их было два, и каждый уносил с собой
     // всё, что стояло ниже.
     expect([...body.matchAll(/\breturn;/g)]).toHaveLength(0);
@@ -191,7 +199,11 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     // Спросить сервер «есть ли конверт» экран не может: listSeedBindingProviders
     // отвечает только про то, какие способы вообще настроены.
     expect(SETTINGS).toContain('providers = await listSeedBindingProviders();');
-    expect(SETTINGS).toContain("setAppleBound(hint === 'bound');");
-    expect(SETTINGS).toContain("setAppleBindStale(hint === 'stale');");
+    // v4.32.1016: два флажка свернулись в одно состояние с четвёртым
+    // значением — «не прочитали». Повод закрепки прежний: строку рисует
+    // подсказка с устройства, и подтвердить её сервером нечем.
+    expect(SETTINGS).toContain('setAppleHint(hint);');
+    expect(SETTINGS).toContain("const appleBound = appleHint === 'bound';");
+    expect(SETTINGS).toContain("const appleBindStale = appleHint === 'stale';");
   });
 });

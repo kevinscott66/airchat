@@ -126,9 +126,19 @@ describe('подсказку не прочитали', () => {
     expect(kvSet).not.toHaveBeenCalled();
   });
 
-  it('ГРАНИЦА: своего текста у «неизвестно» нет — свидетеля ищет экран', async () => {
+  it('у «неизвестно» есть свой текст: свидетеля, на которого тут рассчитывали, нет', async () => {
+    // v4.32.977 оставляла эту строку пустой и звала в свидетели экран. Экранов
+    // два: у сброса пароля по словам свидетеля нет вовсе, а у настроек он
+    // приходит из той же базы, которая только что отказала. Сверх того,
+    // `'unknown'` значит, что пометка НЕ ЛЕГЛА: на диске осталось «привязаны»,
+    // и настройки будут обещать запасной путь дальше. Сказать больше некому
+    // (см. стенд passwordCopiesUnknown1016).
     unreadable();
-    expect(passwordChangeAftermathText(await markPasswordBoundCopiesStale())).toBeNull();
+    const text = passwordChangeAftermathText(await markPasswordBoundCopiesStale());
+
+    expect(text).not.toBeNull();
+    expect(text).toContain('Apple ID');
+    expect(text).toContain('облаке');
   });
 });
 

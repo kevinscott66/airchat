@@ -188,16 +188,23 @@ describe('экран спрашивает правду, а не самый уд�
   });
 
   it('чтение подсказки Apple больше не роняет необработанный отказ', () => {
+    // v4.32.1016: якорь съехал — чтение подсказки переехало ПЕРЕД походом на
+    // сервер, и `setAppleBindReady(true)` стоит теперь после него. Причина
+    // та же самая: бросок `listSeedBindingProviders` уносил чтение целиком, и
+    // недоступный сервер оставлял на экране «привязки нет». Заодно сменилась
+    // форма чтения: складывающая `scopedKvGet` не отличала отказ базы от
+    // пустой ячейки. Закрепка же прежняя — чтение стоит внутри `try`, и отказ
+    // назван в журнале, а не уходит необработанным reject.
     const s = SETTINGS();
-    const at = s.indexOf('setAppleBindReady(true);');
+    const READ = 'const cell = await scopedKvTryGet(APPLE_BINDING_HINT_KEY);';
+    const at = s.indexOf('if (!(await isAppleSignInAvailable())) return;');
     expect(at).toBeGreaterThan(0);
-    const body = s.slice(at, at + 520);
-    expect(body).toContain('hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));');
+    const body = s.slice(at, at + 620);
+    expect(body).toContain(READ);
     expect(body).toContain("log.warn('apple_binding_hint_read_failed'");
+    expect(body).toContain("log.warn('apple_binding_hint_unreadable'");
     // Именно try, а не «тоже где-то рядом»: чтение стоит внутри него.
-    expect(body.indexOf('try {')).toBeLessThan(
-      body.indexOf('hint = parseAppleBindingHint(await scopedKvGet(APPLE_BINDING_HINT_KEY));'),
-    );
+    expect(body.indexOf('try {')).toBeLessThan(body.indexOf(READ));
   });
 
   it('старого текста нет нигде в приложении', () => {

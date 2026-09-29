@@ -143,7 +143,10 @@ describe('ядро отвечает исходом, а не броском', () 
   });
 
   it('два исхода из четырёх имеют текст для человека, и разный', () => {
-    expect(Object.keys(APPLE_BINDING_STALE_TEXT).sort()).toEqual(['marked', 'unwritten']);
+    // v4.32.1016: исходов, о которых говорят человеку, стало три. Молчание на
+    // «не прочитали» опиралось на свидетеля, которого у этого экрана нет, а у
+    // настроек он приходил из той же отказавшей базы.
+    expect(Object.keys(APPLE_BINDING_STALE_TEXT).sort()).toEqual(['marked', 'unknown', 'unwritten']);
     expect(APPLE_BINDING_STALE_TEXT.marked).not.toBe(APPLE_BINDING_STALE_TEXT.unwritten);
     // «Не легло» обязано сказать, что настройки соврут после перезапуска.
     expect(APPLE_BINDING_STALE_TEXT.unwritten).toContain('после перезапуска');

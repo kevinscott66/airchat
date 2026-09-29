@@ -108,7 +108,10 @@ describe('храповик: экран настроек помечает при�
     const body = bodyOf(SCREEN_CODE, 'const markCopiesStaleAfterPasswordChange =');
     expect(body).toContain('await markPasswordBoundCopiesStale();');
     expect(body).not.toContain('APPLE_BINDING_STORED[');
-    expect(body).toContain('setAppleBindStale(true)');
+    // v4.32.1016: пометку ставят только на состоявшийся исход. `'unknown'`
+    // доходит сюда живым, и «устарела» по нему сказать нельзя — была ли
+    // привязка, неизвестно; про это говорит текст.
+    expect(body).toContain("setAppleHint('stale')");
     const core = fs.readFileSync(
       path.join(__dirname, '..', 'appleBindingStale.ts'),
       'utf8',
@@ -119,8 +122,10 @@ describe('храповик: экран настроек помечает при�
   });
 
   test('привязка и отвязка снимают пометку', () => {
-    expect(bodyOf(SCREEN_CODE, 'const submitBindApple =')).toContain('setAppleBindStale(false)');
-    expect(bodyOf(SCREEN_CODE, 'const handleUnbindApple =')).toContain('setAppleBindStale(false)');
+    // v4.32.1016: одно состояние вместо двух флажков — «привязаны» и
+    // «привязки нет» сами по себе означают, что метить нечего.
+    expect(bodyOf(SCREEN_CODE, 'const submitBindApple =')).toContain("setAppleHint('bound')");
+    expect(bodyOf(SCREEN_CODE, 'const handleUnbindApple =')).toContain("setAppleHint('none')");
   });
 
   test('строка в настройках различает устаревшую привязку', () => {
