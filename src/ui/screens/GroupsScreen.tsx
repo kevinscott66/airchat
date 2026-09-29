@@ -305,7 +305,7 @@ import {
   type MentionKeyPin,
   type MentionTarget,
 } from '../../core/social/usernameDirectory';
-import { listContactsFor } from '../../core/social/contacts';
+import { listContactsFor, listContactsReadFor } from '../../core/social/contacts';
 import { normalizeUsername } from '../../core/identity/username';
 import { checkGroupHandle } from '../../core/social/groupHandle';
 import {
@@ -1750,17 +1750,29 @@ function GroupChatScreen({
       // ключам, а не по строкам — один контакт даёт одну и ту же запись.
       let ambiguousUsername = false;
       if (canonical) {
-        try {
-          const pubs = new Set(
-            (await listContactsFor(pid))
-              .filter((c) => normalizeUsername(c.peerUsername) === canonical)
-              .map((c) => c.peerPublicKey)
-          );
-          ambiguousUsername = pubs.size > 1;
-          byUsername = pubs.size === 1 ? [...pubs][0] : null;
-        } catch (e) {
-          log.warn('group_mention_lookup_failed', { err: rawErrorText(e) });
+        // v4.32.1049: справочник читается различающим чтением. `listContactsFor`
+        // отдавала на отказ базы пустой список — ровно то же, что «этого имени
+        // у меня ни за кем не записано», — и дальше имя разрешалось по
+        // отображаемым именам участников. В строке участника юзернейма нет
+        // вовсе (GroupMemberRow), так что совпасть могло только имя, а его в
+        // группе назначает себе сам участник. Достаточно было назваться
+        // «alice», чтобы нажатие на @alice открыло карточку с «Написать» и
+        // словами «тревожиться не о чем» про ключ. Проверка по справочнику
+        // (v4.32.615) для того и заводилась; не прочитав его, отказываемся
+        // вслух, а не угадываем.
+        const contacts = await listContactsReadFor(pid);
+        if (contacts === null) {
+          log.warn('group_mention_lookup_failed', { name: canonical.length });
+          showError(mentionMissText('unreadable', bare));
+          return;
         }
+        const pubs = new Set(
+          contacts
+            .filter((c) => normalizeUsername(c.peerUsername) === canonical)
+            .map((c) => c.peerPublicKey)
+        );
+        ambiguousUsername = pubs.size > 1;
+        byUsername = pubs.size === 1 ? [...pubs][0] : null;
       }
       if (ambiguousUsername) { showError(mentionMissText('ambiguous', bare)); return; }
       const hits = byUsername

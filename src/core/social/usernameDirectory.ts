@@ -149,7 +149,7 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
 
 /** Что показать человеку, когда переходить некуда. */
 export function mentionMissText(
-  status: 'ambiguous' | 'space' | 'unclaimed' | 'unlisted' | 'unconfigured' | 'unknown',
+  status: 'ambiguous' | 'space' | 'unclaimed' | 'unlisted' | 'unconfigured' | 'unreadable' | 'unknown',
   name: string,
   /** Вид предмета — только для `space`: «группы» и «канала» это разные слова. */
   kind?: 'group' | 'channel',
@@ -163,6 +163,10 @@ export function mentionMissText(
       return `Имя «${name}» носят несколько контактов — откройте нужного в списке`;
     case 'unclaimed':
       return `Юзернейма @${name} не существует`;
+    case 'unreadable':
+      // v4.32.1049: не про сеть и не про чужой выбор — про нас. Справочник
+      // контактов не прочитался, и сверить имя с ключом было нечем.
+      return `Не удалось проверить, кто такой @${name}: справочник контактов не прочитался. Попробуйте ещё раз`;
     case 'unlisted':
       return `@${name} занят, но владелец не открыл переход по имени`;
     case 'unconfigured':
