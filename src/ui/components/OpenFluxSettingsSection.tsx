@@ -89,6 +89,14 @@ export type OpenFluxSettingsSectionProps = {
 export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSectionProps = {}): React.ReactElement {
   const [enabled, setEnabled] = useState(false);
   const [status, setStatus] = useState<OpenFluxUiStatus>('off');
+  /**
+   * v4.32.1058: состояние ядра прочитать не удалось.
+   *
+   * Отдельным признаком, а не шестым значением `OpenFluxUiStatus`: этот тип —
+   * итог включения и выключения, его же отдаёт наружу мост агента, и лишнее
+   * значение в нём пришлось бы разбирать всюду, где разбирают исход нажатия.
+   */
+  const [statusUnknown, setStatusUnknown] = useState(false);
   const [socks, setSocks] = useState<string | null>(null);
   /** См. `getOpenFluxHttpLayerActive`. `null` — неизвестно, а не «нет». */
   const [httpLayer, setHttpLayer] = useState<boolean | null>(null);
@@ -102,14 +110,16 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
       const cfg = await loadConfig();
       if (!alive) return;
       setEnabled(!!cfg.openflux?.enabled);
-      try {
-        if (await getOpenFluxRunning()) {
-          if (!alive) return;
-          setStatus('on');
-          setSocks(await getOpenFluxSocksAddr());
-        }
-      } catch {
-        /* статус останется off */
+      // v4.32.1058: `null` — спросить не удалось, а не «ядро погашено».
+      // `catch` тут стоял зря: обёртка свой отказ гасила внутри себя.
+      const live = await getOpenFluxRunning();
+      if (!alive) return;
+      setStatusUnknown(live === null);
+      if (live === true) {
+        setStatus('on');
+        const addr = await getOpenFluxSocksAddr();
+        if (!alive) return;
+        setSocks(addr);
       }
     })();
     return () => {
@@ -193,6 +203,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
       // Переключатель двигаем сразу: канал поднимается секундами, и застывший
       // в прежнем положении рычажок в этот момент читается как «не нажалось».
       setEnabled(on);
+      setStatusUnknown(false);
       setBusy(true);
       try {
         const cfg = await persist(on);
@@ -241,6 +252,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
   const retryBtn = useAsyncButton(async () => {
     const cfg = await loadConfig();
     setStatus('starting');
+    setStatusUnknown(false);
     const s = await retryOpenFlux(cfg);
     setStatus(s);
     if (s === 'on') {
@@ -334,14 +346,18 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
     accent: { color: c.accent },
   }));
 
-  const tone =
-    status === 'on'
-      ? { text: styles.onColor, dot: styles.dotOn }
-      : status === 'starting'
-        ? { text: styles.warnColor, dot: styles.dotWarn }
-        : status === 'failed'
-          ? { text: styles.errColor, dot: styles.dotErr }
-          : { text: styles.offColor, dot: styles.dotOff };
+  // v4.32.1058: непрочитанное состояние — не «Выключен». Лампочка не серая:
+  // серая читается как «всё погашено, беспокоиться не о чем».
+  const statusText = statusUnknown ? 'Состояние не удалось прочитать' : STATUS_LABEL[status];
+  const tone = statusUnknown
+    ? { text: styles.warnColor, dot: styles.dotWarn }
+    : status === 'on'
+    ? { text: styles.onColor, dot: styles.dotOn }
+    : status === 'starting'
+      ? { text: styles.warnColor, dot: styles.dotWarn }
+      : status === 'failed'
+        ? { text: styles.errColor, dot: styles.dotErr }
+        : { text: styles.offColor, dot: styles.dotOff };
 
   // Повтор предлагаем только там, где он может помочь. При «нет ссылки» и
   // «недоступно на устройстве» кнопка была бы обманом: сколько ни нажимай,
@@ -372,7 +388,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
 
         <View style={styles.statusRow}>
           <View style={[styles.statusDot, tone.dot]} />
-          <Text style={[styles.statusText, tone.text]}>{STATUS_LABEL[status]}</Text>
+          <Text style={[styles.statusText, tone.text]}>{statusText}</Text>
           {busy ? <ActivityIndicator size="small" color={styles.accent.color} /> : null}
         </View>
 

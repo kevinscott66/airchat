@@ -64,8 +64,13 @@ export type BridgeReply =
  *
  * Подмножество `OpenFluxUiStatus`: `starting` сюда не попадает, потому что
  * команда возвращается уже после того, как попытка закончилась.
+ *
+ * v4.32.1058: плюс `unknown` — «спросить у ядра не удалось». Своё значение, а
+ * не `off`: по ту сторону моста не человек, а программа, и она по `off`
+ * принимает решения — например, поднять туннель заново или увести трафик
+ * напрямую. Догадка в поле состояния для неё неотличима от факта.
  */
-export type BridgeOpenFluxState = Exclude<OpenFluxUiStatus, 'starting'>;
+export type BridgeOpenFluxState = Exclude<OpenFluxUiStatus, 'starting'> | 'unknown';
 
 /**
  * Разделы конфига, которые мост отдаёт и принимает.
@@ -164,6 +169,8 @@ async function openFluxState(cfg: AppConfig): Promise<{
   if (!OPENFLUX_AVAILABLE) return { state: 'unsupported', socks: null };
   if (!cfg.openflux?.docUrl?.trim()) return { state: 'unconfigured', socks: null };
   const running = await getOpenFluxRunning();
+  // v4.32.1058: `null` — ядро не ответило. Раньше это уезжало как `off`.
+  if (running === null) return { state: 'unknown', socks: null };
   if (!running) return { state: 'off', socks: null };
   return { state: 'on', socks: await getOpenFluxSocksAddr() };
 }
@@ -196,7 +203,11 @@ async function cmdOpenFluxEnable(): Promise<BridgeReply> {
   // главный канал в этом случае остался бы в уже погашенном SOCKS5 ровно так
   // же, как при выключении (см. `cmdOpenFluxDisable`). Поэтому помним, что
   // было до.
-  const wasRunning = await getOpenFluxRunning();
+  // v4.32.1058: `null` считаем за «стоял». `retryOpenFlux` гасит туннель
+  // перед каждой попыткой, и если он всё-таки стоял, главный канал остался бы
+  // в уже мёртвом SOCKS5. Лишний перезапуск транспорта стоит секунды; молчащий
+  // канал — всей переписки до перезахода.
+  const wasRunning = (await getOpenFluxRunning()) !== false;
   // Флаг пишется ДО попытки. `retryOpenFlux` отказывается поднимать туннель,
   // выключенный в конфиге, и это правильно — иначе «выключить» в настройках
   // перестало бы что-то значить. Значит, включение это ровно две вещи в
@@ -227,6 +238,10 @@ async function cmdOpenFluxEnable(): Promise<BridgeReply> {
 /** Почему не поднялся — словами, раз `result` в отказе нет. */
 function openFluxEnableFailure(status: BridgeOpenFluxState, cfg: AppConfig): string {
   if (status === 'unsupported') return 'На этой платформе нет ядра OpenFlux: включать нечего.';
+  // Сюда `unknown` не приходит: этот текст объясняет исход `retryOpenFlux`, а
+  // тот отвечает состоянием попытки, а не чтением. Ветка стоит ради полноты
+  // разбора — молчаливое падение в текст про попытки было бы враньём.
+  if (status === 'unknown') return 'Состояние ядра OpenFlux прочитать не удалось.';
   if (status === 'unconfigured') return 'В этой сборке нет ссылки на документ: туннель вести некуда.';
   if (status === 'off') {
     // `retryOpenFlux` отвечает `off` ровно на выключенный в конфиге туннель —

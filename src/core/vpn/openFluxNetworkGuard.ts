@@ -118,7 +118,18 @@ async function reviveOnce(): Promise<OpenFluxReviveResult> {
   // `autoStart: false` — это «поднимаю руками». Такой туннель восстанавливаем
   // только если на момент переключения он стоял: поднять его на смене сети
   // значило бы включить то, чего не включали.
-  if (!cfg.openflux?.autoStart && !(await getOpenFluxRunning())) return 'skipped';
+  if (!cfg.openflux?.autoStart) {
+    const up = await getOpenFluxRunning();
+    // v4.32.1058: `null` — спросить не удалось. Решение «поднимаю руками»
+    // сильнее нашей догадки: поднять туннель, которого, может быть, и не
+    // поднимали, значит включить его за человека. Но и тишины здесь больше
+    // нет — раньше отказ чтения был неотличим от честного «не стоял».
+    if (up === null) {
+      log.warn('openflux_net_change_state_unknown');
+      return 'skipped';
+    }
+    if (!up) return 'skipped';
+  }
 
   const status = await retryOpenFlux(cfg);
   if (status !== 'on' && status !== 'failed') {

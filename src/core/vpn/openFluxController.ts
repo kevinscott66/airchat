@@ -195,14 +195,28 @@ export async function stopOpenFlux(): Promise<boolean> {
   }
 }
 
-export async function getOpenFluxRunning(): Promise<boolean> {
+/**
+ * Поднято ли ядро — с третьим ответом (v4.32.1058).
+ *
+ * `null` — спросить не удалось. До этой версии отказ ядра уходил в тот же
+ * `false`, что и честно погашенный туннель. Раздел настроек писал «Выключен»
+ * над живым каналом, а мост внешнего агента отдавал `state: 'off'` — то есть
+ * неправда доезжала до машины, которая на неё действует.
+ *
+ * Тихий `false` остаётся там, где ядра нет по сборке или платформе: это не
+ * отказ, а отсутствие туннеля. Соседи по файлу три ответа умеют давно:
+ * `getOpenFluxHttpLayerActive` (`boolean | null`) и `stopOpenFlux`, который
+ * с v4.32.1014 отвечает, погасло ли.
+ */
+export async function getOpenFluxRunning(): Promise<boolean | null> {
   if (!openFluxAvailable()) return false;
   const mod = AirChatOpenFlux;
   if (!mod) return false;
   try {
     return await mod.isRunning();
-  } catch {
-    return false;
+  } catch (e) {
+    log.warn('openflux_running_unknown', { err: openFluxErrorText(e) });
+    return null;
   }
 }
 
