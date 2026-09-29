@@ -113,10 +113,19 @@ const sites = scanIconButtons();
 const settingsSites = (label: string): Site[] =>
   sites.filter((s) => s.file === join('screens', 'SettingsScreen.tsx') && s.label === label);
 
-const at = (...parts: string[]): Site | undefined => {
-  const line = Number(parts[parts.length - 1]);
-  const file = join(...parts.slice(0, -1));
-  return sites.find((s) => s.file === file && s.line === line);
+/**
+ * Место по обработчику нажатия, а не по номеру строки (v4.32.1034).
+ *
+ * Номера строк здесь съезжали от любой правки выше по файлу, и закрепка
+ * падала там, где роль была на месте, — ровно то, за что их уже выгнали из
+ * проверки ссылок в профиле (v4.32.993). Обработчик у каждого из этих мест
+ * свой и переживает перестановку строк; `toHaveLength(1)` сторожит от того,
+ * чтобы якорь однажды стал совпадать с двумя местами сразу и проверка
+ * молча ослабла.
+ */
+const byPress = (parts: string[], press: string): Site[] => {
+  const file = join(...parts);
+  return sites.filter((s) => s.file === file && s.tag.includes(press));
 };
 
 /**
@@ -228,18 +237,23 @@ describe('ЗАКРЕПКА: выбор не назван командой', () =
   });
 
   it('полосы вкладок объявлены вкладками и говорят, какая открыта', () => {
-    expect(at('components', 'AttachSheet.tsx', '295')?.tag)
-      .toContain('accessibilityRole="tab" accessibilityState={{ selected: isActive }}');
-    for (const parts of [['components', 'modals', 'chat', 'ChatSharedMediaModal.tsx', '454'],
-                         ['components', 'modals', 'groups', 'GroupSharedMediaModal.tsx', '154']]) {
-      expect(at(...parts)?.tag)
+    const attach = byPress(['components', 'AttachSheet.tsx'], 'onPress={() => setActiveTab(t.id)}');
+    expect(attach).toHaveLength(1);
+    expect(attach[0].tag).toContain('accessibilityRole="tab" accessibilityState={{ selected: isActive }}');
+
+    for (const parts of [['components', 'modals', 'chat', 'ChatSharedMediaModal.tsx'],
+                         ['components', 'modals', 'groups', 'GroupSharedMediaModal.tsx']]) {
+      const found = byPress(parts, 'onPress={() => setActiveTab(tab.id)}');
+      expect(found).toHaveLength(1);
+      expect(found[0].tag)
         .toContain('accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab.id }}');
     }
   });
 
   it('«Канал»/«Группа» — выбор, и озвучка слышит, какой сделан', () => {
-    expect(at('components', 'modals', 'groups', 'GroupCreateModal.tsx', '208')?.tag)
-      .toContain('accessibilityState={{ selected: type === t }}');
+    const found = byPress(['components', 'modals', 'groups', 'GroupCreateModal.tsx'], 'onPress={() => setType(t)}');
+    expect(found).toHaveLength(1);
+    expect(found[0].tag).toContain('accessibilityState={{ selected: type === t }}');
   });
 
   it('ссылки на 𝕏 и GitHub названы ссылками: они уводят из приложения', () => {
