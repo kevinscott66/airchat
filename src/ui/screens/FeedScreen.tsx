@@ -923,6 +923,38 @@ function announcePublishResult(
   }
 }
 
+/**
+ * Что сказать человеку о его репосте (v4.32.1032).
+ *
+ * Разбор у репоста тот же, что у поста, — `publishRepost` возвращает тот же
+ * `PublishFeedResult`, — а слова свои. До этой версии здесь спрашивали ровно
+ * `'queued' in result`: четыре исхода сходились в два текста, и «Репост
+ * опубликован» печаталось в том числе над `stranded` — рассылка не удалась, и
+ * очередь повторов запись не приняла. Очередь у репоста единственная, так что
+ * до недоставленных он не дойдёт уже никогда, а счётчик очереди покажет ноль
+ * и подтвердит ложный успех.
+ */
+function announceRepostResult(
+  result: Extract<PublishFeedResult, { ok: true }>,
+  t: (key: string) => string,
+): void {
+  switch (result.report) {
+    case 'delivered':
+      showSuccess(t('feed.repostPublished'));
+      return;
+    case 'local-only':
+      showSuccess(t('feed.repostLocalOnly'));
+      return;
+    case 'queued':
+      // v4.32.554: репост без сети не теряется — он лежит в очереди повторов.
+      showSuccess(t('feed.repostQueued'));
+      return;
+    case 'stranded':
+      showError(t('feed.repostStranded'));
+      return;
+  }
+}
+
 function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwnProfile, postJump }: Props): React.ReactElement {
   const { t } = useTranslation();
   // v4.32.16: `isActive` больше НЕ prop — читаем `tabRef.current === 'feed'` из Context.
@@ -2615,10 +2647,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
         try {
           const result = await publishRepost(pair, { originalPost: post, authorName: name });
           if (result.ok) {
-            // v4.32.554: репост без сети больше не теряется — он лежит в
-            // очереди повторов. Показывать «опубликован» в этом случае было бы
-            // неправдой: контакты его ещё не получили.
-            showSuccess(t('queued' in result && result.queued ? 'feed.repostQueued' : 'feed.repostPublished'));
+            // v4.32.1032: исходов у рассылки четыре, и каждый называется своим
+            // словом. Прежняя проверка `'queued' in result` знала два.
+            announceRepostResult(result, t);
             // v4.32.703: часть снимков оригинала могла не найтись на устройстве —
             // репост уходит без них, и молчать об этом нельзя: человек видит у
             // себя в ленте запись, которая отличается от той, что он репостил.

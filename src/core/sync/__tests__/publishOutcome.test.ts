@@ -113,10 +113,13 @@ describe('форма исходников', () => {
       join(__dirname, '..', '..', '..', 'ui', 'screens', 'FeedScreen.tsx'),
       'utf8'
     );
-    expect(screen).toContain("'feed.repostQueued' : 'feed.repostPublished'");
+    // v4.32.1032: исходов у репоста четыре, и разбирает их announceRepostResult.
+    // Повод у пиньона прежний: «в очереди» не называется «опубликован».
+    expect(screen).toContain("showSuccess(t('feed.repostQueued'));");
     const ru = JSON.parse(
       readFileSync(join(__dirname, '..', '..', '..', 'i18n', 'ru.json'), 'utf8')
     ) as { feed: Record<string, string> };
     expect(typeof ru.feed.repostQueued).toBe('string');
+    expect(ru.feed.repostQueued).not.toBe(ru.feed.repostPublished);
   });
 });
