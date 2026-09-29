@@ -113,6 +113,12 @@ async function currentPins(): Promise<Map<string, Pin> | null> {
  * `unknown` отдельно от `first`: «не прочитали» и «видим впервые» ведут себя
  * одинаково (переход идёт), но говорить о них одно и то же нельзя — во втором
  * случае мы запомнили, в первом нет.
+ *
+ * v4.32.1033: у «не запомнили» появилось своё слово — `unsaved`. Прежде оно
+ * сходилось с `unknown`, и это мешало обоим: сверка-то прошла, имя и правда
+ * встретилось впервые, — не удалась только запись. Назвав это «свериться не
+ * смогли», карточка подняла бы тревогу на обычном первом заходе и приучила бы
+ * не обращать на неё внимания там, где она настоящая.
  */
 export type PinVerdict =
   /** Имя видим впервые — ключ запомнен. */
@@ -122,7 +128,13 @@ export type PinVerdict =
   /** Ключ другой. `since` — когда запомнили прежний. */
   | { status: 'changed'; since: number }
   /** Запомненное не прочиталось: сверять не с чем. */
-  | { status: 'unknown' };
+  | { status: 'unknown' }
+  /**
+   * Сверились (имя новое), но запомнить не вышло: нет активного профиля или
+   * запись отказала. Тревоги здесь нет — в следующий раз просто спросим
+   * заново, как и при первой встрече.
+   */
+  | { status: 'unsaved' };
 
 /**
  * Сверить ключ, который справочник назвал за именем, с запомненным — и
@@ -142,7 +154,9 @@ export async function checkUsernameKeyPin(username: string, pub: string): Promis
       : { status: 'changed', since: known.ts };
   }
   const pid = activeProfileIdOrNull();
-  if (pid == null) return { status: 'unknown' };
+  // v4.32.1033: сверка состоялась — запомненного за этим именем нет. Не
+  // состоялась только запись, и это не повод тревожить.
+  if (pid == null) return { status: 'unsaved' };
   const next = new Map(pins);
   if (next.size >= MAX_USERNAME_PINS) {
     let oldestName: string | null = null;
@@ -155,7 +169,7 @@ export async function checkUsernameKeyPin(username: string, pub: string): Promis
   next.set(username, { pub, ts: Date.now() });
   if (!(await writeProfileSharedSecret(USERNAME_KEY_PINS_KEY, serializePins(next)))) {
     log.warn('username_pin_write_failed', { nameLen: username.length });
-    return { status: 'unknown' };
+    return { status: 'unsaved' };
   }
   cache = { profileId: pid, pins: next };
   return { status: 'first' };

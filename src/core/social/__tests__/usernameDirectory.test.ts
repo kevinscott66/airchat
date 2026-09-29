@@ -5,6 +5,14 @@
  */
 jest.mock('../mentionLookup', () => ({ lookupMention: jest.fn() }));
 jest.mock('../../sync/syncApi', () => ({ lookupSyncUsername: jest.fn() }));
+// v4.32.1033: сверка ключа стала частью исхода тремя словами, а не числом. В
+// этих тестах она не предмет: без хранилища настоящая сверка отвечала бы
+// «прочитать не смогли», и исход помечался бы тревогой по причине, не имеющей
+// к разбору ответа реестра никакого отношения. Закрепляем спокойный приговор,
+// чтобы toEqual по-прежнему сверял объект целиком.
+jest.mock('../usernameKeyPin', () => ({
+  checkUsernameKeyPin: jest.fn(async () => ({ status: 'first' })),
+}));
 
 import { lookupMention } from '../mentionLookup';
 import { lookupSyncUsername } from '../../sync/syncApi';
@@ -37,10 +45,11 @@ describe('resolveMentionTarget', () => {
     // открывался как «margarita». toEqual сверяет объект целиком, значит
     // вернувшийся displayName провалит проверку — что и требуется.
     const hit = await resolveMentionTarget('@Founder', 1);
-    // v4.32.945: `keyChangedSince` — часть исхода, и toEqual сверяет объект
+    // v4.32.945: приговор сверки — часть исхода, и toEqual сверяет объект
     // целиком: забытое поле провалит проверку, а не проедет молча.
+    // v4.32.1033: приговор этот трёхсловный; `ok` значит «тревожить не о чем».
     expect(hit).toEqual({
-      status: 'stranger', peerPubB64: PUB, username: 'founder', peerName: null, keyChangedSince: null,
+      status: 'stranger', peerPubB64: PUB, username: 'founder', peerName: null, keyPin: { state: 'ok' },
     });
     expect(hit).not.toHaveProperty('displayName');
     expect(remote).toHaveBeenCalledWith('founder');
@@ -50,7 +59,7 @@ describe('resolveMentionTarget', () => {
     local.mockResolvedValue({ status: 'none' });
     remote.mockResolvedValue({ status: 'taken', subject: null, peerPubB64: PUB, peerName: 'Рита' });
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
-      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyChangedSince: null,
+      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyPin: { state: 'ok' },
     });
   });
 

@@ -22,7 +22,7 @@
 import { normalizeUsername } from '../identity/username';
 import { lookupSyncUsername } from '../sync/syncApi';
 import { lookupMention } from './mentionLookup';
-import { checkUsernameKeyPin } from './usernameKeyPin';
+import { checkUsernameKeyPin, type PinVerdict } from './usernameKeyPin';
 
 export type MentionTarget =
   /** Свой контакт: адрес и подпись берутся с устройства. */
@@ -46,14 +46,19 @@ export type MentionTarget =
       username: string;
       peerName: string | null;
       /**
-       * v4.32.945: за этим именем раньше стоял ДРУГОЙ ключ — `since` говорит,
-       * с каких пор мы помним прежний. `null` — сошлось, встретили впервые или
-       * свериться не вышло; отличать эти три случая вызывающему незачем, а вот
-       * промолчать о четвёртом нельзя: переход по имени целиком верит серверу
-       * справочника, и смена ключа — единственное, чем подмена себя выдаёт.
+       * Чем кончилась сверка ключа с запомненным (v4.32.1033).
+       *
+       * До этой версии здесь стояло одно число: `since` при подмене и `null`
+       * во всех остальных случаях. «Свериться не вышло» попадало в тот же
+       * `null`, что и «ключ тот же», — то есть читалось как «тревоги нет».
+       * А отказ чтения здесь настоящий: запомненное лежит в общей ячейке
+       * профиля, и занятая база на первом же `@имени` после запуска отвечает
+       * отказом. Переход по имени целиком верит серверу справочника, и смена
+       * ключа — единственное, чем подмена себя выдаёт; молчание об отказе
+       * сверки гасило это единственное предупреждение.
        * Подробности и границы — в usernameKeyPin.
        */
-      keyChangedSince: number | null;
+      keyPin: MentionKeyPin;
     }
   /**
    * За именем стоит группа или канал (v4.32.937).
@@ -78,6 +83,35 @@ export type MentionTarget =
   | { status: 'unconfigured' }
   /** Проверить не вышло: реестр не ответил. */
   | { status: 'unknown' };
+
+/**
+ * Что карточке сказать о ключе за именем (v4.32.1033).
+ *
+ * Три слова, а не число: «тревоги нет», «ключ другой», «сверить не смогли».
+ * Последнее — не «всё хорошо»: запомненного мы не прочитали, и подмену в этот
+ * раз заметить было нечем.
+ */
+export type MentionKeyPin =
+  /** Сошлось, встретили впервые или не запомнили — тревожить не о чем. */
+  | { state: 'ok' }
+  /** За именем теперь другой ключ. `since` — с каких пор помним прежний. */
+  | { state: 'changed'; since: number }
+  /** Запомненное не прочиталось: сверки в этот раз не было. */
+  | { state: 'unchecked' };
+
+/** Перевод приговора сверки в то, что видит человек. */
+function keyPinOf(verdict: PinVerdict): MentionKeyPin {
+  switch (verdict.status) {
+    case 'changed':
+      return { state: 'changed', since: verdict.since };
+    case 'unknown':
+      return { state: 'unchecked' };
+    case 'first':
+    case 'same':
+    case 'unsaved':
+      return { state: 'ok' };
+  }
+}
 
 export async function resolveMentionTarget(raw: string, ownerProfileId: number): Promise<MentionTarget> {
   const local = await lookupMention(raw, ownerProfileId);
@@ -109,7 +143,7 @@ export async function resolveMentionTarget(raw: string, ownerProfileId: number):
     peerPubB64: answer.peerPubB64,
     username,
     peerName: answer.peerName,
-    keyChangedSince: pin.status === 'changed' ? pin.since : null,
+    keyPin: keyPinOf(pin),
   };
 }
 

@@ -38,7 +38,12 @@ import { UNREADABLE_COMMENT_TEXT, UNREADABLE_NAME_TEXT, UNREADABLE_POST_TEXT, UN
 import { outwardName, shownName } from '../../core/social/unreadableName';
 import { KeyboardHost } from '../components/KeyboardHost';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { mentionMissTextFor, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
+import {
+  mentionMissTextFor,
+  resolveMentionTarget,
+  type MentionKeyPin,
+  type MentionTarget,
+} from '../../core/social/usernameDirectory';
 import { collectHashtags } from '../../core/text/entities';
 import { normalizeUsername } from '../../core/identity/username';
 import { showPermissionDeniedAlert } from '../permissionAlert';
@@ -1062,8 +1067,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [peekAuthorName, setPeekAuthorName] = useState<string | null>(null);
   /** v4.32.616: юзернейм перехода — адрес, а не имя (см. usernameDirectory). */
   const [peekAuthorUsername, setPeekAuthorUsername] = useState<string | null>(null);
-  /** v4.32.945: см. usernameKeyPin — за именем сменился ключ, и молчать нельзя. */
-  const [peekKeyChangedSince, setPeekKeyChangedSince] = useState<number | null>(null);
+  /**
+   * v4.32.945: см. usernameKeyPin — за именем сменился ключ, и молчать нельзя.
+   * v4.32.1033: слов у сверки три. Отказ чтения — не «ключ тот же».
+   */
+  const [peekKeyPin, setPeekKeyPin] = useState<MentionKeyPin>({ state: 'ok' });
   /**
    * v4.32.605: упоминание в тексте адресует человека именем, а не DID —
    * находится он по адресной книге и открывается по открытому ключу. Та же
@@ -1076,7 +1084,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     // Признак снимается вместе с юзернеймом: он про имя, а не про человека, и
     // оставшись от прошлой карточки, он оболгал бы следующую — в ту сторону,
     // в которую лгать хуже всего.
-    setPeekKeyChangedSince(null);
+    setPeekKeyPin({ state: 'ok' });
     setPeekAuthorPub(null);
     setPeekAuthorDid(did);
   }, []);
@@ -1264,13 +1272,13 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       onClose={() => {
         setPeekAuthorDid(null); setPeekAuthorPub(null);
         setPeekAuthorName(null); setPeekAuthorUsername(null);
-        setPeekKeyChangedSince(null);
+        setPeekKeyPin({ state: 'ok' });
       }}
       peerDid={peekAuthorDid}
       peerPubB64={peekAuthorPub}
       fallbackName={peekAuthorName}
       usernameHint={peekAuthorUsername}
-      keyChangedSince={peekKeyChangedSince}
+      keyPin={peekKeyPin}
       pair={pair}
       onOpenChat={
         onOpenChatWithPeer
@@ -2972,7 +2980,7 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
       setPeekAuthorDid(null);
       setPeekAuthorName(hit.status === 'contact' ? hit.displayName : hit.peerName);
       setPeekAuthorUsername(hit.status === 'stranger' ? hit.username : null);
-      setPeekKeyChangedSince(hit.status === 'stranger' ? hit.keyChangedSince : null);
+      setPeekKeyPin(hit.status === 'stranger' ? hit.keyPin : { state: 'ok' });
       setPeekAuthorPub(hit.peerPubB64);
     })();
   }, [t, myPubB64, onOpenOwnProfile]);

@@ -21,6 +21,14 @@
  */
 jest.mock('../mentionLookup', () => ({ lookupMention: jest.fn() }));
 jest.mock('../../sync/syncApi', () => ({ lookupSyncUsername: jest.fn() }));
+// v4.32.1033: сверка ключа стала частью исхода тремя словами, а не числом. В
+// этих тестах она не предмет: без хранилища настоящая сверка отвечала бы
+// «прочитать не смогли», и исход помечался бы тревогой по причине, не имеющей
+// к разбору ответа реестра никакого отношения. Закрепляем спокойный приговор,
+// чтобы toEqual по-прежнему сверял объект целиком.
+jest.mock('../usernameKeyPin', () => ({
+  checkUsernameKeyPin: jest.fn(async () => ({ status: 'first' })),
+}));
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -148,7 +156,7 @@ describe('единое пространство имён у людей, груп
     const PUB = 'Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyaGk=';
     remote.mockResolvedValue({ status: 'taken', peerPubB64: PUB, peerName: 'Рита', subject: null });
     await expect(resolveMentionTarget('margarita', 1)).resolves.toEqual({
-      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyChangedSince: null,
+      status: 'stranger', peerPubB64: PUB, username: 'margarita', peerName: 'Рита', keyPin: { state: 'ok' },
     });
   });
 

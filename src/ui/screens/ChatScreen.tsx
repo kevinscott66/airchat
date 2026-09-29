@@ -50,7 +50,12 @@ import { ChatQuickReactModal } from '../components/modals/chat/ChatQuickReactMod
 import { DmPollCreatorModal } from '../components/modals/chat/ChatPollCreatorModal';
 import { SharedMediaModal } from '../components/modals/chat/ChatSharedMediaModal';
 import { UserProfilePeek } from '../components/UserProfilePeek';
-import { mentionMissTextFor, resolveMentionTarget, type MentionTarget } from '../../core/social/usernameDirectory';
+import {
+  mentionMissTextFor,
+  resolveMentionTarget,
+  type MentionKeyPin,
+  type MentionTarget,
+} from '../../core/social/usernameDirectory';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -1064,7 +1069,7 @@ function ChatThreadView({
    * незнакомцу открывается та же карточка, где есть «Добавить в контакты».
    */
   const [mentionPeek, setMentionPeek] = useState<
-    { pub: string; name: string; username: string | null; keyChangedSince: number | null } | null
+    { pub: string; name: string; username: string | null; keyPin: MentionKeyPin } | null
   >(null);
   const handleMentionPress = useCallback((mention: string) => {
     void (async () => {
@@ -1091,13 +1096,15 @@ function ChatThreadView({
       // v4.32.945: смена ключа за именем — свойство ответа справочника, и
       // донести её до карточки может только тот, кто этот ответ получил. У
       // контакта ключ свой, сверять его не с чем и незачем.
+      // v4.32.1033: и исходов у сверки три, а не «число или ничего»: отказ
+      // чтения раньше ехал сюда тем же `null`, что и «ключ тот же».
       setMentionPeek(hit.status === 'contact'
-        ? { pub: hit.peerPubB64, name: hit.displayName, username: null, keyChangedSince: null }
+        ? { pub: hit.peerPubB64, name: hit.displayName, username: null, keyPin: { state: 'ok' } }
         : {
             pub: hit.peerPubB64,
             name: hit.peerName ?? '',
             username: hit.username,
-            keyChangedSince: hit.keyChangedSince,
+            keyPin: hit.keyPin,
           });
     })();
   }, [myPubB64, peerB64, onOpenOwnProfile]);
@@ -4691,7 +4698,7 @@ function ChatThreadView({
         peerPubB64={mentionPeek?.pub ?? null}
         fallbackName={mentionPeek?.name || null}
         usernameHint={mentionPeek?.username ?? null}
-        keyChangedSince={mentionPeek?.keyChangedSince ?? null}
+        keyPin={mentionPeek?.keyPin ?? { state: 'ok' }}
         pair={pair}
         onClose={() => setMentionPeek(null)}
         onOpenChat={(pub, name) => { setMentionPeek(null); onOpenPeer?.(pub, name); }}

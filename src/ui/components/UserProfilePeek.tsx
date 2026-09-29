@@ -111,6 +111,7 @@ import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { contactLabel } from '../../core/social/contactLabel';
 import { dayMonthShortYearIfOther } from '../../core/time/ruDateTime';
 import { acceptUsernameKey } from '../../core/social/usernameKeyPin';
+import type { MentionKeyPin } from '../../core/social/usernameDirectory';
 import { rawErrorText, userErrorText } from './userErrorText';
 import { COPY_ACTION, COPY_FAILED, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
@@ -265,14 +266,18 @@ export interface UserProfilePeekProps {
    */
   usernameHint?: string | null;
   /**
-   * v4.32.945: за этим `@именем` раньше стоял другой ключ — с каких пор помним
-   * прежний. `null` — сошлось или сверять было не с чем.
+   * Чем кончилась сверка ключа за этим `@именем` (v4.32.1033).
    *
    * Карточка по имени открывается на слово сервера справочника, и это
    * единственное место, где расхождение можно показать человеку. Молчать о нём
    * нельзя: подмена ответа выглядит точно так же, как незнакомец.
+   *
+   * До v4.32.1033 здесь стояло одно число, и «сверить не смогли» было
+   * неотличимо от «ключ тот же». Слов теперь три, и третье — `unchecked` —
+   * тоже надо сказать вслух: сверки в этот раз не было, и заметить подмену
+   * было нечем.
    */
-  keyChangedSince?: number | null;
+  keyPin?: MentionKeyPin;
   /** Мой pair — нужен для addContact (шлёт invite-пакет). */
   pair: KeyPairBytes | null;
   /**
@@ -308,7 +313,7 @@ export function UserProfilePeek({
   peerDid,
   fallbackName,
   usernameHint,
-  keyChangedSince,
+  keyPin = { state: 'ok' },
   pair,
   onOpenChat,
   inChat,
@@ -736,7 +741,7 @@ export function UserProfilePeek({
    * отменяет переход: не запомнили — предупредим снова.
    */
   const openChatAfterKeyChange = useCallback((pubB64: string) => {
-    const since = keyChangedSince == null ? '' : ` Прежний известен с ${dayMonthShortYearIfOther(keyChangedSince)}.`;
+    const since = keyPin.state !== 'changed' ? '' : ` Прежний известен с ${dayMonthShortYearIfOther(keyPin.since)}.`;
     Alert.alert(
       'Ключ за этим именем сменился',
       `Раньше @${usernameHint} открывался с другим ключом.${since} Так бывает, когда человек переставил приложение — но так же выглядит и подмена ответа сервером.`,
@@ -753,13 +758,40 @@ export function UserProfilePeek({
         },
       ],
     );
-  }, [keyChangedSince, usernameHint, displayName, onOpenChat, onClose]);
+  }, [keyPin, usernameHint, displayName, onOpenChat, onClose]);
+
+  /**
+   * Написать тому, чей ключ свериться не дал (v4.32.1033).
+   *
+   * Отличается от предыдущего двумя вещами, и обе намеренные. Слова мягче:
+   * ничего плохого мы не увидели — мы просто не смогли посмотреть. И
+   * `acceptUsernameKey` здесь НЕ зовётся: принимать за «тот самый» нечего,
+   * запомненное так и осталось непрочитанным, а запись поверх него стёрла бы
+   * настоящий пиньон и подменила его сегодняшним ответом сервера.
+   */
+  const openChatAfterKeyUnchecked = useCallback((pubB64: string) => {
+    Alert.alert(
+      'Сверить ключ не удалось',
+      `Мы не смогли прочитать, с каким ключом @${usernameHint} открывался раньше, — значит и подмену в этот раз заметить было нечем. Обычно помогает открыть карточку ещё раз.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Всё равно написать',
+          onPress: () => {
+            onOpenChat?.(pubB64, displayName);
+            onClose();
+          },
+        },
+      ],
+    );
+  }, [usernameHint, displayName, onOpenChat, onClose]);
 
   const onQuickAction = useCallback((id: QuickActionId) => {
     if (!resolved) return;
     switch (id) {
       case 'message':
-        if (keyChangedSince != null) { openChatAfterKeyChange(resolved.pubB64); return; }
+        if (keyPin.state === 'changed') { openChatAfterKeyChange(resolved.pubB64); return; }
+        if (keyPin.state === 'unchecked') { openChatAfterKeyUnchecked(resolved.pubB64); return; }
         onOpenChat?.(resolved.pubB64, displayName);
         onClose();
         return;
@@ -783,7 +815,7 @@ export function UserProfilePeek({
         setMoreOpen(true);
         return;
     }
-  }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute, keyChangedSince, openChatAfterKeyChange]);
+  }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute, keyPin, openChatAfterKeyChange, openChatAfterKeyUnchecked]);
 
   // ─── Разделы ────────────────────────────────────────────────────────────
   /**
@@ -1129,12 +1161,24 @@ export function UserProfilePeek({
                         сервера справочника — проверить его нечем, кроме
                         собственной памяти. Стоит прямо под адресом, потому что
                         предупреждение именно про адрес, а не про человека. */}
-                    {keyChangedSince != null ? (
+                    {keyPin.state === 'changed' ? (
                       <Text
                         style={[styles.keyChanged, { color: colors.error }]}
                         accessibilityRole="alert"
                       >
                         За этим именем теперь другой ключ
+                      </Text>
+                    ) : null}
+                    {/* v4.32.1033: своя строка и свой цвет. Янтарь, а не
+                        красный: увиденного плохого здесь нет — есть
+                        неувиденное. Но и молчать нельзя, иначе отказ чтения
+                        читается как «всё сошлось». */}
+                    {keyPin.state === 'unchecked' ? (
+                      <Text
+                        style={[styles.keyChanged, { color: colors.warning }]}
+                        accessibilityRole="alert"
+                      >
+                        Сверить ключ за этим именем не удалось
                       </Text>
                     ) : null}
                     {/* v4.32.616: местоимения и статус — из того же

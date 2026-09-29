@@ -302,6 +302,7 @@ import {
   mentionMissText,
   mentionMissTextFor,
   resolveMentionTarget,
+  type MentionKeyPin,
   type MentionTarget,
 } from '../../core/social/usernameDirectory';
 import { listContactsFor } from '../../core/social/contacts';
@@ -1733,7 +1734,7 @@ function GroupChatScreen({
    * ключам: один контакт даёт одну запись, двое разных — неоднозначность.
    */
   const [mentionPeek, setMentionPeek] = useState<
-    { pub: string; name: string; username: string | null; keyChangedSince: number | null } | null
+    { pub: string; name: string; username: string | null; keyPin: MentionKeyPin } | null
   >(null);
 
   const handleMentionPress = useCallback((name: string) => {
@@ -1787,20 +1788,21 @@ function GroupChatScreen({
         if (hit.peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
         // v4.32.616: см. ChatScreen — юзернейм не имя.
         // v4.32.945: см. ChatScreen — признак едет вместе с ключом.
+        // v4.32.1033: признак этот трёхсловный, а не число.
         setMentionPeek(hit.status === 'contact'
-          ? { pub: hit.peerPubB64, name: hit.displayName, username: null, keyChangedSince: null }
+          ? { pub: hit.peerPubB64, name: hit.displayName, username: null, keyPin: { state: 'ok' } }
           : {
               pub: hit.peerPubB64,
               name: hit.peerName ?? '',
               username: hit.username,
-              keyChangedSince: hit.keyChangedSince,
+              keyPin: hit.keyPin,
             });
         return;
       }
       // v4.32.609: своё упоминание ведёт в собственный профиль. Раньше здесь
       // стоял молчаливый выход, и нажатие на своё имя выглядело поломкой.
       if (hits[0].peerPubB64 === myPubB64) { onOpenOwnProfile?.(); return; }
-      setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare, username: null, keyChangedSince: null });
+      setMentionPeek({ pub: hits[0].peerPubB64, name: hits[0].displayName ?? bare, username: null, keyPin: { state: 'ok' } });
     })();
   }, [allMembers, pid, myPubB64, onOpenOwnProfile]);
 
@@ -5228,7 +5230,7 @@ function GroupChatScreen({
         peerPubB64={mentionPeek?.pub ?? null}
         fallbackName={mentionPeek?.name || null}
         usernameHint={mentionPeek?.username ?? null}
-        keyChangedSince={mentionPeek?.keyChangedSince ?? null}
+        keyPin={mentionPeek?.keyPin ?? { state: 'ok' }}
         pair={pair}
         onOpenChat={(peerPubB64, displayName) => {
           setMentionPeek(null);

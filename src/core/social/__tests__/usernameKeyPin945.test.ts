@@ -132,7 +132,11 @@ describe('отказ базы не превращается в ложную тр
 
   it('неудачная запись не выдаётся за запомненное', async () => {
     mockWriteFails = true;
-    expect(await checkUsernameKeyPin('anya', PUB_A)).toEqual({ status: 'unknown' });
+    // v4.32.1033: слово уточнено. Запомненное мы прочли и ничего за именем не
+    // нашли — сверка состоялась, не легла только запись. `unknown` значит
+    // «посмотреть не смогли», и карточка поднимает по нему тревогу; здесь
+    // тревожить не о чем.
+    expect(await checkUsernameKeyPin('anya', PUB_A)).toEqual({ status: 'unsaved' });
     mockWriteFails = false;
     // Не запомнили — значит в следующий раз спросим заново, а не соврём «same».
     expect((await checkUsernameKeyPin('anya', PUB_A)).status).toBe('first');
@@ -140,8 +144,21 @@ describe('отказ базы не превращается в ложную тр
 
   it('без профиля не пишем', async () => {
     mockProfileId = null;
-    expect(await checkUsernameKeyPin('anya', PUB_A)).toEqual({ status: 'unknown' });
+    // v4.32.1033: то же самое — читать было чем, писать некуда.
+    expect(await checkUsernameKeyPin('anya', PUB_A)).toEqual({ status: 'unsaved' });
     expect(await acceptUsernameKey('anya', PUB_A)).toBe(false);
+  });
+
+  it('«не прочитали» и «не запомнили» — разные слова (v4.32.1033)', async () => {
+    mockUnreadable = true;
+    const unread = await checkUsernameKeyPin('anya', PUB_A);
+    resetUsernameKeyPinCache();
+    mockUnreadable = false;
+    mockWriteFails = true;
+    const unsaved = await checkUsernameKeyPin('anya', PUB_A);
+    // Первое — слепое пятно: за именем мог оказаться и другой ключ. Второе —
+    // обычный первый переход, просто без памяти о нём.
+    expect(unread).not.toEqual(unsaved);
   });
 });
 
@@ -214,9 +231,12 @@ describe('форма исходников: сверка стоит на пути
 
   it('переход по имени спрашивает запомненное', () => {
     const body = read('usernameDirectory.ts');
-    expect(body).toContain("import { checkUsernameKeyPin } from './usernameKeyPin';");
+    // v4.32.1033: якоря уточнены. Приговор сверки едет в карточку словом, а не
+    // числом, — повод у пиньона прежний: переход по имени обязан спросить
+    // запомненное и донести ответ до того, кто его покажет.
+    expect(body).toContain("import { checkUsernameKeyPin, type PinVerdict } from './usernameKeyPin';");
     expect(body).toContain('await checkUsernameKeyPin(username, answer.peerPubB64)');
-    expect(body).toContain('keyChangedSince:');
+    expect(body).toContain('keyPin: keyPinOf(pin),');
   });
 
   it('сверка идёт после отказов, а не до них', () => {
@@ -239,7 +259,9 @@ describe('форма исходников: сверка стоит на пути
       join(__dirname, '..', '..', '..', 'ui', 'components', 'UserProfilePeek.tsx'),
       'utf8',
     );
-    expect(peek).toContain('keyChangedSince');
+    // v4.32.1033: признак зовётся keyPin и различает три исхода.
+    expect(peek).toContain('keyPin');
+    expect(peek).toContain("keyPin.state === 'changed'");
     expect(peek).toContain('За этим именем теперь другой ключ');
     // Принять новый ключ можно только действием человека.
     expect(peek).toContain('void acceptUsernameKey(usernameHint, pubB64)');
@@ -248,7 +270,7 @@ describe('форма исходников: сверка стоит на пути
   it('все три экрана доносят признак до карточки', () => {
     const ui = join(__dirname, '..', '..', '..', 'ui', 'screens');
     for (const name of ['ChatScreen.tsx', 'GroupsScreen.tsx', 'FeedScreen.tsx']) {
-      expect(readFileSync(join(ui, name), 'utf8')).toContain('keyChangedSince');
+      expect(readFileSync(join(ui, name), 'utf8')).toContain('keyPin');
     }
   });
 });
