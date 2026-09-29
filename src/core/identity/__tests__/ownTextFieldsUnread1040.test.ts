@@ -25,11 +25,18 @@
  * ГРАНИЦЫ. Пустое поле без отказа чтения — обычная пустота, и над формой
  * тогда молчание. Отказ не вечный: он про то чтение, которым наполнялось
  * окно, поэтому в тексте сказано «откройте окно ещё раз».
+ *
+ * v4.32.1065: то же правило распространено на фото, имя и @имя, а модуль
+ * вместе с ними переименован (текст был ни при чём). Повод у этой проверки
+ * прежний и живой: три текстовых поля обязаны читаться исходом, а над формой
+ * обязано быть сказано, что записанное на месте. Ниже поменялись только имена
+ * и одно слово в обещании — «написать здесь» стало «задать новое здесь»,
+ * потому что фотографию выбирают, а не пишут.
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { ownTextFieldsUnreadText } from '../ownTextFieldsUnread';
+import { ownCardFieldsUnreadText } from '../ownCardFieldsUnread';
 
 /** Только код: пояснения не должны сами удовлетворять проверку. */
 const codeOnly = (src: string): string =>
@@ -45,11 +52,11 @@ const MODAL = (): string =>
 
 describe('что сказать над формой', () => {
   it('всё прочиталось — говорить нечего', () => {
-    expect(ownTextFieldsUnreadText([])).toBeNull();
+    expect(ownCardFieldsUnreadText([])).toBeNull();
   });
 
   it('одно поле названо в единственном числе', () => {
-    const t = ownTextFieldsUnreadText(['bio']);
+    const t = ownCardFieldsUnreadText(['bio']);
     expect(t).toContain('«О себе»');
     expect(t).toContain('Поле показано пустым');
     expect(t).not.toContain('местоимения');
@@ -57,23 +64,23 @@ describe('что сказать над формой', () => {
   });
 
   it('три поля перечислены сверху вниз по форме, а не по порядку аргумента', () => {
-    const t = ownTextFieldsUnreadText(['bio', 'status', 'pronouns']);
+    const t = ownCardFieldsUnreadText(['bio', 'status', 'pronouns']);
     expect(t).toContain('местоимения, статус и «О себе»');
     expect(t).toContain('Поля показаны пустыми');
   });
 
   it('сказано и то, что записанное на месте, и то, чем оно заменится', () => {
-    const t = ownTextFieldsUnreadText(['status']) ?? '';
+    const t = ownCardFieldsUnreadText(['status']) ?? '';
     // Без первой половины человек решит, что текст пропал, и напишет заново —
     // ровно то, ради чего всё это.
     expect(t).toContain('записанное на месте');
-    expect(t).toContain('заменится, только если написать здесь');
+    expect(t).toContain('заменится, только если задать новое здесь');
     // Отказ не вечный: он про одно чтение, а не про поле навсегда.
     expect(t).toContain('откройте окно ещё раз');
   });
 
   it('ГРАНИЦА: повтор в списке не удваивает название', () => {
-    const t = ownTextFieldsUnreadText(['bio', 'bio']) ?? '';
+    const t = ownCardFieldsUnreadText(['bio', 'bio']) ?? '';
     expect(t.split('«О себе»').length - 1).toBe(1);
   });
 });
@@ -94,7 +101,7 @@ describe('форма исходников', () => {
     expect(m).toContain('pronouns: pronouns === null,');
     expect(m).toContain('status: status === null,');
     expect(m).toContain('bio: bio === null,');
-    expect(m).toContain('const unreadNote = ownTextFieldsUnreadText(');
+    expect(m).toContain('const unreadNote = ownCardFieldsUnreadText(unreadFields);');
     expect(m).toContain('testID="profile_edit_unread_note"');
   });
 
@@ -112,7 +119,7 @@ describe('форма исходников', () => {
   });
 
   it('ЗАКРЕПКА: правило лежит отдельно от экрана и без импортов', () => {
-    const rule = readFileSync(join(__dirname, '..', 'ownTextFieldsUnread.ts'), 'utf8');
+    const rule = readFileSync(join(__dirname, '..', 'ownCardFieldsUnread.ts'), 'utf8');
     expect(codeOnly(rule)).not.toContain('import ');
   });
 });

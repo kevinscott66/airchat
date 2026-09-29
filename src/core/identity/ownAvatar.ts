@@ -121,6 +121,15 @@ export async function ownAvatarUri(): Promise<string | null> {
 }
 
 /**
+ * Путь к фотографии активного профиля с отдельным ответом «не прочитали»
+ * (v4.32.1065): `null` — ячейка на месте и не открылась, `{ uri: null }` —
+ * фотографии нет.
+ */
+export async function ownAvatarUriTry(): Promise<{ uri: string | null } | null> {
+  return await ownAvatarUriTryFor(activeProfileId());
+}
+
+/**
  * Путь к фотографии заданного профиля, годный прямо сейчас.
  *
  * Сводит «фотографии нет» и «прочитать не смогли» к одному `null`. Месту,

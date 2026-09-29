@@ -116,7 +116,14 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы цел
     expect(login).toContain("showError('Введите имя пользователя');");
     expect(login).toContain('const uname = stripOwnDisplayName(username);');
     const modal = ui('components/modals/profile/ProfileEditModal.tsx');
-    expect(modal).toContain("showError('Имя не может быть пустым');");
+    // v4.32.1065: слова отказа переехали в `ownNameEmptyText` — пустое поле
+    // имени значит одно из двух, и непрочитанное имя человек не стирал.
+    // Повод у закрепки прежний и живой: отказ на месте и по-прежнему
+    // останавливает сохранение до единой записи. Сами слова — обе их пары —
+    // сторожит ownCardFieldsUnread1065.
+    expect(modal).toContain('showError(ownNameEmptyText(cardUnread.name));');
+    const at = modal.indexOf('showError(ownNameEmptyText(cardUnread.name));');
+    expect(modal.slice(at, at + 80)).toContain('return;');
   });
 
   it('правка профиля: все девять полей всё так же пишутся', () => {

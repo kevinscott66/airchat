@@ -242,6 +242,14 @@ export async function getOwnDisplayName(): Promise<string | null> {
 }
 
 /**
+ * То же имя активного профиля, но с отдельным ответом «не прочитали»
+ * (v4.32.1065): `null` — ячейка на месте и не открылась.
+ */
+export async function getOwnDisplayNameTry(): Promise<{ name: string | null } | null> {
+  return await getOwnDisplayNameTryFor(activeProfileId());
+}
+
+/**
  * То же имя, но заданного профиля, — для путей, которые знают своего владельца
  * и не вправе спрашивать активный (см. ownFieldGetFor).
  */
@@ -286,6 +294,15 @@ export async function getOwnDisplayNameTryFor(pid: number): Promise<{ name: stri
 /** Username активного аккаунта. У каждого DID может быть только одно значение. */
 export async function getOwnUsername(): Promise<string | null> {
   return await getOwnUsernameFor(activeProfileId());
+}
+
+/**
+ * Username активного аккаунта с отдельным ответом «прочитать не удалось»
+ * (v4.32.1065). Пара к {@link getOwnDisplayNameTry}: окно правки профиля
+ * читает оба поля рядом и из отказа выводов не делает.
+ */
+export async function getOwnUsernameTry(): Promise<{ username: string | null } | null> {
+  return await getOwnUsernameTryFor(activeProfileId());
 }
 
 /** Username конкретного аккаунта, без чтения активного профиля. */

@@ -50,8 +50,8 @@ import {
 } from './ownProfileEditModel';
 import {
   OWN_DISPLAY_NAME_KEY,
-  getOwnDisplayName,
-  getOwnUsername,
+  getOwnDisplayNameTry,
+  getOwnUsernameTry,
   ownFieldSet,
   ownFieldTryGet,
   sanitizeOwnDisplayName,
@@ -63,14 +63,16 @@ import {
   type LinkFieldName,
 } from '../../../../core/identity/linkFieldWrite';
 import {
-  ownTextFieldsUnreadText,
-  type OwnTextFieldName,
-} from '../../../../core/identity/ownTextFieldsUnread';
+  decideUsernameRename,
+  ownCardFieldsUnreadText,
+  ownNameEmptyText,
+  type OwnCardFieldName,
+} from '../../../../core/identity/ownCardFieldsUnread';
 import { checkUsernameClaim } from '../../../../core/identity/reservedUsernames';
 import { republishOwnUsernameToDirectory, saveOwnUsernameGlobally } from '../../../../core/identity/usernameRegistry';
 import { applyOwnBadgeGrant, ownBadgeClaim } from '../../../../core/identity/ownBadge';
 import type { VerificationClaim } from '../../../../core/identity/verification';
-import { ownAvatarUri, saveOwnAvatar } from '../../../../core/identity/ownAvatar';
+import { ownAvatarUriTry, saveOwnAvatar } from '../../../../core/identity/ownAvatar';
 import { refreshAvatarTable } from '../../../../core/social/avatarRegistry';
 import { broadcastMyProfile, markProfileChanged } from '../../../../core/social/profileSync';
 import { republishProfileFromKv } from '../../../../core/identity/profile';
@@ -142,13 +144,17 @@ export function ProfileEditModal({
     website: false, twitter: false, github: false, twitter_proof: false, github_proof: false,
   });
   /**
-   * Какие из текстовых полей при наполнении окна не открылись (v4.32.1040).
+   * Какие поля карточки при наполнении окна не открылись (v4.32.1040).
    * Пустота в них — не ответ базы «ничего не записано», а отказ чтения. См.
-   * ownTextFieldsUnread: стереть их этим нельзя, а вот переписать вслепую —
+   * ownCardFieldsUnread: стереть их этим нельзя, а вот переписать вслепую —
    * можно, если человеку не сказать.
+   *
+   * v4.32.1065: сюда же фото, имя и @имя — три поля того же окна, читавшиеся
+   * собирающей формой. У фото и @имени цена выше, чем у текста: одно уносит
+   * прежний снимок, другое отпускает прежний адрес.
    */
-  const [textUnread, setTextUnread] = useState<Record<OwnTextFieldName, boolean>>({
-    pronouns: false, status: false, bio: false,
+  const [cardUnread, setCardUnread] = useState<Record<OwnCardFieldName, boolean>>({
+    avatar: false, name: false, handle: false, pronouns: false, status: false, bio: false,
   });
   const [pubB64, setPubB64] = useState('');
 
@@ -160,15 +166,15 @@ export function ProfileEditModal({
     void (async () => {
       const [name, handle, pronouns, status, bio, website, twitter, github, face, claim] =
         await Promise.all([
-          getOwnDisplayName(),
-          getOwnUsername(),
+          getOwnDisplayNameTry(),
+          getOwnUsernameTry(),
           ownFieldTryGet('user_pronouns'),
           ownFieldTryGet('user_custom_status'),
           ownFieldTryGet('user_bio'),
           ownFieldTryGet('user_website'),
           ownFieldTryGet('user_twitter'),
           ownFieldTryGet('user_github'),
-          ownAvatarUri(),
+          ownAvatarUriTry(),
           ownBadgeClaim(),
         ]);
       const [xProof, ghProof, kp] = await Promise.all([
@@ -178,8 +184,8 @@ export function ProfileEditModal({
       ]);
       if (!alive) return;
       const next: Loaded = {
-        name: name ?? '',
-        handle: handle ?? '',
+        name: name?.name ?? '',
+        handle: handle?.username ?? '',
         pronouns: cleanPronouns(pronouns?.text ?? null),
         status: normalizeOwnStatus(status?.text ?? null),
         bio: normalizeOwnBio(bio?.text ?? null),
@@ -189,10 +195,13 @@ export function ProfileEditModal({
       };
       setSaved(next);
       setDraft(next);
-      setAvatar(face ?? null);
+      setAvatar(face?.uri ?? null);
       setBadge(claim);
       setProofs({ x: readLinkProofRecord(xProof?.text ?? null), github: readLinkProofRecord(ghProof?.text ?? null) });
-      setTextUnread({
+      setCardUnread({
+        avatar: face === null,
+        name: name === null,
+        handle: handle === null,
         pronouns: pronouns === null,
         status: status === null,
         bio: bio === null,
@@ -209,9 +218,8 @@ export function ProfileEditModal({
     return () => { alive = false; };
   }, [visible]);
 
-  const unreadNote = ownTextFieldsUnreadText(
-    (Object.keys(textUnread) as OwnTextFieldName[]).filter((f) => textUnread[f])
-  );
+  const unreadFields = (Object.keys(cardUnread) as OwnCardFieldName[]).filter((f) => cardUnread[f]);
+  const unreadNote = ownCardFieldsUnreadText(unreadFields);
 
   const completion = profileCompletionPct({
     name: draft.name,
@@ -335,7 +343,11 @@ export function ProfileEditModal({
 
       const name = sanitizeOwnDisplayName(draft.name);
       if (!name) {
-        showError('Имя не может быть пустым');
+        // v4.32.1065: пустое поле имени значит одно из двух, и сказано должно
+        // быть то, что есть. Непрочитанное имя человек не стирал, а отказ
+        // сохранения ему здесь достаётся весь: без имени не лягут ни «О себе»,
+        // ни ссылки.
+        showError(ownNameEmptyText(cardUnread.name));
         return;
       }
       if (name !== saved.name) {
@@ -448,7 +460,18 @@ export function ProfileEditModal({
 
       let handle = saved.handle;
       const wanted = draft.handle.trim().replace(/^@/, '').toLowerCase();
-      if (wanted !== saved.handle) {
+      const rename = decideUsernameRename(wanted, saved.handle, cardUnread.handle);
+      if (rename.act === 'refuse') {
+        // v4.32.1065: прежнее @имя не прочиталось, и поле показано пустым —
+        // значит набранное здесь ни с чем не сравнить. Путь ниже занял бы его
+        // как ПЕРВОЕ имя, а прежнее осталось бы ничьим: по нему человека
+        // больше не найдут, и забрать его может кто угодно. Текстовое поле в
+        // такой же беде правку разрешает (v4.32.1040) — там теряется набранное
+        // самим человеком, а здесь единственный его адрес.
+        showError('@имя не прочиталось — откройте окно ещё раз, иначе прежнее достанется кому угодно');
+        return;
+      }
+      if (rename.act === 'claim') {
         // v4.32.547: второй аргумент — имя из своей бумаги: только оно проходит
         // мимо списка оставленных приложению имён.
         const claim = checkUsernameClaim(wanted, badge?.username);
@@ -495,7 +518,7 @@ export function ProfileEditModal({
     } finally {
       setBusy(false);
     }
-  }, [draft, saved, badge, proofs, linkUnread, publish, onSaved, onClose]);
+  }, [draft, saved, badge, proofs, linkUnread, cardUnread, publish, onSaved, onClose]);
 
   if (!visible) return null;
 
@@ -551,17 +574,31 @@ export function ProfileEditModal({
               </AppPressable>
               <AppPressable onPress={() => void pickAvatar()} hitSlop={8}>
                 <Text style={[styles.avatarAction, { color: colors.accent }]}>
-                  {avatar ? 'Изменить фото' : 'Добавить фото'}
+                  {/* v4.32.1065: непрочитанное фото — не «фотографии нет».
+                      «Добавить» обещало бы, что добавлять не поверх чего, а
+                      выбор нового удаляет прежний файл и уезжает контактам. */}
+                  {cardUnread.avatar ? 'Выбрать фото' : avatar ? 'Изменить фото' : 'Добавить фото'}
                 </Text>
               </AppPressable>
-              <View style={[styles.meter, { backgroundColor: colors.border }]}>
-                <View
-                  style={[styles.meterFill, { width: `${completion}%`, backgroundColor: colors.primary }]}
-                />
-              </View>
-              <Text style={[styles.meterLabel, { color: colors.textSecondary }]}>
-                Профиль заполнен на {completion}%
-              </Text>
+              {unreadFields.length === 0 ? (
+                <>
+                  <View style={[styles.meter, { backgroundColor: colors.border }]}>
+                    <View
+                      style={[styles.meterFill, { width: `${completion}%`, backgroundColor: colors.primary }]}
+                    />
+                  </View>
+                  <Text style={[styles.meterLabel, { color: colors.textSecondary }]}>
+                    Профиль заполнен на {completion}%
+                  </Text>
+                </>
+              ) : (
+                // Доля считается по полям, про которые сейчас известно, что их
+                // нет. Про непрочитанные это неизвестно, и полоска занижала бы
+                // её ровно на них — заодно подталкивая заполнить заполненное.
+                <Text style={[styles.meterLabel, { color: colors.textSecondary }]}>
+                  Заполненность не считаем: часть полей не прочиталась
+                </Text>
+              )}
             </View>
 
             <Text style={[styles.label, { color: colors.textSecondary }]}>Имя</Text>
