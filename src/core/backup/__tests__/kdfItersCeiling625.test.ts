@@ -71,7 +71,9 @@ describe('все три входа проходят через общую пла
   it('конверт привязки берёт iters только у acceptKdfIters', () => {
     const code = codeLines(SEED_BINDING);
     expect(code).toContain('const iters = acceptKdfIters(envelope.iters, SEED_BINDING_KDF_ITERS);');
-    expect(code).toContain('if (iters == null) return null;');
+    // v4.32.1079: отказ стал называть свою причину. Закрепка здесь не про то,
+    // каким словом он записан, а про то, что он есть и случается до счёта ключа.
+    expect(code).toContain("if (iters == null) return no('broken_envelope');");
     // Прежняя односторонняя проверка ушла целиком.
     expect(code).not.toContain('Number.isSafeInteger(envelope.iters)');
     // И ключ выводится из проверенного числа, а не из сырого поля.
@@ -82,7 +84,9 @@ describe('все три входа проходят через общую пла
   it('у конверта привязки появился предел на длину шифртекста', () => {
     const code = codeLines(SEED_BINDING);
     expect(code).toContain('const SEED_BINDING_MAX_DATA_B64 = 4096;');
-    const gate = code.indexOf('if (envelope.dataB64.length > SEED_BINDING_MAX_DATA_B64) return null;');
+    const gate = code.indexOf(
+      "if (envelope.dataB64.length > SEED_BINDING_MAX_DATA_B64) return no('broken_envelope');",
+    );
     const decode = code.indexOf("Buffer.from(envelope.dataB64, 'base64')");
     expect(gate).toBeGreaterThan(0);
     // Проверка длины — ДО раскодирования, иначе память уже выделена.

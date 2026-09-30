@@ -21,6 +21,7 @@ import { log } from '../logger';
 import { fetchWithDeadline } from '../net/timedFetch';
 import { cloudBaseUrl } from './cloudVault';
 import { acceptKdfIters } from '../crypto/kdfIters';
+import type { SeedBindingRefusal } from './seedBindingRefusal';
 
 export const SEED_BINDING_VERSION = 1;
 /**
@@ -85,24 +86,49 @@ export function encryptSeedBinding(
   };
 }
 
-/** Открыть конверт. `null` — неверный пароль или порченая запись, без разницы. */
-export function decryptSeedBinding(
+/** Исход открытия конверта. При отказе сказано, чей он: пароля или записи. */
+export type SeedBindingOpen =
+  | { ok: true; mnemonic: string }
+  | { ok: false; why: SeedBindingRefusal };
+
+/**
+ * Открыть конверт (v4.32.1079).
+ *
+ * Прежде эта форма отвечала одним `null` на семь разных отказов, а экран
+ * восстановления называл их все неверным паролем. Разбор причин — см.
+ * seedBindingRefusal: проверки здесь те же, изменилось только то, что каждая
+ * теперь называет себя.
+ */
+export function openSeedBinding(
   envelope: SeedBindingEnvelope | null | undefined,
   password: string,
-): string | null {
-  if (!envelope || envelope.v !== SEED_BINDING_VERSION) return null;
+): SeedBindingOpen {
+  const no = (why: SeedBindingRefusal): SeedBindingOpen => ({ ok: false, why });
+  if (!envelope) return no('no_envelope');
+  // Конверт новее здешней версии — единственный отказ, который человек может
+  // починить сам, и единственный, где старое приложение точно не виновато.
+  if (typeof envelope.v === 'number' && envelope.v > SEED_BINDING_VERSION) {
+    return no('newer_envelope');
+  }
+  if (envelope.v !== SEED_BINDING_VERSION) return no('broken_envelope');
   // v4.32.625: планка стала двусторонней — см. kdfIters.
   const iters = acceptKdfIters(envelope.iters, SEED_BINDING_KDF_ITERS);
-  if (iters == null) return null;
-  if (typeof envelope.saltB64 !== 'string' || typeof envelope.dataB64 !== 'string') return null;
-  if (envelope.dataB64.length > SEED_BINDING_MAX_DATA_B64) return null;
+  if (iters == null) return no('broken_envelope');
+  if (typeof envelope.saltB64 !== 'string' || typeof envelope.dataB64 !== 'string') {
+    return no('broken_envelope');
+  }
+  if (envelope.dataB64.length > SEED_BINDING_MAX_DATA_B64) return no('broken_envelope');
   const salt = Buffer.from(envelope.saltB64, 'base64');
-  if (salt.length !== SEED_BINDING_SALT_BYTES) return null;
+  if (salt.length !== SEED_BINDING_SALT_BYTES) return no('broken_envelope');
   const key = deriveBindingKey(password, new Uint8Array(salt), iters);
   const plain = decryptSymmetric(key, new Uint8Array(Buffer.from(envelope.dataB64, 'base64')), SEED_BINDING_AAD);
-  if (!plain) return null;
+  // Метка AEAD не сошлась — это и есть «не тот пароль»: единственный из
+  // разрядов, где подобрать другой пароль имеет смысл.
+  if (!plain) return no('wrong_password');
   const mnemonic = normalizeMnemonic(new TextDecoder().decode(plain));
-  return validateMnemonic(mnemonic) ? mnemonic : null;
+  // Ключ верный, а внутри не слова: пароль называть неверным здесь нельзя.
+  if (!validateMnemonic(mnemonic)) return no('broken_words');
+  return { ok: true, mnemonic };
 }
 
 /**

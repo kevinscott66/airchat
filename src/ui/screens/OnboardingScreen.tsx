@@ -52,11 +52,12 @@ import {
 } from '../../core/backup/storedPhraseState';
 import { isCloudVaultConfigured, restoreCloudVault } from '../../core/backup/cloudVault';
 import {
-  decryptSeedBinding,
   fetchSeedBinding,
+  openSeedBinding,
   trySeedBindingProviders,
   type SeedBindingEnvelope,
 } from '../../core/backup/seedBinding';
+import { seedBindingRefusalText } from '../../core/backup/seedBindingRefusal';
 import { isAppleSignInAvailable, signInWithApple } from '../../core/auth/appleSignIn';
 import {
   appleAskState,
@@ -431,11 +432,15 @@ export function OnboardingScreen({ onComplete }: Props): React.ReactElement {
    */
   const handleRestoreFromBinding = async (): Promise<void> => {
     if (!appleBinding) return;
-    const mnemonic = decryptSeedBinding(appleBinding, cloudPwd);
-    if (!mnemonic) {
-      Alert.alert('AirChat', 'Неверный пароль приложения.');
+    // v4.32.1079: отказов у конверта несколько, и пароль виноват только в
+    // одном. Прежде здесь на все отвечали «Неверный пароль приложения.» —
+    // человеку с единственным паролем это говорило, что он его забыл.
+    const opened = openSeedBinding(appleBinding, cloudPwd);
+    if (!opened.ok) {
+      Alert.alert('AirChat', seedBindingRefusalText(opened.why));
       return;
     }
+    const mnemonic = opened.mnemonic;
     setBusy(true);
     try {
       const pair = await restoreFromMnemonic(mnemonic);

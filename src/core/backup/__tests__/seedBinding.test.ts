@@ -2,8 +2,8 @@ import {
   SEED_BINDING_KDF_ITERS,
   SEED_BINDING_SALT_BYTES,
   SEED_BINDING_VERSION,
-  decryptSeedBinding,
   encryptSeedBinding,
+  openSeedBinding,
   type SeedBindingEnvelope,
 } from '../seedBinding';
 
@@ -35,16 +35,22 @@ describe('seed binding envelope', () => {
   });
 
   it('открывается тем же паролем', () => {
-    expect(decryptSeedBinding(envelope, PASSWORD)).toBe(MNEMONIC);
+    expect(openSeedBinding(envelope, PASSWORD)).toEqual({ ok: true, mnemonic: MNEMONIC });
   });
 
-  it('не открывается чужим паролем', () => {
-    expect(decryptSeedBinding(envelope, 'пароль-приложенья')).toBeNull();
+  it('не открывается чужим паролем — и отказ назван паролем', () => {
+    // v4.32.1079: прежде здесь был безымянный null. Важно не только то, что
+    // конверт не открылся, но и то, что виноватым назван пароль: именно этот
+    // разряд экран отвечает предложением ввести его заново.
+    expect(openSeedBinding(envelope, 'пароль-приложенья')).toEqual({
+      ok: false,
+      why: 'wrong_password',
+    });
   });
 
   it('терпит регистр и лишние пробелы в словах', () => {
     const messy = encryptSeedBinding(`  ${MNEMONIC.toUpperCase().replace(/ /g, '   ')}  `, PASSWORD);
-    expect(decryptSeedBinding(messy, PASSWORD)).toBe(MNEMONIC);
+    expect(openSeedBinding(messy, PASSWORD)).toEqual({ ok: true, mnemonic: MNEMONIC });
   });
 
   it('отказывается шифровать не-слова и слабый пароль', () => {
@@ -56,14 +62,20 @@ describe('seed binding envelope', () => {
   it('не принимает конверт с заниженным KDF', () => {
     // Заниженный `iters` — попытка удешевить перебор пароля. Ключ по нему
     // считать нельзя даже ради проверки: конверт отвергается по форме.
-    expect(decryptSeedBinding({ ...envelope, iters: 1000 }, PASSWORD)).toBeNull();
-    expect(decryptSeedBinding({ ...envelope, iters: SEED_BINDING_KDF_ITERS - 1 }, PASSWORD)).toBeNull();
+    // v4.32.1079: отказ по форме конверта — не «неверный пароль».
+    expect(openSeedBinding({ ...envelope, iters: 1000 }, PASSWORD).ok).toBe(false);
+    expect(openSeedBinding({ ...envelope, iters: SEED_BINDING_KDF_ITERS - 1 }, PASSWORD))
+      .toEqual({ ok: false, why: 'broken_envelope' });
   });
 
   it('не принимает конверт чужой версии и порченый', () => {
-    expect(decryptSeedBinding({ ...envelope, v: SEED_BINDING_VERSION + 1 }, PASSWORD)).toBeNull();
-    expect(decryptSeedBinding({ ...envelope, saltB64: 'AAEC' }, PASSWORD)).toBeNull();
-    expect(decryptSeedBinding(null, PASSWORD)).toBeNull();
+    // Версия новее — свой разряд: его чинят обновлением приложения, а не
+    // подбором пароля (v4.32.1079).
+    expect(openSeedBinding({ ...envelope, v: SEED_BINDING_VERSION + 1 }, PASSWORD))
+      .toEqual({ ok: false, why: 'newer_envelope' });
+    expect(openSeedBinding({ ...envelope, saltB64: 'AAEC' }, PASSWORD))
+      .toEqual({ ok: false, why: 'broken_envelope' });
+    expect(openSeedBinding(null, PASSWORD)).toEqual({ ok: false, why: 'no_envelope' });
   });
 
   it('даёт разный шифртекст на одних и тех же словах', () => {
