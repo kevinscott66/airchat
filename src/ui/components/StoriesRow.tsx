@@ -70,6 +70,11 @@ import { log } from '../../core/logger';
 import { UserProfilePeek } from './UserProfilePeek';
 import { contactLabel, nameInitial } from '../../core/social/contactLabel';
 import { shortIdentity } from '../identity/shortId';
+import {
+  STORIES_ROW_FAILED_LABEL,
+  storiesRowFailedA11yLabel,
+  storiesRowFailedHint,
+} from '../utils/storiesRowUnread';
 import { rawErrorText, userErrorText } from './userErrorText';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -628,6 +633,11 @@ export function StoriesRow({
   const [viewerTarget, setViewerTarget] = useState<{ stories: StoryRow[]; index: number } | null>(null);
   const [composerVisible, setComposerVisible] = useState(false);
   const [storyNameMap, setStoryNameMap] = useState<Record<string, string>>({});
+  /**
+   * v4.32.1075: чтение ряда сорвалось. Без этого пустой `groups` рисовал
+   * «историй нет» и после отказа базы — см. storiesRowUnread.
+   */
+  const [loadFailed, setLoadFailed] = useState(false);
   const c = useColors();
   const pid = profileManager.getActiveProfile()?.id ?? 1;
 
@@ -638,53 +648,63 @@ export function StoriesRow({
   const aliveRef = useRef(true);
 
   const reload = useCallback(async () => {
-    await deleteExpiredStories();
-    if (!aliveRef.current) return;
-    const [allStories, contacts] = await Promise.all([
-      listActiveStories(pid),
-      listContacts(),
-    ]);
-    if (!aliveRef.current) return;
-    const nameMap = new Map<string, string>(contacts.map((c) => [c.peerPublicKey, c.displayName ?? '']));
-    nameMap.set(myPubB64, 'Я');
-    setStoryNameMap(Object.fromEntries(nameMap));
+    // v4.32.1075: один try на всё чтение. Прежде его не было вовсе, а зовут
+    // отсюда четырьмя способами, три из них — `void reload()`: бросок уходил
+    // в необработанный промис, и ряд оставался пустым молча.
+    try {
+      await deleteExpiredStories();
+      if (!aliveRef.current) return;
+      const [allStories, contacts] = await Promise.all([
+        listActiveStories(pid),
+        listContacts(),
+      ]);
+      if (!aliveRef.current) return;
+      const nameMap = new Map<string, string>(contacts.map((c) => [c.peerPublicKey, c.displayName ?? '']));
+      nameMap.set(myPubB64, 'Я');
+      setStoryNameMap(Object.fromEntries(nameMap));
 
-    // Group by author
-    const byAuthor = new Map<string, StoryRow[]>();
-    for (const s of allStories) {
-      const list = byAuthor.get(s.authorPubB64) ?? [];
-      list.push(s);
-      byAuthor.set(s.authorPubB64, list);
-    }
+      // Group by author
+      const byAuthor = new Map<string, StoryRow[]>();
+      for (const s of allStories) {
+        const list = byAuthor.get(s.authorPubB64) ?? [];
+        list.push(s);
+        byAuthor.set(s.authorPubB64, list);
+      }
 
-    const result: StoryGroup[] = [];
-    // Own story first
-    if (byAuthor.has(myPubB64)) {
-      const own = byAuthor.get(myPubB64)!;
-      result.push({ authorPubB64: myPubB64, stories: own, hasUnread: false, displayName: 'Я' });
+      const result: StoryGroup[] = [];
+      // Own story first
+      if (byAuthor.has(myPubB64)) {
+        const own = byAuthor.get(myPubB64)!;
+        result.push({ authorPubB64: myPubB64, stories: own, hasUnread: false, displayName: 'Я' });
+      }
+      // Others
+      for (const [pub, stories] of byAuthor.entries()) {
+        if (pub === myPubB64) continue;
+        // v4.32.590: неизвестный список посмотревших больше не зажигает кружок
+        // навсегда — погасить его было нечем, писать в непрочитанный столбец
+        // нельзя.
+        const hasUnread = storyRingUnread(
+          parseViewerList(stories[0].viewedBy, stories[0].viewedUnreadable),
+          myPubB64,
+        );
+        result.push({
+          authorPubB64: pub,
+          stories,
+          hasUnread,
+          // v4.32.906: то же пустое имя. Отсюда оно расходилось дальше: в
+          // кружке рисовалась буква «?», а подпись под ним пропадала совсем —
+          // ''.split(' ')[0] пуст.
+          displayName: contactLabel(nameMap.get(pub), shortIdentity(pub)),
+        });
+      }
+      if (!aliveRef.current) return;
+      setGroups(result);
+      setLoadFailed(false);
+    } catch (e) {
+      log.warn('ui_stories_row_reload_failed', { err: rawErrorText(e) });
+      // Прежде прочитанное не стираем: оно настоящее, просто могло устареть.
+      if (aliveRef.current) setLoadFailed(true);
     }
-    // Others
-    for (const [pub, stories] of byAuthor.entries()) {
-      if (pub === myPubB64) continue;
-      // v4.32.590: неизвестный список посмотревших больше не зажигает кружок
-      // навсегда — погасить его было нечем, писать в непрочитанный столбец
-      // нельзя.
-      const hasUnread = storyRingUnread(
-        parseViewerList(stories[0].viewedBy, stories[0].viewedUnreadable),
-        myPubB64,
-      );
-      result.push({
-        authorPubB64: pub,
-        stories,
-        hasUnread,
-        // v4.32.906: то же пустое имя. Отсюда оно расходилось дальше: в
-        // кружке рисовалась буква «?», а подпись под ним пропадала совсем —
-        // ''.split(' ')[0] пуст.
-        displayName: contactLabel(nameMap.get(pub), shortIdentity(pub)),
-      });
-    }
-    if (!aliveRef.current) return;
-    setGroups(result);
   }, [pid, myPubB64]);
 
   useEffect(() => {
@@ -746,6 +766,30 @@ export function StoriesRow({
   // Always show "add my story" button
   const hasMyStory = groups.some((g) => g.authorPubB64 === myPubB64);
 
+  /**
+   * v4.32.1075: кружок «Не открылись». Один на обе ветки отрисовки — пустую и
+   * обычную: правило о том, что сказать, у них одно, и разъехаться им нельзя.
+   */
+  const failureBubble = loadFailed ? (
+    <AppPressable
+      style={sb.wrap}
+      testID="stories_row_failed"
+      accessibilityRole="button"
+      accessibilityLabel={storiesRowFailedA11yLabel(groups.length > 0)}
+      onPress={() => {
+        showError(storiesRowFailedHint(groups.length > 0));
+        void reload();
+      }}
+    >
+      <View style={[sb.ring, { borderColor: c.textMuted }]}>
+        <View style={[sb.avatar, { backgroundColor: c.surface }]}>
+          <Ionicons name="alert" size={24} color={c.textSecondary} />
+        </View>
+      </View>
+      <Text style={[sb.name, { color: c.textSecondary }]}>{STORIES_ROW_FAILED_LABEL}</Text>
+    </AppPressable>
+  ) : null;
+
   if (groups.length === 0 && !hasMyStory) {
     // Show just the add button
     return (
@@ -760,6 +804,7 @@ export function StoriesRow({
               </View>
               <Text style={[sb.name, { color: c.textSecondary }]}>Добавить</Text>
             </AppPressable>
+            {failureBubble}
           </View>
         </View>
         {composerVisible ? (
@@ -804,6 +849,7 @@ export function StoriesRow({
               <Text style={[sb.name, { color: c.textSecondary }]}>Добавить</Text>
             </AppPressable>
           ) : null}
+          {failureBubble}
           {groups.map((g) => (
             <StoryBubble
               key={g.authorPubB64}
