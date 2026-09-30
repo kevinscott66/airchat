@@ -14,6 +14,7 @@ import {
   passwordChangeAftermathText,
 } from '../../core/security/passwordChangeAftermath';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from '../../core/security/passwordPolicy';
+import { seedMatchText } from '../../core/security/seedMatchVerdict';
 import { checkSeedWordCount, normalizeSeedInput } from './seedInput';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
@@ -126,9 +127,13 @@ export function ForgotPasswordScreen({ onSuccess, onCancel }: Props): React.Reac
     }
     setBusy(true);
     try {
+      // v4.32.1084: «нет» бывает разным. Отказ хранилища ключей — не чужие
+      // слова: ключ на месте, и человеку надо перезапустить приложение, а не
+      // решать, что он записал не ту фразу и пора стирать аккаунт.
       const match = await authGuard.verifyMnemonicMatchesWallet(m);
-      if (!match) {
-        showError('Слова не совпадают с аккаунтом на этом устройстве');
+      const mismatchText = seedMatchText(match);
+      if (mismatchText) {
+        showError(mismatchText);
         return;
       }
       const ok = await authGuard.resetPasswordWithVerifiedSeed(m, newPassword);

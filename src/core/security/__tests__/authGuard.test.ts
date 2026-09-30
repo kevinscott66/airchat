@@ -23,7 +23,9 @@ jest.mock('../biometricUnlock', () => ({
 jest.mock('../../identity/profileManager', () => ({
   profileManager: { init: jest.fn(async () => {}), getActiveProfile: jest.fn(() => null) },
 }));
-jest.mock('../../crypto/keyManager', () => ({ loadKeyPair: jest.fn(async () => null) }));
+jest.mock('../../crypto/keyManager', () => ({
+  readKeyRecord: jest.fn(async () => ({ state: 'absent', pair: null })),
+}));
 jest.mock('../../backup/seedPhrase', () => ({
   deriveKeyPairFromMnemonicForProfile: jest.fn(() => ({
     publicKey: new Uint8Array(32),
@@ -37,7 +39,7 @@ import { AuthGuard } from '../authGuard';
 const mockSecureStore = jest.requireMock('../../storage/secureStoreQueued') as {
   __store: Record<string, string | undefined>;
 };
-const mockKeyManager = jest.requireMock('../../crypto/keyManager') as { loadKeyPair: jest.Mock };
+const mockKeyManager = jest.requireMock('../../crypto/keyManager') as { readKeyRecord: jest.Mock };
 const mockBip39 = jest.requireMock('bip39') as { validateMnemonic: jest.Mock };
 const mockBiometric = jest.requireMock('../biometricUnlock') as {
   isBiometricUnlockEnabled: jest.Mock;
@@ -259,7 +261,7 @@ describe('AuthGuard — сброс пароля по секретным слов
   const SEED = 'слова которые человек записал на бумажке';
 
   afterEach(() => {
-    mockKeyManager.loadKeyPair.mockImplementation(async () => null);
+    mockKeyManager.readKeyRecord.mockImplementation(async () => ({ state: 'absent', pair: null }));
     mockBip39.validateMnemonic.mockImplementation(() => true);
   });
 
@@ -267,9 +269,9 @@ describe('AuthGuard — сброс пароля по секретным слов
     const guard = freshGuard();
     await guard.setPassword('забытый!');
     // Ключ, выведенный из слов (мок отдаёт нули), совпадает с ключом кошелька.
-    mockKeyManager.loadKeyPair.mockImplementation(async () => ({
-      publicKey: new Uint8Array(32),
-      secretKey: new Uint8Array(64),
+    mockKeyManager.readKeyRecord.mockImplementation(async () => ({
+      state: 'ok',
+      pair: { publicKey: new Uint8Array(32), secretKey: new Uint8Array(64) },
     }));
 
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(true);
@@ -280,9 +282,9 @@ describe('AuthGuard — сброс пароля по секретным слов
   test('чужие слова пароль не меняют', async () => {
     const guard = freshGuard();
     await guard.setPassword('забытый!');
-    mockKeyManager.loadKeyPair.mockImplementation(async () => ({
-      publicKey: new Uint8Array(32).fill(7),
-      secretKey: new Uint8Array(64),
+    mockKeyManager.readKeyRecord.mockImplementation(async () => ({
+      state: 'ok',
+      pair: { publicKey: new Uint8Array(32).fill(7), secretKey: new Uint8Array(64) },
     }));
 
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
@@ -293,9 +295,9 @@ describe('AuthGuard — сброс пароля по секретным слов
   test('слова не из словаря bip39 пароль не меняют', async () => {
     const guard = freshGuard();
     await guard.setPassword('забытый!');
-    mockKeyManager.loadKeyPair.mockImplementation(async () => ({
-      publicKey: new Uint8Array(32),
-      secretKey: new Uint8Array(64),
+    mockKeyManager.readKeyRecord.mockImplementation(async () => ({
+      state: 'ok',
+      pair: { publicKey: new Uint8Array(32), secretKey: new Uint8Array(64) },
     }));
     mockBip39.validateMnemonic.mockImplementation(() => false);
 
@@ -306,7 +308,7 @@ describe('AuthGuard — сброс пароля по секретным слов
   test('слов нет на устройстве — менять нечему и не с чем', async () => {
     const guard = freshGuard();
     await guard.setPassword('забытый!');
-    // loadKeyPair отдаёт null: кошелька на устройстве нет.
+    // readKeyRecord отдаёт «absent»: кошелька на устройстве нет.
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
     expect(await guard.verifyPassword('забытый!')).toBe('ok');
   });

@@ -9,12 +9,13 @@ import { validateMnemonic } from 'bip39';
 import * as SecureStore from '../storage/secureStoreQueued';
 import { deriveKeyPairFromMnemonicForProfile } from '../backup/seedPhrase';
 import { bytesEqualConstTime } from '../crypto/bytesEqual';
-import { loadKeyPair } from '../crypto/keyManager';
+import { readKeyRecord } from '../crypto/keyManager';
 import { profileManager } from '../identity/profileManager';
 import { log } from '../logger';
 import { disableBiometricUnlock, enableBiometricUnlock, isBiometricUnlockEnabled } from './biometricUnlock';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from './passwordPolicy';
 import { passwordVerdictCostsAttempt, type PasswordChange, type PasswordVerdict } from './passwordVerdict';
+import { seedMatchFromKeyRecord, seedMatchIsMatch, type SeedMatch } from './seedMatchVerdict';
 
 const AUTH_PAYLOAD_KEY = 'airchat_app_password_v1';
 const FAILED_ATTEMPTS_KEY = 'airchat_app_password_failed_v1';
@@ -240,16 +241,26 @@ export class AuthGuard {
     return bytesEqualConstTime(computed, expected) ? 'ok' : 'wrong';
   }
 
-  async verifyMnemonicMatchesWallet(mnemonic: string): Promise<boolean> {
-    const kp = await loadKeyPair();
-    if (!kp) return false;
+  /**
+   * Сверить секретные слова с ключом этого устройства. Исходов больше двух.
+   *
+   * v4.32.1084: прежде отвечала `boolean`, и три разных «нет» — ключ не
+   * прочитался, фраза не сходится по bip39, слова от другого аккаунта —
+   * приходили наружу одинаковыми. Экран восстановления пароля называл их все
+   * чужими словами, см. seedMatchVerdict.ts.
+   */
+  async verifyMnemonicMatchesWallet(mnemonic: string): Promise<SeedMatch> {
+    const record = await readKeyRecord();
+    const noKey = seedMatchFromKeyRecord(record.state);
+    if (noKey) return noKey;
+    if (!record.pair) return 'no_identity';
     const normalized = mnemonic.trim().split(/\s+/).join(' ');
-    if (!validateMnemonic(normalized)) return false;
+    if (!validateMnemonic(normalized)) return 'invalid_words';
     await profileManager.init();
     const ap = profileManager.getActiveProfile();
     const idx = ap?.derivationIndex ?? 0;
     const derived = deriveKeyPairFromMnemonicForProfile(normalized, idx);
-    return bytesEqualConstTime(derived.publicKey, kp.publicKey);
+    return bytesEqualConstTime(derived.publicKey, record.pair.publicKey) ? 'match' : 'mismatch';
   }
 
   /**
@@ -268,7 +279,7 @@ export class AuthGuard {
    */
   async resetPasswordWithVerifiedSeed(mnemonic: string, newPassword: string): Promise<boolean> {
     if (passwordPolicyError(newPassword)) return false;
-    if (!(await this.verifyMnemonicMatchesWallet(mnemonic))) return false;
+    if (!seedMatchIsMatch(await this.verifyMnemonicMatchesWallet(mnemonic))) return false;
     const ok = await this.setPassword(newPassword);
     if (ok) {
       await this.resetFailedAttempts();
