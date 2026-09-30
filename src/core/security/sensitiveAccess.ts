@@ -12,6 +12,7 @@
  * копия» и «Профиль → Секретные слова», — и разъехаться они не должны.
  */
 import { authGuard } from './authGuard';
+import { PASSWORD_UNUSABLE_TEXT } from './passwordVerdict';
 
 /**
  * Что делать перед тем, как открыть защищённое место:
@@ -25,8 +26,14 @@ export type SensitiveGate = 'set_password' | 'verify';
  * `empty` отделён от `rejected` намеренно: пустая строка не тратит одну из
  * пяти попыток {@link authGuard}, иначе случайное нажатие «Показать»
  * приближало бы пятнадцатиминутную блокировку.
+ *
+ * v4.32.1083: `unusable` — запись пароля есть, но сверить с ней нечего. Это
+ * не отказ по паролю: попытка не тратится, и говорить «неверный» не о чем.
  */
-export type SensitiveUnlock = 'ok' | 'empty' | 'rejected' | 'no_password';
+export type SensitiveUnlock = 'ok' | 'empty' | 'rejected' | 'no_password' | 'unusable';
+
+/** Слово про повреждённую запись — одно на все двери, см. passwordVerdict.ts. */
+export const SENSITIVE_UNUSABLE_TEXT = PASSWORD_UNUSABLE_TEXT;
 
 /** Текст для случая, когда пароль ещё не заведён. */
 export const SENSITIVE_NO_PASSWORD_TEXT =
@@ -38,8 +45,13 @@ export async function sensitiveAccessGate(): Promise<SensitiveGate> {
 
 export async function unlockSensitiveAccess(password: string): Promise<SensitiveUnlock> {
   if (!password.trim()) return 'empty';
-  // Пароля нет — verifyPassword вернул бы false и списал попытку, а человек
-  // читал бы «неверный пароль» про пароль, которого не существует.
+  // Пароля нет — verifyPassword ответил бы «сверять не с чем», а человеку
+  // здесь надо сказать не про повреждённую запись, а про незаведённый пароль.
   if (!(await authGuard.hasPassword())) return 'no_password';
-  return (await authGuard.verifyPassword(password)) ? 'ok' : 'rejected';
+  const verdict = await authGuard.verifyPassword(password);
+  if (verdict === 'ok') return 'ok';
+  // v4.32.1083: «сверять не с чем» — не «не подошёл». За обеими дверьми
+  // лежат секретные слова, и отправлять за ними человека с верным паролем,
+  // сказав ему, что пароль неверный, — худшее, что здесь можно сделать.
+  return verdict === 'unusable' ? 'unusable' : 'rejected';
 }

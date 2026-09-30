@@ -35,6 +35,7 @@ import {
 } from '../../core/security/passwordChangeAftermath';
 import {
   SENSITIVE_NO_PASSWORD_TEXT,
+  SENSITIVE_UNUSABLE_TEXT,
   sensitiveAccessGate,
   unlockSensitiveAccess,
 } from '../../core/security/sensitiveAccess';
@@ -884,10 +885,19 @@ function SettingsScreenImpl({
     }
     setPwdBusy(true);
     try {
-      const ok = await authGuard.changePassword(oldPwd, newPwd);
+      const res = await authGuard.changePassword(oldPwd, newPwd);
       // v4.32.315: смена пароля теперь под теми же пятью попытками, что и экран
       // блокировки, — значит и объяснять отказ надо так же, см. userFeedback.
-      if (!ok) { await showPasswordRejected(); return; }
+      //
+      // v4.32.1083: но так — только про настоящий промах. Повреждённая запись
+      // и несохранившийся новый пароль тоже отвечали «Неверный пароль», хотя
+      // старый пароль в обоих случаях был введён верно.
+      if (res === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
+      if (res === 'save_failed') {
+        showError('Старый пароль принят, но новый не сохранился. Пароль остался прежним — попробуйте ещё раз.');
+        return;
+      }
+      if (res !== 'ok') { await showPasswordRejected(); return; }
       showSuccess('Пароль обновлён');
       setChangePwdModal(false);
       setOldPwd('');
@@ -1048,6 +1058,7 @@ function SettingsScreenImpl({
       const result = await unlockSensitiveAccess(bioPwdInput);
       if (result === 'empty') { showError('Введите пароль'); return; }
       if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
       if (result === 'rejected') { await showPasswordRejected(); return; }
       if (!(await enableBiometricUnlock(bioPwdInput))) {
         showError('Не удалось включить вход по биометрии');
@@ -1127,6 +1138,7 @@ function SettingsScreenImpl({
       const access = await unlockSensitiveAccess(appleBindPwd);
       if (access === 'empty') { showError('Введите пароль'); return; }
       if (access === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (access === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
       if (access === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Секретные слова недоступны на этом устройстве'); return; }
@@ -1284,6 +1296,7 @@ function SettingsScreenImpl({
       const result = await unlockSensitiveAccess(backupPwdInput);
       if (result === 'empty') { showError('Введите пароль'); return; }
       if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
       if (result === 'rejected') { await showPasswordRejected(); return; }
       setBackupUnlockModal(false);
       setBackupPwdInput('');
@@ -1304,6 +1317,7 @@ function SettingsScreenImpl({
       const result = await unlockSensitiveAccess(seedPwdInput);
       if (result === 'empty') { showError('Введите пароль'); return; }
       if (result === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (result === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
       if (result === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Секретные слова не найдены'); return; }
@@ -1331,6 +1345,7 @@ function SettingsScreenImpl({
       const unlocked = await unlockSensitiveAccess(cloudPasswordInput);
       if (unlocked === 'empty') { showError('Введите пароль'); return; }
       if (unlocked === 'no_password') { showError(SENSITIVE_NO_PASSWORD_TEXT); return; }
+      if (unlocked === 'unusable') { showError(SENSITIVE_UNUSABLE_TEXT); return; }
       if (unlocked === 'rejected') { await showPasswordRejected(); return; }
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) { showError('Секретные слова не найдены'); return; }

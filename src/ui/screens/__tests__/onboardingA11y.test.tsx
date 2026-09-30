@@ -91,7 +91,7 @@ jest.mock('../../../core/security/authGuard', () => ({
   authGuard: {
     getRemainingAttempts: jest.fn(async () => 5),
     getLockoutTimeRemaining: jest.fn(async () => 0),
-    checkPassword: jest.fn(async () => false),
+    checkPassword: jest.fn(async () => 'wrong'),
     setPassword: jest.fn(),
   },
 }));

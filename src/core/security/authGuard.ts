@@ -14,6 +14,7 @@ import { profileManager } from '../identity/profileManager';
 import { log } from '../logger';
 import { disableBiometricUnlock, enableBiometricUnlock, isBiometricUnlockEnabled } from './biometricUnlock';
 import { PASSWORD_MIN_LENGTH, passwordPolicyError } from './passwordPolicy';
+import { passwordVerdictCostsAttempt, type PasswordChange, type PasswordVerdict } from './passwordVerdict';
 
 const AUTH_PAYLOAD_KEY = 'airchat_app_password_v1';
 const FAILED_ATTEMPTS_KEY = 'airchat_app_password_failed_v1';
@@ -146,39 +147,44 @@ export class AuthGuard {
 
   /**
    * Проверка пароля для экрана блокировки: при успехе разблокирует сессию.
+   *
+   * v4.32.1083: исходов три. `unusable` — сверять не с чем; попытку он не
+   * тратит и сессию не открывает, см. passwordVerdict.ts.
    */
-  async checkPassword(password: string): Promise<boolean> {
+  async checkPassword(password: string): Promise<PasswordVerdict> {
     return this.serializeAttempt(() => this.checkPasswordOnce(password));
   }
 
-  private async checkPasswordOnce(password: string): Promise<boolean> {
-    if (await this.isLocked()) return false;
-    const ok = await this.verifyPasswordInternal(password);
-    if (ok) {
+  private async checkPasswordOnce(password: string): Promise<PasswordVerdict> {
+    // Заперт — отвечаем как на промах: сколько осталось ждать, экран узнаёт
+    // не отсюда, а из счётчика и отметки времени. Так было и до v4.32.1083.
+    if (await this.isLocked()) return 'wrong';
+    const verdict = await this.verifyPasswordInternal(password);
+    if (verdict === 'ok') {
       await this.resetFailedAttempts();
       this.sessionUnlocked = true;
-      return true;
+      return 'ok';
     }
-    await this.recordFailedAttempt();
-    return false;
+    if (passwordVerdictCostsAttempt(verdict)) await this.recordFailedAttempt();
+    return verdict;
   }
 
   /**
    * Проверка пароля без смены флага сессии (например просмотр seed).
    */
-  async verifyPassword(password: string): Promise<boolean> {
+  async verifyPassword(password: string): Promise<PasswordVerdict> {
     return this.serializeAttempt(() => this.verifyPasswordOnce(password));
   }
 
-  private async verifyPasswordOnce(password: string): Promise<boolean> {
-    if (await this.isLocked()) return false;
-    const ok = await this.verifyPasswordInternal(password);
-    if (ok) {
+  private async verifyPasswordOnce(password: string): Promise<PasswordVerdict> {
+    if (await this.isLocked()) return 'wrong';
+    const verdict = await this.verifyPasswordInternal(password);
+    if (verdict === 'ok') {
       await this.resetFailedAttempts();
-      return true;
+      return 'ok';
     }
-    await this.recordFailedAttempt();
-    return false;
+    if (passwordVerdictCostsAttempt(verdict)) await this.recordFailedAttempt();
+    return verdict;
   }
 
   private serializeAttempt<T>(operation: () => Promise<T>): Promise<T> {
@@ -187,34 +193,51 @@ export class AuthGuard {
     return current;
   }
 
-  async changePassword(oldPassword: string, newPassword: string): Promise<boolean> {
-    if (passwordPolicyError(newPassword)) return false;
+  async changePassword(oldPassword: string, newPassword: string): Promise<PasswordChange> {
+    if (passwordPolicyError(newPassword)) return 'weak';
     // v4.32.315: через verifyPassword, а не напрямую. Прямой вызов проходил мимо
     // счётчика попыток и мимо блокировки — то есть форма «сменить пароль» была
     // площадкой для подбора старого пароля без ограничений, в обход тех самых
     // пяти попыток и пятнадцати минут, которыми защищён экран блокировки.
-    if (!(await this.verifyPassword(oldPassword))) return false;
-    return this.setPassword(newPassword);
+    //
+    // v4.32.1083: исход пробрасывается как есть. `unusable` здесь значит то же,
+    // что и на экране блокировки, — сверять не с чем, и говорить «неверный
+    // старый пароль» не о чем. А `save_failed` отделён от промаха потому, что
+    // старый пароль при нём был введён верно: молчать о неудавшейся записи
+    // словом «Неверный пароль» значит отправить человека менять пароль
+    // заново вместо того, чтобы сказать, что он не сменился.
+    const verdict = await this.verifyPassword(oldPassword);
+    if (verdict !== 'ok') return verdict;
+    return (await this.setPassword(newPassword)) ? 'ok' : 'save_failed';
   }
 
-  private async verifyPasswordInternal(password: string): Promise<boolean> {
+  /**
+   * Сверить пароль с записью. Три исхода, см. passwordVerdict.ts.
+   *
+   * `unusable` — общее имя всем случаям, когда сравнения не было: записи нет,
+   * она не разбирается, в ней другая версия формата или нет соли и хэша. До
+   * v4.32.1083 все они отвечали тем же `false`, что и настоящий промах, и
+   * вызывающий списывал за них попытку.
+   */
+  private async verifyPasswordInternal(password: string): Promise<PasswordVerdict> {
     const raw = await SecureStore.getItemAsync(AUTH_PAYLOAD_KEY);
-    // v4.32.176: если payload отсутствует — возвращаем false, а не true.
-    // Раньше transient SecureStore miss (Keystore race после boot) давал
-    // эффект password-bypass в changePassword и других местах, которые
-    // вызывают verifyPasswordInternal.
-    if (!raw?.trim()) return false;
+    // v4.32.176: при отсутствующем payload доступа нет. Раньше transient
+    // SecureStore miss (Keystore race после boot) давал эффект
+    // password-bypass в changePassword и других местах, которые вызывают
+    // verifyPasswordInternal. v4.32.1083 эту политику не трогает: `unusable`
+    // — это по-прежнему «не пустили», изменилось только сказанное человеку.
+    if (!raw?.trim()) return 'unusable';
     let payload: AuthPayloadV1;
     try {
       payload = JSON.parse(raw) as AuthPayloadV1;
     } catch {
-      return false;
+      return 'unusable';
     }
-    if (payload.v !== 1 || !payload.saltB64 || !payload.hashB64) return false;
+    if (payload.v !== 1 || !payload.saltB64 || !payload.hashB64) return 'unusable';
     const salt = new Uint8Array(Buffer.from(payload.saltB64, 'base64'));
     const expected = new Uint8Array(Buffer.from(payload.hashB64, 'base64'));
     const computed = hashPassword(password, salt);
-    return bytesEqualConstTime(computed, expected);
+    return bytesEqualConstTime(computed, expected) ? 'ok' : 'wrong';
   }
 
   async verifyMnemonicMatchesWallet(mnemonic: string): Promise<boolean> {

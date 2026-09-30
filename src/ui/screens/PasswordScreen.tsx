@@ -13,6 +13,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppPressable } from '../components/AppPressable';
 import { AUTH_MAX_ATTEMPTS, authGuard } from '../../core/security/authGuard';
 import { isBiometricUnlockEnabled, readBiometricPassword } from '../../core/security/biometricUnlock';
+import { PASSWORD_UNUSABLE_TEXT } from '../../core/security/passwordVerdict';
 import { SafeScreen } from '../components/SafeScreen';
 import { AuthBackdrop } from '../components/AuthBackdrop';
 import { GlassSurface } from '../components/GlassSurface';
@@ -235,12 +236,20 @@ export function PasswordScreen({ onSuccess, onForgot }: Props): React.ReactEleme
       submittingRef.current = true;
       setLoading(true);
       try {
-        if (await authGuard.checkPassword(value)) {
+        const verdict = await authGuard.checkPassword(value);
+        if (verdict === 'ok') {
           onSuccess();
           return true;
         }
         setPin('');
         setPassword('');
+        if (verdict === 'unusable') {
+          // v4.32.1083: сверять не с чем — человек не промахнулся, и попытку
+          // за это не списали. Ни встряхивать экран, ни считать оставшиеся
+          // попытки не о чем: ни то, ни другое к этому отказу не относится.
+          showError(PASSWORD_UNUSABLE_TEXT);
+          return false;
+        }
         shake();
         const { remaining, lockout } = await refreshStatus();
         if (lockout > 0) {

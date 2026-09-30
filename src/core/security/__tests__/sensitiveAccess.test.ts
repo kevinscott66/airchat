@@ -1,16 +1,18 @@
 import {
   SENSITIVE_NO_PASSWORD_TEXT,
+  SENSITIVE_UNUSABLE_TEXT,
   sensitiveAccessGate,
   unlockSensitiveAccess,
 } from '../sensitiveAccess';
+import type { PasswordVerdict } from '../passwordVerdict';
 
 const mockHasPassword = jest.fn<Promise<boolean>, []>();
-const mockVerifyPassword = jest.fn<Promise<boolean>, [string]>();
+const mockVerifyPassword = jest.fn<Promise<PasswordVerdict>, [string]>();
 
 jest.mock('../authGuard', () => ({
   authGuard: {
     hasPassword: (): Promise<boolean> => mockHasPassword(),
-    verifyPassword: (password: string): Promise<boolean> => mockVerifyPassword(password),
+    verifyPassword: (password: string): Promise<PasswordVerdict> => mockVerifyPassword(password),
   },
 }));
 
@@ -31,15 +33,23 @@ test('с паролем дверь спрашивает пароль', async () 
 
 test('верный пароль открывает', async () => {
   mockHasPassword.mockResolvedValue(true);
-  mockVerifyPassword.mockResolvedValue(true);
+  mockVerifyPassword.mockResolvedValue('ok');
   await expect(unlockSensitiveAccess('correct horse')).resolves.toBe('ok');
   expect(mockVerifyPassword).toHaveBeenCalledWith('correct horse');
 });
 
 test('неверный пароль не открывает', async () => {
   mockHasPassword.mockResolvedValue(true);
-  mockVerifyPassword.mockResolvedValue(false);
+  mockVerifyPassword.mockResolvedValue('wrong');
   await expect(unlockSensitiveAccess('nope')).resolves.toBe('rejected');
+});
+
+test('сверять не с чем — отдельный ответ, а не «неверный пароль» (v4.32.1083)', async () => {
+  mockHasPassword.mockResolvedValue(true);
+  mockVerifyPassword.mockResolvedValue('unusable');
+  await expect(unlockSensitiveAccess('верный пароль')).resolves.toBe('unusable');
+  expect(SENSITIVE_UNUSABLE_TEXT).not.toContain('Неверный пароль');
+  expect(SENSITIVE_UNUSABLE_TEXT).toContain('секретным словам');
 });
 
 test('пустая строка не тратит попытку', async () => {

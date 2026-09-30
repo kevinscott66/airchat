@@ -66,9 +66,10 @@ describe('AuthGuard — basic password flow', () => {
   // оставшийся вход, который выставлял `sessionUnlocked` вообще без проверки.
   // В приложении его не звали нигде: он существовал только здесь, в тестах,
   // и ждал, пока кто-нибудь подключит к нему экран блокировки.
-  test('no password → checkPassword returns false (no implicit bypass)', async () => {
+  test('no password → checkPassword does not let anyone in (no implicit bypass)', async () => {
     const guard = freshGuard();
-    expect(await guard.checkPassword('anything')).toBe(false);
+    // v4.32.1083: исход назвался своим именем, но политика та же — не пустили.
+    expect(await guard.checkPassword('anything')).not.toBe('ok');
     expect(guard.isSessionUnlocked()).toBe(false);
   });
 
@@ -78,20 +79,20 @@ describe('AuthGuard — basic password flow', () => {
       require('path').join(__dirname, '..', 'authGuard.ts'), 'utf8'
     ) as string;
     expect(SRC).not.toContain('checkPasswordOrBypassIfUnset');
-    expect(await guard.checkPassword('anything')).toBe(false);
+    expect(await guard.checkPassword('anything')).not.toBe('ok');
     expect(guard.isSessionUnlocked()).toBe(false);
   });
 
   test('setPassword + verify correct password', async () => {
     const guard = freshGuard();
     await guard.setPassword('hunter2!');
-    expect(await guard.verifyPassword('hunter2!')).toBe(true);
+    expect(await guard.verifyPassword('hunter2!')).toBe('ok');
   });
 
-  test('wrong password returns false', async () => {
+  test('wrong password is called wrong', async () => {
     const guard = freshGuard();
     await guard.setPassword('hunter2!');
-    expect(await guard.verifyPassword('wrong')).toBe(false);
+    expect(await guard.verifyPassword('wrong')).toBe('wrong');
   });
 
   test('setPassword rejects passwords shorter than minPasswordLength', async () => {
@@ -130,7 +131,7 @@ describe('AuthGuard — failed attempts & lockout', () => {
     const guard = freshGuard();
     await guard.setPassword('secret!');
     for (let i = 0; i < 5; i++) await guard.checkPassword('x');
-    expect(await guard.checkPassword('secret!')).toBe(false);
+    expect(await guard.checkPassword('secret!')).not.toBe('ok');
   });
 
   test('correct password resets failed attempts counter', async () => {
@@ -159,24 +160,24 @@ describe('AuthGuard — changePassword', () => {
     const guard = freshGuard();
     await guard.setPassword('oldpass!');
     const ok = await guard.changePassword('oldpass!', 'newpass!!');
-    expect(ok).toBe(true);
-    expect(await guard.verifyPassword('newpass!!')).toBe(true);
-    expect(await guard.verifyPassword('oldpass!')).toBe(false);
+    expect(ok).toBe('ok');
+    expect(await guard.verifyPassword('newpass!!')).toBe('ok');
+    expect(await guard.verifyPassword('oldpass!')).toBe('wrong');
   });
 
   test('fails with wrong old password', async () => {
     const guard = freshGuard();
     await guard.setPassword('oldpass!');
     const ok = await guard.changePassword('wrongpass', 'newpass!!');
-    expect(ok).toBe(false);
+    expect(ok).toBe('wrong');
     // original password still valid
-    expect(await guard.verifyPassword('oldpass!')).toBe(true);
+    expect(await guard.verifyPassword('oldpass!')).toBe('ok');
   });
 
   test('fails if new password is too short', async () => {
     const guard = freshGuard();
     await guard.setPassword('oldpass!');
-    expect(await guard.changePassword('oldpass!', 'ab')).toBe(false);
+    expect(await guard.changePassword('oldpass!', 'ab')).toBe('weak');
   });
 });
 
@@ -196,15 +197,15 @@ describe('AuthGuard — смена пароля под теми же огран�
     for (let i = 0; i < 5; i++) await guard.changePassword('wrong', 'newpass!!');
     expect(await guard.isLocked()).toBe(true);
     // Даже верный старый пароль во время блокировки не проходит.
-    expect(await guard.changePassword('oldpass!', 'newpass!!')).toBe(false);
-    expect(await guard.verifyPassword('oldpass!')).toBe(false);
+    expect(await guard.changePassword('oldpass!', 'newpass!!')).not.toBe('ok');
+    expect(await guard.verifyPassword('oldpass!')).not.toBe('ok');
   });
 
   test('удачная смена пароля обнуляет счётчик', async () => {
     const guard = freshGuard();
     await guard.setPassword('oldpass!');
     await guard.changePassword('wrongpass', 'newpass!!');
-    expect(await guard.changePassword('oldpass!', 'newpass!!')).toBe(true);
+    expect(await guard.changePassword('oldpass!', 'newpass!!')).toBe('ok');
     expect(await guard.getRemainingAttempts()).toBe(5);
   });
 });
@@ -225,7 +226,7 @@ describe('AuthGuard — испорченные значения в хранил�
     mockSecureStore.__store['airchat_app_password_last_attempt_v1'] = 'сломано';
     expect(await guard.isLocked()).toBe(false);
     expect(await guard.getLockoutTimeRemaining()).toBe(0);
-    expect(await guard.checkPassword('secret!')).toBe(true);
+    expect(await guard.checkPassword('secret!')).toBe('ok');
   });
 
   test('часы, переведённые назад, не запирают навсегда', async () => {
@@ -237,7 +238,7 @@ describe('AuthGuard — испорченные значения в хранил�
     const yearAhead = Date.now() + 365 * 24 * 60 * 60 * 1000;
     mockSecureStore.__store['airchat_app_password_last_attempt_v1'] = String(yearAhead);
     expect(await guard.isLocked()).toBe(false);
-    expect(await guard.checkPassword('secret!')).toBe(true);
+    expect(await guard.checkPassword('secret!')).toBe('ok');
   });
 
   test('блокировка истекает по истечении срока', async () => {
@@ -273,7 +274,7 @@ describe('AuthGuard — сброс пароля по секретным слов
 
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(true);
     expect(guard.isSessionUnlocked()).toBe(true);
-    expect(await guard.verifyPassword('новый!!!')).toBe(true);
+    expect(await guard.verifyPassword('новый!!!')).toBe('ok');
   });
 
   test('чужие слова пароль не меняют', async () => {
@@ -286,7 +287,7 @@ describe('AuthGuard — сброс пароля по секретным слов
 
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
     expect(guard.isSessionUnlocked()).toBe(false);
-    expect(await guard.verifyPassword('забытый!')).toBe(true);
+    expect(await guard.verifyPassword('забытый!')).toBe('ok');
   });
 
   test('слова не из словаря bip39 пароль не меняют', async () => {
@@ -299,7 +300,7 @@ describe('AuthGuard — сброс пароля по секретным слов
     mockBip39.validateMnemonic.mockImplementation(() => false);
 
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
-    expect(await guard.verifyPassword('забытый!')).toBe(true);
+    expect(await guard.verifyPassword('забытый!')).toBe('ok');
   });
 
   test('слов нет на устройстве — менять нечему и не с чем', async () => {
@@ -307,7 +308,7 @@ describe('AuthGuard — сброс пароля по секретным слов
     await guard.setPassword('забытый!');
     // loadKeyPair отдаёт null: кошелька на устройстве нет.
     expect(await guard.resetPasswordWithVerifiedSeed(SEED, 'новый!!!')).toBe(false);
-    expect(await guard.verifyPassword('забытый!')).toBe(true);
+    expect(await guard.verifyPassword('забытый!')).toBe('ok');
   });
 });
 
