@@ -70,6 +70,7 @@ jest.mock('../../transport/ipfs/heliaNode', () => ({ isIpfsEnabled: () => false 
 jest.mock('../contacts', () => ({
   listContacts: async () => [],
   listContactsFor: async () => [{ peerPublicKey: mockPeer }],
+  listContactsReadFor: async () => [{ peerPublicKey: mockPeer }],
 }));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryGet: async () => mockPrefRead,

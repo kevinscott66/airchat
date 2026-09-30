@@ -69,6 +69,8 @@ jest.mock('../../identity/profileManager', () => ({
 }));
 jest.mock('../contacts', () => ({
   listContactsFor: async () => mockContacts.map((p) => ({ peerPublicKey: p })),
+  // v4.32.1090: рассылка читает книгу различающей формой.
+  listContactsReadFor: async () => mockContacts.map((p) => ({ peerPublicKey: p })),
 }));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryGetFor: async () => (mockVisibility === null ? null : { value: mockVisibility }),

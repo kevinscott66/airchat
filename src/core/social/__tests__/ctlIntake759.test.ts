@@ -29,6 +29,7 @@ const mockWrites: { pid: number; peer: string; name: string | null }[] = [];
 
 jest.mock('../contacts', () => ({
   listContactsFor: async () => [],
+  listContactsReadFor: async () => [],
   // v4.32.768: запись отвечает словом, а не бросает. Прежний мок бросал
   // исключение — настоящая функция его никогда не бросала, свой `catch` у неё
   // внутри, и ветка отсрочки в profileSync не зажигалась ни разу.

@@ -65,6 +65,7 @@ jest.mock('../sendGate', () => ({ canReachPeer: (...a: unknown[]) => mockReach(.
 let mockContacts: string[] = [];
 jest.mock('../contacts', () => ({
   listContactsFor: jest.fn(async () => mockContacts.map((p) => ({ peerPublicKey: p }))),
+  listContactsReadFor: jest.fn(async () => mockContacts.map((p) => ({ peerPublicKey: p }))),
   setPeerProfileFor: jest.fn(async () => true),
 }));
 jest.mock('../../identity/profileManager', () => ({

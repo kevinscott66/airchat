@@ -16,9 +16,18 @@
  * Честная граница: изменённый клиент может проигнорировать просьбу. Поэтому
  * рядом работает вторая половина, которую никто снаружи не отменит, —
  * взаимность в presenceService (скрыл своё время — не видишь чужое).
+ *
+ * v4.32.1090: адресная книга тоже читается трёхзначно. Здесь стояло
+ * `listContactsFor`, а это сводящая обёртка: отказ базы она отдаёт пустым
+ * списком, и стоявший рядом `catch` не срабатывал никогда. Пустая книга при
+ * варианте «Контакты» означает «ни один из них не контакт», то есть рассылка
+ * уходила ровно обратной просьбой — «спрячьте моё время» тем самым людям,
+ * которым человек только что решил его открыть. Хуже отправки то, что она
+ * ложилась в карту как доставленная: второго захода нет, и само это уже не
+ * чинится. Теперь неизвестный ответ так и называется неизвестным.
  */
 import { scopedKvSetSecretCheckedFor, scopedKvTryGetSecretFor } from '../storage/profileScopedKv';
-import { listContactsFor } from './contacts';
+import { listContactsReadFor } from './contacts';
 import { profileManager } from '../identity/profileManager';
 import { mergeSentMap, parseSentMap, isSentFlag, trimSentMap } from './sentMap';
 import { getMessagingService } from './messaging';
@@ -179,8 +188,13 @@ async function currentVisibility(pid: number): Promise<LastSeenVisibility> {
  * `sent_map_unreadable` — карта отправленного не прочиталась, и список
  * адресатов вышел неполным: бывшие контакты в него не попали. Настройка при
  * этом сохранена, а рассылка по нынешним контактам прошла.
+ *
+ * `contacts_unreadable` (v4.32.1090) — не прочиталась адресная книга. Это
+ * больше, чем неполный список: при варианте «Контакты» неизвестен сам ответ,
+ * потому что «контакт он мне или нет» знает только она. Такому адресату не
+ * отправляется ничего — выдуманное «нет» легло бы в карту как доставленное.
  */
-export type LastSeenBroadcast = 'ok' | 'sent_map_unreadable';
+export type LastSeenBroadcast = 'ok' | 'sent_map_unreadable' | 'contacts_unreadable';
 
 /**
  * Разослать текущее решение. Вызывается при изменении настройки.
@@ -195,12 +209,12 @@ export async function broadcastLastSeenPref(): Promise<LastSeenBroadcast> {
   // активным может быть уже другой аккаунт.
   const pid = activeProfileId();
   const visibility = await currentVisibility(pid);
-  let contactPubs: string[] = [];
-  try {
-    contactPubs = (await listContactsFor(pid)).map((c) => c.peerPublicKey);
-  } catch (e) {
-    log.warn('presence_pref_contacts_failed', { err: e instanceof Error ? e.message : String(e) });
-  }
+  // v4.32.1090: книга читается различающей формой. Сводящая (listContactsFor)
+  // отдавала отказ пустым списком, и `catch` вокруг неё был мёртвым: бросать
+  // ей нечего, отказ она гасит внутри себя (см. readContactsFor).
+  const book = await listContactsReadFor(pid);
+  const bookUnreadable = book === null;
+  const contactPubs = (book ?? []).map((c) => c.peerPublicKey);
   const contactSet = new Set(contactPubs);
   // v4.32.901: `null` здесь значит «прочитать не вышло», и для дедупликации
   // пустая карта безвредна — лишняя отправка дешева. Но из этой же карты
@@ -219,6 +233,11 @@ export async function broadcastLastSeenPref(): Promise<LastSeenBroadcast> {
       log.info('presence_pref_profile_switched', { pid, done: Object.keys(fresh).length });
       break;
     }
+    // v4.32.1090: при непрочитанной книге ответ для «Контакты» неизвестен.
+    // `contactSet.has` отдал бы уверенное «не контакт», а это просьба
+    // спрятать время входа — обратная выбранной. Молчание дешевле выдумки:
+    // повтор настройки догонит, отправленное — нет.
+    if (bookUnreadable && visibility === 'contacts') continue;
     const show = shouldShareLastSeenWith({ visibility, isContact: contactSet.has(peer) });
     if (sent[peer] === show || fresh[peer] === show) continue;
     if (await sendPref(peer, show)) fresh[peer] = show;
@@ -229,9 +248,15 @@ export async function broadcastLastSeenPref(): Promise<LastSeenBroadcast> {
     targets: targets.size,
     sent: Object.keys(fresh).length,
     sentMapUnreadable: sentRead === null,
+    contactsUnreadable: bookUnreadable,
   });
   // Карта на диске цела: recordSent отказывается писать поверх непрочитанной
   // (v4.32.693), так что повтор той же настройки действительно догонит всех.
+  //
+  // v4.32.1090: о книге говорим раньше карты. Без карты неполон список
+  // адресатов, без книги неизвестен сам ответ — это большая беда из двух, и
+  // повторить просят из-за неё.
+  if (bookUnreadable) return 'contacts_unreadable';
   return sentRead === null ? 'sent_map_unreadable' : 'ok';
 }
 
@@ -244,10 +269,17 @@ export async function syncLastSeenPrefTo(peerPubB64: string): Promise<void> {
   if (!peerPubB64) return;
   const pid = activeProfileId();
   const visibility = await currentVisibility(pid);
-  let isContact = false;
-  try {
-    isContact = (await listContactsFor(pid)).some((c) => c.peerPublicKey === peerPubB64);
-  } catch { /* считаем «не контакт» — так строже */ }
+  // v4.32.1090: та же книга и та же трёхзначность, что в рассылке. Прежнее
+  // «не контакт при отказе» строгим было только на словах: при варианте
+  // «Контакты» оно отправляло собеседнику «спрячь моё время» и записывало
+  // это как доставленное, а переписка открывается однажды — повтора не
+  // будет. Здесь сказать человеку нечего, поэтому не говорим ничего.
+  const book = await listContactsReadFor(pid);
+  if (book === null && visibility === 'contacts') {
+    log.info('presence_pref_book_unreadable', { to: peerPubB64.slice(0, 12) });
+    return;
+  }
+  const isContact = (book ?? []).some((c) => c.peerPublicKey === peerPubB64);
   const show = shouldShareLastSeenWith({ visibility, isContact });
   const sent = (await loadSent(pid)) ?? {};
   // «Показывать» — состояние по умолчанию у любого клиента; пока мы ничего не

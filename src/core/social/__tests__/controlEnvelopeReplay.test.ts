@@ -82,7 +82,7 @@ jest.mock('../copyGuard', () => ({
     return true;
   },
 }));
-jest.mock('../contacts', () => ({ listContactsFor: async () => [] }));
+jest.mock('../contacts', () => ({ listContactsFor: async () => [], listContactsReadFor: async () => [] }));
 jest.mock('../messaging', () => ({ getMessagingService: () => null }));
 jest.mock('../presenceService', () => ({
   // v4.32.751: запись отчитывается о себе — как запрет копирования и таймер.

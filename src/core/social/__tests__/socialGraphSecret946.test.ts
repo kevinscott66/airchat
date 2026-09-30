@@ -89,6 +89,7 @@ let mockContacts: string[] = [];
 jest.mock('../contacts', () => ({
   listContacts: async () => mockContacts.map((peerPublicKey) => ({ peerPublicKey })),
   listContactsFor: async () => mockContacts.map((peerPublicKey) => ({ peerPublicKey })),
+  listContactsReadFor: async () => mockContacts.map((peerPublicKey) => ({ peerPublicKey })),
   setPeerProfileFor: async () => true,
   setPeerProfileForChecked: async () => true,
 }));

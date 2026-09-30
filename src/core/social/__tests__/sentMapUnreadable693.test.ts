@@ -64,6 +64,7 @@ jest.mock('../../identity/profileManager', () => ({
 }));
 jest.mock('../contacts', () => ({
   listContactsFor: async () => mockContacts.map((p) => ({ peerPublicKey: p })),
+  listContactsReadFor: async () => mockContacts.map((p) => ({ peerPublicKey: p })),
 }));
 jest.mock('../../settings/privacyPrefs', () => ({
   privacyPrefTryGetFor: async () => (mockVisibility === null ? null : { value: mockVisibility }),

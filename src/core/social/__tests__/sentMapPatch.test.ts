@@ -120,7 +120,10 @@ describe('у захода один владелец от начала до ко�
   it('рассылка решения о времени входа — так же', () => {
     expect(presenceSrc).not.toMatch(/await scopedKvGet\(/);
     expect(presenceSrc).toContain('const pid = activeProfileId();');
-    expect(presenceSrc).toContain('await listContactsFor(pid)');
+    // v4.32.1090: книгу читает различающая форма (listContactsReadFor).
+    // Довод проверки прежний и к правке не относится: книга берётся у
+    // НАЗВАННОГО профиля, а не у активного.
+    expect(presenceSrc).toMatch(/await listContacts\w*For\(pid\)/);
     expect(presenceSrc).toContain('await currentVisibility(pid)');
   });
 
