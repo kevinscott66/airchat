@@ -15,7 +15,11 @@ import fs from 'fs';
 import path from 'path';
 
 import { describeRestoreLock, RESTORE_LOCK_POLICY_TEXT, RESTORE_LOCK_STORAGE_TEXT } from '../../../core/security/restoreLockOutcome';
-import { decideStoredPhraseState } from '../../../core/backup/storedPhraseState';
+import {
+  decideStoredPhraseState,
+  phraseAskBanner,
+  phraseOverwriteWarning,
+} from '../../../core/backup/storedPhraseState';
 import { PASSWORD_MIN_LENGTH } from '../../../core/security/passwordPolicy';
 
 const read = (rel: string): string => fs.readFileSync(path.join(__dirname, '..', '..', '..', rel), 'utf8');
@@ -145,11 +149,15 @@ describe('онбординг проверяет ответ setPassword в обо
 describe('онбординг отличает нечитаемую фразу от её отсутствия', () => {
   it('эффект welcome спрашивает решение и запоминает его до вопроса о сидке', () => {
     const src = ONB();
-    const eff = slice(src, 'const present = await hasStoredMnemonic();', "setStep('showSeed');");
+    // v4.32.1072: вопрос «есть ли запись» получил свой try, и объявление
+    // переменной отделилось от чтения. Якорь — само чтение.
+    const eff = slice(src, 'present = await hasStoredMnemonic();', "setStep('showSeed');");
     expect(eff).toContain('const phraseState = decideStoredPhraseState(present, stored);');
-    expect(eff).toContain("setPhraseUnreadable(phraseState === 'unreadable');");
+    // v4.32.1072: ответов стало четыре, и решение кладётся в состояние целиком.
+    // Смысл закрепки прежний: исход разбора запоминается ДО вопроса о сидке.
+    expect(eff).toContain('setPhraseAsk(phraseState);');
     expect(eff).toContain("if (phraseState !== 'ready') return;");
-    expect(eff.indexOf('setPhraseUnreadable(')).toBeLessThan(eff.indexOf('await hasSeedShown()'));
+    expect(eff.indexOf('setPhraseAsk(')).toBeLessThan(eff.indexOf('await hasSeedShown()'));
     // отказ чтения тоже должен стать «не открылась», а не пролететь наружу
     expect(eff).toContain('stored = await getStoredMnemonic();');
     expect(eff).toContain('} catch {');
@@ -158,21 +166,29 @@ describe('онбординг отличает нечитаемую фразу о
   it('создание нового аккаунта поверх нечитаемой фразы переспрашивает', () => {
     const src = ONB();
     const body = slice(src, 'const handleCreateNew = async (): Promise<void> => {', 'setBusy(true);');
-    expect(body).toContain('if (phraseUnreadable && !(await confirmOverwriteUnreadable())) return;');
-    const dialog = slice(src, 'const confirmOverwriteUnreadable =', '\n    });\n');
+    // v4.32.1072: поводов переспросить два, и слова у них разные, поэтому
+    // условие спрашивает правило, а не флаг. Смысл тот же: нечитаемая запись
+    // не даёт создать аккаунт молча.
+    expect(body).toContain('if (overwriteWarning && !(await confirmOverwrite(overwriteWarning))) return;');
+    expect(phraseOverwriteWarning('unreadable')).not.toBeNull();
+    const dialog = slice(src, 'const confirmOverwrite =', '\n    });\n');
     expect(dialog).toContain("style: 'cancel', onPress: () => resolve(false)");
     expect(dialog).toContain('onDismiss: () => resolve(false)');
-    expect(dialog).toContain('сотрёт их навсегда');
+    expect(phraseOverwriteWarning('unreadable')?.body).toContain('сотрёт их навсегда');
     // запрета быть не должно: у кого запись правда испорчена — это его выход
-    expect(codeOnly(src)).not.toContain('disabled={phraseUnreadable}');
+    expect(codeOnly(src)).not.toContain('disabled={phraseAsk');
+    expect(codeOnly(src)).not.toContain('disabled={overwriteWarning');
   });
 
   it('welcome предупреждает вслух', () => {
     const src = ONB();
-    const banner = slice(src, 'testID="onboarding_phrase_unreadable"', '</Text>');
-    expect(banner).toContain('не читаются');
-    expect(banner).toContain('Восстановить аккаунт');
-    expect(src.indexOf('testID="onboarding_phrase_unreadable"')).toBeLessThan(
+    // v4.32.1072: слова переехали в ядро — их теперь два набора. Закрепка
+    // прежняя: при нечитаемой записи человек читает предупреждение, и стоит
+    // оно ВЫШЕ кнопки, а не под ней.
+    expect(phraseAskBanner('unreadable')).toContain('не читаются');
+    expect(phraseAskBanner('unreadable')).toContain('Восстановить аккаунт');
+    expect(src).toContain('{phraseAskBanner(phraseAsk)}');
+    expect(src.indexOf('testID="onboarding_phrase_warning"')).toBeLessThan(
       src.indexOf('testID="btn_create_new"')
     );
   });
