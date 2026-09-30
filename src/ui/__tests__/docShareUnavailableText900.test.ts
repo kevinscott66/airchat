@@ -25,6 +25,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { shareDownloadFailText } from '../utils/shareDownload';
+
 const UI = path.join(__dirname, '..');
 const SRC = path.join(UI, '..');
 const read = (rel: string, root: string = UI): string => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -81,7 +83,12 @@ describe('просмотрщик медиа говорит без жаргона
 
   it('оба окна просмотрщика переписаны по-человечески', () => {
     const body = codeOnly('components/MediaViewer.tsx');
-    expect(body).toContain('Файл слишком большой, чтобы им поделиться');
+    // v4.32.1076: текст про размер переехал в utils/shareDownload и там
+    // разделился на три причины — прежний показывался и на обрыве связи, и
+    // на отказе сервера. Закрепка та же по смыслу: человек узнаёт, что
+    // случилось, словами без жаргона, — только слова теперь берутся оттуда.
+    expect(body).toContain('shareDownloadFailText(got.why)');
+    expect(shareDownloadFailText('too_big')).toContain('поделиться им не выйдет');
     expect(body).toContain('На этом устройстве нет приложения, которому можно передать файл');
   });
 });
@@ -105,7 +112,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   it('в просмотрщике обе ветки на месте', () => {
     const body = codeOnly('components/MediaViewer.tsx');
     expect(body).toContain('const canShare = await Sharing.isAvailableAsync();');
-    expect(body).toContain('if (!got) {');
+    // v4.32.1076: у закачки теперь исход, а не «строка или ничего».
+    expect(body).toContain('if (!got.ok) {');
   });
 });
 

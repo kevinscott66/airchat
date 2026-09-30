@@ -20,6 +20,13 @@ import { AppModal as Modal } from './AppModal';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { classifyShareUrl, type ShareUrlVerdict } from '../../core/media/mediaUrlPolicy';
+import {
+  MAX_SHARE_BYTES,
+  shareDownloadFailText,
+  shareStatusRefused,
+  type ShareDownloadFail,
+  type ShareDownloadOutcome,
+} from '../utils/shareDownload';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mediaScrim } from '../theme';
@@ -27,9 +34,6 @@ import { showError } from './userFeedback';
 import { userErrorText } from './userErrorText';
 
 const { width: W, height: H } = Dimensions.get('window');
-
-/** Потолок для файла, который скачивается ради «Поделиться». */
-const MAX_SHARE_BYTES = 50 * 1024 * 1024;
 
 const SHARE_URL_REFUSAL: Record<Exclude<ShareUrlVerdict, 'ok'>, string> = {
   malformed: 'Некорректная ссылка',
@@ -68,8 +72,13 @@ function shareExt(uri: string): keyof typeof SHARE_MIME {
  * получателя, по адресу, который выбрал отправитель. Размер приходится
  * сторожить по ходу — заявленному значению верить нельзя, а обрывать надо не
  * после, а во время.
+ *
+ * v4.32.1076: отвечает исходом, а не «строка или ничего». Прежний `null` значил
+ * сразу и «не влез в потолок», и «закачка сорвалась», а вызывающий на оба
+ * случая писал про размер. Ответ сервера от 400 и выше раньше не проверялся
+ * вовсе: на диск ложилось тело ошибки, и оно уходило в «Поделиться» как файл.
  */
-async function downloadCapped(url: string, dest: string): Promise<string | null> {
+async function downloadCapped(url: string, dest: string): Promise<ShareDownloadOutcome> {
   let overLimit = false;
   let cancel: (() => void) | null = null;
   const task = FileSystem.createDownloadResumable(url, dest, {}, (p) => {
@@ -80,13 +89,19 @@ async function downloadCapped(url: string, dest: string): Promise<string | null>
     }
   });
   cancel = () => { void task.cancelAsync().catch(() => {}); };
-  const res = await task.downloadAsync().catch(() => null);
-  if (overLimit || !res) {
-    // Оборванная закачка оставляет частичный файл — он уже не нужен никому.
+  const fail = async (why: ShareDownloadFail): Promise<ShareDownloadOutcome> => {
+    // Оборванная закачка оставляет частичный файл, отказ сервера — тело
+    // ошибки под именем фотографии. Ни то, ни другое не нужно никому.
     await FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => {});
-    return null;
-  }
-  return res.uri;
+    return { ok: false, why };
+  };
+  const res = await task.downloadAsync().catch(() => null);
+  // Потолок проверяется первым: отменённая задача отдаёт `undefined`, и это
+  // тот же самый случай, только увиденный с другой стороны.
+  if (overLimit) return await fail('too_big');
+  if (!res) return await fail('network');
+  if (shareStatusRefused(res.status)) return await fail('server');
+  return { ok: true, uri: res.uri };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,8 +242,8 @@ function SingleImageView({
         mimeType = SHARE_MIME[ext];
         const dest = `${FileSystem.cacheDirectory}ac_share_${Date.now()}.${ext}`;
         const got = await downloadCapped(uri, dest);
-        if (!got) { Alert.alert('AirChat', 'Файл слишком большой, чтобы им поделиться'); return; }
-        localUri = got;
+        if (!got.ok) { Alert.alert('AirChat', shareDownloadFailText(got.why)); return; }
+        localUri = got.uri;
       }
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) { Alert.alert('AirChat', 'На этом устройстве нет приложения, которому можно передать файл'); return; }
