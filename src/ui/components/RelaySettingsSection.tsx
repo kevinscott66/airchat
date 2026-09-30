@@ -23,7 +23,12 @@ import { AppSwitch } from './AppSwitch';
 import { useAsyncButton } from '../../core/hooks/useAsyncButton';
 import { showError, showSuccess } from './userFeedback';
 import { userErrorText } from './userErrorText';
-import { loadConfig, saveConfigOverride, type AppConfig } from '../../core/config';
+import {
+  configOverrideUnread,
+  loadConfig,
+  saveConfigOverride,
+  type AppConfig,
+} from '../../core/config';
 import { loadKeyPair } from '../../core/crypto/keyManager';
 import {
   DEFAULT_RELAY_BASE,
@@ -32,6 +37,7 @@ import {
   parseRelayInput,
 } from '../../core/transport/internet/relayConfig';
 import { probeRelay } from '../../core/transport/internet/relayProbe';
+import { relayStatusLine } from '../utils/relayStatus';
 import {
   startInternetTransportIfEnabled,
   stopInternetTransportStack,
@@ -46,6 +52,12 @@ export function RelaySettingsSection(): React.ReactElement {
   /** Адрес, который сейчас реально используется транспортом. */
   const [activeBase, setActiveBase] = useState(DEFAULT_RELAY_BASE);
   const [check, setCheck] = useState<CheckState>(null);
+  /**
+   * Свои настройки не прочитались (v4.32.1080). Тогда и адрес, и рычажок выше
+   * — заводские умолчания, а не выбор человека, и говорить о них его словами
+   * нельзя.
+   */
+  const [unread, setUnread] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -58,6 +70,7 @@ export function RelaySettingsSection(): React.ReactElement {
       // настроено», и предлагать его как заготовку для правки незачем.
       setInput(isCustomRelay(base) ? base : '');
       setEnabled(cfg.internet?.enabled !== false);
+      setUnread(configOverrideUnread());
     })();
     return () => {
       alive = false;
@@ -129,6 +142,9 @@ export function RelaySettingsSection(): React.ReactElement {
       return;
     }
     setActiveBase(parsed.endpoints.relayBase);
+    // Сохранение прошло — значит прежние настройки прочитались, и предупреждать
+    // больше не о чем.
+    setUnread(false);
     setCheck(
       parsed.warning ? { kind: 'warn', text: parsed.warning } : { kind: 'ok', text: res.detail },
     );
@@ -148,6 +164,7 @@ export function RelaySettingsSection(): React.ReactElement {
     }
     setInput('');
     setActiveBase(DEFAULT_RELAY_BASE);
+    setUnread(false);
     setCheck(null);
     if (await restartTransport(cfg)) showSuccess('Возвращён общий сервер ntfy.sh');
     else showError('Настройка сохранена, но переподключиться не удалось — перезапустите приложение');
@@ -251,12 +268,14 @@ export function RelaySettingsSection(): React.ReactElement {
     errColor: { color: c.error },
     mutedColor: { color: c.textMuted },
     dotOn: { backgroundColor: c.success },
+    dotWarn: { backgroundColor: c.warning },
     dotOff: { backgroundColor: c.textMuted },
     primaryColor: { color: c.accent },
     placeholderColor: { color: c.textMuted },
   }));
 
   const custom = isCustomRelay(activeBase);
+  const status = relayStatusLine({ enabled, activeBase, custom, unread });
   const checkStyle =
     check?.kind === 'ok' ? styles.okColor : check?.kind === 'warn' ? styles.warnColor : styles.errColor;
 
@@ -270,12 +289,20 @@ export function RelaySettingsSection(): React.ReactElement {
       </Text>
       <View style={styles.card}>
         <View style={styles.statusRow}>
-          <View style={[styles.statusDot, enabled ? styles.dotOn : styles.dotOff]} />
+          <View
+            style={[
+              styles.statusDot,
+              status.tone === 'ok' ? styles.dotOn : status.tone === 'warn' ? styles.dotWarn : styles.dotOff,
+            ]}
+          />
           <Text
-            style={[styles.statusText, enabled ? styles.okColor : styles.mutedColor]}
-            numberOfLines={1}
+            style={[
+              styles.statusText,
+              status.tone === 'ok' ? styles.okColor : status.tone === 'warn' ? styles.warnColor : styles.mutedColor,
+            ]}
+            numberOfLines={2}
           >
-            {!enabled ? 'Выключен — только локальная сеть' : custom ? activeBase : 'Общий ntfy.sh'}
+            {status.text}
           </Text>
         </View>
 

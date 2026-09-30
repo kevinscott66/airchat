@@ -210,16 +210,16 @@ describe('форма исходников: прежний файл отодви�
     expect(body).toContain("await FileSystem.moveAsync({ from: previous, to: uri }).catch(() => {});");
   });
 
-  it('оба читателя поднимают отодвинутую копию', () => {
-    const user = SRC.slice(
-      SRC.indexOf('async function readUserOverride('),
-      SRC.indexOf('async function readUserOverride(') + 400
-    );
-    expect(user).toContain('await restoreStrandedOverride();');
-    const writer = SRC.slice(
-      SRC.indexOf('async function readConfigOverride('),
-      SRC.indexOf('async function readConfigOverride(') + 400
-    );
-    expect(writer).toContain('if (!(await restoreStrandedOverride())) return null;');
+  it('читатель поднимает отодвинутую копию — и он же читает при запуске', () => {
+    // v4.32.1080: читателей было два, и второй (readUserOverride) сводил отказ
+    // к пустому `{}`. Теперь читатель один; закрепка здесь не про их число, а
+    // про то, что перед чтением отодвинутая копия возвращается на место —
+    // иначе запуск при целом файле рядом ушёл бы на общий ntfy.sh.
+    const at = SRC.indexOf('async function readConfigOverride(');
+    expect(at).toBeGreaterThan(0);
+    const reader = SRC.slice(at, at + 400);
+    expect(reader).toContain('if (!(await restoreStrandedOverride())) return null;');
+    const load = SRC.slice(SRC.indexOf('export async function loadConfig('));
+    expect(load).toContain('const read = await readConfigOverride();');
   });
 });

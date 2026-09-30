@@ -361,6 +361,22 @@ const DEFAULT_CONFIG: AppConfig = {
 
 let cached: AppConfig | null = null;
 
+/**
+ * Файл своих настроек есть, но прочитать его при запуске не удалось
+ * (v4.32.1080).
+ *
+ * Для самой загрузки это по-прежнему то же, что «файла нет»: один запуск на
+ * умолчаниях обратим, а падать на старте из-за занятой песочницы нельзя (см.
+ * readConfigOverride). Но умолчания — это публичный ntfy.sh, и выдавать их за
+ * настроенное молча нельзя тоже: настройки экрана доставки спрашивают отсюда.
+ */
+let overrideUnread = false;
+
+/** Прочитались ли свои настройки при последней загрузке конфига. */
+export function configOverrideUnread(): boolean {
+  return overrideUnread;
+}
+
 function deepMerge<T extends Record<string, unknown>>(base: T, patch: Partial<T>): T {
   const out = { ...base } as Record<string, unknown>;
   for (const k of Object.keys(patch)) {
@@ -519,30 +535,6 @@ function finalizeConfig(cfg: AppConfig): AppConfig {
   return patchIpfsUrlsForAndroid(normalizeEndpoints(cfg));
 }
 
-/** Documents/airchat-config.json — пользовательский runtime-override (relay и т.п.). */
-async function readUserOverride(): Promise<Partial<AppConfig>> {
-  try {
-    // v4.32.967: если прошлое сохранение оборвали посередине, настройки лежат
-    // под именем `.prev`. Поднять их надо до чтения — иначе запуск уйдёт на
-    // умолчания (общий ntfy.sh) при целом файле рядом.
-    await restoreStrandedOverride();
-    const uri = `${FileSystem.documentDirectory ?? ''}airchat-config.json`;
-    const info = await FileSystem.getInfoAsync(uri);
-    // v4.32.194 (Round-24 #7): reject oversized / non-object overrides.
-    // A 500MB file freezes JS on read; `[]` or `null` crashes deepMerge.
-    if (info.exists && (info.size ?? 0) <= 256 * 1024) {
-      const raw = await FileSystem.readAsStringAsync(uri);
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Partial<AppConfig>;
-      }
-    }
-  } catch {
-    /* optional user override */
-  }
-  return {};
-}
-
 /**
  * Имена, которые по RFC 2606 и RFC 6761 зарезервированы под примеры и никогда
  * не будут ничьим настоящим сервером.
@@ -659,7 +651,12 @@ export async function loadConfig(): Promise<AppConfig> {
   // the build, and the old catch branch returned bare defaults — silently
   // discarding Documents/airchat-config.json, which made runtime relay
   // switching (saveConfigOverride / manual file push) a no-op on such builds.
-  const patch = await readUserOverride();
+  // v4.32.1080: читатель у файла один — тот, что различает «нет файла» и «не
+  // прочитали». Прежний второй читатель сводил отказ к `{}`, и запуск уходил
+  // на общий ntfy.sh, ничего об этом не сказав.
+  const read = await readConfigOverride();
+  overrideUnread = read === null;
+  const patch = read ?? {};
   try {
     const bundled = bundledConfig();
     // Сначала накладываем заводской конфиг на defaults, затем пользовательский
@@ -745,9 +742,11 @@ async function restoreStrandedOverride(): Promise<boolean> {
  * сохранение ОДНОЙ настройки в стирание ВСЕХ остальных: адрес своего
  * ретранслятора, настройки VPN и туннеля исчезали молча, а устройство
  * возвращалось на общий ntfy.sh (ровно та беда, от которой в loadConfig завели
- * послойное слияние). Тому, кто только читает конфиг при старте, разница
- * по-прежнему безразлична: у него `null` равен `{}` — один запуск на
- * умолчаниях обратим, а стёртый файл нет.
+ * послойное слияние). Для самой загрузки разница по-прежнему не меняет хода:
+ * у неё `null` сводится к `{}` — один запуск на умолчаниях обратим, а стёртый
+ * файл нет. v4.32.1080: но исход загрузка теперь запоминает (overrideUnread),
+ * потому что умолчания — это публичный ntfy.sh, и выдавать их за настроенное
+ * молча нельзя.
  */
 async function readConfigOverride(): Promise<Partial<AppConfig> | null> {
   try {
@@ -757,10 +756,9 @@ async function readConfigOverride(): Promise<Partial<AppConfig> | null> {
     const uri = documentConfigOverrideUri();
     const info = await FileSystem.getInfoAsync(uri);
     if (!info.exists) return {};
-    // v4.32.581. Тот же потолок, что и у readUserOverride: файл один и тот же,
-    // а читателей у него два, и второй читал без ограничения — подложенный
-    // многомегабайтный override вешал JS-поток на старте. Для пишущего это не
-    // «пусто», а «не прочитали»: под потолком может лежать чужая настройка.
+    // v4.32.581. Потолок: подложенный многомегабайтный override вешал
+    // JS-поток на старте. Это не «пусто», а «не прочитали»: под потолком
+    // может лежать чужая настройка.
     if ((info.size ?? 0) > 256 * 1024) {
       log.warn('config_override_too_big', { bytes: info.size ?? 0 });
       return null;
@@ -846,6 +844,9 @@ export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<App
   } catch {
     /* no bundled config — defaults + override only */
   }
+  // Сохранение дошло до конца — значит прежние настройки прочитались
+  // (readConfigOverride выше отказался бы), и незнанию взяться неоткуда.
+  overrideUnread = false;
   cached = finalizeConfig(
     deepMerge(deepMerge(DEFAULT_CONFIG, bundled), completeOverrideRelayPair(mergedOverride)),
   );
