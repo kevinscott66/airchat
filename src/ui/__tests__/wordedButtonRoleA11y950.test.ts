@@ -170,9 +170,6 @@ describe('у каждой такой кнопки озвучка слышит «
 });
 
 describe('выбор отличён от команды', () => {
-  const at = (file: string, line: number): Site | undefined =>
-    sites.find((s) => s.file === file && s.line === line);
-
   it('чип «Все истории» сообщает, выбран ли он', () => {
     // v4.32.1064: по ярлыку, а не по номеру строки. Номер уехал от правки
     // выше по файлу (альбомы научились отличать непрочитанное от пустого), и
@@ -186,10 +183,16 @@ describe('выбор отличён от команды', () => {
   });
 
   it('переключатель «Завтра» сообщает, включён ли он', () => {
-    // v4.32.982: строка уехала на 91 — выше по файлу списку заготовок
-    // («Через 10 минут», «Через час») добавили роль.
-    const s = at(join('components', 'modals', 'chat', 'ChatScheduleModal.tsx'), 91);
-    expect(s?.tag).toContain('accessibilityState={{ selected: customTomorrow }}');
+    // v4.32.1082: по стилю, а не по номеру строки — последний номер в этом
+    // файле. Он уже уезжал однажды (v4.32.982, когда заготовкам «Через 10
+    // минут» и «Через час» добавили роль), и закрепка падала там, где
+    // `selected` никуда не девался: ровно то, за что номера выгнали отсюда в
+    // v4.32.1016 и из соседних проверок в v4.32.1021, v4.32.1034 и v4.32.1064.
+    // Стиль dayToggle в доме один, и он именно у этого переключателя.
+    const found = sites.filter((s) => s.tag.includes('schStyles.dayToggle'));
+    expect(found).toHaveLength(1);
+    expect(found[0].file).toBe(join('components', 'modals', 'chat', 'ChatScheduleModal.tsx'));
+    expect(found[0].tag).toContain('accessibilityState={{ selected: customTomorrow }}');
   });
 });
 
