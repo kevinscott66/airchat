@@ -964,9 +964,22 @@ export async function setPeerProfileForChecked(
 export async function renameContact(peerPublicKeyB64: string, newName: string): Promise<void> {
   const pid = activeProfileId();
   await withContactLock(pid, async () => {
-    const row = await contactRowGet(pid, peerPublicKeyB64);
+    // v4.32.1073: «строки нет» и «строку не прочитали» — разные ответы, а
+    // `contactRowGet` сводит их к одному `null`. Тот же разбор тремя
+    // состояниями, что у `addContact` с v4.32.641, здесь не спрашивали, и
+    // непрочитанная строка уходила молчаливым `return` — то есть «Имя
+    // обновлено» при нетронутом диске. Переименовывают обычно затем, чтобы
+    // различить двоих одинаковых, так что потерянная правка значит «написал
+    // не тому»; а хранилище молчит как раз сразу после перезагрузки телефона.
+    // Собрать строку заново поверх непрочитанного шифртекста тоже нельзя: в
+    // ней лежит профиль собеседника целиком (v4.32.570).
+    const cell = await contactRowCell(pid, peerPublicKeyB64);
+    if (!mayOverwrite(cell)) throw new Error(CONTACT_ROW_UNREADABLE_MESSAGE);
+    const row = cellTextOrNull(cell);
     // v4.32.581: пустая строка вместо записи — наследие старого deleteContact
     // (см. ту же проверку в разборе индекса выше): JSON.parse('') бросает.
+    // Отсутствие строки здесь по-прежнему тихое: переименовать нечего, и оба
+    // экрана зовут это только для контакта, взятого из указателя.
     if (!row || !row.trim()) return;
     // v4.32.115: preserve `implicit` flag across renames.
     const j = JSON.parse(row) as { displayName?: string; symKey?: string; profileCid?: string; implicit?: boolean };
