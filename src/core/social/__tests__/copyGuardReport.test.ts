@@ -78,7 +78,7 @@ jest.mock('../../logger', () => ({
 
 import {
   copyGuardKey,
-  copyGuardState,
+  copyGuardView,
   isCopyGuarded,
   peerCopyGuardKey,
   setCopyGuard,
@@ -146,8 +146,10 @@ describe('запрет на копирование', () => {
   it('карточке профиля сбой чтения не рисует включённый переключатель', async () => {
     // Экрану отвечают мягко: иначе профиль без единой записи выглядел бы
     // запертым, и человек снимал бы запрет, которого не ставил.
+    // v4.32.1077: мягко, но не молча — рядом едет `unknown`, и подпись под
+    // строкой говорит «не удалось прочитать» вместо «Выкл».
     mockBroken = true;
-    expect(await copyGuardState(PEER)).toEqual({ mine: false, theirs: false });
+    expect(await copyGuardView(PEER)).toEqual({ mine: false, theirs: false, unknown: true });
   });
 
   it('не легшая запись отчитывается отказом, а не молчит', async () => {
@@ -200,7 +202,7 @@ describe('запрет на копирование', () => {
   it('запрет собеседника закрывает переписку так же, как свой', async () => {
     await setPeerCopyGuardFor(1, PEER, true);
     await expect(isCopyGuarded(PEER)).resolves.toBe(true);
-    expect(await copyGuardState(PEER)).toEqual({ mine: false, theirs: true });
+    expect(await copyGuardView(PEER)).toEqual({ mine: false, theirs: true, unknown: false });
   });
 
   it('снятие своего запрета не открывает переписку, закрытую собеседником', async () => {

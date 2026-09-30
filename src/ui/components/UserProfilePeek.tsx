@@ -143,7 +143,7 @@ import { setDisappearAndSync } from '../../core/social/disappearSync';
 import { BLOCK_CONFIRM_BODY, BLOCK_CONFIRM_TITLE, BLOCK_NOT_SAVED_OFF, BLOCK_NOT_SAVED_ON, rateLimiter } from '../../core/security/rateLimiter';
 import { initiateCall } from '../../core/social/callService';
 import { callStartText } from '../callStartText';
-import { copyGuardState } from '../../core/social/copyGuard';
+import { copyGuardView } from '../../core/social/copyGuard';
 import { setCopyGuardAndSync } from '../../core/social/copyGuardSync';
 import { isSecureContentSupported } from '../../../modules/airchat-screen-guard/src';
 import { hasReportedRead, recordContactReport, REPORT_REASONS } from '../../core/social/contactReport';
@@ -369,6 +369,13 @@ export function UserProfilePeek({
   // v4.32.571: запрет, включённый собеседником. Отдельно от своего — снять его
   // своей рукой нельзя, и в карточке это должно быть написано, а не молчать.
   const [copyGuardByPeer, setCopyGuardByPeer] = useState(false);
+  /**
+   * v4.32.1077: оба решения о запрете прочитать не вышло. Отдельно от самих
+   * решений: переключатель при незнании остаётся выключенным (v4.32.655), но
+   * подпись «Выкл» — уже утверждение, и спорить ей с isCopyGuarded, который
+   * на том же отказе переписку запирает, нельзя.
+   */
+  const [copyGuardUnknown, setCopyGuardUnknown] = useState(false);
   const [disappearMs, setDisappearMs] = useState<number | null>(null);
   /**
    * v4.32.1053: строку разговора прочитать не вышло.
@@ -457,6 +464,7 @@ export function UserProfilePeek({
     setBlockUnknown(false);
     setCopyGuardState(false);
     setCopyGuardByPeer(false);
+    setCopyGuardUnknown(false);
     setDisappearMs(null);
     setConvUnknown(false);
     setReported(false);
@@ -558,12 +566,13 @@ export function UserProfilePeek({
         if (!cancelled) { setBlockUnknown(true); setBlocked(false); }
       }
       const [guard, wasReported] = await Promise.all([
-        copyGuardState(pub),
+        copyGuardView(pub),
         hasReportedRead(resolved.did),
       ]);
       if (cancelled) return;
       setCopyGuardState(guard.mine);
       setCopyGuardByPeer(guard.theirs);
+      setCopyGuardUnknown(guard.unknown);
       // v4.32.1054: `null` — журнал не прочитался, а не «жалоб не было».
       setReportUnknown(wasReported === null);
       setReported(wasReported === true);
@@ -626,13 +635,14 @@ export function UserProfilePeek({
     muted,
     copyGuard,
     copyGuardByPeer,
+    copyGuardUnknown,
     disappearMs,
     convUnknown,
     reported,
     reportUnknown,
     canOpenChat: !!onOpenChat,
     inChat: !!inChat,
-  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, disappearMs, convUnknown, reported, reportUnknown, onOpenChat, inChat]);
+  }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, copyGuardUnknown, disappearMs, convUnknown, reported, reportUnknown, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
   const sections = useMemo(() => hubSections(facts), [facts]);
@@ -952,6 +962,17 @@ export function UserProfilePeek({
     // Чужое решение своей рукой не снимается (v4.32.571). Строка настройки при
     // этом остаётся нажимаемой — молчаливое нажатие «ни во что» человек читает
     // как поломку, поэтому вместо тишины объясняем, чей это запрет.
+    // v4.32.1077: чего мы не прочитали, того и не меняем. Включение отсюда
+    // обещает «будет нельзя ни вам, ни собеседнику» и уходит конвертом ему —
+    // на непрочитанном состоянии оба обещания даются вслепую, а живой запрет
+    // собеседника при этом молчит, потому что `copyGuardByPeer` ещё `false`.
+    if (copyGuardUnknown) {
+      Alert.alert(
+        'Не удалось прочитать запрет',
+        'Что сейчас включено в этой переписке, приложение не знает — база не ответила. До тех пор переписка считается закрытой: копирование и пересылка не работают. Закройте карточку и откройте снова.'
+      );
+      return;
+    }
     if (!copyGuard && copyGuardByPeer) {
       Alert.alert(
         'Запрет включил собеседник',
@@ -980,7 +1001,7 @@ export function UserProfilePeek({
         { text: 'Включить', onPress: commit },
       ]
     );
-  }, [resolved, copyGuard, copyGuardByPeer]);
+  }, [resolved, copyGuard, copyGuardByPeer, copyGuardUnknown]);
 
   const clearHistory = useCallback(() => {
     if (!resolved) return;

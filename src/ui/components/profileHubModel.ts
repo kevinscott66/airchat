@@ -74,6 +74,13 @@ export type HubFacts = {
    * нельзя, и «Вкл» без объяснения читалось бы как заевший переключатель.
    */
   copyGuardByPeer: boolean;
+  /**
+   * Ни одно из двух решений прочитать не вышло (v4.32.1077). «Выкл» здесь —
+   * утверждение о настройке безопасности, и оно спорило бы с isCopyGuarded:
+   * тот на том же отказе переписку запирает. Разница та же, что у соседей с
+   * v4.32.1051–1053.
+   */
+  copyGuardUnknown: boolean;
   /** Таймер самоуничтожения, мс. null / 0 — выключен. */
   disappearMs: number | null;
   /**
@@ -222,7 +229,13 @@ export function hubSettings(f: HubFacts): Array<HubItem<SettingId>> {
     out.push({
       id: 'copy_guard',
       label: 'Запрет копирования и пересылки',
-      value: f.copyGuard ? 'Вкл' : f.copyGuardByPeer ? 'Вкл собеседником' : 'Выкл',
+      value: f.copyGuardUnknown
+        ? 'не удалось прочитать'
+        : f.copyGuard
+          ? 'Вкл'
+          : f.copyGuardByPeer
+            ? 'Вкл собеседником'
+            : 'Выкл',
     });
   }
   out.push({ id: 'clear_history', label: 'Удалить переписку', danger: true });

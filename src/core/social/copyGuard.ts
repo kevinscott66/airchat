@@ -139,15 +139,28 @@ export async function copyGuardStateTryFor(
 }
 
 /**
- * Оба решения по переписке для названного профиля.
+ * То же, что видит экран: оба решения плюс признак, что их не прочитали
+ * (v4.32.1077).
  *
- * Непрочитанное решение показывается выключенным: переключатель, значение
- * которого мы не знаем, не должен рисоваться включённым — человек решит, что
- * запрет включился сам. Это ответ ДЛЯ ЭКРАНА. Запирать переписку по нему
- * нельзя: для этого есть isCopyGuarded, и он читает сам.
+ * Непрочитанное решение по-прежнему показывается выключенным: переключатель,
+ * значение которого мы не знаем, не должен рисоваться включённым — человек
+ * решит, что запрет включился сам (v4.32.655). Но выключенным МОЛЧА оно
+ * показываться перестало, и вот почему. Запирает переписку isCopyGuarded, а
+ * он на том же отказе отвечает «закрыто». Экран, утверждавший «Выкл», спорил
+ * с приложением, которое в этот момент запрещает; хуже того, нажатие на
+ * строку вело не туда: при живом запрете собеседника карточка не показывала
+ * «Вкл собеседником», а предлагала включить свой — с обещанием «будет нельзя
+ * ни вам, ни собеседнику» и с конвертом ему о запрете, которого человек не
+ * собирался ставить.
+ *
+ * Значение и незнание разъезжаются нарочно: `mine`/`theirs` остаются мягкими
+ * для отрисовки переключателя, `unknown` говорит подписи и нажатию.
  */
-export async function copyGuardStateFor(pid: number, peerPubB64: string): Promise<CopyGuardState> {
-  return (await copyGuardStateTryFor(pid, peerPubB64)) ?? { mine: false, theirs: false };
+export type CopyGuardView = CopyGuardState & { unknown: boolean };
+
+export async function copyGuardViewFor(pid: number, peerPubB64: string): Promise<CopyGuardView> {
+  const state = await copyGuardStateTryFor(pid, peerPubB64);
+  return state ? { ...state, unknown: false } : { mine: false, theirs: false, unknown: true };
 }
 
 /**
@@ -162,15 +175,15 @@ async function guardedNow(pid: number, peerPubB64: string): Promise<boolean> {
   return state === null ? true : copyGuardOn(state);
 }
 
-/** Оба решения по переписке для активного профиля. */
-export async function copyGuardState(peerPubB64: string): Promise<CopyGuardState> {
-  return copyGuardStateFor(activeProfileId(), peerPubB64);
+/** Оба решения по переписке для активного профиля, глазами экрана. */
+export async function copyGuardView(peerPubB64: string): Promise<CopyGuardView> {
+  return copyGuardViewFor(activeProfileId(), peerPubB64);
 }
 
 /**
  * Закрыта ли переписка — чьим бы решением она ни была закрыта.
  *
- * В отличие от copyGuardState, отвечающего экрану, этот ответ запирает: см.
+ * В отличие от copyGuardView, отвечающего экрану, этот ответ запирает: см.
  * guardedNow про цену двух ошибок.
  */
 export async function isCopyGuarded(peerPubB64: string): Promise<boolean> {

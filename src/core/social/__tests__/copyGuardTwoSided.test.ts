@@ -23,6 +23,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { hubSettings, type HubFacts } from '../../../ui/components/profileHubModel';
+
 const dir = (...p: string[]): string => path.join(__dirname, '..', ...p);
 const guard = fs.readFileSync(dir('copyGuard.ts'), 'utf8');
 const sync = fs.readFileSync(dir('copyGuardSync.ts'), 'utf8');
@@ -127,7 +129,7 @@ describe('чужое решение отделено от своего', () => {
   });
 
   it('нечитаемая база запирает переписку, а не открывает её', () => {
-    // v4.32.655: copyGuardStateFor гасил отказ чтения в { mine: false,
+    // v4.32.655: экранный ответ гасил отказ чтения в { mine: false,
     // theirs: false }, и экран снимал запрет сам собой, без строки в журнале.
     expect(guard).toContain('return state === null ? true : copyGuardOn(state);');
     expect(guard).toContain("log.warn('copy_guard_read_failed', { pid });");
@@ -137,10 +139,14 @@ describe('чужое решение отделено от своего', () => {
     expect(guard).toContain('if (mine === null || theirs === null) {');
     // ПРОВЕРКА НЕ ПУСТАЯ: ответ экрану остаётся мягким — иначе профиль без
     // единой записи выглядел бы запертым.
-    expect(guard).toContain("?? { mine: false, theirs: false };");
-    // Строгий ответ идёт только через guardedNow, экранный — через copyGuardStateFor.
+    // v4.32.1077: мягкость на месте, но теперь при ней едет `unknown`, и
+    // «Выкл» под строкой сменилось на «не удалось прочитать».
+    expect(guard).toContain(
+      "return state ? { ...state, unknown: false } : { mine: false, theirs: false, unknown: true };"
+    );
+    // Строгий ответ идёт только через guardedNow, экранный — через copyGuardViewFor.
     expect(guard.indexOf('async function guardedNow(')).toBeGreaterThan(
-      guard.indexOf('export async function copyGuardStateFor(')
+      guard.indexOf('export async function copyGuardViewFor(')
     );
   });
 
@@ -179,7 +185,7 @@ describe('чужое решение отделено от своего', () => {
   });
 
   it('экран не перекрашивается решением из чужого профиля', () => {
-    const notify = guard.slice(guard.indexOf('function notify('), guard.indexOf('export async function copyGuardStateFor'));
+    const notify = guard.slice(guard.indexOf('function notify('), guard.indexOf('export async function copyGuardViewFor'));
     expect(notify).toContain('if (pid !== activeProfileId()) return;');
   });
 });
@@ -223,7 +229,22 @@ describe('карточка профиля говорит правду', () => {
   });
 
   it('строка настройки называет, чьё это решение', () => {
-    expect(hub).toContain("value: f.copyGuard ? 'Вкл' : f.copyGuardByPeer ? 'Вкл собеседником' : 'Выкл',");
+    // v4.32.1077: закрепка утверждает смысл, а не написание — рядом с двумя
+    // решениями приехало третье состояние, «не прочитали», и строку исходника
+    // это переписывает каждый раз. Спрашиваем саму модель.
+    const facts = {
+      isSelf: false, inContacts: true, hasContactRecord: true, bookUnknown: false,
+      blocked: false, blockUnknown: false, muted: false, copyGuard: false,
+      copyGuardByPeer: false, copyGuardUnknown: false, disappearMs: null,
+      convUnknown: false, reported: false, reportUnknown: false,
+      canOpenChat: true, inChat: false,
+    };
+    const valueOf = (f: HubFacts): string | undefined =>
+      hubSettings(f).find((i) => i.id === 'copy_guard')?.value;
+    expect(valueOf({ ...facts, copyGuard: true })).toBe('Вкл');
+    expect(valueOf({ ...facts, copyGuardByPeer: true })).toBe('Вкл собеседником');
+    expect(valueOf(facts)).toBe('Выкл');
+    // И само разделение на два поля: одним «Вкл» чьё это решение не назвать.
     expect(hub).toContain('copyGuardByPeer: boolean;');
   });
 });

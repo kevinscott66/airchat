@@ -26,6 +26,7 @@ const base: HubFacts = {
   muted: false,
   copyGuard: false,
   copyGuardByPeer: false,
+  copyGuardUnknown: false,
   disappearMs: null,
   convUnknown: false,
   reported: false,
