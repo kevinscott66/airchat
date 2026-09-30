@@ -17,6 +17,12 @@ import {
   type Profile,
   MAX_PROFILES,
 } from '../../core/identity/profileManager';
+import {
+  mayCreateProfile,
+  profileCreateBlockedText,
+  profileListNotice,
+  profileSlotsText,
+} from '../../core/identity/profileListNotice';
 import { profileRenameErrorText } from './modals/profile/ownProfileEditModel';
 import { showError, showSuccess } from './userFeedback';
 import { useThemedStyles, useColors } from '../ThemeContext';
@@ -165,6 +171,12 @@ export function ProfileSelector({
     };
   });
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  /**
+   * v4.32.1074: `false` — снимок профилей принят не целиком, и список короче
+   * правды. Пустой или урезанный список читается как «профиль удалён», а это
+   * другое утверждение: см. profileListNotice.
+   */
+  const [listComplete, setListComplete] = useState(true);
   const [newProfileName, setNewProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [renameId, setRenameId] = useState<number | null>(null);
@@ -172,7 +184,12 @@ export function ProfileSelector({
 
   const loadProfiles = (): void => {
     setProfiles(profileManager.getAllProfiles());
+    setListComplete(profileManager.getProfileIdsComplete().complete);
   };
+
+  /** Всё, что лист знает о своём списке: правило про них лежит в ядре. */
+  const listFacts = { shown: profiles.length, max: MAX_PROFILES, complete: listComplete };
+  const listNotice = profileListNotice(listFacts);
 
   useEffect(() => {
     if (visible) {
@@ -341,6 +358,8 @@ export function ProfileSelector({
                   при переключении показываются только чаты этого профиля.
                 </Text>
 
+                {listNotice ? <Text style={styles.limitNote}>{listNotice}</Text> : null}
+
                 {profiles.map((profile) => (
                   <View key={profile.id} style={styles.profileRow}>
                     <AppPressable
@@ -390,18 +409,16 @@ export function ProfileSelector({
                 <View style={styles.divider} />
 
                 {/* v4.32.22: лимит 4 профиля на устройстве. Когда достигнут —
-                    форма создания скрыта, показываем only info. */}
-                {profiles.length >= MAX_PROFILES ? (
-                  <Text style={styles.limitNote}>
-                    Достигнут лимит профилей на устройстве: {MAX_PROFILES}.{"\n"}
-                    Удалите один из существующих, чтобы создать новый.
-                  </Text>
+                    форма создания скрыта, показываем only info.
+                    v4.32.1074: второй повод спрятать её — неполный список:
+                    создание пишет состояние целиком и стёрло бы с диска то,
+                    что сейчас не читается. Причина названа тем же местом. */}
+                {!mayCreateProfile(listFacts) ? (
+                  <Text style={styles.limitNote}>{profileCreateBlockedText(listFacts)}</Text>
                 ) : (
                   <>
                     <Text style={styles.sectionTitle}>Новый профиль</Text>
-                    <Text style={styles.slotsCounter}>
-                      Занято {profiles.length} из {MAX_PROFILES}
-                    </Text>
+                    <Text style={styles.slotsCounter}>{profileSlotsText(listFacts)}</Text>
                     <TextInput
                       style={styles.input}
                       placeholder="Название"
