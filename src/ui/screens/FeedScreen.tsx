@@ -2044,18 +2044,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   // v4.32.130 (AUDIT P2): prevent concurrent pull-to-refresh from firing two
   // loadFeed() chains — second invocation used to race the first's
   // setRefreshing(false) and leave the spinner in an indeterminate state.
+  // v4.32.1071: сам обработчик переехал ниже — ему нужны чтения боковых
+  // списков, а они объявлены там же, где их состояние.
   const refreshLockRef = useRef(false);
-  const onRefresh = useCallback(async () => {
-    if (refreshLockRef.current) return;
-    refreshLockRef.current = true;
-    setRefreshing(true);
-    try {
-      await loadFeed();
-    } finally {
-      setRefreshing(false);
-      refreshLockRef.current = false;
-    }
-  }, [loadFeed]);
 
   const handleCloseModal = useCallback(() => {
     setDraft('');
@@ -3176,6 +3167,33 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   useEffect(() => {
     if (archiveFilter) void loadArchiveFirstPage();
   }, [archiveFilter, loadArchiveFirstPage]);
+
+  /**
+   * Потянуть вниз (v4.32.1071).
+   *
+   * Прежде здесь стоял один `loadFeed()`, а боковые режимы — «Архив» и
+   * «Закладки» — свои списки читают сами. В них жест крутил бегунок и
+   * ничего не перечитывал: человек получал знак «обновлено» над тем же
+   * самым. Хуже всего это ложилось на отказ чтения (v4.32.1070): текст
+   * ленты учит «потяните вниз, чтобы повторить», а в архиве повтора не
+   * происходило — и человек заключал, что архив правда пуст.
+   *
+   * Обновляется тот список, который сейчас на экране: у каждого своё
+   * чтение, и перечитать чужое значило бы снова ничего не сделать.
+   */
+  const onRefresh = useCallback(async () => {
+    if (refreshLockRef.current) return;
+    refreshLockRef.current = true;
+    setRefreshing(true);
+    try {
+      if (archiveFilter) await loadArchiveFirstPage();
+      else if (bookmarkFilter) await loadBookmarks();
+      else await loadFeed();
+    } finally {
+      setRefreshing(false);
+      refreshLockRef.current = false;
+    }
+  }, [loadFeed, archiveFilter, bookmarkFilter, loadArchiveFirstPage, loadBookmarks]);
 
   const loadMoreArchive = useCallback(async () => {
     if (!archiveFilter || archiveLoadingMore.current || !archiveHasMore) return;
