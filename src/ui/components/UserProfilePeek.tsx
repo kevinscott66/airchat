@@ -122,8 +122,16 @@ import { coverWallpaperFor } from '../wallpapers';
 import { publicIdFor } from '../../core/identity/publicId';
 import { PersonAvatar } from './PersonAvatar';
 import { VerifiedMark } from './VerifiedMark';
-import { getOwnDisplayName, getOwnUsername, ownFieldGet } from '../../core/identity/ownProfile';
-import { ownLinks } from '../../core/identity/ownLinks';
+import {
+  getOwnDisplayNameTry,
+  getOwnUsernameTry,
+  ownFieldTryGet,
+} from '../../core/identity/ownProfile';
+import {
+  ownPeekFieldsUnreadText,
+  type OwnPeekFieldName,
+} from '../../core/identity/ownCardFieldsUnread';
+import { ownLinksTry } from '../../core/identity/ownLinks';
 import { ownBadgeClaim } from '../../core/identity/ownBadge';
 import { normalizeOwnBio } from '../../core/social/profileEnvelope';
 import { normalizeOwnPronouns } from '../../core/social/peerPronouns';
@@ -350,6 +358,15 @@ export function UserProfilePeek({
   const [isSelf, setIsSelf] = useState(false);
   // Своя карточка. null и у чужого профиля, и пока своя не прочитана.
   const [own, setOwn] = useState<PeekOwn | null>(null);
+  /**
+   * Поля своей карточки, которые не открылись (v4.32.1078).
+   *
+   * Пустое поле здесь бывает и ответом, и незнанием — ровно как в окне
+   * правки (v4.32.1040, v4.32.1065). Разница в том, что окно правки об этом
+   * говорит, а карточка молчала: семь полей читались собирающими формами, и
+   * занятая база превращала заполненный профиль в пустой.
+   */
+  const [ownUnread, setOwnUnread] = useState<OwnPeekFieldName[]>([]);
 
   // Состояние переписки. Всё читается один раз при открытии карточки: она
   // живёт поверх других экранов и обязана показывать то, что есть сейчас, а не
@@ -459,6 +476,7 @@ export function UserProfilePeek({
     setRenameDraft('');
     setIsSelf(false);
     setOwn(null);
+    setOwnUnread([]);
     setMuted(false);
     setBlocked(false);
     setBlockUnknown(false);
@@ -482,30 +500,45 @@ export function UserProfilePeek({
         if (mine) {
           // Своё читается по одному полю, как и на экране профиля: общей
           // «карточки одним куском» в хранилище нет.
+          // v4.32.1078: формы с исходом, а не собирающие. Каждая из них
+          // отвечает `null` ровно на «ячейка на месте и не открылась», и
+          // именно это карточка прежде показывала как пустое поле.
           const [name, username, bio, pronouns, status, claim, links] = await Promise.all([
-            getOwnDisplayName(),
-            getOwnUsername(),
-            ownFieldGet('user_bio'),
+            getOwnDisplayNameTry(),
+            getOwnUsernameTry(),
+            ownFieldTryGet('user_bio'),
             // v4.32.616: те же два поля, что уехали в конверт профиля. Своя
             // карточка обязана показывать ровно то же, что видит собеседник,
             // — иначе проверить, как выглядит профиль, негде.
-            ownFieldGet('user_pronouns'),
-            ownFieldGet('user_custom_status'),
+            ownFieldTryGet('user_pronouns'),
+            ownFieldTryGet('user_custom_status'),
             ownBadgeClaim(),
-            ownLinks(),
+            ownLinksTry(),
           ]);
           if (cancelled) return;
+          const uname = username?.username ?? null;
           // Галочка — только при совпадении имени с бумагой: переименовавшийся
           // аккаунт контакты видят без неё, и себя он должен видеть так же.
+          // Непрочитанное @имя сюда попадает как отсутствующее, и галочка
+          // гаснет — об этом говорит подпись ниже, потому что сама по себе
+          // пропавшая галочка означала бы снятое подтверждение.
           setOwn({
-            name,
-            username,
-            bio: normalizeOwnBio(bio) || null,
-            pronouns: normalizeOwnPronouns(pronouns) || null,
-            status: normalizeOwnStatus(status) || null,
-            verified: !!claim && !!username && claim.username === username,
-            links,
+            name: name?.name ?? null,
+            username: uname,
+            bio: normalizeOwnBio(bio?.text ?? null) || null,
+            pronouns: normalizeOwnPronouns(pronouns?.text ?? null) || null,
+            status: normalizeOwnStatus(status?.text ?? null) || null,
+            verified: !!claim && !!uname && claim.username === uname,
+            links: links === 'unreadable' ? null : links,
           });
+          const unread: OwnPeekFieldName[] = [];
+          if (name === null) unread.push('name');
+          if (username === null) unread.push('handle');
+          if (pronouns === null) unread.push('pronouns');
+          if (status === null) unread.push('status');
+          if (bio === null) unread.push('bio');
+          if (links === 'unreadable') unread.push('links');
+          setOwnUnread(unread);
         }
         const all = await listContactsRead();
         if (cancelled) return;
@@ -618,6 +651,10 @@ export function UserProfilePeek({
   // Имя для действий: у безымянного это заглушка из DID, а не слово «Контакт»
   // — иначе двое добавленных незнакомцев станут в списке чатов неразличимы.
   const displayName = identity.contactName;
+  // v4.32.1078: строка о непрочитанных полях своей карточки. Считается всегда
+  // — хуков нельзя вызывать меньше, чем в прошлый раз, — а показывается
+  // только у себя: у чужой карточки эти поля приезжают конвертом.
+  const ownUnreadNote = useMemo(() => ownPeekFieldsUnreadText(ownUnread), [ownUnread]);
   // Свой ключ — из pair: из него и ключа собеседника собирается код, который
   // сверяют голосом. Без pair кода нет, и блок его не покажет.
   const myPubB64 = useMemo(
@@ -1284,6 +1321,19 @@ export function UserProfilePeek({
                         поля заполнялись и не показывались никому. Строкой
                         выше «В ваших контактах», потому что это про человека,
                         а подсказка ниже — про наши с ним отношения. */}
+                    {/* v4.32.1078: то же место и тот же янтарь, что у
+                        несверенного ключа строкой выше, и по той же причине:
+                        увиденного плохого нет — есть неувиденное. Стоит над
+                        полями, о которых говорит, иначе читается как подпись
+                        к последнему из них. */}
+                    {isSelf && ownUnreadNote ? (
+                      <Text
+                        style={[styles.bio, { color: colors.warning }]}
+                        accessibilityRole="alert"
+                      >
+                        {ownUnreadNote}
+                      </Text>
+                    ) : null}
                     {identity.pronouns ? (
                       <Text style={[styles.pronouns, { color: colors.textSecondary }]} numberOfLines={1}>
                         {identity.pronouns}

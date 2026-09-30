@@ -55,11 +55,15 @@ export async function ownLinksTryFor(pid: number): Promise<ProfileLink[] | null 
 }
 
 /**
- * Привязки текущего профиля — для своей карточки. Здесь «не прочитали» и «не
- * задано» сводятся к одному: показать нечего и там, и там, а записывать
- * карточка отсюда ничего не будет.
+ * Привязки текущего профиля — для своей карточки (v4.32.1078).
+ *
+ * Прежде эта форма сводила «не прочитали» и «не задано» к одному `null`, и
+ * довод был такой: записывать карточка отсюда ничего не будет. Довод верный
+ * и сегодня — затереть непрочитанный ряд ей нечем. Но не писать и не
+ * утверждать — разные вещи: пустой ряд ссылок в своей карточке человек
+ * читает как ответ на вопрос «видно ли мои привязки контактам», и ответ этот
+ * оказывался неверным. Поэтому здесь тот же исход, что у ownLinksTryFor.
  */
-export async function ownLinks(): Promise<ProfileLink[] | null> {
-  const links = await collect(ownFieldTryGet);
-  return links === 'unreadable' ? null : links;
+export async function ownLinksTry(): Promise<ProfileLink[] | null | 'unreadable'> {
+  return await collect(ownFieldTryGet);
 }
