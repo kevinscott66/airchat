@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   addContact,
   deleteContact,
+  listContactsRead,
   listContactsReadDetailed,
   parseContactId,
   renameContact,
@@ -38,6 +39,7 @@ import { useThemedStyles, useColors } from '../ThemeContext';
 import { badgeTint, contrastingInk, font, mediaScrim, mono, radius, scrim } from '../theme';
 import { log } from '../../core/logger';
 import { shouldApplyRows } from '../../core/storage/readResult';
+import { UNREADABLE_CONTACTS_TEXT } from '../../core/storage/unreadableText';
 import { ruPlural } from '../../core/text/ruPlural';
 import { shortIdentity } from '../identity/shortId';
 import { rawErrorText, userErrorText } from '../components/userErrorText';
@@ -346,6 +348,14 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
    */
   const [blockUnknown, setBlockUnknown] = useState(false);
 
+  /**
+   * v4.32.1089: книгу не удалось прочитать. Показ ошибки всплывашкой беду
+   * называл, но экран под ней оставался прежним, а при первом чтении
+   * прежнее — это пустой список: «Пока никого в списке» и кнопка «Добавить
+   * первый контакт». Всплывашка уходит через секунды, надпись остаётся.
+   */
+  const [contactsReadFailed, setContactsReadFailed] = useState(false);
+
   const load = useCallback(async () => {
     // v4.32.622: сорванное чтение раньше приходило сюда пустым списком и
     // рисовалось как «Добавьте первый контакт» — то есть как пропавшая
@@ -354,9 +364,11 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     const detailed = await listContactsReadDetailed();
     const read = detailed?.contacts ?? null;
     if (!shouldApplyRows(read)) {
+      setContactsReadFailed(true);
       showError('Не удалось прочитать контакты. Потяните список вниз, чтобы повторить.');
       return;
     }
+    setContactsReadFailed(false);
     // v4.32.846: список прочитался, но не весь. Показать его молча — значит
     // предъявить укороченную книжку как полную: человек решит, что контакт
     // пропал, и заведёт его заново. Строки целы, их просто не открыть сейчас.
@@ -576,8 +588,23 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
 
     // v4.32.44: дубликат — один и тот же адрес не может быть добавлен дважды.
     // Предлагаем либо обновить имя, либо удалить старую запись, либо заблокировать пира.
-    if (isDuplicate) {
-      const dup = isDuplicate;
+    // v4.32.1089: проверка шла по списку в состоянии экрана, а он остаётся
+    // пустым, когда книгу не прочитали. Тогда дубликат «не находился», и
+    // addContact дальше ставил displayName из патча — а патч здесь непустой
+    // всегда («Контакт xxx», если поле пустое). Человек, повторно вставивший
+    // знакомый ID, вместо «Контакт уже добавлен» получал переименованный
+    // контакт: ровно то «фантомное повторное добавление», против которого
+    // проверку и завели. Тот же отказ в окне списка чатов — с v4.32.999.
+    const known = await listContactsRead();
+    if (known === null) {
+      showError(
+        `${UNREADABLE_CONTACTS_TEXT}. Не видно, нет ли такого контакта уже, поэтому добавлять не стали: иначе у знакомого контакта сменилось бы имя. Откройте список заново.`,
+      );
+      return;
+    }
+    const duplicate = parsedB64 ? known.find((c) => c.peerPublicKey === parsedB64) ?? null : null;
+    if (duplicate) {
+      const dup = duplicate;
       const alreadyBlocked = blockedSet.has(dup.peerPublicKey);
       Alert.alert(
         'Контакт уже добавлен',
@@ -671,7 +698,7 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
     } finally {
       setAddBusy(false);
     }
-  }, [parsedKey, pair, isSelf, addNameInput, isDuplicate, resetAddForm, blockedSet, blockUnknown, load]);
+  }, [parsedKey, parsedB64, pair, isSelf, addNameInput, resetAddForm, blockedSet, blockUnknown, load]);
 
   // ─── Share my ID ───────────────────────────────────────────────────────
   const shareMyId = useCallback(async () => {
@@ -868,17 +895,31 @@ function ContactsScreenImpl({ onOpenChatWithPeer, pair, myDid }: Props): React.R
           windowSize={10}
           removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Ionicons name="people-outline" size={56} color={colors.textMuted} />
-              <Text style={styles.emptyTitle}>Пока никого в списке</Text>
-              <Text style={styles.emptyText}>
-                Добавьте первый контакт — попросите друга открыть «Профиль» → «Мой QR-код», отсканируйте код или вставьте его ID.
-              </Text>
-              <AppPressable accessibilityRole="button" style={styles.emptyBtn} onPress={openAddModal} testID="contacts_empty_add">
-                <Ionicons name="person-add" size={18} color={contrastingInk(colors.primary)} />
-                <Text style={styles.emptyBtnText}>Добавить контакт</Text>
-              </AppPressable>
-            </View>
+            contactsReadFailed ? (
+              // v4.32.1089: книга не прочиталась. Звать сюда «добавить первый
+              // контакт» — прямая ложь: записи на диске целы, добавлять
+              // некого, а заводить их заново значит потерять и имена, и
+              // историю привязок. Помогает повтор чтения, о нём и говорим.
+              <View style={styles.empty}>
+                <Ionicons name="alert-circle-outline" size={56} color={colors.textMuted} />
+                <Text style={styles.emptyTitle}>{UNREADABLE_CONTACTS_TEXT}</Text>
+                <Text style={styles.emptyText}>
+                  Контакты на месте — их не удалось прочитать сейчас. Потяните список вниз, чтобы повторить.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Ionicons name="people-outline" size={56} color={colors.textMuted} />
+                <Text style={styles.emptyTitle}>Пока никого в списке</Text>
+                <Text style={styles.emptyText}>
+                  Добавьте первый контакт — попросите друга открыть «Профиль» → «Мой QR-код», отсканируйте код или вставьте его ID.
+                </Text>
+                <AppPressable accessibilityRole="button" style={styles.emptyBtn} onPress={openAddModal} testID="contacts_empty_add">
+                  <Ionicons name="person-add" size={18} color={contrastingInk(colors.primary)} />
+                  <Text style={styles.emptyBtnText}>Добавить контакт</Text>
+                </AppPressable>
+              </View>
+            )
           }
         />
       </View>

@@ -144,7 +144,18 @@ describe('форма исходника экрана контактов', () => 
     // Обе замыкающие её callback-функции пересобираются при смене пометки —
     // иначе меню осталось бы со старой подписью.
     expect(s).toContain('}, [onOpenChatWithPeer, blockedSet, blockUnknown, load]);');
-    expect(s).toContain('isDuplicate, resetAddForm, blockedSet, blockUnknown, load]);');
+    // v4.32.1089: закрепка держит смысл, а не буквальный список. Из
+    // зависимостей submitAdd ушёл isDuplicate — проверка двойника перестала
+    // верить состоянию экрана и читает книгу заново. Важно здесь ровно одно:
+    // пометка входит в зависимости и окно добавления пересобирается при её
+    // смене.
+    const addAt = s.indexOf('const submitAdd = useCallback(async () => {');
+    expect(addAt).toBeGreaterThan(-1);
+    const depsAt = s.indexOf('\n  }, [', addAt);
+    expect(depsAt).toBeGreaterThan(addAt);
+    const addDeps = s.slice(depsAt, s.indexOf(']);', depsAt) + 3);
+    expect(addDeps).toContain('blockUnknown');
+    expect(addDeps).toContain('blockedSet');
   });
 });
 
