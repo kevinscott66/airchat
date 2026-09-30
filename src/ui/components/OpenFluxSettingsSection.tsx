@@ -43,6 +43,7 @@ import {
   type OpenFluxTunnelStats,
   type OpenFluxUiStatus,
 } from '../../core/vpn/openFluxController';
+import { tunnelStatsRefusalText } from '../../core/vpn/tunnelStatsRefusal';
 import { addOpenFluxReviveListener } from '../../core/vpn/openFluxNetworkGuard';
 import { clockTimeSec } from '../../core/time/ruDateTime';
 
@@ -271,11 +272,22 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
    * такое за спиной пользователя нельзя.
    */
   const countBtn = useAsyncButton(async () => {
-    if (!(await enableOpenFluxTunnelStats())) {
-      showError('В этой версии приложения счётчик недоступен');
+    // v4.32.1081: отказов три, и про сборку — только один. Прежде на все
+    // отвечали «в этой версии счётчика нет», и человек переставал пробовать
+    // там, где помогло бы второе нажатие.
+    const start = await enableOpenFluxTunnelStats();
+    if (start !== 'on') {
+      showError(tunnelStatsRefusalText(start));
       return;
     }
-    setStats(await getOpenFluxTunnelStats());
+    const first = await getOpenFluxTunnelStats();
+    if (!first) {
+      // Включили, а отсчёта нет: строка статистики не появится, и без слов
+      // нажатие выглядело бы пустым.
+      showError(tunnelStatsRefusalText('silent'));
+      return;
+    }
+    setStats(first);
   });
 
   const styles = useThemedStyles((c) => ({

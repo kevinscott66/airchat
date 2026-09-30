@@ -264,22 +264,29 @@ export type OpenFluxTunnelStats = {
   httpProxy: boolean;
 };
 
+/** Исход включения счётчика. При отказе сказано, чей он (v4.32.1081). */
+export type OpenFluxStatsStart = 'on' | 'unsupported' | 'refused';
+
 /**
  * Включить подсчёт соединений. Обратного хода нет: в ядре отладочный флаг
- * односторонний, и выключается он только перезапуском приложения. Возвращает
- * false, если считать нечем (web, Android — там счётчика пока нет).
+ * односторонний, и выключается он только перезапуском приложения.
+ *
+ * v4.32.1081: исходов три, а не два. «Считать нечем» (web, Android — там
+ * счётчика пока нет) и «ядро отказалось» — разные вещи: первое про сборку и
+ * навсегда, второе про эту минуту и чинится повтором. Прежде оба уходили
+ * наружу одним `false`, и кнопка говорила о сборке то, чего не знала.
  */
-export async function enableOpenFluxTunnelStats(): Promise<boolean> {
-  if (!openFluxAvailable()) return false;
+export async function enableOpenFluxTunnelStats(): Promise<OpenFluxStatsStart> {
+  if (!openFluxAvailable()) return 'unsupported';
   const mod = AirChatOpenFlux;
-  if (!mod?.enableTunnelStats) return false;
+  if (!mod?.enableTunnelStats) return 'unsupported';
   try {
     await mod.enableTunnelStats();
     log.info('openflux_stats_enabled');
-    return true;
+    return 'on';
   } catch (e) {
     log.warn('openflux_stats_enable_failed', { err: openFluxErrorText(e) });
-    return false;
+    return 'refused';
   }
 }
 

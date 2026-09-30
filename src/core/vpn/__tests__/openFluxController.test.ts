@@ -250,7 +250,9 @@ describe('счётчик соединений', () => {
     // Ноль соединений и «счётчика нет» — разные вещи. Первое значит «трафик
     // мимо туннеля», второе — «мы не смотрели»; показать одно вместо другого
     // и есть то самое враньё нулём, от которого счётчик и задумывался.
-    await expect(enableOpenFluxTunnelStats()).resolves.toBe(false);
+    // v4.32.1081: отказ называет себя. Закрепка тут не про слово, а про то,
+    // что включения не случилось и нулём это не прикрыто.
+    await expect(enableOpenFluxTunnelStats()).resolves.not.toBe('on');
     await expect(getOpenFluxTunnelStats()).resolves.toBeNull();
   });
 
@@ -267,7 +269,7 @@ describe('счётчик соединений', () => {
     mockNative.enableTunnelStats = jest.fn().mockResolvedValue(undefined);
     mockNative.tunnelStats = jest.fn().mockResolvedValue(stats);
 
-    await expect(enableOpenFluxTunnelStats()).resolves.toBe(true);
+    await expect(enableOpenFluxTunnelStats()).resolves.toBe('on');
     // Прокси поставлены, а соединений ноль — именно так и должно выглядеть
     // «перехват включён, но трафик через него пока не пошёл».
     await expect(getOpenFluxTunnelStats()).resolves.toEqual(stats);
