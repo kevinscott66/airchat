@@ -65,6 +65,12 @@ import { loadConfig } from '../../core/config';
 import { contactLabel } from '../../core/social/contactLabel';
 import { hoursLabel, membersLabel, minutesLabel, ruPlural, subscribersLabel } from '../utils/plural';
 import {
+  feedListEmptyHint,
+  feedListEmptyIcon,
+  feedListEmptyTitle,
+  FEED_LIST_RETRY,
+} from '../utils/feedListUnread';
+import {
   loadFeedPosts,
   publishFeedPost,
   publishRepost,
@@ -891,10 +897,16 @@ type Props = {
 function applyIfRead(
   set: (rows: FeedPostRow[]) => void,
   where: string,
+  mark?: (unreadable: boolean) => void,
 ): (rows: DbRead<FeedPostRow>) => void {
   return (rows) => {
-    if (shouldApplyRows(rows)) set([...rows]);
-    else log.warn('ui_feed_list_read_failed', { where });
+    if (shouldApplyRows(rows)) {
+      set([...rows]);
+      mark?.(false);
+    } else {
+      log.warn('ui_feed_list_read_failed', { where });
+      mark?.(true);
+    }
   };
 }
 
@@ -1057,9 +1069,15 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const [mentionSuggestions, setMentionSuggestions] = useState<{ name: string; did: string; insert: string }[]>([]);
   const [bookmarkFilter, setBookmarkFilter] = useState(false);
   const [bookmarkedPosts, setBookmarkedPosts] = useState<FeedPostRow[]>([]);
+  // v4.32.1070: последнее чтение закладок не удалось. Пустой список значит
+  // одно из двух, и «Нет закладок» — только одно из них.
+  const [bookmarksUnread, setBookmarksUnread] = useState(false);
   // v4.32.34: режим «Архив» — показывает только archived-посты, скрытые из основной ленты.
   const [archiveFilter, setArchiveFilter] = useState(false);
   const [archivedPosts, setArchivedPosts] = useState<FeedPostRow[]>([]);
+  // v4.32.1070: то же самое для архива — и цена здесь выше, спрятанных
+  // публикаций нет больше нигде.
+  const [archiveUnread, setArchiveUnread] = useState(false);
   // v4.32.34: post action sheet (вместо Alert.alert — на Android Alert capped at 3 buttons).
   const [actionSheetPost, setActionSheetPost] = useState<FeedPostRow | null>(null);
   // v4.32.50: профиль автора поста/комментария — открывается при тапе по имени/аватару.
@@ -1801,7 +1819,9 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const reloadFeedLists = useCallback(async () => {
     await loadFeed();
     if (archiveFilter) {
-      await listArchivedFeedPosts().then(applyIfRead(setArchivedPosts, 'archive_reload'));
+      await listArchivedFeedPosts().then(
+        applyIfRead(setArchivedPosts, 'archive_reload', setArchiveUnread),
+      );
     }
   }, [loadFeed, archiveFilter]);
 
@@ -3116,33 +3136,46 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     );
   }, [commentPost, did, cmStyles, styles, colors, t, pinnedMediaUrls, openFeedMedia, openPeekAuthor, handleHashtagPress, handleMentionPress]);
 
+  /**
+   * v4.32.1070: перечитать закладки, донеся исход до экрана. Отдельной
+   * формой, потому что её же зовёт «Повторить» под отказом чтения.
+   */
+  const loadBookmarks = useCallback(async () => {
+    await listBookmarkedFeedPosts().then(
+      applyIfRead(setBookmarkedPosts, 'bookmarks_enter', setBookmarksUnread),
+    );
+  }, []);
   useEffect(() => {
-    if (bookmarkFilter) {
-      void listBookmarkedFeedPosts().then(applyIfRead(setBookmarkedPosts, 'bookmarks_enter'));
-    }
-  }, [bookmarkFilter]);
+    if (bookmarkFilter) void loadBookmarks();
+  }, [bookmarkFilter, loadBookmarks]);
 
   // v4.32.34/v4.32.47: при входе в режим «Архив» подгружаем первую страницу (40 постов),
   // дальше — пагинация через loadMoreArchive по onEndReached FlatList.
   const [archiveOffset, setArchiveOffset] = useState(0);
   const [archiveHasMore, setArchiveHasMore] = useState(true);
   const archiveLoadingMore = useRef(false);
-  useEffect(() => {
-    if (archiveFilter) {
-      setArchiveOffset(0);
-      setArchiveHasMore(true);
-      void listArchivedFeedPosts(FEED_PAGE, 0).then((first) => {
-        // v4.32.528: пустой архив применяем (он мог опустеть), сбой чтения — нет.
-        if (!shouldApplyRows(first)) {
-          log.warn('ui_feed_list_read_failed', { where: 'archive_enter' });
-          return;
-        }
-        setArchivedPosts([...first]);
-        setArchiveOffset(first.length);
-        if (first.length < FEED_PAGE) setArchiveHasMore(false);
-      });
+  /**
+   * v4.32.1070: первая страница архива, с исходом чтения. Отдельной формой —
+   * её зовёт и вход в режим, и «Повторить» под отказом.
+   */
+  const loadArchiveFirstPage = useCallback(async () => {
+    setArchiveOffset(0);
+    setArchiveHasMore(true);
+    const first = await listArchivedFeedPosts(FEED_PAGE, 0);
+    // v4.32.528: пустой архив применяем (он мог опустеть), сбой чтения — нет.
+    if (!shouldApplyRows(first)) {
+      log.warn('ui_feed_list_read_failed', { where: 'archive_enter' });
+      setArchiveUnread(true);
+      return;
     }
-  }, [archiveFilter]);
+    setArchiveUnread(false);
+    setArchivedPosts([...first]);
+    setArchiveOffset(first.length);
+    if (first.length < FEED_PAGE) setArchiveHasMore(false);
+  }, []);
+  useEffect(() => {
+    if (archiveFilter) void loadArchiveFirstPage();
+  }, [archiveFilter, loadArchiveFirstPage]);
 
   const loadMoreArchive = useCallback(async () => {
     if (!archiveFilter || archiveLoadingMore.current || !archiveHasMore) return;
@@ -3247,7 +3280,11 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
     const newVal = !item.bookmarked;
     void setFeedPostBookmarked(item.id, newVal)
       .then(() => {
-        if (bookmarkFilter) return listBookmarkedFeedPosts().then(applyIfRead(setBookmarkedPosts, 'bookmarks_toggle'));
+        if (bookmarkFilter) {
+          return listBookmarkedFeedPosts().then(
+            applyIfRead(setBookmarkedPosts, 'bookmarks_toggle', setBookmarksUnread),
+          );
+        }
         return loadFeed();
       })
       .catch((e) => {
@@ -3557,20 +3594,48 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
               </View>
             ) : archiveFilter ? (
               // v4.32.34: пустое состояние режима «Архив».
+              // v4.32.1070: пусто и «не прочиталось» — разные утверждения, и
+              // второе здесь дороже: спрятанных публикаций нет больше нигде.
               <View style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>📥</Text>
-                <Text style={styles.emptyTitle}>Архив пуст</Text>
-                <Text style={styles.empty}>
-                  Долгое нажатие на публикации → «Архивировать», чтобы спрятать её из ленты, не удаляя.
+                <Text style={styles.emptyIcon}>{feedListEmptyIcon('archive', archiveUnread)}</Text>
+                <Text style={styles.emptyTitle} testID="feed_archive_empty_title">
+                  {feedListEmptyTitle('archive', archiveUnread)}
                 </Text>
+                <Text style={[styles.empty, archiveUnread && { color: colors.warning }]}>
+                  {feedListEmptyHint('archive', archiveUnread)}
+                </Text>
+                {archiveUnread ? (
+                  <AppPressable
+                    style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 }}
+                    onPress={() => { void loadArchiveFirstPage(); }}
+                    accessibilityRole="button"
+                    accessibilityLabel={FEED_LIST_RETRY}
+                    testID="feed_archive_unread_retry"
+                  >
+                    <Text style={{ color: colors.accent, fontWeight: '600' }}>{FEED_LIST_RETRY}</Text>
+                  </AppPressable>
+                ) : null}
               </View>
             ) : bookmarkFilter ? (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>🔖</Text>
-                <Text style={styles.emptyTitle}>Нет закладок</Text>
-                <Text style={styles.empty}>
-                  Нажмите иконку закладки в карточке публикации, чтобы сохранить её.
+                <Text style={styles.emptyIcon}>{feedListEmptyIcon('bookmarks', bookmarksUnread)}</Text>
+                <Text style={styles.emptyTitle} testID="feed_bookmarks_empty_title">
+                  {feedListEmptyTitle('bookmarks', bookmarksUnread)}
                 </Text>
+                <Text style={[styles.empty, bookmarksUnread && { color: colors.warning }]}>
+                  {feedListEmptyHint('bookmarks', bookmarksUnread)}
+                </Text>
+                {bookmarksUnread ? (
+                  <AppPressable
+                    style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 8 }}
+                    onPress={() => { void loadBookmarks(); }}
+                    accessibilityRole="button"
+                    accessibilityLabel={FEED_LIST_RETRY}
+                    testID="feed_bookmarks_unread_retry"
+                  >
+                    <Text style={{ color: colors.accent, fontWeight: '600' }}>{FEED_LIST_RETRY}</Text>
+                  </AppPressable>
+                ) : null}
               </View>
             ) : feedReadFailed ? (
               // v4.32.528: сбой чтения базы — это не пустая лента, и говорить
