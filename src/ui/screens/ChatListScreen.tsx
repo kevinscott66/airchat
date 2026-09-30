@@ -44,6 +44,7 @@ import {
   UNREADABLE_REACTIONS_TEXT,
 } from '../../core/storage/unreadableText';
 import { draftIsUnreadable, hasReadableDraft } from '../../core/social/draftGuard';
+import { lastOutgoingMark } from '../../core/social/lastOutgoingMark';
 import { searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
 import { matchesSearch } from '../../core/social/searchableText';
 import { searchReactionChip, UNREADABLE_REACTION_MARK } from '../../core/social/searchReactionChip';
@@ -204,6 +205,15 @@ function ConvRowImpl({
   const presence = usePresence(item.contactPubB64 ?? '');
   const isOut = item.lastMessageDirection === 'out';
   /**
+   * v4.32.1086: судьба моей последней реплики — из её настоящего статуса.
+   * Раньше значок выводился из `unreadCount === 0`, то есть из счётчика
+   * МОИХ непрочитанных входящих: он почти всегда ноль, когда последнее
+   * сообщение моё, и строка показывала «прочитано» сразу после нажатия
+   * «отправить» — в том числе когда отправка провалилась. `null` означает
+   * «не знаем»: тогда не рисуем ничего. См. lastOutgoingMark.
+   */
+  const outMark = lastOutgoingMark(item.lastOutgoing);
+  /**
    * v4.32.583: черновик не открылся ключом данных. Пустая строка на его
    * месте выглядела как «черновика нет» — а он есть, и его нельзя ни
    * показать, ни молча затереть. См. draftGuard.
@@ -341,11 +351,12 @@ function ConvRowImpl({
             ) : null}
           </View>
           <View style={rowStyles.timeRow}>
-            {isOut ? (
+            {isOut && outMark ? (
               <Ionicons
-                name={item.unreadCount === 0 ? 'checkmark-done' : 'checkmark'}
+                name={outMark.icon}
                 size={14}
-                color={colors.accent}
+                color={colors[outMark.tone]}
+                accessibilityLabel={outMark.label}
                 style={{ marginRight: 2 }}
               />
             ) : null}

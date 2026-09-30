@@ -12,6 +12,7 @@ import { parseViewerList } from '../social/viewerList';
 import { mayOverwrite, cellTextOrNull, classifyAtRestCell, type AtRestCell } from './atRestCell';
 import { scheduledReadState, type ScheduledReadState } from '../social/scheduledDispatch';
 import type { ReactionWriteResult } from '../social/reactionWrite';
+import type { LastOutgoing } from '../social/lastOutgoingMark';
 import { mayWritePreview, previewAction } from './unreadableCell';
 import { unreadableFromCellState } from './unreadableText';
 import { emptySearchScan, noteSearchedRow, type SearchScan } from './searchScan';
@@ -3230,6 +3231,13 @@ export type ConversationRow = {
   /** v4.32.583: черновик не открылся ключом данных — см. draftGuard. */
   draftUnreadable?: boolean;
   lastMessageDirection: 'in' | 'out' | null;
+  /**
+   * v4.32.1086: судьба последней исходящей реплики — её настоящий статус, а
+   * не догадка по счётчику непрочитанных. `null` либо отсутствие поля
+   * означает «не знаем»: исходящей не нашлось или строка собрана не отсюда.
+   * См. lastOutgoingMark.
+   */
+  lastOutgoing?: LastOutgoing | null;
   pinnedMessageId: string | null;
   /** If set, messages in this conversation auto-delete after this many ms (0 = off). */
   disappearAfterMs: number | null;
@@ -5198,13 +5206,41 @@ async function readConversationRows(
       last_message_at: number;
       last_message_preview: string | null;
       last_message_direction: string | null;
+      last_out_status: string | null;
+      last_out_cid: string | null;
       pinned_message_id: string | null;
       disappear_after_ms: number | null;
       color_tag: string | null;
     }>(
-      `SELECT * FROM conversations
-       WHERE owner_profile_id = ? AND archived = ?
-       ORDER BY ${order}`,
+      /*
+       * v4.32.1086: статус последней исходящей реплики берётся из самих
+       * сообщений, а не денормализуется в строку диалога. Статус меняется
+       * уже после записи строки (sending → sent → delivered → read), и
+       * колонка рядом с last_message_direction рассохлась бы на первой же
+       * смене.
+       *
+       * Условие `c.last_message_direction = 'out'` стоит первым намеренно:
+       * значок рисуется только у исходящей последней реплики, и для всех
+       * прочих диалогов подзапрос отваливается, не прочитав ни строки. Там
+       * же, где он работает, первая строка индекса idx_chat_contact_profile
+       * (contact, profile, created_at DESC) и есть искомая.
+       */
+      `SELECT c.*,
+              (SELECT m.status FROM chat_messages m
+                WHERE c.last_message_direction = 'out'
+                  AND m.contact_pub_b64 = c.contact_pub_b64
+                  AND m.owner_profile_id = c.owner_profile_id
+                  AND m.direction = 'out'
+                ORDER BY m.created_at DESC LIMIT 1) AS last_out_status,
+              (SELECT m.cid FROM chat_messages m
+                WHERE c.last_message_direction = 'out'
+                  AND m.contact_pub_b64 = c.contact_pub_b64
+                  AND m.owner_profile_id = c.owner_profile_id
+                  AND m.direction = 'out'
+                ORDER BY m.created_at DESC LIMIT 1) AS last_out_cid
+         FROM conversations c
+        WHERE c.owner_profile_id = ? AND c.archived = ?
+        ORDER BY ${order}`,
       [ownerProfileId, archived]
     );
     const now = Date.now();
@@ -5240,6 +5276,12 @@ async function readConversationRows(
         lastMessagePreview: cellTextOrNull(prevCell),
         lastMessagePreviewUnreadable: unreadableFromCellState(prevCell.state),
         lastMessageDirection: (r.last_message_direction as 'in' | 'out' | null) ?? null,
+        // Статуса нет — исходящей реплики не нашлось. Это «не знаем», и
+        // значок в списке не рисуется вовсе (см. lastOutgoingMark).
+        lastOutgoing:
+          r.last_out_status == null
+            ? null
+            : { status: r.last_out_status, cid: r.last_out_cid ?? null },
         pinnedMessageId: r.pinned_message_id ?? null,
         disappearAfterMs: r.disappear_after_ms ?? null,
         colorTag: r.color_tag ?? null,
