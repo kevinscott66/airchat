@@ -1276,18 +1276,30 @@ function SettingsScreenImpl({
    * Если пароля ещё нет, сначала предлагаем его завести, см. sensitiveAccess.
    */
   const openBackupSection = useCallback(async () => {
-    const gate = await sensitiveAccessGate();
-    setHasAppPassword(gate === 'verify');
-    if (gate === 'set_password') {
-      setNewPwd('');
-      setNewPwd2('');
-      setSetPwdPurpose('backup');
-      openSetPassword();
-      showError(SENSITIVE_NO_PASSWORD_TEXT);
-      return;
+    try {
+      const gate = await sensitiveAccessGate();
+      setHasAppPassword(gate === 'verify');
+      if (gate === 'set_password') {
+        setNewPwd('');
+        setNewPwd2('');
+        setSetPwdPurpose('backup');
+        openSetPassword();
+        showError(SENSITIVE_NO_PASSWORD_TEXT);
+        return;
+      }
+      setBackupPwdInput('');
+      setBackupUnlockModal(true);
+    } catch (e) {
+      // v4.32.1085: `sensitiveAccessGate` ходит в защищённое хранилище и
+      // умеет бросать — на Android оно отказывает, пока устройство не
+      // разблокировали после перезагрузки. Ловить было некому: `useAsyncButton`
+      // на отказ пишет в `console.warn`, и нажатие на «Резервную копию» не
+      // делало ничего — ни окна, ни слова. Кнопка, которая молчит, читается
+      // как сломанное приложение, а раздел за ней — единственный путь к
+      // секретным словам и облачной копии. Три соседние двери говорят об
+      // отказе с v4.32.882, эта молчала.
+      showError(userErrorText(e, 'Не удалось открыть раздел. Попробуйте ещё раз.'));
     }
-    setBackupPwdInput('');
-    setBackupUnlockModal(true);
   }, [openSetPassword]);
 
   const submitBackupUnlock = async (): Promise<void> => {
