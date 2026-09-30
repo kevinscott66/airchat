@@ -30,7 +30,7 @@ const APP = bare(['..', '..', 'App.tsx']);
 
 describe('под замком имени звонящего нет', () => {
   it('заперто — вместо имени подпись, вместо инициалов вопрос', () => {
-    const who = callerDisplay(true, 'Рита');
+    const who = callerDisplay(true, 'Рита', false);
     expect(who.name).toBe(HIDDEN_CALLER_NAME);
     expect(who.name).not.toContain('Рита');
     expect(who.avatarName).toBe('');
@@ -39,14 +39,16 @@ describe('под замком имени звонящего нет', () => {
   });
 
   it('открыто — имя показывается как есть', () => {
-    expect(callerDisplay(false, 'Рита')).toEqual({ name: 'Рита', avatarName: 'Рита' });
-    expect(nameInitials(callerDisplay(false, 'Рита').avatarName)).not.toBe('?');
+    expect(callerDisplay(false, 'Рита', false)).toEqual({ name: 'Рита', avatarName: 'Рита' });
+    expect(nameInitials(callerDisplay(false, 'Рита', false).avatarName)).not.toBe('?');
   });
 
   it('под замком имя скрыто при любом входном имени', () => {
     for (const n of ['', 'A', 'Alexander Ivanov', 'AbCdEf123456']) {
-      expect(callerDisplay(true, n).name).toBe(HIDDEN_CALLER_NAME);
-      expect(callerDisplay(true, n).avatarName).toBe('');
+      for (const unreadable of [false, true]) {
+        expect(callerDisplay(true, n, unreadable).name).toBe(HIDDEN_CALLER_NAME);
+        expect(callerDisplay(true, n, unreadable).avatarName).toBe('');
+      }
     }
   });
 });
@@ -54,7 +56,10 @@ describe('под замком имени звонящего нет', () => {
 describe('оверлей знает про замок и пользуется решением', () => {
   it('имя приходит только через callerDisplay', () => {
     expect(OVERLAY).toContain("import { callerDisplay, type CallerDisplay } from './callerDisplay';");
-    expect(OVERLAY).toContain('const who = callerDisplay(locked, call.peerName);');
+    // v4.32.1087: у решения появился третий вход — «книга не прочиталась».
+    // Закрепка держит смысл: имя приходит из решения, замок идёт первым
+    // входом, а peerName читается ровно в одном месте.
+    expect(OVERLAY).toContain('callerDisplay(locked, call.peerName,');
     // Единственное место, где call.peerName вообще читается.
     expect(OVERLAY.split('call.peerName').length - 1).toBe(1);
     expect(OVERLAY).toContain('export function CallOverlay({ locked }: { locked: boolean })');
@@ -72,11 +77,11 @@ describe('оверлей знает про замок и пользуется р
     const to = OVERLAY.indexOf('}, [call?.peerPubB64, call?.state, locked]);', from);
     expect(to).toBeGreaterThan(from);
     const effect = OVERLAY.slice(from, to);
-    expect(effect).toContain('await listContacts()');
+    expect(effect).toContain('await listContactsRead()');
     // Выход раньше чтения — и по замку тоже.
     const guard = effect.indexOf('if (locked || call?.state !== ');
     expect(guard).toBeGreaterThan(0);
-    expect(guard).toBeLessThan(effect.indexOf('await listContacts()'));
+    expect(guard).toBeLessThan(effect.indexOf('await listContactsRead()'));
   });
 
   it('App передаёт состояние замка', () => {

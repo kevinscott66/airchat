@@ -15,6 +15,14 @@
  *
  * Пустое `avatarName` — не оплошность: nameInitials на пустой строке отдаёт
  * «?», и в кружке оказывается вопрос, а не чьи-то инициалы.
+ *
+ * v4.32.1087: третий исход — книгу контактов не удалось прочитать. Раньше
+ * такого исхода не было: `listContacts()` на отказе отдаёт пустой список, и
+ * «книга не открылась» приходило сюда неотличимо от «этого человека нет в
+ * контактах». На экран во весь рост выкладывался запасной `peerName` —
+ * двенадцать знаков открытого ключа (callService), — и звонок близкого
+ * человека выглядел как звонок незнакомца. Отклонить такой проще, чем
+ * принять. Теперь это отдельная подпись.
  */
 export type CallerDisplay = {
   /** Подпись под аватаром и в шапке видео. */
@@ -26,7 +34,25 @@ export type CallerDisplay = {
 /** Подпись вместо имени, пока замок заперт. */
 export const HIDDEN_CALLER_NAME = 'Имя скрыто';
 
-export function callerDisplay(locked: boolean, peerName: string): CallerDisplay {
-  if (!locked) return { name: peerName, avatarName: peerName };
-  return { name: HIDDEN_CALLER_NAME, avatarName: '' };
+/**
+ * Подпись, когда книга контактов не открылась. Не «неизвестный»: человек
+ * вполне может быть в контактах — прочитать не вышло именно сейчас.
+ */
+export const UNREADABLE_CALLER_NAME = 'Имя не прочитано';
+
+/**
+ * @param bookUnreadable — книгу контактов прочитать не удалось. Требуется
+ *   явно: «мы не знаем» — такой же полноправный исход, как два других, и
+ *   умолчания у него быть не должно.
+ */
+export function callerDisplay(
+  locked: boolean,
+  peerName: string,
+  bookUnreadable: boolean
+): CallerDisplay {
+  // Замок — раньше всего: под ним не показывают ничего, включая и то, что
+  // имя не прочиталось (v4.32.627).
+  if (locked) return { name: HIDDEN_CALLER_NAME, avatarName: '' };
+  if (bookUnreadable) return { name: UNREADABLE_CALLER_NAME, avatarName: '' };
+  return { name: peerName, avatarName: peerName };
 }

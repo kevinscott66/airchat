@@ -55,7 +55,7 @@ import {
   type CallMediaState,
   type CallMediaStream,
 } from '../../core/social/callService';
-import { listContacts } from '../../core/social/contacts';
+import { listContactsRead } from '../../core/social/contacts';
 import { log } from '../../core/logger';
 import { formatClockDuration } from '../time/durationLabel';
 import { nameInitials } from '../../core/social/contactLabel';
@@ -339,10 +339,17 @@ export function CallOverlay({ locked }: { locked: boolean }): React.ReactElement
   }, [speakerOn]);
 
   const nameResolvedForRef = useRef<string | null>(null);
+  /**
+   * v4.32.1087: книгу контактов прочитать не вышло. Отдельное состояние, а
+   * не пустой список: иначе «не открылась» неотличимо от «его нет в
+   * контактах», и на экран идёт обрубок ключа вместо имени.
+   */
+  const [bookUnreadable, setBookUnreadable] = useState(false);
   useEffect(() => {
     const peer = call?.peerPubB64;
     if (!peer) {
       nameResolvedForRef.current = null;
+      setBookUnreadable(false);
       return;
     }
     // v4.32.627. Под замком книгу контактов не трогаем вовсе: имя звонящего
@@ -353,13 +360,32 @@ export function CallOverlay({ locked }: { locked: boolean }): React.ReactElement
     nameResolvedForRef.current = peer;
     let cancelled = false;
     void (async () => {
+      /*
+       * v4.32.1087: отметку о разобранном имени снимаем на любом отказе.
+       * Она ставится ДО чтения, и одного неудачного прохода хватало, чтобы
+       * имя не подтянулось до конца звонка — даже когда книга становилась
+       * читаемой через секунду. Снятая отметка даёт повтор на ближайшей
+       * смене замка или состояния звонка, а это ровно тот случай: чаще
+       * всего книга не читается, пока телефон не разблокировали.
+       */
+      const failed = (error: unknown): void => {
+        nameResolvedForRef.current = null;
+        setBookUnreadable(true);
+        log.warn('call_caller_name_resolve_failed', { err: rawErrorText(error) });
+      };
       try {
-        const contacts = await listContacts();
+        const contacts = await listContactsRead();
         if (cancelled) return;
+        if (contacts === null) {
+          failed(new Error('contacts_unreadable'));
+          return;
+        }
+        setBookUnreadable(false);
         const name = contacts.find((contact) => contact.peerPublicKey === peer)?.displayName?.trim();
         if (name) updateIncomingCallerName(peer, name);
       } catch (error) {
-        log.warn('call_caller_name_resolve_failed', { err: rawErrorText(error) });
+        if (cancelled) return;
+        failed(error);
       }
     })();
     return () => { cancelled = true; };
@@ -408,7 +434,7 @@ export function CallOverlay({ locked }: { locked: boolean }): React.ReactElement
 
   if (!call || call.state === 'idle') return null;
 
-  const who = callerDisplay(locked, call.peerName);
+  const who = callerDisplay(locked, call.peerName, bookUnreadable);
   const isIncoming = call.state === 'incoming';
   const isOutgoing = call.state === 'outgoing';
   const isConnected = call.state === 'connected';
