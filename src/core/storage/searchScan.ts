@@ -18,6 +18,15 @@
  * Единственная зависимость — такой же чистый модуль с окончаниями
  * (ruPlural, v4.32.584): счёт и склонение проверяются без базы, ключей и
  * шифра.
+ *
+ * v4.32.1088: третий исход — поиск не выполнился вовсе. Все четыре поиска
+ * обёрнуты в try/catch, и на отказе базы или ключа данных из catch выходил
+ * `emptySearchScan()` — ноль обойдённых строк и ноль непрочитанных. Форма,
+ * заведённая ради честности, отдавала самую спокойную из возможных картин:
+ * «искали везде, не нашли ничего». На экране это «Ничего не найдено» без
+ * единой оговорки — притом что до строк дело не дошло ни разу. Отличить
+ * «обошли и не нашли» от «не обошли» по двум счётчикам нельзя: у ненайденного
+ * запроса в пустой переписке они ровно такие же. Поэтому исход назван прямо.
  */
 
 /** Сколько строк поиск прочитал и сколько не смог. */
@@ -26,11 +35,41 @@ import { pluralRu } from './ruPlural';
 export type SearchScan = {
   scanned: number;
   unreadable: number;
+  /**
+   * Поиск сорвался целиком: до строк дело не дошло. Не то же самое, что
+   * `scanned === 0` — у ненайденного запроса в пустой переписке обойдённых
+   * строк тоже ноль, и это честный ноль.
+   */
+  failed: boolean;
 };
 
 export function emptySearchScan(): SearchScan {
-  return { scanned: 0, unreadable: 0 };
+  return { scanned: 0, unreadable: 0, failed: false };
 }
+
+/**
+ * Счёт для сорвавшегося поиска: база не открылась, ключ данных не достался,
+ * запрос к таблице упал. Строк не обошли ни одной, и сказать «не найдено»
+ * не о чем.
+ */
+export function failedSearchScan(): SearchScan {
+  return { scanned: 0, unreadable: 0, failed: true };
+}
+
+/** Сорвался ли поиск. Отдельная функция, чтобы экраны не лезли в поля. */
+export function searchDidFail(scan: SearchScan | null | undefined): boolean {
+  return scan?.failed === true;
+}
+
+/**
+ * Короткая подпись вместо «Ничего не найдено», когда искать не вышло.
+ * Одна на все экраны: расходиться таким словам нельзя.
+ */
+export const SEARCH_FAILED_TEXT = 'Поиск не выполнился';
+
+/** Развёрнутая строка под выдачей — с прямым отрицанием ложного вывода. */
+export const SEARCH_FAILED_NOTICE =
+  'Поиск не выполнился — это не значит, что ничего нет. Попробуйте ещё раз';
 
 /**
  * Отметить обойдённую строку.
@@ -63,6 +102,8 @@ export function messageWordForCount(n: number): string {
  * момент, когда человеку и без того тревожно.
  */
 export function searchSkippedNotice(scan: SearchScan): string | null {
+  // Сорвавшийся поиск говорит о себе раньше счётчиков: они у него пустые.
+  if (scan.failed) return SEARCH_FAILED_NOTICE;
   const n = Math.trunc(scan.unreadable);
   if (!Number.isFinite(n) || n <= 0) return null;
   const tail = messageWordForCount(n) === 'сообщение' ? 'оно не участвовало в поиске' : 'они не участвовали в поиске';
@@ -71,6 +112,8 @@ export function searchSkippedNotice(scan: SearchScan): string | null {
 
 /** Короткая пометка рядом со счётчиком совпадений. null — жаловаться не на что. */
 export function searchSkippedBadge(scan: SearchScan): string | null {
+  // Числа тут нет: не сосчитано ничего, а знак нужен.
+  if (scan.failed) return '⚠';
   const n = Math.trunc(scan.unreadable);
   if (!Number.isFinite(n) || n <= 0) return null;
   return `⚠ ${n}`;

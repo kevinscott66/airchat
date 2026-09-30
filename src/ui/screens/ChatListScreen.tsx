@@ -45,7 +45,7 @@ import {
 } from '../../core/storage/unreadableText';
 import { draftIsUnreadable, hasReadableDraft } from '../../core/social/draftGuard';
 import { lastOutgoingMark } from '../../core/social/lastOutgoingMark';
-import { searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
+import { SEARCH_FAILED_TEXT, searchDidFail, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
 import { matchesSearch } from '../../core/social/searchableText';
 import { searchReactionChip, UNREADABLE_REACTION_MARK } from '../../core/social/searchReactionChip';
 import {
@@ -1734,8 +1734,10 @@ export function ChatListScreen({ pair, onOpenChat, onOpenChatAt, refreshTick }: 
             <ChatListSkeleton />
           ) : searchQuery ? (
             <View style={s.empty}>
+              {/* v4.32.1088: сорвавшийся поиск — не пустая выдача. «Ничего не
+                  найдено» под ним было бы выводом, которого никто не делал. */}
               <Text style={[s.emptyText, { color: colors.textMuted }]}>
-                Ничего не найдено
+                {searchDidFail(globalSearchScan) ? SEARCH_FAILED_TEXT : 'Ничего не найдено'}
               </Text>
             </View>
           ) : convReadFailed ? (

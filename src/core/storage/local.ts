@@ -15,7 +15,7 @@ import type { ReactionWriteResult } from '../social/reactionWrite';
 import type { LastOutgoing } from '../social/lastOutgoingMark';
 import { mayWritePreview, previewAction } from './unreadableCell';
 import { unreadableFromCellState } from './unreadableText';
-import { emptySearchScan, noteSearchedRow, type SearchScan } from './searchScan';
+import { emptySearchScan, failedSearchScan, noteSearchedRow, type SearchScan } from './searchScan';
 import {
   countScannedCell,
   countScannedRow,
@@ -8432,7 +8432,8 @@ export async function searchGroupMessages(
     return { items: out, scan };
   } catch (e) {
     log.warn('search_group_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { items: [], scan: emptySearchScan() };
+    // v4.32.1088: пустой счёт здесь читался как «обошли всё и не нашли».
+    return { items: [], scan: failedSearchScan() };
   }
 }
 
@@ -8519,7 +8520,8 @@ export async function searchAllGroupMessages(
     return { items: out, scan };
   } catch (e) {
     log.warn('search_all_group_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { items: [], scan: emptySearchScan() };
+    // v4.32.1088: пустой счёт здесь читался как «обошли всё и не нашли».
+    return { items: [], scan: failedSearchScan() };
   }
 }
 
@@ -9584,7 +9586,8 @@ export async function searchMessages(
     return { items: out, scan };
   } catch (e) {
     log.warn('search_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { items: [], scan: emptySearchScan() };
+    // v4.32.1088: пустой счёт здесь читался как «обошли всё и не нашли».
+    return { items: [], scan: failedSearchScan() };
   }
 }
 
@@ -9658,7 +9661,8 @@ export async function searchChatMessages(
     return { items: out, scan };
   } catch (e) {
     log.warn('search_chat_messages_failed', { err: e instanceof Error ? e.message : String(e) });
-    return { items: [], scan: emptySearchScan() };
+    // v4.32.1088: пустой счёт здесь читался как «обошли всё и не нашли».
+    return { items: [], scan: failedSearchScan() };
   }
 }
 

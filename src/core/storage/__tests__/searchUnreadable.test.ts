@@ -35,7 +35,7 @@ function slice(src: string, from: string, to: string): string {
 describe('счёт непрочитанных строк в поиске', () => {
   it('пустой счёт ни на что не жалуется', () => {
     const scan = emptySearchScan();
-    expect(scan).toEqual({ scanned: 0, unreadable: 0 });
+    expect(scan).toEqual({ scanned: 0, unreadable: 0, failed: false });
     expect(searchSkippedNotice(scan)).toBeNull();
     expect(searchSkippedBadge(scan)).toBeNull();
   });
@@ -45,7 +45,7 @@ describe('счёт непрочитанных строк в поиске', () =>
     noteSearchedRow(scan, true);
     noteSearchedRow(scan, false);
     noteSearchedRow(scan, true);
-    expect(scan).toEqual({ scanned: 3, unreadable: 1 });
+    expect(scan).toEqual({ scanned: 3, unreadable: 1, failed: false });
   });
 
   it('строка появляется ровно тогда, когда есть непрочитанное', () => {
@@ -57,8 +57,8 @@ describe('счёт непрочитанных строк в поиске', () =>
   });
 
   it('единственное непрочитанное говорит о себе в единственном числе', () => {
-    expect(searchSkippedNotice({ scanned: 10, unreadable: 1 })).toContain('оно не участвовало');
-    expect(searchSkippedNotice({ scanned: 10, unreadable: 2 })).toContain('они не участвовали');
+    expect(searchSkippedNotice({ scanned: 10, unreadable: 1, failed: false })).toContain('оно не участвовало');
+    expect(searchSkippedNotice({ scanned: 10, unreadable: 2, failed: false })).toContain('они не участвовали');
   });
 
   it('склонение слова «сообщение» по русским правилам', () => {
@@ -76,14 +76,14 @@ describe('счёт непрочитанных строк в поиске', () =>
   });
 
   it('короткая пометка несёт то же число', () => {
-    expect(searchSkippedBadge({ scanned: 40, unreadable: 7 })).toBe('⚠ 7');
-    expect(searchSkippedBadge({ scanned: 40, unreadable: 0 })).toBeNull();
+    expect(searchSkippedBadge({ scanned: 40, unreadable: 7, failed: false })).toBe('⚠ 7');
+    expect(searchSkippedBadge({ scanned: 40, unreadable: 0, failed: false })).toBeNull();
   });
 
   it('мусорное число не превращается в строку', () => {
-    expect(searchSkippedNotice({ scanned: 0, unreadable: Number.NaN })).toBeNull();
-    expect(searchSkippedNotice({ scanned: 0, unreadable: -3 })).toBeNull();
-    expect(searchSkippedBadge({ scanned: 0, unreadable: Number.NaN })).toBeNull();
+    expect(searchSkippedNotice({ scanned: 0, unreadable: Number.NaN, failed: false })).toBeNull();
+    expect(searchSkippedNotice({ scanned: 0, unreadable: -3, failed: false })).toBeNull();
+    expect(searchSkippedBadge({ scanned: 0, unreadable: Number.NaN, failed: false })).toBeNull();
   });
 
   it('модуль ни от чего не зависит — счёт проверяется без базы и ключей', () => {
@@ -122,8 +122,10 @@ describe('четыре поиска в local.ts читают текст трёх
     expect(body).toContain('const scan = emptySearchScan();');
     expect(body).toContain('return { items: out, scan };');
     // Ранний выход и catch тоже обязаны вернуть форму со счётом, иначе
-    // вызывающий получит undefined вместо нуля.
-    expect((body.match(/return \{ items: \[\], scan: emptySearchScan\(\) \};/g) ?? []).length).toBe(2);
+    // вызывающий получит undefined вместо нуля. v4.32.1088: счета у них
+    // разные — пустой запрос ничего не искал по своей воле, а catch не смог.
+    expect((body.match(/return \{ items: \[\], scan: emptySearchScan\(\) \};/g) ?? []).length).toBe(1);
+    expect((body.match(/return \{ items: \[\], scan: failedSearchScan\(\) \};/g) ?? []).length).toBe(1);
   });
 
   it('счёт заводится один раз на каждый поиск, не больше', () => {

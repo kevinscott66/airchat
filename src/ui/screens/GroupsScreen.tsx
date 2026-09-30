@@ -108,7 +108,7 @@ import { setActiveGroupId } from '../../notifications/pushNotifications';
 import { isUnreadableMessage, mayReuseMessageText, UNREADABLE_DESCRIPTION_TEXT, UNREADABLE_GROUPS_TEXT, UNREADABLE_DRAFT_TEXT, UNREADABLE_JOIN_REQUESTS_TEXT, UNREADABLE_SCHEDULED_TEXT, UNREADABLE_MEDIA_TEXT, UNREADABLE_MESSAGE_TEXT, UNREADABLE_QUOTE_TEXT, UNREADABLE_REACTIONS_TEXT } from '../../core/storage/unreadableText';
 import { quoteView } from '../../core/social/replyQuote';
 import { decideDraftWrite, draftIsUnreadable, hasReadableDraft, unreadableAfterWrite } from '../../core/social/draftGuard';
-import { searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
+import { SEARCH_FAILED_TEXT, searchDidFail, searchSkippedBadge, searchSkippedNotice, type SearchScan } from '../../core/storage/searchScan';
 import { decideOwnDescriptionWrite } from '../../core/social/groupMetaEvents';
 import { SafeScreen } from '../components/SafeScreen';
 import { reportErased, showError, showSuccess } from '../components/userFeedback';
@@ -4380,7 +4380,10 @@ function GroupChatScreen({
             <Ionicons name={searchVisible ? 'search-outline' : 'chatbubbles-outline'} size={48} color={colors.textMuted} />
             <Text style={[gcStyles.emptyText, { color: colors.textMuted }]}>
               {searchVisible
-                ? (searchQuery.trim() ? 'Ничего не найдено' : 'Введите запрос для поиска')
+                ? (searchQuery.trim()
+                    // v4.32.1088: отказ поиска не выдаётся за пустую выдачу.
+                    ? (searchDidFail(searchScan) ? SEARCH_FAILED_TEXT : 'Ничего не найдено')
+                    : 'Введите запрос для поиска')
                 : msgReadFailed
                   ? 'Не удалось открыть переписку'
                   : (group.type === 'channel' ? 'Нет постов' : 'Нет сообщений')}
