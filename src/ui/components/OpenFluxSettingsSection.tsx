@@ -231,7 +231,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
         if (s === 'on') {
           setSocks(await getOpenFluxSocksAddr());
           await restartTransport(cfg);
-          showSuccess('OpenFlux включён');
+          showSuccess('Обходной канал поднят');
         } else if (s === 'failed') {
           showError('Не удалось поднять канал. Проверьте подключение к сети');
         }
@@ -259,7 +259,7 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
     if (s === 'on') {
       setSocks(await getOpenFluxSocksAddr());
       await restartTransport(cfg);
-      showSuccess('OpenFlux включён');
+      showSuccess('Обходной канал поднят');
     } else {
       showError('Снова не вышло. Проверьте подключение к сети');
     }
@@ -380,14 +380,16 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
     <View>
       <Text style={styles.sectionTitle}>OPENFLUX</Text>
       <Text style={styles.hint}>
-        Помогает подключаться при ограничениях сети. Приложение «Агент» не требуется.
-        При первом включении может понадобиться вход в Яндекс.
+        Когда оператор пускает только разрешённые сайты, приложение не достучится до сервера
+        доставки напрямую. OpenFlux проводит трафик через адреса, которые в такой сети открыты
+        всегда. В обычной сети туннель можно выключить: без него быстрее.
+        При первом включении может открыться окно входа.
       </Text>
       <View style={styles.card}>
         <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Включить OpenFlux</Text>
+          <Text style={styles.switchLabel}>Вести трафик в обход ограничений</Text>
           <AppSwitch
-            accessibilityLabel="Включить OpenFlux"
+            accessibilityLabel="Вести трафик в обход ограничений"
             value={enabled}
             onValueChange={(v) => {
               void onToggle(v);
