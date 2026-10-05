@@ -46,6 +46,7 @@ import {
 } from '../openFluxController';
 
 const mockNative = AirChatOpenFlux as unknown as {
+  authorizeSession?: jest.Mock;
   isSupported: jest.Mock;
   start: jest.Mock;
   stop: jest.Mock;
@@ -77,6 +78,7 @@ function cfg(over: Partial<OpenFlux> = {}): AppConfig {
 }
 
 beforeEach(() => {
+  delete mockNative.authorizeSession;
   jest.clearAllMocks();
   (Platform as { OS: string }).OS = 'android';
   mockNative.isSupported.mockResolvedValue(true);
@@ -341,5 +343,34 @@ describe('перехват HTTP после подъёма', () => {
     // Иначе выключенный туннель продолжал бы пугать предупреждением о прямом
     // трафике — при том что прямой трафик в этот момент и есть норма.
     expect(getOpenFluxHttpLayerActive()).toBeNull();
+  });
+});
+
+
+describe('local browser session', () => {
+  it('does not open authentication during background startup', async () => {
+    mockNative.authorizeSession = jest.fn();
+    await maybeStartOpenFlux(cfg());
+    expect(mockNative.authorizeSession).not.toHaveBeenCalled();
+  });
+  it('does not open authentication during automatic network recovery', async () => {
+    mockNative.authorizeSession = jest.fn();
+    mockNative.start.mockResolvedValue('127.0.0.1:41080');
+    await retryOpenFlux(cfg());
+    expect(mockNative.authorizeSession).not.toHaveBeenCalled();
+  });
+  it('does not launch the core after cancelled login', async () => {
+    mockNative.authorizeSession = jest.fn().mockResolvedValue(false);
+    await expect(retryOpenFlux(cfg(), { renew: false })).resolves.toBe('failed');
+    expect(mockNative.start).not.toHaveBeenCalled();
+    expect(mockNative.authorizeSession).toHaveBeenCalledTimes(1);
+  });
+  it('renews once, then launches without passing cookies through JS', async () => {
+    mockNative.authorizeSession = jest.fn().mockResolvedValue(true);
+    mockNative.start.mockResolvedValue('127.0.0.1:41080');
+    await expect(retryOpenFlux(cfg(), { renew: true })).resolves.toBe('on');
+    expect(mockNative.authorizeSession).toHaveBeenCalledWith(DOC, true);
+    expect(mockNative.authorizeSession).toHaveBeenCalledTimes(1);
+    expect(mockNative.start.mock.calls[0][0]).not.toHaveProperty('session');
   });
 });

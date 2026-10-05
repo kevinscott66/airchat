@@ -32,11 +32,11 @@ enum OpenFluxCore {
   ) -> String? {
     // maxToken/maxUID нужны транспорту Max; у нас документ Яндекса, который
     // авторизуется самой ссылкой, — туда уходят пустые строки.
-    let args = [transport, docURL, "", "", socksAddr, dns]
+    let args = [transport, docURL, "", "", socksAddr, dns, FluxSessionStore.load(document: docURL) ?? ""]
     let c = args.map { strdup($0) }
     defer { c.forEach { free($0) } }
 
-    guard let err = OpenFluxStart(c[0], c[1], c[2], c[3], c[4], c[5]) else { return nil }
+    guard let err = OpenFluxStartWithBrowserSession(c[0], c[1], c[2], c[3], c[4], c[5], c[6]) else { return nil }
     let text = String(cString: err)
     // Строку выделил Go — освобождать её может только он.
     OpenFluxFree(err)

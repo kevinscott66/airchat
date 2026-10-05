@@ -50,6 +50,14 @@ if [[ ! -d "$OPENFLUX_SRC" ]]; then
   echo "Склонируй репозиторий ядра и укажи путь: OPENFLUX_SRC=/путь/к/OpenFlux bash scripts/build-openflux-ios.sh" >&2
   exit 2
 fi
+# The upstream mobile API is incompatible with this app's C bridge.
+EXPECTED_REV="$(tr -d '[:space:]' < "$ROOT/scripts/openflux-ios-revision")"
+ACTUAL_REV="$(git -C "$OPENFLUX_SRC" rev-parse HEAD)"
+if [[ "$ACTUAL_REV" != "$EXPECTED_REV" ]]; then
+  echo "Несовместимая ревизия OpenFlux: $ACTUAL_REV; нужна $EXPECTED_REV (docs/openflux-local-session.md)." >&2
+  exit 2
+fi
+
 if [[ ! -f "$OPENFLUX_SRC/export_mobile.go" ]]; then
   echo "В $OPENFLUX_SRC нет export_mobile.go — это не дерево OpenFlux или оно старое." >&2
   echo "Нужна версия ядра с C-обвязкой (build tag mobile)." >&2

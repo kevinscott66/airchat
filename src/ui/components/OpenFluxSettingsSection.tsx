@@ -226,12 +226,12 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
           return;
         }
         setStatus('starting');
-        const s = await retryOpenFlux(cfg);
+        const s = await retryOpenFlux(cfg, { renew: false });
         setStatus(s);
         if (s === 'on') {
           setSocks(await getOpenFluxSocksAddr());
           await restartTransport(cfg);
-          showSuccess('Обходной канал поднят');
+          showSuccess('OpenFlux включён');
         } else if (s === 'failed') {
           showError('Не удалось поднять канал. Проверьте подключение к сети');
         }
@@ -254,12 +254,12 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
     const cfg = await loadConfig();
     setStatus('starting');
     setStatusUnknown(false);
-    const s = await retryOpenFlux(cfg);
+    const s = await retryOpenFlux(cfg, { renew: true });
     setStatus(s);
     if (s === 'on') {
       setSocks(await getOpenFluxSocksAddr());
       await restartTransport(cfg);
-      showSuccess('Обходной канал поднят');
+      showSuccess('OpenFlux включён');
     } else {
       showError('Снова не вышло. Проверьте подключение к сети');
     }
@@ -378,17 +378,16 @@ export function OpenFluxSettingsSection({ devMode = false }: OpenFluxSettingsSec
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>OPENFLUX (СЕТИ С БЕЛЫМ СПИСКОМ)</Text>
+      <Text style={styles.sectionTitle}>OPENFLUX</Text>
       <Text style={styles.hint}>
-        Когда оператор пускает только разрешённые сайты, приложение не достучится до сервера
-        доставки напрямую. OpenFlux проводит трафик через адреса, которые в такой сети открыты
-        всегда. В обычной сети туннель можно выключить: без него быстрее.
+        Помогает подключаться при ограничениях сети. Приложение «Агент» не требуется.
+        При первом включении может понадобиться вход в Яндекс.
       </Text>
       <View style={styles.card}>
         <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Вести трафик в обход ограничений</Text>
+          <Text style={styles.switchLabel}>Включить OpenFlux</Text>
           <AppSwitch
-            accessibilityLabel="Вести трафик в обход ограничений"
+            accessibilityLabel="Включить OpenFlux"
             value={enabled}
             onValueChange={(v) => {
               void onToggle(v);

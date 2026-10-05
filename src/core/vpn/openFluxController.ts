@@ -307,10 +307,18 @@ export async function getOpenFluxTunnelStats(): Promise<OpenFluxTunnelStats | nu
  * вручную). Документ Яндекса отвечает не всегда с первого раза, а разовая
  * неудача здесь стоит пользователю всей связи, поэтому повтор — не роскошь.
  */
-export async function retryOpenFlux(cfg: AppConfig): Promise<OpenFluxUiStatus> {
+export async function retryOpenFlux(cfg: AppConfig, session?: { renew: boolean }): Promise<OpenFluxUiStatus> {
   const o = cfg.openflux;
   if (!o?.enabled) return 'off';
+  if (!o.docUrl?.trim()) return 'unconfigured';
+  if (!openFluxAvailable()) return 'unsupported';
   await stopOpenFlux();
+  // Only an explicit foreground action opens login. Cookies never cross this bridge.
+  if (session && (o.transport ?? 'yandex') === 'yandex' && AirChatOpenFlux?.authorizeSession) {
+    try {
+      if (!(await AirChatOpenFlux.authorizeSession(o.docUrl.trim(), session.renew))) return 'failed';
+    } catch { return 'failed'; }
+  }
   const max = Math.max(1, o.startRetries ?? 3);
   const delayMs = o.retryDelayMs ?? 2000;
   let last: OpenFluxUiStatus = 'failed';

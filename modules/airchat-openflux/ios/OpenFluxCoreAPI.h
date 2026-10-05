@@ -39,8 +39,14 @@ extern void OpenFluxSetDebug(int on);
  * авторизуется ссылкой, — туда уходят пустые строки. */
 extern char* OpenFluxStart(char* transportName, char* docURL, char* maxToken, char* maxUID, char* socksAddr, char* dns);
 
-/* Фактический адрес локального SOCKS5 ("127.0.0.1:54321"). Опущенный туннель
- * ядро описывает пустой строкой, а не NULL. */
+/* Device-local browser session; cookies remain inside the native bridge. */
+extern char* OpenFluxStartWithBrowserSession(char* transportName, char* docURL, char* maxToken, char* maxUID, char* socksAddr, char* dns, char* session);
+extern void OpenFluxSetCapMonsterKey(char* key);
+extern char* OpenFluxTunStartWithBrowserSession(char* transportName, char* docURL, char* maxToken, char* maxUID, char* dns, int mtu, char* session);
+extern char* OpenFluxTunStartWithRouting(char* transportName, char* docURL, char* maxToken, char* maxUID, char* dns, int mtu, char* session, char* rules, char* cachePath);
+extern char* OpenFluxValidateBypassRules(char* rules);
+
+/* Actual local SOCKS5 address; an inactive core returns an empty string. */
 extern char* OpenFluxSocksAddr(void);
 
 extern int OpenFluxIsRunning(void);

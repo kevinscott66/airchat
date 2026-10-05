@@ -66,6 +66,12 @@ public class AirChatOpenFluxModule: Module {
       try self.startTunnel(options)
     }
 
+    AsyncFunction("authorizeSession") { (document: String, renew: Bool) async -> Bool in
+      guard OpenFluxCore.isAvailable, #available(iOS 17.0, *) else { return false }
+      if !renew, FluxSessionStore.load(document: document) != nil { return true }
+      return await FluxSessionPresenter.shared.authorize(document: document)
+    }
+
     AsyncFunction("stop") {
       self.stopTunnel()
     }

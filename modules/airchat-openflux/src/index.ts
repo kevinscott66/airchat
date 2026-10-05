@@ -39,6 +39,7 @@ export type OpenFluxStartOptions = {
 };
 
 export type AirChatOpenFluxNative = {
+  authorizeSession?: (document: string, renew: boolean) => Promise<boolean>;
   isSupported: () => Promise<boolean>;
   /**
    * Поднять туннель и увести трафик приложения в него.
