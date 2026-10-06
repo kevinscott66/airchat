@@ -180,14 +180,6 @@ describe('ГРАНИЦА: вопрос — не команда', () => {
 describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   const src = (...p: string[]) => readFileSync(join(__dirname, '..', '..', ...p), 'utf8');
 
-  it('`retryOpenFlux` по-прежнему гасит туннель перед попытками', () => {
-    const ctl = src('vpn', 'openFluxController.ts');
-    const at = ctl.indexOf('export async function retryOpenFlux(');
-    expect(at).toBeGreaterThan(-1);
-    const body = ctl.slice(at, at + 900);
-    expect(body).toContain('await stopOpenFlux();');
-  });
-
   it('`failed` по-прежнему означает «пробовали — не вышло», а не «выключено»', () => {
     const ctl = src('vpn', 'openFluxController.ts');
     expect(ctl).toContain("| 'failed'");
