@@ -41,7 +41,7 @@ case "$SVC" in
     DEST=/opt/airchat-cloud-vault
     UNIT=airchat-cloud-vault
     PORT=3010
-    FILES=(index.js sync-db.js reserved-usernames.js official-badge.js geoip.js seed-binding.js package.json package-lock.json tools)
+    FILES=(index.js body-parser.js sync-db.js reserved-usernames.js official-badge.js geoip.js seed-binding.js package.json package-lock.json tools)
     ;;
   *) echo "Неизвестный сервис: $SVC" >&2; exit 2 ;;
 esac

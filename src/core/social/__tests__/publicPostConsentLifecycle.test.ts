@@ -1,4 +1,3 @@
-import { setLinkPublished } from '../postLinkState';
 /**
  * Копия по ссылке не переживает удаления публикации (v4.32.614).
  *
@@ -96,7 +95,7 @@ jest.mock('../publicPost', () => ({
 import { ed25519 } from '@noble/curves/ed25519.js';
 
 import { publicKeyToDidKey } from '../../identity/did';
-import { closeFeedStorage, publishPostLinkCopy, refreshPublicPostCopy, setFeedProfileContext } from '../feedService';
+import { closeFeedStorage, publishPostLinkCopy, refreshPublicPostCopy, revokePostLinkCopy, setFeedProfileContext } from '../feedService';
 
 const keys = ed25519.keygen();
 const pair = { secretKey: keys.secretKey, publicKey: keys.publicKey };
@@ -113,7 +112,9 @@ beforeAll(async () => { await setFeedProfileContext(1); });
  */
 afterAll(async () => { await closeFeedStorage(); });
 
-beforeEach(async () => {
+beforeEach(() => {
+  require('../publicPost').publicPostCopyExists.mockClear();
+  require('../publicPost').publicPostCopyExists.mockImplementation(async (id: string) => mockServer.copies.has(id));
   mockPosts.clear();
   mockKv.clear();
   mockServer.copies.clear();
@@ -121,41 +122,64 @@ beforeEach(async () => {
   mockCalls.length = 0;
   mockDeleteDuringPut = null;
   mockPosts.set('p1', { id: 'p1', authorDid: myDid, text: 'запись', timestamp: 1000 });
-  await setLinkPublished('p1', true, 1);
 });
 
-describe('удаление во время выкладки копии', () => {
-  it('без удаления копия остаётся лежать', async () => {
-    expect(await publishPostLinkCopy(pair, 'p1')).toBe(true);
-    expect(mockServer.copies.has('p1')).toBe(true);
-    expect(mockCalls).toEqual(['put:p1']);
-  });
-
-  it('публикацию удалили во время запроса — копия не остаётся на сервере', async () => {
-    mockDeleteDuringPut = () => { mockPosts.delete('p1'); };
-
-    expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
+describe('audit security reproductions', () => {
+  it('hostile HEAD cannot publish a never-consented private post', async () => {
+    const api = require('../publicPost');
+    api.publicPostCopyExists.mockImplementation(async () => true);
+    expect(mockKv.size).toBe(0);
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(false);
     expect(mockServer.copies.has('p1')).toBe(false);
-    expect(mockCalls).toEqual(['put:p1', 'del:p1']);
+    expect(mockCalls).toEqual([]);
   });
-
-  it('сервер не убрал копию — она попадает в очередь повторов', async () => {
-    mockDeleteDuringPut = () => { mockPosts.delete('p1'); };
-    mockServer.deleteWorks = false;
-
-    expect(await publishPostLinkCopy(pair, 'p1')).toBe(false);
-    // Отказ удаления перепроверяется через HEAD; копия там осталась.
-    expect(mockServer.copies.has('p1')).toBe(true);
-    const queued = JSON.parse(mockKv.get('feed_link_delete_outbox_v1') ?? '[]') as { postId: string }[];
-    expect(queued.map((it) => it.postId)).toEqual(['p1']);
-  });
-
-  it('то же самое при обновлении копии после правки', async () => {
+  it('a legacy copy is reported stale without uploading', async () => {
+    mockKv.set('p1:feed_link_published:p1', '1700000000000');
     mockServer.copies.add('p1');
-    mockDeleteDuringPut = () => { mockPosts.delete('p1'); };
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(false);
+    expect(mockCalls).toEqual([]);
+  });
 
-    await refreshPublicPostCopy(pair, 'p1');
+  it('absent copy needs no refresh without consent', async () => {
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(true);
+    expect(mockCalls).toEqual([]);
+  });
+
+  it('unknown copy availability warns without uploading', async () => {
+    require('../publicPost').publicPostCopyExists.mockResolvedValueOnce(null);
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(false);
+    expect(mockCalls).toEqual([]);
+  });
+
+  it('unknown consent fails closed without consulting the server', async () => {
+    const local = require('../../storage/local');
+    local.kvTryGet.mockResolvedValueOnce(null);
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(false);
+    expect(mockCalls).toEqual([]);
+    expect(require('../publicPost').publicPostCopyExists).not.toHaveBeenCalled();
+  });
+
+  it('revoke waits for in-flight refresh and removes its copy', async () => {
+    const api = require('../publicPost');
+    await publishPostLinkCopy(pair, 'p1');
+    let unblock!: () => void;
+    let arrived!: () => void;
+    const atPut = new Promise<void>(resolve => { arrived = resolve; });
+    const blocked = new Promise<void>(resolve => { unblock = resolve; });
+    api.putPublicPostCopy.mockImplementationOnce(async () => {
+      arrived();
+      await blocked;
+      mockServer.copies.add('p1');
+      return true;
+    });
+    const refresh = refreshPublicPostCopy(pair, 'p1');
+    await atPut;
+    const revoke = revokePostLinkCopy(pair, 'p1');
+    unblock();
+    expect(await refresh).toBe(true);
+    expect(await revoke).toBe(true);
     expect(mockServer.copies.has('p1')).toBe(false);
-    expect(mockCalls).toEqual(['put:p1', 'del:p1']);
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(true);
+    expect(mockServer.copies.has('p1')).toBe(false);
   });
 });

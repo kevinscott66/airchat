@@ -13,6 +13,9 @@
 import { log } from '../logger';
 import {
   scopedKvDeleteChecked,
+  scopedKvDeleteCheckedFor,
+  scopedKvSetCheckedFor,
+  scopedKvTryGetFor,
   scopedKvSetChecked,
   scopedKvTryListKeysByPrefix,
 } from '../storage/profileScopedKv';
@@ -46,13 +49,25 @@ export async function listLinkPublishedPostIds(): Promise<Set<string> | null> {
   }
 }
 
-/** Поставить или снять отметку. `false` — база не ответила, отметка прежняя. */
-export async function setLinkPublished(postId: string, published: boolean): Promise<boolean> {
+/** Only versioned explicit consent permits automatic plaintext uploads. */
+export async function linkPublishedFor(profileId: number, postId: string): Promise<boolean | null> {
+  try {
+    const cell = await scopedKvTryGetFor(profileId, feedLinkPublishedKey(postId));
+    return cell === null ? null : cell.value?.startsWith('consent-v1:') === true;
+  } catch {
+    return null;
+  }
+}
+
+export async function setLinkPublished(postId: string, published: boolean, profileId?: number): Promise<boolean> {
   try {
     if (published) {
-      return await scopedKvSetChecked(feedLinkPublishedKey(postId), String(Date.now()));
+      return profileId === undefined
+        ? await scopedKvSetChecked(feedLinkPublishedKey(postId), `consent-v1:${Date.now()}`)
+        : await scopedKvSetCheckedFor(profileId, feedLinkPublishedKey(postId), `consent-v1:${Date.now()}`);
     }
-    await scopedKvDeleteChecked(feedLinkPublishedKey(postId));
+    if (profileId === undefined) await scopedKvDeleteChecked(feedLinkPublishedKey(postId));
+    else await scopedKvDeleteCheckedFor(profileId, feedLinkPublishedKey(postId));
     return true;
   } catch (e) {
     log.warn('feed_link_published_write_failed', {

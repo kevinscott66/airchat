@@ -374,3 +374,98 @@ describe('local browser session', () => {
     expect(mockNative.start.mock.calls[0][0]).not.toHaveProperty('session');
   });
 });
+
+describe('serialized lifecycle', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  afterEach(async () => {
+    jest.useRealTimers();
+    mockNative.stop.mockResolvedValue(undefined);
+    await stopOpenFlux();
+  });
+
+  it('stops without waiting for login and never starts when that login later completes', async () => {
+    const entered = deferred<void>();
+    const login = deferred<boolean>();
+    mockNative.authorizeSession = jest.fn(() => { entered.resolve(); return login.promise; });
+    const retry = retryOpenFlux(cfg(), { renew: true });
+    await entered.promise;
+    await expect(stopOpenFlux()).resolves.toBe(true);
+    login.resolve(true);
+    await expect(retry).resolves.toBe('off');
+    expect(mockNative.start).not.toHaveBeenCalled();
+  });
+
+  it('invalidates retries waiting between attempts', async () => {
+    jest.useFakeTimers();
+    mockNative.start.mockRejectedValue(new Error('offline'));
+    const retry = retryOpenFlux(cfg({ retryDelayMs: 2000 }));
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockNative.start).toHaveBeenCalledTimes(1);
+    await stopOpenFlux();
+    await jest.advanceTimersByTimeAsync(2000);
+    await expect(retry).resolves.toBe('off');
+    expect(mockNative.start).toHaveBeenCalledTimes(1);
+    mockNative.start.mockResolvedValue('127.0.0.1:41080');
+  });
+
+  it('waits for an in-progress native start and cleans it up before confirming stop', async () => {
+    const entered = deferred<void>();
+    const start = deferred<string>();
+    const events: string[] = [];
+    mockNative.start.mockImplementationOnce(() => { entered.resolve(); return start.promise; });
+    mockNative.stop.mockImplementation(async () => { events.push('stopped'); });
+    const pending = maybeStartOpenFlux(cfg());
+    await entered.promise;
+    const stop = stopOpenFlux().then((result) => { events.push('confirmed'); return result; });
+    expect(events).toEqual([]);
+    start.resolve('127.0.0.1:41080');
+    await expect(pending).resolves.toBe('off');
+    await expect(stop).resolves.toBe(true);
+    expect(events[0]).toBe('stopped');
+    expect(events[events.length - 1]).toBe('confirmed');
+    expect(getOpenFluxHttpLayerActive()).toBeNull();
+  });
+
+  it('serializes overlapping automatic and explicit starts; only the latest intent survives', async () => {
+    const entered = deferred<void>();
+    const start = deferred<string>();
+    const events: string[] = [];
+    mockNative.start.mockImplementationOnce(() => {
+      events.push('old start'); entered.resolve(); return start.promise;
+    }).mockImplementationOnce(async () => { events.push('new start'); return '127.0.0.1:41081'; });
+    mockNative.stop.mockImplementation(async () => { events.push('stop'); });
+    mockNative.authorizeSession = jest.fn().mockResolvedValue(true);
+    const automatic = maybeStartOpenFlux(cfg());
+    await entered.promise;
+    const explicit = retryOpenFlux(cfg(), { renew: true });
+    expect(mockNative.start).toHaveBeenCalledTimes(1);
+    start.resolve('127.0.0.1:41080');
+    await expect(automatic).resolves.toBe('off');
+    await expect(explicit).resolves.toBe('on');
+    expect(events.indexOf('stop')).toBeGreaterThan(events.indexOf('old start'));
+    expect(events.indexOf('new start')).toBeGreaterThan(events.indexOf('stop'));
+    expect(mockNative.authorizeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['running', 'unknown'])('does not authorize or start after stop fails with %s state', async (state) => {
+    mockNative.stop.mockRejectedValueOnce(new Error('busy'));
+    if (state === 'running') mockNative.isRunning.mockResolvedValueOnce(true);
+    else mockNative.isRunning.mockRejectedValueOnce(new Error('unavailable'));
+    mockNative.authorizeSession = jest.fn();
+    await expect(retryOpenFlux(cfg(), { renew: true })).resolves.toBe('failed');
+    expect(mockNative.authorizeSession).not.toHaveBeenCalled();
+    expect(mockNative.start).not.toHaveBeenCalled();
+  });
+
+  it('still retries when stop rejects but the core confirms it is stopped', async () => {
+    mockNative.stop.mockRejectedValueOnce(new Error('already stopped'));
+    mockNative.isRunning.mockResolvedValueOnce(false);
+    await expect(retryOpenFlux(cfg())).resolves.toBe('on');
+    expect(mockNative.start).toHaveBeenCalledTimes(1);
+  });
+});

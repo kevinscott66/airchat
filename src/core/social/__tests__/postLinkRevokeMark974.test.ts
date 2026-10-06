@@ -193,7 +193,7 @@ describe('отзыв ссылки отвечает и за отметку', () =
 
   it('ЗАКРЕПКА: ответ снятия отметки не выбрасывается', () => {
     const code = codeOnly(SRC);
-    expect(code).toContain('const unmarked = await setLinkPublished(postId, false);');
+    expect(code).toContain('const unmarked = await setLinkPublished(postId, false, profileId);');
     expect(code).toContain('if (!unmarked) {');
     expect(code).not.toContain('    await setLinkPublished(postId, false);\n    log.info(');
   });

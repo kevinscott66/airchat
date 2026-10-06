@@ -27,7 +27,14 @@ to be useful, not as a trusted party. The design addresses three vectors:
   asks for explicit confirmation before the first upload and lets the author
   revoke the link (`POST /v1/post/:postId/delete`). Copying the link of an
   already published post does not publish anything new; a private post is
-  never published implicitly by «copy» or «share».
+  never published implicitly by «copy» or «share». Automatic updates require
+  a versioned record of explicit consent on that device; a server HEAD response
+  is not consent. Legacy copies can still be revoked, but must be explicitly
+  republished before this device automatically updates their plaintext.
+- **Public profile photos.** Choosing photo visibility «everybody» uploads a
+  signed, unencrypted image to the avatar directory. Lookup keys and image
+  versions are public. Choosing «contacts» or «nobody» requests removal of
+  that public copy; it cannot erase copies already downloaded by others.
 - **Username discovery.** A claimed `@name` is public on purpose:
   `GET /v1/username/:name` answers whether it is taken and, for names claimed
   by current clients, the owner's **profile public key** (`pub`), so that a
@@ -83,7 +90,7 @@ remediation if you have one. Expect acknowledgement within 72 hours and a
 
 ## Repository hygiene
 
-No credentials are committed. Host names, IP addresses and deployment
-identifiers in source, tests and server configuration are placeholders. The
-`did:key` values in tests are the public example identifiers from the W3C
-specification, not live keys.
+Keep credentials and account sessions out of source and build logs. Service
+addresses and other public configuration may appear in distributed clients;
+they must not be treated as secrets. Web exports additionally reject native
+Yandex document URLs. Test identities are fixtures, not credentials.

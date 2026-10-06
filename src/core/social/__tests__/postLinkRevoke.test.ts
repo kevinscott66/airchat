@@ -183,10 +183,10 @@ describe('отметка «опубликовано по ссылке»', () => 
     expect(mockKv.has('feed_link_delete_outbox_v1')).toBe(false);
   });
 
-  it('копия, выложенная старой версией, находится при правке и получает отметку', async () => {
+  it('копия старой версии не превращает ответ сервера в локальное согласие', async () => {
     mockServer.copies.add('p1');
-    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(true);
-    expect((await publishedIds()).has('p1')).toBe(true);
+    expect(await refreshPublicPostCopy(pair, 'p1')).toBe(false);
+    expect((await publishedIds()).has('p1')).toBe(false);
   });
 
   it('правка неопубликованной записи отметку не ставит', async () => {

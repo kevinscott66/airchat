@@ -176,3 +176,14 @@ builder writes through a temporary file and renames, so the running service
 never reads a half-written table. Country here is the *registered* country of an
 address block, which for a hosting provider can differ from where the machine
 physically stands.
+
+### HTTP body admission
+
+`body-parser.js` selects the decoded JSON size limit from the method and route.
+Routes with budgets above the default 2 MiB share one in-flight slot, including
+requests with small Content-Length, chunked transfer, or compressed JSON. A busy
+slot returns HTTP 503 with `Retry-After: 5`; default-budget routes remain available.
+The slot lasts until response finish/close, or is released on parser failure.
+This deliberately serializes even small writes on large-budget routes. It bounds
+concurrent large parsing, not the memory overhead of one allowed body; existing
+HTTP/proxy timeouts and process memory limits remain necessary.

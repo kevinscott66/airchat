@@ -115,7 +115,7 @@ import {
   publicPostStoreAvailable,
   isPublicPostId,
 } from './publicPost';
-import { setLinkPublished } from './postLinkState';
+import { linkPublishedFor, setLinkPublished } from './postLinkState';
 
 import {
   mergeQueue,
@@ -2645,11 +2645,13 @@ async function buildOwnPostEnvelope(
  * очередь повторов; если не удалось ни то ни другое, об этом остаётся запись в
  * журнале, а ссылка в любом случае отвечает «не выложено».
  */
-async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<boolean> {
-  const s = await ensureStorage();
+async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string, profileId: number): Promise<boolean> {
+  // A different active database cannot tell us whether this author deleted the post.
+  if (currentProfileId !== profileId) return false;
+  const s = await ensureStorage(profileId);
   if (await s.getPost(postId)) return false;
   log.warn('public_post_copy_outlived_post', { postId: postId.slice(0, 24) });
-  await setLinkPublished(postId, false);
+  await setLinkPublished(postId, false, profileId);
   if (!(await dropPublicPostCopy(pair, postId))) {
     await queueLinkCopyDelete(pair, postId);
   }
@@ -2668,14 +2670,41 @@ async function dropCopyIfPostGone(pair: KeyPairBytes, postId: string): Promise<b
  * `true` — копия на сервере И устройство о ней помнит, то есть ссылку есть чем
  * отозвать. Одно без другого успехом не считается.
  */
+// Public-copy writes share an author/post queue: a refresh started before a
+// revoke must finish before that revoke can report success.
+const publicCopyOperations = new Map<string, Promise<boolean>>();
+function withPublicCopyOperation(
+  pair: KeyPairBytes,
+  postId: string,
+  operation: (profileId: number) => Promise<boolean>,
+): Promise<boolean> {
+  const profileId = currentProfileId;
+  if (profileId === null || !feedStorageBelongsTo(pair)) return Promise.resolve(false);
+  const key = `${publicKeyToDidKey(pair.publicKey)}:${postId}`;
+  const previous = publicCopyOperations.get(key) ?? Promise.resolve(false);
+  const current = previous.catch(() => false).then(() => {
+    if (currentProfileId !== profileId || !feedStorageBelongsTo(pair)) return false;
+    return operation(profileId);
+  });
+  publicCopyOperations.set(key, current);
+  return current.finally(() => {
+    if (publicCopyOperations.get(key) === current) publicCopyOperations.delete(key);
+  });
+}
+
 export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  return withPublicCopyOperation(pair, postId, (profileId) => publishPostLinkCopyFor(pair, postId, profileId));
+}
+
+async function publishPostLinkCopyFor(pair: KeyPairBytes, postId: string, profileId: number): Promise<boolean> {
   if (!publicPostStoreAvailable()) return false;
   try {
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
+    if (currentProfileId !== profileId || !feedStorageBelongsTo(pair)) return false;
     const ok = await putPublicPostCopy(pair, payload);
     // Пока копия шла на сервер, публикацию могли удалить — тогда она не «выложена».
-    if (ok && await dropCopyIfPostGone(pair, postId)) return false;
+    if (ok && await dropCopyIfPostGone(pair, postId, profileId)) return false;
     // AC-04: отметка «опубликовано по ссылке» — только после ответа сервера.
     //
     // v4.32.895: ответ этой записи выбрасывался, а рядом стояло «публикация
@@ -2691,7 +2720,7 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
     // одним нажатием, «опубликовалось навсегда» не исправить никак. Если снять
     // не вышло, отзыв уходит в ту же очередь повторов, что и при гонке с
     // удалением записи.
-    if (ok && !(await setLinkPublished(postId, true))) {
+    if (ok && !(await setLinkPublished(postId, true, profileId))) {
       log.warn('public_post_mark_failed', { postId: postId.slice(0, 24) });
       if (!(await dropPublicPostCopy(pair, postId))) {
         await queueLinkCopyDelete(pair, postId);
@@ -2719,6 +2748,10 @@ export async function publishPostLinkCopy(pair: KeyPairBytes, postId: string): P
  * копия лежит, было бы неправдой, а повторить можно тем же пунктом меню.
  */
 export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  return withPublicCopyOperation(pair, postId, (profileId) => revokePostLinkCopyFor(pair, postId, profileId));
+}
+
+async function revokePostLinkCopyFor(pair: KeyPairBytes, postId: string, profileId: number): Promise<boolean> {
   if (!publicPostStoreAvailable() || !isPublicPostId(postId)) return false;
   try {
     const gone = await dropPublicPostCopy(pair, postId);
@@ -2727,7 +2760,7 @@ export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Pr
     // отметка осталась лежать — и при следующем запуске отозванная запись снова
     // горит «опубликовано по ссылке»: экран перечитывает отметки с диска. Лечит
     // это второе нажатие того же пункта меню: снятие копии идемпотентно.
-    const unmarked = await setLinkPublished(postId, false);
+    const unmarked = await setLinkPublished(postId, false, profileId);
     if (!unmarked) {
       log.warn('public_post_revoke_mark_stuck', { postId: postId.slice(0, 24) });
       return false;
@@ -2754,8 +2787,19 @@ export async function revokePostLinkCopy(pair: KeyPairBytes, postId: string): Pr
  * `true` — «расхождения нет»: либо копию обновили, либо обновлять было нечего.
  */
 export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string): Promise<boolean> {
+  return withPublicCopyOperation(pair, postId, (profileId) => refreshPublicPostCopyFor(pair, postId, profileId));
+}
+
+async function refreshPublicPostCopyFor(pair: KeyPairBytes, postId: string, profileId: number): Promise<boolean> {
   if (!publicPostStoreAvailable()) return true;
   try {
+    // A server response proves availability, never the user's permission to
+    // disclose plaintext. Missing/unknown local consent must not publish.
+    const consent = await linkPublishedFor(profileId, postId);
+    if (consent === null) return false;
+    // Older/discovered copies may still expose an outdated edit. Availability
+    // may inform the warning, but can never authorize a plaintext upload.
+    if (!consent) return (await publicPostCopyExists(postId)) === false;
     const copy = await publicPostCopyExists(postId);
     // v4.32.1059: `null` — спросить у сервера не вышло. Класть копию вслепую
     // нельзя (см. выше: не отдавали наружу — не кладём), но и молчать теперь
@@ -2766,22 +2810,11 @@ export async function refreshPublicPostCopy(pair: KeyPairBytes, postId: string):
       return false;
     }
     if (!copy) return true;
-    // AC-04: копия на сервере есть — значит, запись опубликована по ссылке,
-    // даже если отметку ставила версия, которая отметок ещё не вела. Без этого
-    // отозвать такую ссылку было бы не из чего.
-    //
-    // v4.32.917: исход этой записи выбрасывался. Снять копию в ответ, как это
-    // делает publishPostLinkCopy, здесь нельзя: копию выкладывали не сейчас, а
-    // ссылку человек уже кому-то отдал — правка текста не повод её отзывать.
-    // Поэтому обновление идёт своим чередом, а незаписанная отметка называется
-    // вслух: по ней и только по ней меню рисует «Отозвать ссылку».
-    if (!(await setLinkPublished(postId, true))) {
-      log.warn('public_post_backfill_mark_failed', { postId: postId.slice(0, 24) });
-    }
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
+    if (currentProfileId !== profileId || !feedStorageBelongsTo(pair)) return false;
     const ok = await putPublicPostCopy(pair, payload);
-    if (ok) await dropCopyIfPostGone(pair, postId);
+    if (ok) await dropCopyIfPostGone(pair, postId, profileId);
     return ok;
   } catch (e) {
     log.warn('public_post_refresh_failed', {

@@ -66,8 +66,12 @@ const MAX_SIGNED_PAYLOAD = 600 * 1024;
 
 /** Что уже ушло на сервер от этого профиля за запуск: `put:<hash>` или `del`. */
 const published = new Map<number, string>();
+// Async work belongs to the cache lifetime in which it began.
+let generation = 0;
 
-async function sendAvatarRequest(pair: KeyPairBytes, body: Record<string, unknown>): Promise<boolean> {
+async function sendAvatarRequest(
+  pair: KeyPairBytes, body: Record<string, unknown>, epoch: number,
+): Promise<boolean> {
   const base = cloudBaseUrl();
   if (!base) return false;
   const signed = await signJson(pair, {
@@ -77,6 +81,7 @@ async function sendAvatarRequest(pair: KeyPairBytes, body: Record<string, unknow
     publicKeyB64: publicKeyToB64(pair.publicKey),
     ...body,
   });
+  if (epoch !== generation) return false;
   return fetchWithDeadline(
     `${base}/v1/avatar`,
     {
@@ -114,6 +119,7 @@ async function sendAvatarRequest(pair: KeyPairBytes, body: Record<string, unknow
  */
 export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
   if (!cloudBaseUrl()) return;
+  const epoch = generation;
   let marker: string | null = null;
   try {
     const visibility = await avatarVisibilityTryFor(pid);
@@ -130,6 +136,7 @@ export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
       }
       b64 = read.b64;
     }
+    if (epoch !== generation) return;
     const bytes = b64 ? Buffer.from(b64, 'base64') : null;
     const share = bytes !== null && bytes.length > 0 && bytes.length <= MAX_IMAGE_BYTES;
     marker = share && bytes
@@ -141,11 +148,11 @@ export async function publishOwnAvatarToDirectory(pid: number): Promise<void> {
     if (!pair) return;
     published.set(pid, marker);
     const ok = share
-      ? await sendAvatarRequest(pair, { act: 'put', imageB64: b64 })
-      : await sendAvatarRequest(pair, { act: 'del' });
-    if (!ok && published.get(pid) === marker) published.delete(pid);
+      ? await sendAvatarRequest(pair, { act: 'put', imageB64: b64 }, epoch)
+      : await sendAvatarRequest(pair, { act: 'del' }, epoch);
+    if (epoch === generation && !ok && published.get(pid) === marker) published.delete(pid);
   } catch (e) {
-    if (marker !== null && published.get(pid) === marker) published.delete(pid);
+    if (epoch === generation && marker !== null && published.get(pid) === marker) published.delete(pid);
     log.info('public_avatar_publish_skipped', { err: e instanceof Error ? e.message : String(e) });
   }
 }
@@ -247,6 +254,7 @@ async function verifiedAvatarFile(
   pubB64: string,
   urlKey: string,
   version: string,
+  epoch: number,
 ): Promise<string | null> {
   const dir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
   if (!dir) return null;
@@ -257,11 +265,13 @@ async function verifiedAvatarFile(
     const info = await FileSystem.getInfoAsync(path);
     if (info.exists) return path;
   } catch { /* файла нет или не прочесть — сходим на сервер */ }
+  if (epoch !== generation) return null;
   const publicKey = publicKeyFromB64(pubB64);
   if (!publicKey) return null;
   // Разобранный и отвергнутый ответ — приговор этой версии, а не сбой связи:
   // запоминаем, чтобы не ходить за ней снова (v4.32.972).
   const reject = (reason: string): null => {
+    if (epoch !== generation) return null;
     hopeless.add(`${pubB64}:${version}`);
     log.warn('public_avatar_proof_rejected', { reason });
     return null;
@@ -278,8 +288,9 @@ async function verifiedAvatarFile(
         : null;
     },
   );
-  if (!envelope) return null;
+  if (!envelope || epoch !== generation) return null;
   const claim = await verifySignedJson(publicKey, envelope, MAX_SIGNED_PAYLOAD);
+  if (epoch !== generation) return null;
   if (!claim) return reject('signature');
   // Подпись сошлась — но подписать могли и снятие фото, и чужой ключ.
   if (claim.act !== 'put' || claim.publicKeyB64 !== publicKeyToB64(publicKey)) {
@@ -340,13 +351,16 @@ function retryLater(pubB64: string, version: string): void {
 async function materialize(
   base: string,
   pending: { pubB64: string; urlKey: string; version: string }[],
+  epoch: number,
 ): Promise<void> {
   for (const { pubB64, urlKey, version } of pending) {
+    if (epoch !== generation) return;
     const tag = `${pubB64}:${version}`;
     if (materializing.has(tag)) continue;
     materializing.add(tag);
     try {
-      const uri = await verifiedAvatarFile(base, pubB64, urlKey, version);
+      const uri = await verifiedAvatarFile(base, pubB64, urlKey, version, epoch);
+      if (epoch !== generation) return;
       const prev = known.get(pubB64);
       // Пока качали, могли сменить аккаунт (resetPublicAvatars) или узнать
       // новую версию — тогда этот ответ уже не про то, что показывается.
@@ -369,15 +383,17 @@ async function materialize(
       known.set(pubB64, { uri, ver: version, at: prev.at });
       wake();
     } catch (e) {
+      if (epoch !== generation) return;
       log.info('public_avatar_fetch_failed', { err: e instanceof Error ? e.message : String(e) });
       retryLater(pubB64, version);
     } finally {
-      materializing.delete(tag);
+      if (epoch === generation) materializing.delete(tag);
     }
   }
 }
 
 async function flush(): Promise<void> {
+  const epoch = generation;
   const base = cloudBaseUrl();
   const batch = Array.from(queued).slice(0, LOOKUP_BATCH);
   for (const key of batch) {
@@ -414,6 +430,7 @@ async function flush(): Promise<void> {
       },
     );
     // Сбой справки не записываем как «фото нет»: спросим при следующей отрисовке.
+    if (epoch !== generation) return;
     if (found) {
       const now = Date.now();
       for (const [urlKey, pubB64] of byUrlKey) {
@@ -441,14 +458,19 @@ async function flush(): Promise<void> {
   } catch (e) {
     log.info('public_avatar_lookup_failed', { err: e instanceof Error ? e.message : String(e) });
   } finally {
-    for (const key of batch) inFlight.delete(key);
+    if (epoch === generation) {
+      for (const key of batch) inFlight.delete(key);
+    }
   }
+  if (epoch !== generation) return;
   if (changed) wake();
-  if (pending.length > 0) await materialize(base, pending);
+  if (pending.length > 0) await materialize(base, pending, epoch);
 }
 
 /** Смена аккаунта, выход, тесты: забыть всё, что спрашивали. */
 export function resetPublicAvatars(): void {
+  generation += 1;
+  inFlight.clear();
   known.clear();
   queued.clear();
   published.clear();
