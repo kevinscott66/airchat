@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import type { KeyPairBytes } from '../../core/crypto/keyManager';
 import { publishPostLinkCopy, revokePostLinkCopy } from '../../core/social/feedService';
 import { publicPostCopyExists, publicPostStoreAvailable } from '../../core/social/publicPost';
-import { listLinkPublishedPostIds, setLinkPublished } from '../../core/social/postLinkState';
+import { listLinkPublishedPostIds } from '../../core/social/postLinkState';
 import {
   createPostLinkFlow,
   mayPublishByLink,
@@ -137,34 +137,10 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
   }), [did]);
 
   /**
-   * Дочитать у сервера состояние своей записи, за которой отметки не числится.
-   *
-   * v4.32.902 спрашивал сервер только тогда, когда не прочитался ВЕСЬ список
-   * отметок. Но отметка пропадает и поодиночке, а последствие то же самое:
-   * «Отозвать ссылку» рисуется ровно по ней, и без неё незашифрованную копию
-   * нечем снять. Поодиночке отметка теряется не в теории:
-   *   • `refreshPublicPostCopy` ставит её задним числом, когда копия на
-   *     сервере есть, а отметки нет (старая сборка ссылок ещё не отмечала), и
-   *     отказ этой записи до v4.32.917 выбрасывался;
-   *   • `publishPostLinkCopy` при незаписавшейся отметке снимает копию, но
-   *     снять её удаётся не всегда — тогда копия остаётся, а отметки нет;
-   *   • профиль переносили на другое устройство, и отметки — память
-   *     устройства, а не слово сервера.
-   * Пустой прочитанный список поэтому такое же незнание, как и нечитаемый:
-   * он говорит «мы не отмечали», а не «на сервере ничего нет».
-   *
-   * Цена вопроса — один HEAD на свою запись за сессию, и только по долгому
-   * нажатию. Ответ «есть» тут же записывается отметкой: иначе следующий
-   * запуск начнёт с того же незнания, а человек — с того же пустого меню.
-   *
-   * HEAD отвечает «есть» только когда копия действительно есть.
-   *
-   * v4.32.1059: а «спросить не вышло» больше не запоминается за ответ. Отметка
-   * `askedRef` ставится до похода в сеть и не снималась никогда, поэтому один
-   * неудачный HEAD — метро, самолётный режим, отвернувшийся сервер — прятал
-   * «Отозвать ссылку» до конца сеанса, и снять открытую всем копию в этом
-   * сеансе было нечем. Отметку «опубликовано» по незнанию по-прежнему не
-   * ставим: это слово сервера, а он его не сказал.
+   * Discover an existing copy so its author can revoke it, including copies
+   * published on another device. HEAD is only a server availability claim:
+   * keep it in this screen's memory, never as permission for future uploads.
+   * Unknown responses remain retryable within the same session.
    */
   const resolvePublished = useCallback(async (post: LinkablePost) => {
     if (!publicPostStoreAvailable()) return;
@@ -184,10 +160,8 @@ export function usePostLinkSharing(pair: KeyPairBytes, did: string): PostLinkSha
     if (!exists) return;
     publishedRef.current.add(post.id);
     setPublishedIds(new Set(publishedRef.current));
-    // Отметка — то, по чему меню узнаёт о копии после перезапуска. Отказ
-    // записи ничего не отменяет: в этой сессии «Отозвать ссылку» уже на месте,
-    // а в следующей сервер спросят заново.
-    void setLinkPublished(post.id, true);
+    // Discovery enables revocation in this session. It must never persist
+    // consent to upload plaintext: only explicit publication can do that.
   }, [did]);
 
   /** Общий разбор исхода: что сказать человеку. */

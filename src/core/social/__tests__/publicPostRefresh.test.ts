@@ -1,3 +1,4 @@
+jest.mock('../postLinkState', () => ({ linkPublishedFor: jest.fn(async () => true), setLinkPublished: jest.fn(async () => true) }));
 /**
  * Правка догоняет копию по ссылке (v4.32.614).
  *
@@ -78,7 +79,7 @@ const pair = { secretKey: keys.secretKey, publicKey: keys.publicKey };
 const myDid = publicKeyToDidKey(keys.publicKey);
 
 beforeAll(async () => { await setFeedProfileContext(1); });
-beforeEach(() => {
+beforeEach(async () => {
   mockPosts.clear();
   mockCopyOnServer.clear();
   mockPutCalls.length = 0;

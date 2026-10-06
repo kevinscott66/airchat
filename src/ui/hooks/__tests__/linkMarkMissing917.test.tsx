@@ -26,8 +26,8 @@
  * Правка. Пустая отметка приравнена к незнанию: у своей записи, за которой
  * отметки не числится, состояние дочитывается у сервера (HEAD по копии) — один
  * раз на запись за сессию и только по долгому нажатию. Подтверждённая копия
- * тут же записывается отметкой, иначе следующий запуск начнёт с того же
- * незнания. Отдельный признак «список не прочитался» за ненадобностью убран:
+ * доступна для отзыва в этой сессии. Ответ HEAD не сохраняется как согласие
+ * на будущую загрузку открытого текста. Отдельный признак «список не прочитался» за ненадобностью убран:
  * пустой и нечитаемый список теперь разбираются одним путём.
  */
 import React, { act } from 'react';
@@ -155,12 +155,16 @@ describe('отметки нет, а копия на сервере лежит', 
     expect(hook.isPublished('p1')).toBe(true);
   });
 
-  it('подтверждённая копия записывается отметкой — иначе следующий запуск начнёт с нуля', async () => {
+  it('обнаруженная копия доступна для отзыва, но не становится согласием на загрузку', async () => {
     mockStoredIds = new Set();
     mockCopyExists.mockResolvedValue(true);
     await mount();
     await act(async () => { await hook.resolvePublished(post); });
-    expect(mockSetMark).toHaveBeenCalledWith('p1', true);
+    expect(hook.isPublished('p1')).toBe(true);
+    expect(mockSetMark).not.toHaveBeenCalled();
+    await act(async () => { await hook.revoke(post); });
+    expect(mockRevoke).toHaveBeenCalledWith(pair, 'p1');
+    expect(hook.isPublished('p1')).toBe(false);
   });
 
   it('«Копировать ссылку» у такой записи не выкладывает её заново', async () => {
@@ -191,12 +195,15 @@ describe('отметки нет, а копия на сервере лежит', 
     expect(mockCopyExists).not.toHaveBeenCalled();
   });
 
-  it('дописывание отметки задним числом больше не выбрасывает исход', () => {
+  it('обновление копии требует согласия и не создаёт его из ответа HEAD', () => {
     const src = feedService();
-    expect(src).toContain('if (!(await setLinkPublished(postId, true))) {');
-    expect(src).toContain("log.warn('public_post_backfill_mark_failed'");
-    // Прежняя форма: запись без проверки прямо посреди обновления копии.
-    expect(src).not.toContain('    await setLinkPublished(postId, true);');
+    const start = src.indexOf('async function refreshPublicPostCopyFor(');
+    const end = src.indexOf('export async function fetchPostByLink', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const refresh = src.slice(start, end);
+    expect(refresh).toContain('await linkPublishedFor(profileId, postId)');
+    expect(refresh).not.toContain('setLinkPublished(');
   });
 });
 

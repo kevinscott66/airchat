@@ -44,6 +44,18 @@ export type OpenFluxUiStatus =
   /** Пробовали поднять — не вышло. */
   | 'failed';
 
+// Intent changes immediately, while native mutations run in order. Login and
+// retry delays stay outside the queue so disabling never waits for the browser.
+let lifecycleGeneration = 0;
+let nativeQueue: Promise<unknown> = Promise.resolve();
+let cleanupRequired = false;
+
+function withNativeLifecycle<T>(action: () => Promise<T>): Promise<T> {
+  const result = nativeQueue.then(action);
+  nativeQueue = result.catch(() => undefined);
+  return result;
+}
+
 /** Куда просить ядро положить локальный SOCKS5. Порт 0 — пусть выберет сам. */
 function socksAddrFor(cfg: AppConfig): string {
   const port = cfg.openflux?.localSocksPort ?? 0;
@@ -71,6 +83,15 @@ export async function maybeStartOpenFlux(
   cfg: AppConfig,
   opts?: { force?: boolean },
 ): Promise<OpenFluxUiStatus> {
+  const generation = ++lifecycleGeneration;
+  return startForGeneration(cfg, generation, opts);
+}
+
+async function startForGeneration(
+  cfg: AppConfig,
+  generation: number,
+  opts?: { force?: boolean },
+): Promise<OpenFluxUiStatus> {
   const o = cfg.openflux;
   if (!o?.enabled) return 'off';
   if (!opts?.force && !o.autoStart) return 'off';
@@ -86,30 +107,37 @@ export async function maybeStartOpenFlux(
     log.warn('openflux_module_missing');
     return 'unsupported';
   }
-  try {
-    if (!(await mod.isSupported())) return 'unsupported';
-  } catch {
-    return 'unsupported';
-  }
+  return withNativeLifecycle(async (): Promise<OpenFluxUiStatus> => {
+    if (generation !== lifecycleGeneration) return 'off';
+    if (cleanupRequired && !(await stopNativeOpenFlux())) return 'failed';
+    try {
+      if (!(await mod.isSupported())) return 'unsupported';
+    } catch {
+      return 'unsupported';
+    }
 
-  try {
-    const addr = await mod.start({
-      transport: o.transport ?? 'yandex',
-      docUrl: o.docUrl.trim(),
-      socksAddr: socksAddrFor(cfg),
-      dns: o.dns ?? '1.1.1.1:53',
-    });
-    log.info('openflux_started', { socks: addr });
-    await noteHttpLayer();
-    return 'on';
-  } catch (e) {
-    // Текст ядра (документ недоступен, старый редактор выключен, нет прав на
-    // запись) уносим в журнал: без него причина неотличима от «сеть». Но без
-    // адресов — ссылка на документ есть право писать в него, см.
-    // openFluxErrorText.
-    log.warn('openflux_start_failed', { err: openFluxErrorText(e) });
-    return 'failed';
-  }
+    if (generation !== lifecycleGeneration) return 'off';
+    try {
+      const addr = await mod.start({
+        transport: o.transport ?? 'yandex',
+        docUrl: o.docUrl.trim(),
+        socksAddr: socksAddrFor(cfg),
+        dns: o.dns ?? '1.1.1.1:53',
+      });
+      await noteHttpLayer();
+      if (generation !== lifecycleGeneration) {
+        // A native start cannot be cancelled midway. Undo it before releasing
+        // the queue, otherwise it could revive a disabled or replaced tunnel.
+        return (await stopNativeOpenFlux()) ? 'off' : 'failed';
+      }
+      log.info('openflux_started', { socks: addr });
+      return 'on';
+    } catch (e) {
+      // Core errors may contain the document URL: redact before logging.
+      log.warn('openflux_start_failed', { err: openFluxErrorText(e) });
+      return generation === lifecycleGeneration ? 'failed' : 'off';
+    }
+  });
 }
 
 /**
@@ -163,19 +191,27 @@ export function getOpenFluxHttpLayerActive(): boolean | null {
  * значит подтвердить остановку нечем.
  */
 export async function stopOpenFlux(): Promise<boolean> {
+  ++lifecycleGeneration;
+  return withNativeLifecycle(stopNativeOpenFlux);
+}
+
+async function stopNativeOpenFlux(): Promise<boolean> {
   if (!openFluxAvailable()) {
     httpLayer = null;
+    cleanupRequired = false;
     return true;
   }
   const mod = AirChatOpenFlux;
   if (!mod) {
     httpLayer = null;
+    cleanupRequired = false;
     return true;
   }
   try {
     await mod.stop();
     httpLayer = null;
     log.info('openflux_stopped');
+    cleanupRequired = false;
     return true;
   } catch (e) {
     try {
@@ -183,6 +219,7 @@ export async function stopOpenFlux(): Promise<boolean> {
         // Отказ был про то, что гасить уже нечего.
         httpLayer = null;
         log.info('openflux_stopped');
+        cleanupRequired = false;
         return true;
       }
     } catch {
@@ -191,6 +228,7 @@ export async function stopOpenFlux(): Promise<boolean> {
     // Слой перехвата не трогаем: он таким и остался, а `null` здесь значил бы
     // «неизвестно» про то, что как раз известно.
     log.warn('openflux_stop_failed', { err: openFluxErrorText(e) });
+    cleanupRequired = true;
     return false;
   }
 }
@@ -312,18 +350,27 @@ export async function retryOpenFlux(cfg: AppConfig, session?: { renew: boolean }
   if (!o?.enabled) return 'off';
   if (!o.docUrl?.trim()) return 'unconfigured';
   if (!openFluxAvailable()) return 'unsupported';
-  await stopOpenFlux();
+  const generation = ++lifecycleGeneration;
+  const stopped = await withNativeLifecycle(async () => {
+    if (generation !== lifecycleGeneration) return true;
+    return stopNativeOpenFlux();
+  });
+  if (generation !== lifecycleGeneration) return 'off';
+  if (!stopped) return 'failed';
   // Only an explicit foreground action opens login. Cookies never cross this bridge.
   if (session && (o.transport ?? 'yandex') === 'yandex' && AirChatOpenFlux?.authorizeSession) {
     try {
-      if (!(await AirChatOpenFlux.authorizeSession(o.docUrl.trim(), session.renew))) return 'failed';
-    } catch { return 'failed'; }
+      const authorized = await AirChatOpenFlux.authorizeSession(o.docUrl.trim(), session.renew);
+      if (generation !== lifecycleGeneration) return 'off';
+      if (!authorized) return 'failed';
+    } catch { return generation === lifecycleGeneration ? 'failed' : 'off'; }
   }
   const max = Math.max(1, o.startRetries ?? 3);
   const delayMs = o.retryDelayMs ?? 2000;
   let last: OpenFluxUiStatus = 'failed';
   for (let i = 0; i < max; i++) {
-    last = await maybeStartOpenFlux(cfg, { force: true });
+    if (generation !== lifecycleGeneration) return 'off';
+    last = await startForGeneration(cfg, generation, { force: true });
     // Повторять имеет смысл только `failed`: остальное от повтора не изменится.
     if (last !== 'failed') return last;
     if (i < max - 1) await new Promise((r) => setTimeout(r, delayMs));

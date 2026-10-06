@@ -1,3 +1,4 @@
+jest.mock('../postLinkState', () => ({ linkPublishedFor: jest.fn(async () => true), setLinkPublished: jest.fn(async () => true) }));
 /**
  * Конверт по ссылке собирается целиком или не собирается вовсе (v4.32.614).
  *
@@ -100,7 +101,7 @@ function photoPost(n: number): Row {
 }
 
 beforeAll(async () => { await setFeedProfileContext(1); });
-beforeEach(() => {
+beforeEach(async () => {
   mockPosts.clear();
   mockBlobs.clear();
   mockCopyOnServer.clear();

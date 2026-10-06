@@ -11,6 +11,7 @@ const http = require('http');
 const { createHash } = require('crypto');
 const express = require('express');
 const cors = require('cors');
+const { createBodyParser } = require('./body-parser');
 const { ed25519 } = require('@noble/curves/ed25519.js');
 const { SyncDatabase, validateMutation } = require('./sync-db');
 const {
@@ -256,57 +257,15 @@ app.use((req, res, next) => {
   if (bucket.count > limit) return res.status(429).json({ error: 'rate_limited' });
   return next();
 });
-/**
- * Потолок тела — по настоящему маршруту, а не по хвосту пути (v4.32.614).
- *
- * Было `req.path.endsWith('/push')`: восемьдесят мегабайт выдавалось любому
- * адресу, оканчивающемуся на это слово, — в том числе несуществующему, где
- * тело разбиралось целиком только затем, чтобы express ответил 404.
- *
- * Второе здесь же: разбор большого тела стоит памяти в несколько раз больше
- * самого тела (замерено: 21 МБ мелких объектов дают около 130 МБ RSS), а у
- * службы MemoryMax=384M. Одновременные большие запросы складываются, поэтому
- * их пропускаем по одному, а остальным честно отвечаем 503 с retry-after.
- * Это не защита от одного заведомо злого гиганта — от него спасает только
- * гарантированный перезапуск (см. deploy/airchat-cloud-vault.service), — но
- * она убирает самый дешёвый способ сложить память несколькими соединениями.
- */
-const CLOUD_VAULT_PUT_PATH_RE = /^\/v1\/cloud-vault\/[^/]+$/;
-const SYNC_PUSH_PATH_RE = /^\/v1\/sync\/[^/]+\/push$/;
-const MEDIA_PUT_PATH_RE = /^\/v1\/sync\/[^/]+\/media\/put$/;
-const PUBLIC_POST_WRITE_PATH_RE = /^\/v1\/post\/[^/]+(?:\/delete)?$/;
-const LARGE_BODY_MAX_INFLIGHT = 1;
-let largeBodyInFlight = 0;
-
-function bodyLimitFor(req) {
-  if (req.method === 'PUT' && CLOUD_VAULT_PUT_PATH_RE.test(req.path)) return MAX_BODY_BYTES;
-  if (req.method !== 'POST') return DEFAULT_JSON_BODY_BYTES;
-  if (SYNC_PUSH_PATH_RE.test(req.path)) return SYNC_PUSH_BODY_BYTES;
-  if (MEDIA_PUT_PATH_RE.test(req.path)) return MEDIA_BODY_BYTES;
-  if (PUBLIC_POST_WRITE_PATH_RE.test(req.path)) return PUBLIC_POST_BODY_BYTES;
-  return DEFAULT_JSON_BODY_BYTES;
-}
-
-app.use((req, res, next) => {
-  const limit = bodyLimitFor(req);
-  const declared = Number(req.headers['content-length']);
-  const large = limit > DEFAULT_JSON_BODY_BYTES
-    && Number.isFinite(declared)
-    && declared > DEFAULT_JSON_BODY_BYTES;
-  if (!large) return express.json({ limit: `${limit}b` })(req, res, next);
-  if (largeBodyInFlight >= LARGE_BODY_MAX_INFLIGHT) {
-    res.set('retry-after', '5');
-    return res.status(503).json({ error: 'server_busy' });
-  }
-  largeBodyInFlight += 1;
-  let released = false;
-  res.on('close', () => {
-    if (released) return;
-    released = true;
-    largeBodyInFlight -= 1;
-  });
-  return express.json({ limit: `${limit}b` })(req, res, next);
-});
+// Reserve by the route's permitted decoded size, before reading any body.
+// Content-Length cannot describe chunked bodies or decompressed JSON size.
+app.use(createBodyParser({
+  defaultBytes: DEFAULT_JSON_BODY_BYTES,
+  vaultBytes: MAX_BODY_BYTES,
+  syncPushBytes: SYNC_PUSH_BODY_BYTES,
+  mediaBytes: MEDIA_BODY_BYTES,
+  publicPostBytes: PUBLIC_POST_BODY_BYTES,
+}));
 setInterval(() => {
   const cutoff = Date.now() - RATE_WINDOW_MS;
   for (const [key, bucket] of rateBuckets) {

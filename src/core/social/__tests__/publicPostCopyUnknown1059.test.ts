@@ -278,12 +278,11 @@ describe('что делает экран ленты', () => {
     // отсутствующей строки «меньше» чего угодно, и проверка была бы пустой.
     expect(body).toContain('askedRef.current.delete(post.id);');
     expect(body).toContain('publishedRef.current.add(post.id);');
-    expect(body).toContain('void setLinkPublished(post.id, true);');
+    expect(body).not.toContain('setLinkPublished(');
     // Возврат из ветки незнания идёт ДО записи отметки и до показа пункта меню.
     expect(body.indexOf('askedRef.current.delete(post.id);'))
       .toBeLessThan(body.indexOf('publishedRef.current.add(post.id);'));
-    expect(body.indexOf('askedRef.current.delete(post.id);'))
-      .toBeLessThan(body.indexOf('void setLinkPublished(post.id, true);'));
+
   });
 });
 
