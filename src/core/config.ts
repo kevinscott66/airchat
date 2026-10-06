@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { bundledOpenFluxDocument } from './openFluxDocument';
 import { defaultBypassFlags } from './transport/bypass/defaults';
 import type { BypassFeatureFlags } from './transport/bypass/types';
 import { resolveIpfsLoopbackForAndroid } from './transport/ipfs/resolveLoopback';
@@ -608,19 +609,15 @@ function bundledConfig(): AppConfig {
         },
       }
     : raw;
-  // v4.32.723. Ссылка на документ OpenFlux приходит переменной сборки по той
-  // же причине, что адрес relay: у всякого, кто её получил, появляется право
-  // писать в документ, то есть это ключ. В git её нет и быть не должно.
+  // Адрес документа нужен нативному OpenFlux. Веб-реализация этого импорта
+  // возвращает пустую строку, чтобы Expo не встраивал адрес в публичный JS.
   //
   // Переменная отвечает на вопрос «через какой документ», а не «включать ли».
   // Флаг `enabled` остаётся из конфига: сборка с выключенным туннелем не
   // включится от одной переменной. Обратное тоже верно и важнее — сборка без
   // переменной оставляет docUrl пустым, и контроллер честно скажет «туннеля в
   // этой сборке нет» вместо бесконечных попыток открыть пустую ссылку.
-  const docFromEnv =
-    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_OPENFLUX_DOC_URL
-      ? process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL
-      : '';
+  const docFromEnv = bundledOpenFluxDocument();
   const bundled: AppConfig = docFromEnv
     ? {
         ...withRelay,

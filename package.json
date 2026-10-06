@@ -31,7 +31,7 @@
     "build:release": "bash scripts/build-release.sh",
     "version:bump": "bash scripts/bump-version.sh",
     "web": "expo start --web",
-    "web:export": "expo export --platform web",
+    "web:export": "expo export --platform web && node scripts/check-web-config.js dist",
     "web:budget": "node scripts/web-bundle-budget.js dist",
     "postinstall": "node scripts/ensure-expo-image-picker-swift.js"
   },
