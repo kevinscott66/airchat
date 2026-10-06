@@ -13,3 +13,5 @@ Opening the document or starting SOCKS does not establish end-to-end availabilit
 The separate system VPN prototype is not part of this app-scoped integration: its bridge is not wired to the native module and it needs its own Network Extension provisioning and device acceptance.
 
 For simulator runtime checks, build with `ARCHS=arm64 CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES` so Xcode generates simulator Keychain entitlements. An unsigned build can compile successfully but fail SecureStore access at startup. This is simulator signing, not a device distribution signature.
+
+The document address is build configuration, not an account session. Native clients necessarily contain the configured address. Web selects `src/core/openFluxDocument.web.ts` and receives no document address; the actual export is checked by `scripts/check-web-config.js`. CI exports with a synthetic address to catch accidental reintroduction. Local cookies and Keychain session data remain native.

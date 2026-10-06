@@ -55,6 +55,7 @@ build_web() {
   echo "→ web: expo export → dist/"
   rm -rf dist
   npx expo export --platform web --output-dir dist
+  node scripts/check-web-config.js dist
   node scripts/web-bundle-budget.js dist
   # Опубликованный сайт сам говорит, что он такое: сверка без угадывания по хешам.
   printf '{"app":"airchat","version":"%s","commit":"%s","builtAt":"%s"}\n' "$VER" "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/release.json
