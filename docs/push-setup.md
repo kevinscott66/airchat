@@ -34,6 +34,15 @@ Firebase → Add app → iOS.
 `GoogleService-Info.plist`. `app.config.base.json` уже указывает на него через
 `ios.googleServicesFile`.
 
+Одного plist недостаточно: в iOS `FirebaseApp.configure()` должен выполниться
+в `AppDelegate` до запуска React Native bridge. Текущий native delegate сначала
+проверяет `FirebaseApp.app() == nil`, затем настраивает default app. Официальный
+config plugin `@react-native-firebase/app` в `app.config.base.json` сохраняет эту
+инициализацию при следующей генерации native-проекта. После изменения prebuild
+или delegate проверяйте порядок вызовов: сообщения FirebaseCore
+`I-COR000003`/`I-COR000005` означают, что default app ещё не настроен; это не
+подтверждение регистрации FCM/APNs.
+
 ## 4. iOS: ключ APNs (.p8)
 
 Apple Developer → Certificates, Identifiers & Profiles → Keys → **+** →

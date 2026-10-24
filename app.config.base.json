@@ -7,6 +7,7 @@
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders",
+      "@react-native-firebase/app",
       "expo-apple-authentication"
     ],
     "orientation": "portrait",
