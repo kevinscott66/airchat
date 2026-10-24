@@ -55,6 +55,7 @@ import {
   type MentionKeyPin,
   type MentionTarget,
 } from '../../core/social/usernameDirectory';
+import { useChatBottomAnchor } from '../hooks/useChatBottomAnchor';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -976,6 +977,7 @@ function ChatThreadView({
   const flashListRef = useRef<any>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const showScrollToBottomRef = useRef(false);
+  const bottomAnchor = useChatBottomAnchor(flashListRef, showScrollToBottom, showScrollToBottomRef, !searchVisible && !mediaFilterActive);
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const [contactInfoVisible, setContactInfoVisible] = useState(false);
   /**
@@ -3823,6 +3825,7 @@ function ChatThreadView({
         <MessagesShell style={{ flex: 1 }}>
         <FlashList
           ref={flashListRef}
+          {...bottomAnchor}
           style={{ flex: 1 }}
           data={displayMessages}
           inverted

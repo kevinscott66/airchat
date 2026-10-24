@@ -59,7 +59,8 @@ describe('сторона пузыря в канале', () => {
 
   test('шапка автора показывается и на своей записи канала', () => {
     const body = bubbleBody();
-    expect(body).toContain('{!outgoing && !anonymousPosting');
+    expect(body).toContain("{group.type === 'channel' && !isConsecutive");
+    expect(body).toContain("{group.type !== 'channel' && !outgoing && !anonymousPosting");
     expect(body).not.toContain('{!isMe && !anonymousPosting');
   });
 

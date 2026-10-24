@@ -15,6 +15,8 @@
  * blob MUST be encrypted before upload — which it is, with a fresh random key
  * per blob. An eavesdropper with the URL gets only ciphertext.
  */
+import { Platform } from 'react-native';
+import { readWebAttachment } from './readWebAttachment';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
 import { randomBytes } from '@noble/hashes/utils.js';
@@ -325,7 +327,10 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     // пять строк выше, только на ветке `declared === null`, а её комментарий
     // прямо признаёт: размер файловая система сообщает не всегда.
     // position и length действуют только вместе и только для base64.
-    const b64 = declared === null
+    const webRead = Platform.OS === 'web' ? await readWebAttachment(uri, MAX_BLOB_BYTES) : null;
+    if (webRead && !webRead.ok) return null;
+    if (!mime && webRead?.ok) mime = webRead.mime;
+    const b64 = webRead?.ok ? webRead.b64 : declared === null
       ? await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64,
           position: 0,
@@ -345,7 +350,7 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     const { lanBlobCacheWrite, lanBlobPush } = await import('../transport/lan/lanBlob');
     // Отправку это не срывает — ciphertext уже в памяти, — но без кэша не
     // будет ни идемпотентного LAN-push, ни повторной отправки.
-    if (!(await lanBlobCacheWrite(idHex, cipher))) {
+    if (Platform.OS !== 'web' && !(await lanBlobCacheWrite(idHex, cipher))) {
       log.warn('blob_cache_write_failed', { id: idHex.slice(0, 8) });
     }
     // Keep the existing relay/LAN behavior responsive. The VPS receives the
@@ -467,7 +472,7 @@ const blobResolveFlights = new Map<string, Promise<BlobResolveResult>>();
 
 /** То же самое, но с причиной отказа — для экранов, которые о ней говорят. */
 export function resolveBlobToLocalFileResult(ref: BlobRef, ext = 'bin'): Promise<BlobResolveResult> {
-  const cacheDir = FileSystem.cacheDirectory ?? '';
+  const cacheDir = Platform.OS === 'web' ? 'web:' : FileSystem.cacheDirectory ?? '';
   const name = isBlobRef(ref) ? blobCacheName(ref, ext) : null;
   if (!cacheDir) return Promise.resolve({ ok: false, reason: 'storage' });
   if (!name) return Promise.resolve({ ok: false, reason: 'unsupported' });
@@ -493,7 +498,8 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<Bl
   };
   try {
     if (!isBlobRef(ref)) return { ok: false, reason: 'unsupported' };
-    const cacheDir = FileSystem.cacheDirectory ?? '';
+    const web = Platform.OS === 'web';
+    const cacheDir = web ? 'web:' : FileSystem.cacheDirectory ?? '';
     if (!cacheDir) return { ok: false, reason: 'storage' };
     // Stable filename: blob id when present, else derived from the URL, плюс
     // отпечаток ключа.
@@ -506,7 +512,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<Bl
     // (см. blobRef.blobKeyFingerprint).
     const dest = `${cacheDir}${blobCacheName(ref, ext) ?? ''}`;
     if (dest === cacheDir) return { ok: false, reason: 'unsupported' };
-    const existing = await FileSystem.getInfoAsync(dest);
+    const existing = web ? { exists: false as const } : await FileSystem.getInfoAsync(dest);
     if (existing.exists && (existing.size ?? 0) > 0) return { ok: true, uri: dest };
 
     const key = new Uint8Array(Buffer.from(ref.k, 'base64'));
@@ -521,7 +527,7 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<Bl
     // 1) LAN-доставленный (или свой отправленный) ciphertext в локальном кэше —
     //    работает полностью оффлайн, без relay.
     const loadLanCache = async (): Promise<Uint8Array | null> => {
-      if (!blobId) return null;
+      if (web || !blobId) return null;
       const { lanBlobCachedPath } = await import('../transport/lan/lanBlob');
       const cached = await lanBlobCachedPath(blobId);
       if (!cached) return null;
@@ -644,6 +650,13 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<Bl
     if (!plain) {
       log.warn('blob_download_decrypt_failed');
       return { ok: false, reason: FAILURE_PRIORITY.find((r) => fails.includes(r)) ?? 'unknown' };
+    }
+    if (web) {
+      // In-memory URL, no persistent plaintext cache or native FS dependency.
+      // Active document formats (HTML/SVG/XML) must not become executable URLs.
+      const mime = /^(image\/(png|jpeg|gif|webp|avif)|audio\/[a-z0-9.+-]+|video\/[a-z0-9.+-]+)$/i.test(ref.m ?? '')
+        ? ref.m! : 'application/octet-stream';
+      return { ok: true, uri: `data:${mime};base64,${Buffer.from(plain).toString('base64')}` };
     }
     const temporary = `${dest}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await FileSystem.writeAsStringAsync(temporary, Buffer.from(plain).toString('base64'), {

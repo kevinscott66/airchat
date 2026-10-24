@@ -101,15 +101,17 @@ describe('файл базы занят другой вкладкой', () => {
     expect(text).not.toContain('переполненный');
   });
 
-  it('WebKit причину не назвал — оговариваемся, но советуем то же', () => {
+  it('WebKit причину не назвал — учитываем приватный режим без ложного диагноза', () => {
     const text = diagnoseStorageFailure(WEBKIT, OK_ENV);
     expect(text).toContain('не назвал причину');
     expect(text).toContain('вкладки с AirChat');
-    expect(text).not.toContain('переполненный');
+    expect(text).toContain('приватном окне');
+    expect(text).not.toContain('Почти всегда');
+    expect(text).not.toContain('никуда не денутся');
   });
 
   it('обещает, что переписка на месте — иначе человек начнёт чистить данные сайта', () => {
-    for (const m of [CHROME, WEBKIT]) {
+    for (const m of [CHROME]) {
       expect(diagnoseStorageFailure(m, OK_ENV)).toContain('никуда не денутся');
     }
   });

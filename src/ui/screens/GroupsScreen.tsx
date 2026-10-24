@@ -6,6 +6,8 @@
  *   CreateGroupModal: форма создания группы / канала
  *   GroupMembersScreen: список участников с ролями
  */
+import { isGroupReadReceiptTarget } from '../../core/social/groupReadReceiptTarget';
+import { channelIdentity, channelAuthor } from '../../core/social/channelIdentity';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -36,6 +38,7 @@ import { useBackHandler } from '../../core/hooks/useBackHandler';
 import { MAX_MESSAGE_TEXT } from '../../core/social/messageTextLimit';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
+import { useChatBottomAnchor } from '../hooks/useChatBottomAnchor';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GlassSurface } from '../components/GlassSurface';
@@ -380,7 +383,7 @@ function GroupListRow({
    * сообщений» здесь было прямой неправдой: сообщения есть, их не прочитать.
    */
   const previewUnreadable = !item.draftText && item.lastMessagePreviewUnreadable === true;
-  const previewText = item.lastMessagePreview
+  const previewText = item.type === 'channel' && item.lastMessagePreview && isGroupSysMessage(item.lastMessagePreview) ? 'Событие канала' : item.lastMessagePreview
     ? previewLabelForText(item.lastMessagePreview)
     : previewUnreadable
       ? UNREADABLE_MESSAGE_TEXT
@@ -391,7 +394,7 @@ function GroupListRow({
    * себя как «подписи нет» — а это законный случай, и строка рисовалась без
    * приставки: реплика соседа теряла автора молча.
    */
-  const senderLabel = isOutgoingLast
+  const senderLabel = item.type === 'channel' ? null : isOutgoingLast
     ? 'Вы'
     : shownNameOrNull(item.lastMessageSenderName, item.lastMessageSenderNameUnreadable);
   /**
@@ -747,6 +750,7 @@ function GroupChatScreen({
   const groupFlashRef = useRef<any>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const showScrollBottomRef = useRef(false);
+  const bottomAnchor = useChatBottomAnchor(groupFlashRef, showScrollBottom, showScrollBottomRef, !searchVisible);
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const jumpHighlightAnim = useRef(new RNAnimated.Value(0)).current;
   /** ID of the message just sent this session — shows single ✓ until next reload. */
@@ -1166,7 +1170,7 @@ function GroupChatScreen({
     // группы: повторно отправленная отметка адресату ничего не сообщает.
     const sentReceipts = new Set<string>();
     for (const msg of msgs.slice(0, 20)) {
-      if (msg.senderPubB64 === myPubB64 || sentReceipts.has(msg.senderPubB64)) continue;
+      if (!isGroupReadReceiptTarget(msg, myPubB64) || sentReceipts.has(msg.senderPubB64)) continue;
       sentReceipts.add(msg.senderPubB64);
       const mark = `${msg.senderPubB64}|${msg.id}`;
       if (sentGroupReceiptsRef.current.has(mark)) continue;
@@ -1876,12 +1880,7 @@ function GroupChatScreen({
   useEffect(() => {
     const unsub = subscribeChatWrites(() => {
       if (tabRefGroupChat.current !== 'groups') return;
-      void loadMessages().then(() => {
-        // Auto-scroll to newest message if already near the bottom
-        if (!showScrollBottomRef.current) {
-          groupFlashRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }
-      });
+      void loadMessages();
       // Закрепление от другого участника приходит тем же путём, что сообщение,
       // поэтому баннер обновляем здесь же — иначе он оставался бы старым до
       // следующего входа в чат.
@@ -2445,7 +2444,7 @@ function GroupChatScreen({
         try { list = raw ? (JSON.parse(raw) as Array<{ id: string; text: string; senderName: string; deletedAt: number }>) : []; } catch { list = []; }
         if (!Array.isArray(list)) list = [];
         list = list.filter((x) => x.deletedAt > now - GRP_RECENTLY_DELETED_TTL_MS);
-        list.unshift({ id: msg.id, text: msg.text, senderName: msg.senderName ?? shortIdentity(msg.senderPubB64), deletedAt: now });
+        list.unshift({ id: msg.id, text: msg.text, senderName: channelAuthor(group, msg.senderName ?? shortIdentity(msg.senderPubB64)), deletedAt: now });
         if (list.length > 50) list = list.slice(0, 50);
         return JSON.stringify(list);
       });
@@ -2454,7 +2453,7 @@ function GroupChatScreen({
       log.warn('group_recently_deleted_copy_failed', { err: rawErrorText(e) });
       return false;
     }
-  }, [pid, group.id]);
+  }, [pid, group]);
 
   const deleteMsg = useCallback((msg: GroupMessageRow) => {
     const isOwn = msg.senderPubB64 === myPubB64;
@@ -2666,10 +2665,10 @@ function GroupChatScreen({
       { text: 'Сведения', onPress: () => setGrpMsgInfoTarget(item) },
       !isOwn ? { text: '📩 Отметить непрочитанным', onPress: markUnreadAndLeave } : null,
       { text: 'Выбрать', onPress: selectMsg },
-      !isOwn && onOpenDm ? { text: 'Написать в ЛС', onPress: () => onOpenDm(item.senderPubB64, dmName) } : null,
+      group.type !== 'channel' && !isOwn && onOpenDm ? { text: 'Написать в ЛС', onPress: () => onOpenDm(item.senderPubB64, dmName) } : null,
       { text: 'Отмена', style: 'cancel' as const },
     ]);
-    openSheet('Сообщение', item.text.length > 60 ? item.text.slice(0, 60) + '…' : parseGroupSysText(item.text), [
+    openSheet('Сообщение', group.type === 'channel' && isSysMsg ? 'Событие канала' : item.text.length > 60 ? item.text.slice(0, 60) + '…' : parseGroupSysText(item.text), [
       ...(isSysMsg ? [] : REACTION_EMOJIS.map((emoji) => ({ text: emoji, onPress: () => void applyReaction(item, emoji) }))),
       isSysMsg ? null : { text: 'Ответить', onPress: () => setReplyTo(item) },
       // v4.32.872: условие `isTextMsg` шире не стало, а вот копировался
@@ -2680,14 +2679,14 @@ function GroupChatScreen({
         if (body === null) showError(COPY_NOTHING_TEXT);
         else void copyText(body, COPIED_TEXT);
       } } : null,
-      isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64)), item.text)) } : null,
+      isTextMsg ? { text: 'Переслать', onPress: () => setForwardText(makeForwardText(channelAuthor(group, outwardName(item.senderName, item.senderUnreadable, shortIdentity(item.senderPubB64))), item.text)) } : null,
       canEdit ? { text: 'Редактировать', onPress: () => startEdit(item) } : null,
       canPin ? { text: grpPinnedList.some((p) => p.id === item.id) ? 'Открепить' : 'Закрепить', onPress: () => void pinMsg(item) } : null,
       { text: 'Ещё…', onPress: openMore },
       canDelete ? { text: 'Удалить', style: 'destructive' as const, onPress: () => deleteMsg(item) } : null,
       { text: 'Отмена', style: 'cancel' as const },
     ]);
-  }, [applyReaction, openSheet, myPubB64, startEdit, amAdmin, canPin, pinMsg, deleteMsg, loadMessages, grpPinnedList, onOpenDm, onBack, group.id, pid, grpTranslateLang, translationCache, grpManualTranslatedIds, setTranslationCache, setGrpManualTranslatedIds, setGrpMsgInfoTarget]);
+  }, [applyReaction, openSheet, myPubB64, startEdit, amAdmin, canPin, pinMsg, deleteMsg, loadMessages, grpPinnedList, onOpenDm, onBack, group, pid, grpTranslateLang, translationCache, grpManualTranslatedIds, setTranslationCache, setGrpManualTranslatedIds, setGrpMsgInfoTarget]);
 
   const send = useCallback(() => {
     let t = textRef.current.trim();
@@ -3232,7 +3231,7 @@ function GroupChatScreen({
     const prevMsg = prevRaw && !('type' in prevRaw) ? prevRaw as GroupMessageRow : null;
     const msgRow = !('type' in rawItem) ? rawItem as GroupMessageRow : null;
     const isConsecutive = !!(msgRow && prevMsg &&
-      prevMsg.senderPubB64 === msgRow.senderPubB64 &&
+      (group.type === 'channel' || prevMsg.senderPubB64 === msgRow.senderPubB64) &&
       msgRow.createdAt - prevMsg.createdAt < 5 * 60_000 &&
       !isGroupSysMessage(msgRow.text) &&
       !isGroupSysMessage(prevMsg.text));
@@ -3313,7 +3312,7 @@ function GroupChatScreen({
       return (
         <View style={{ alignItems: 'center', paddingVertical: 4, paddingHorizontal: 16 }}>
           <View style={{ backgroundColor: quoteFill, borderRadius: radius.lg, paddingHorizontal: 12, paddingVertical: 4 }}>
-            <Text style={{ color: quoteInk.secondary, fontSize: 12, textAlign: 'center' }}>{parseGroupSysText(item.text)}</Text>
+            <Text style={{ color: quoteInk.secondary, fontSize: 12, textAlign: 'center' }}>{group.type === 'channel' ? 'Событие канала' : parseGroupSysText(item.text)}</Text>
           </View>
         </View>
       );
@@ -3407,7 +3406,13 @@ function GroupChatScreen({
             </View>
           </View>
         ) : null}
-        {!outgoing && !anonymousPosting && !isGroupSysMessage(item.text) && !isConsecutive ? (
+        {group.type === 'channel' && !isConsecutive ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+            <GrpSenderAvatar name={channelIdentity(group)!} seed={group.id} size={26} />
+            <Text style={[gcStyles.senderName, { color: identityInk(group.id, colors.surface) }]}>{channelIdentity(group)}</Text>
+          </View>
+        ) : null}
+        {group.type !== 'channel' && !outgoing && !anonymousPosting && !isGroupSysMessage(item.text) && !isConsecutive ? (
           <AppPressable onPress={() => {
             const member = allMembers.find((m) => m.peerPubB64 === item.senderPubB64);
             if (member) {
@@ -3476,7 +3481,7 @@ function GroupChatScreen({
                 : replyPreview.startsWith(POLL_PREFIX) ? '📊 Опрос'
                 : replyPreview.startsWith('\x09vo:') ? '🔥 Одноразовое сообщение'
                 : replyPreview.startsWith('\x0cliveloc:') ? '📡 Живая геолокация'
-                : isGroupSysMessage(replyPreview) ? parseGroupSysText(replyPreview)
+                : isGroupSysMessage(replyPreview) ? (group.type === 'channel' ? 'Событие канала' : parseGroupSysText(replyPreview))
                 : replyPreview}
             </Text>
           </AppPressable>
@@ -4058,14 +4063,14 @@ function GroupChatScreen({
             // при включённых анонимных постах — то есть настройка
             // скрывала имена на экране и тут же выкладывала их в
             // файл, которым делятся наружу.
-            const who = anonymousPosting
+            const who = channelIdentity(group) ?? (anonymousPosting
               ? (m.senderPubB64 === myPubB64 ? 'Вы' : 'Участник')
               // v4.32.593: в файл идёт имя либо короткий ключ, но
               // никогда пометка о непрочитанном столбце.
-              : outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64));
+              : outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64)));
             // v4.32.604: у непрочитанной реплики текста нет, и
             // пустая строка в файле выдавала её за отправленную пустоту.
-            return `[${d}] ${who}: ${exportBody(m)}`;
+            return `[${d}] ${who}: ${group.type === 'channel' && isGroupSysMessage(m.text) ? 'Событие канала' : exportBody(m)}`;
           }).join('\n');
           // v4.32.310: см. cacheFiles — имя общее для всех
           // экспортов, иначе за файлом никто не убирает.
@@ -4355,6 +4360,7 @@ function GroupChatScreen({
       {/* Messages */}
       <FlashList
         ref={groupFlashRef}
+        {...bottomAnchor}
         data={displayGroupMessages}
         inverted={!searchVisible}
         getItemType={(item) => {
@@ -4483,7 +4489,7 @@ function GroupChatScreen({
           else void copyText(body, COPIED_TEXT);
           setQuickReact(null);
         }}
-        onForward={() => { if (quickReact) { setForwardText(makeForwardText(outwardName(quickReact.senderName, quickReact.senderUnreadable, shortIdentity(quickReact.senderPubB64)), quickReact.text)); setQuickReact(null); } }}
+        onForward={() => { if (quickReact) { setForwardText(makeForwardText(channelAuthor(group, outwardName(quickReact.senderName, quickReact.senderUnreadable, shortIdentity(quickReact.senderPubB64))), quickReact.text)); setQuickReact(null); } }}
         onPin={() => { if (quickReact) { void pinMsg(quickReact); setQuickReact(null); } }}
         onEdit={() => { if (quickReact) { startEdit(quickReact); setQuickReact(null); } }}
         onDelete={() => { if (quickReact) { deleteMsg(quickReact); setQuickReact(null); } }}
@@ -4603,7 +4609,7 @@ function GroupChatScreen({
               <View style={{ width: 2.5, alignSelf: 'stretch', backgroundColor: colors.primary, borderRadius: radius.sm, marginRight: 8 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 12, fontWeight: '600', color: colors.accent, marginBottom: 1 }} numberOfLines={1}>
-                  {replyTo.senderPubB64 === myPubB64 ? 'Вы' : (replyTo.senderName ?? shortIdentity(replyTo.senderPubB64))}
+                  {channelAuthor(group, replyTo.senderPubB64 === myPubB64 ? 'Вы' : (replyTo.senderName ?? shortIdentity(replyTo.senderPubB64)))}
                 </Text>
                 <Text style={[gcStyles.replyBarText, { color: colors.textMuted }]} numberOfLines={1}>
                   {isVoiceMessage(replyTo.text) ? '🎤 Голосовое сообщение'
@@ -4615,7 +4621,7 @@ function GroupChatScreen({
                     : replyTo.text.startsWith('\x09vo:') ? '🔥 Одноразовое сообщение'
                     : replyTo.text.startsWith('\x0cliveloc:') ? '📡 Живая геолокация'
                     : isForwardedMessage(replyTo.text) ? `↪ ${parseForwardedMessage(replyTo.text)?.originalText?.slice(0, 50) ?? 'Пересланное сообщение'}`
-                    : isGroupSysMessage(replyTo.text) ? parseGroupSysText(replyTo.text)
+                    : isGroupSysMessage(replyTo.text) ? (group.type === 'channel' ? 'Событие канала' : parseGroupSysText(replyTo.text))
                     : replyTo.text}
                 </Text>
               </View>
@@ -4727,7 +4733,7 @@ function GroupChatScreen({
                         // v4.32.593: наружу уходит короткий ключ, а не «?» и не
                         // пометка о непрочитанном — чужому устройству знать о
                         // состоянии наших ключей незачем.
-                        senderName: outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64)),
+                        senderName: channelAuthor(group, outwardName(m.senderName, m.senderUnreadable, shortIdentity(m.senderPubB64))),
                         text: m.text,
                       }))));
                       setSelectedGrpIds(new Set());
@@ -5035,7 +5041,7 @@ function GroupChatScreen({
       {/* Message info modal */}
       {grpMsgInfoTarget ? (
         <GrpMessageInfoModal
-          msg={grpMsgInfoTarget}
+          msg={group.type === 'channel' ? { ...grpMsgInfoTarget, senderName: channelIdentity(group) } : grpMsgInfoTarget}
           problem={grpMsgInfoTarget ? (sendProblems[grpMsgInfoTarget.id]?.problem ?? null) : null}
           onClose={() => setGrpMsgInfoTarget(null)}
         />
@@ -5103,7 +5109,7 @@ function GroupChatScreen({
       <GroupRecentlyDeletedModal
         visible={grpRecentlyDeletedVisible}
         onClose={closeGrpRecentlyDeleted}
-        items={grpRecentlyDeletedList}
+        items={group.type === 'channel' ? grpRecentlyDeletedList.map((entry) => ({ ...entry, senderName: channelIdentity(group)! })) : grpRecentlyDeletedList}
         onRestore={handleGrpRestoreDeleted}
       />
 
@@ -5111,7 +5117,7 @@ function GroupChatScreen({
       <GroupStarredModal
         visible={starredVisible}
         onClose={closeStarred}
-        starredEntries={starredEntries}
+        starredEntries={group.type === 'channel' ? starredEntries.map((entry) => ({ ...entry, message: { ...entry.message, senderName: channelIdentity(group) } })) : starredEntries}
         readFailed={starredReadFailed}
         setStarredEntries={setStarredEntries}
         onReload={reloadStarred}
@@ -6686,7 +6692,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
             {grpMsgSearchResults.map((r) => {
               const myPub = pair ? Buffer.from(pair.publicKey).toString('base64') : '';
               const isOut = r.message.senderPubB64 === myPub;
-              const preview = previewLabelForText(r.message.text).slice(0, 120);
+              const preview = groups.find((g) => g.id === r.groupId)?.type === 'channel' && isGroupSysMessage(r.message.text) ? 'Событие канала' : previewLabelForText(r.message.text).slice(0, 120);
               const qLower = grpSearch.toLowerCase();
               const matchIdx = preview.toLowerCase().indexOf(qLower);
               // v4.32.605: непрочитанный столбец больше не выдаёт себя за «реакций нет».
@@ -6717,7 +6723,7 @@ function GroupsScreenBody({ pair, groupJump, onOpenDm, onOpenOwnProfile }: Props
                       <Text style={{ fontSize: font.xs, color: colors.textMuted }}>{timeStr}</Text>
                     </View>
                     <Text style={{ fontSize: 13, color: colors.textSecondary }} numberOfLines={1}>
-                      {r.message.senderName && !isOut ? <Text style={{ color: colors.textMuted }}>{r.message.senderName}{': '}</Text> : null}
+                      {groups.find((g) => g.id === r.groupId)?.type !== 'channel' && r.message.senderName && !isOut ? <Text style={{ color: colors.textMuted }}>{r.message.senderName}{': '}</Text> : null}
                       {matchIdx >= 0 ? (
                         <>
                           <Text>{preview.slice(0, matchIdx)}</Text>

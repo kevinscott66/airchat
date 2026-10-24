@@ -555,7 +555,7 @@ function validateSyncRequest(payload, accountId, op) {
       !info || typeof info !== 'object' || Array.isArray(info) ||
       typeof info.platform !== 'string' || !DEVICE_PLATFORM_RE.test(info.platform) ||
       typeof info.model !== 'string' || info.model.length < 1 || info.model.length > 96 ||
-      typeof info.osVersion !== 'string' || info.osVersion.length < 1 || info.osVersion.length > 32 ||
+      typeof info.osVersion !== 'string' || info.osVersion.length > 32 ||
       typeof info.appVersion !== 'string' || info.appVersion.length < 1 || info.appVersion.length > 32
     ) return null;
     deviceInfo = {

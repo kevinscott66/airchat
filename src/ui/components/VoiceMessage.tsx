@@ -12,6 +12,7 @@ import {
   Easing,
   ActivityIndicator,
   AppState,
+  Platform,
   GestureResponderEvent,
   LayoutChangeEvent,
 } from 'react-native';
@@ -97,7 +98,14 @@ export function VoiceRecorderButton({ onRecorded, disabled }: RecorderProps): Re
   // того, как пользователь захотел записать голосовое. Теперь только read,
   // запрос будет при первом onPressIn.
   useEffect(() => {
-    void getRecordingPermissionsAsync().then(({ granted }) => setPermissionGranted(granted));
+    // expo-audio web falls back to requesting microphone access when the
+    // Permissions API returns prompt/unknown. Opening a chat must not prompt.
+    if (Platform.OS === 'web') return;
+    let active = true;
+    void getRecordingPermissionsAsync()
+      .then(({ granted }) => { if (active) setPermissionGranted(granted); })
+      .catch(() => { /* Ask only when recording is explicitly requested. */ });
+    return () => { active = false; };
   }, []);
 
   // v4.32.49: unmount cleanup — если юзер начал запись, а потом свернул

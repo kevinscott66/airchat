@@ -360,6 +360,9 @@ export async function sendGroupReadReceipt(
   senderPubB64: string,
   myPubB64: string
 ): Promise<GroupReadReceiptOutcome> {
+  // Locally generated control events have no remote author. There is no receipt
+  // to retry, and trying to create a DM session for an empty key raises a false alert.
+  if (!senderPubB64.trim()) return 'off';
   const svc = getMessagingService();
   if (!svc) return 'refused';
   if (senderPubB64 === myPubB64) return 'off'; // don't send to self
@@ -741,7 +744,7 @@ export async function handleIncomingGroupEnvelope(
     // список чатов показывал «Вася: текст» и push выносил то же имя на экран
     // блокировки. В самой строке имя сохраняется (иначе выключение настройки
     // уже ничего не вернёт) — скрывается только там, где оно показывается.
-    const shownSenderName = group.anonymousPosting ? null : (env.senderName || null);
+    const shownSenderName = group.type === 'channel' ? group.name : group.anonymousPosting ? null : (env.senderName || null);
     const stored = await insertGroupMessageWithTouch(row, {
       groupId: env.groupId,
       ownerProfileId: pid,

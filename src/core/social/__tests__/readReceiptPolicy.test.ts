@@ -80,6 +80,12 @@ describe('отметки о прочтении в группе', () => {
     expect(outcome).toBe('off');
   });
 
+  it.each(['', '   '])('does not look up a session for a system-event recipient %j', async (sender) => {
+    expect(await sendGroupReadReceipt(GROUP, 'ctl-event', sender, ME)).toBe('off');
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockReadReceiptsAllowedFor).not.toHaveBeenCalled();
+  });
+
   it('себе не отправляются', async () => {
     const outcome = await sendGroupReadReceipt(GROUP, 'm1', ME, ME);
     expect(mockSendMessage).not.toHaveBeenCalled();

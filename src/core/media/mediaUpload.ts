@@ -20,6 +20,8 @@
  * chooseUploadRoute, и байты читаются только тем путём, который их использует.
  */
 
+import { Platform } from 'react-native';
+import { readWebAttachment } from './readWebAttachment';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
 import { addToIpfs } from '../transport/ipfs/node';
@@ -86,7 +88,9 @@ export async function uploadMediaToCid(
       // поток), читался целиком: base64-строка плюс два двоичных буфера, всё
       // тот же ~3.4× от файла, ради которого и заводился этот модуль.
       // position и length действуют только вместе и только для base64.
-      const b64 = known === null
+      const webRead = Platform.OS === 'web' ? await readWebAttachment(uri, route.limitBytes) : null;
+      if (webRead && !webRead.ok) return { ok: false, reason: webRead.reason, limitBytes: route.limitBytes };
+      const b64 = webRead?.ok ? webRead.b64 : known === null
         ? await FileSystem.readAsStringAsync(uri, {
             encoding: FileSystem.EncodingType.Base64,
             position: 0,
@@ -105,7 +109,7 @@ export async function uploadMediaToCid(
         return { ok: false, reason: 'oversize', limitBytes: route.limitBytes };
       }
       const cid = await addToIpfs(plain);
-      if (cid) return { ok: true, cid, sizeBytes };
+      if (cid) return { ok: true, cid, sizeBytes: webRead?.ok ? webRead.size : sizeBytes };
       // IPFS включён, но узел не отдал CID. Запасной путь есть, только он
       // строже по размеру — файл, разрешённый как «до 50 МБ в IPFS», во
       // вложение не влезет, и честнее сказать это, чем молча не отправить.

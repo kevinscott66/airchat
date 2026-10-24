@@ -100,9 +100,9 @@ describe('окно настроек группы и канала', () => {
     expect(ids).not.toContain('slow_mode');
     expect(ids).not.toContain('admin_only_posting');
     expect(ids).not.toContain('admin_only_pinning');
-    // Одобрение входа и скрытие имён в канале остаются осмысленными.
+    // Публикации канала всегда подписаны каналом; переключатель не нужен.
     expect(ids).toContain('require_approval');
-    expect(ids).toContain('anonymous_posting');
+    expect(ids).not.toContain('anonymous_posting');
     // А в группе медленный режим есть, и его значение — текущее.
     expect(find(facts({ amAdmin: true, slowModeSeconds: 30 }), 'slow_mode')?.value).toBe('30 сек');
   });

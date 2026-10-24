@@ -7,6 +7,8 @@
  * FeedEnvelope кадры — см. ./feedTransport.ts, lanCoordinator.ts.
  */
 import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
+import { readWebAttachment } from '../media/readWebAttachment';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { publicKeyToDidKey, parseDidKey, didFromPubB64 } from '../identity/did';
 import { profileManager } from '../identity/profileManager';
@@ -444,6 +446,7 @@ type FeedReadFail = { ok: false; reason: 'oversize' | 'failed' };
 async function readMediaAsBase64(
   uri: string,
 ): Promise<{ ok: true; b64: string; mime: string } | FeedReadFail> {
+  if (Platform.OS === 'web') return readWebAttachment(uri, FEED_MEDIA_MAX_BASE64_BYTES);
   try {
     const info = await FileSystem.getInfoAsync(uri);
     // v4.32.843: пропавший файл — не «слишком большой». Раньше человеку в этом
@@ -481,6 +484,10 @@ export type FeedDocumentInput = { uri: string; name: string; mime: string; size?
 async function readDocumentAsBase64(
   input: FeedDocumentInput,
 ): Promise<{ ok: true; name: string; mime: string; size: number; b64: string } | FeedReadFail> {
+  if (Platform.OS === 'web') {
+    const read = await readWebAttachment(input.uri, FEED_MAX_DOC_BYTES);
+    return read.ok ? { ...read, name: input.name, mime: input.mime || read.mime } : read;
+  }
   try {
     const info = await FileSystem.getInfoAsync(input.uri);
     if (!info.exists) {

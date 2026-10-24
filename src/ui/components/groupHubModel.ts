@@ -169,7 +169,7 @@ export function groupSettingsSections(f: GroupHubFacts): GroupSettingSection[] {
               { id: 'admin_only_pinning' as const, label: 'Закреплять могут только администраторы', toggle: f.adminOnlyPinning },
             ]),
         { id: 'require_approval', label: 'Вход по ссылке — с одобрением', toggle: f.requireApproval },
-        { id: 'anonymous_posting', label: 'Скрывать имена отправителей', toggle: f.anonymousPosting },
+        ...(f.type === 'channel' ? [] : [{ id: 'anonymous_posting' as const, label: 'Скрывать имена отправителей', toggle: f.anonymousPosting }]),
       ],
     });
 
