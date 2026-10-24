@@ -31,3 +31,13 @@ relay availability still apply.
 Web document actions download through a temporary object URL with an octet-stream
 MIME type and a sanitized filename; they do not pass data URLs to native sharing.
 The temporary URL is revoked after a delay so Safari can finish consuming it.
+
+## Public profile avatars
+
+The web public-avatar fallback renders owner-signed raster bytes as an in-memory
+data URI because Expo's native cache and document directories are unavailable
+in browsers. Signature, subject, size and version-hash checks run before display;
+only JPEG, PNG and WebP byte signatures are accepted. Resetting the active
+profile invalidates pending results. Native clients retain the verified file
+cache. This does not change avatar visibility or publish a previously private
+photo.

@@ -25,6 +25,9 @@ const mockFiles = new Map<string, string>();
 let mockLookupBody: unknown = null;
 let mockSignedBody: unknown = null;
 let mockSignedOk = true;
+let mockPlatform = 'ios';
+let mockSignedPending: Promise<unknown> | null = null;
+jest.mock('react-native', () => ({ Platform: { get OS() { return mockPlatform; } } }));
 
 jest.mock('../../backup/cloudVault', () => ({ cloudBaseUrl: () => 'https://vault.test' }));
 jest.mock('../../settings/avatarVisibility', () => ({ avatarVisibilityTryFor: jest.fn(async () => null) }));
@@ -38,7 +41,7 @@ jest.mock('../../identity/profileManager', () => ({
   profileManager: { getActiveProfile: () => ({ id: 1 }), getActiveKeyPair: () => null },
 }));
 jest.mock('expo-file-system/legacy', () => ({
-  cacheDirectory: 'file:///cache/',
+  get cacheDirectory() { return mockPlatform === 'web' ? null : 'file:///cache/'; },
   documentDirectory: null,
   EncodingType: { Base64: 'base64' },
   getInfoAsync: jest.fn(async (path: string) => ({ exists: mockFiles.has(path) })),
@@ -47,6 +50,7 @@ jest.mock('expo-file-system/legacy', () => ({
 jest.mock('../../net/timedFetch', () => ({
   fetchWithDeadline: jest.fn(async (url: string, _init: unknown, _opts: unknown, read: (r: unknown) => unknown) => {
     if (String(url).endsWith('/signed')) {
+      if (mockSignedPending) await mockSignedPending;
       return read({ ok: mockSignedOk, status: mockSignedOk ? 200 : 404, json: async () => mockSignedBody });
     }
     return read({ ok: true, status: 200, json: async () => mockLookupBody });
@@ -96,6 +100,8 @@ async function ask(): Promise<string | null> {
 beforeEach(async () => {
   resetPublicAvatars();
   mockFiles.clear();
+  mockPlatform = 'ios';
+  mockSignedPending = null;
   mockSignedOk = true;
   mockLookupBody = { found: { [URL_KEY]: VERSION } };
   mockSignedBody = await proof();
@@ -165,5 +171,49 @@ describe('фото профиля с сервера', () => {
     resetPublicAvatars();
     mockFiles.set(FILE, IMAGE_B64);
     expect(await ask()).toBe(FILE);
+  });
+});
+
+
+describe('browser public avatar with unavailable native filesystem', () => {
+  beforeEach(() => { mockPlatform = 'web'; });
+  it('returns signed verified PNG bytes as an image data URI without native files', async () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1cAAAAASUVORK5CYII=';
+    mockLookupBody = { found: { [URL_KEY]: createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex').slice(0, 32) } };
+    mockSignedBody = await proof({ imageB64: png });
+    expect(await ask()).toBe(`data:image/png;base64,${png}`);
+    expect(mockFiles.size).toBe(0);
+  });
+  it('rejects a validly signed unsupported content type even when its hash matches', async () => {
+    const bytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    mockLookupBody = { found: { [URL_KEY]: createHash('sha256').update(bytes).digest('hex').slice(0, 32) } };
+    mockSignedBody = await proof({ imageB64: bytes.toString('base64') });
+    expect(await ask()).toBeNull();
+  });
+  it('rejects forged owner proof', async () => {
+    mockSignedBody = await proof({}, STRANGER);
+    expect(await ask()).toBeNull();
+  });
+  it('rejects tampered version', async () => {
+    mockLookupBody = { found: { [URL_KEY]: 'a'.repeat(32) } };
+    expect(await ask()).toBeNull();
+  });
+  it('rejects oversized signed image bytes', async () => {
+    const bytes = Buffer.alloc(400 * 1024 + 1, 0xff);
+    bytes[1] = 0xd8;
+    mockLookupBody = { found: { [URL_KEY]: createHash('sha256').update(bytes).digest('hex').slice(0, 32) } };
+    mockSignedBody = await proof({ imageB64: bytes.toString('base64') });
+    expect(await ask()).toBeNull();
+  });
+  it('does not cache a signed download finishing after reset', async () => {
+    let release!: () => void;
+    mockSignedPending = new Promise<void>((resolve) => { release = resolve; });
+    requestPublicAvatar(PUB_B64);
+    await settle();
+    resetPublicAvatars();
+    release();
+    await settle();
+    expect(publicAvatarUri(PUB_B64)).toBeNull();
+    expect(mockFiles.size).toBe(0);
   });
 });
