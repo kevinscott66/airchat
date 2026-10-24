@@ -103,6 +103,7 @@ jobs:
       - name: expo export (web)
         env:
           EXPO_PUBLIC_OPENFLUX_DOC_URL: https://docs.yandex.ru/ci-not-a-real-document
+          EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS: '["https://docs.yandex.ru/ci-not-a-real-previous-document"]'
         run: npx expo export --platform web --output-dir dist
       - name: Native config stays out of web output
         run: node scripts/check-web-config.js dist

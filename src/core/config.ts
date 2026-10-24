@@ -1,5 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { bundledOpenFluxDocument } from './openFluxDocument';
+import { bundledOpenFluxDocument, previousBundledOpenFluxDocuments } from './openFluxDocument';
 import { defaultBypassFlags } from './transport/bypass/defaults';
 import type { BypassFeatureFlags } from './transport/bypass/types';
 import { resolveIpfsLoopbackForAndroid } from './transport/ipfs/resolveLoopback';
@@ -532,8 +532,19 @@ function normalizeEndpoints(cfg: AppConfig): AppConfig {
  * каждом из них шаг подстановки писался заново — то есть забыть его было
  * можно. Теперь забыть нельзя: собирать конфиг больше нечем.
  */
+/** Exact factory-default migration only; no URL normalization or custom-document inference.
+ * Loads remain read-only. Every restart applies the same rule, and the next
+ * explicit save persists it through the existing recoverable file replacement.
+ */
+function migrateFactoryOpenFluxDocument<T extends Partial<AppConfig>>(cfg: T): T {
+  const current = bundledOpenFluxDocument();
+  const previous = cfg.openflux?.docUrl;
+  if (!current || !previous || previous === current || !previousBundledOpenFluxDocuments().includes(previous)) return cfg;
+  return { ...cfg, openflux: { ...cfg.openflux, docUrl: current } };
+}
+
 function finalizeConfig(cfg: AppConfig): AppConfig {
-  return patchIpfsUrlsForAndroid(normalizeEndpoints(cfg));
+  return patchIpfsUrlsForAndroid(normalizeEndpoints(migrateFactoryOpenFluxDocument(cfg)));
 }
 
 /**
@@ -793,10 +804,10 @@ export async function saveConfigOverride(patch: Partial<AppConfig>): Promise<App
       'Не удалось прочитать текущие настройки. Изменение не сохранено, прежние настройки целы',
     );
   }
-  const mergedOverride = deepMerge(
+  const mergedOverride = migrateFactoryOpenFluxDocument(deepMerge(
     existingOverride as Record<string, unknown>,
     patch as Record<string, unknown>,
-  ) as Partial<AppConfig>;
+  ) as Partial<AppConfig>);
 
   // v4.32.729: запись через временный файл. Прямая перезапись открывала файл
   // на усечение до того, как новое содержимое оказывалось на диске, и обрыв

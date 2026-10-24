@@ -23,3 +23,26 @@ iOS registers the same proxy configuration provider for React Native HTTP and
 is registered on the main thread during OpenFlux module preparation, before
 attachment requests begin. This keeps bounded, redirect-rejecting media requests
 on the existing app routing path. Actual tunnel delivery remains a device check.
+
+Native builds can migrate a retired factory document with
+`EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS`, a JSON array supplied privately at build
+time, together with the current `EXPO_PUBLIC_OPENFLUX_DOC_URL`. Only an exact
+match to an allowlisted previous URL is replaced, and only when the current URL
+is nonempty and different. Custom documents, `enabled`, `autoStart`, and other
+settings remain unchanged. Missing or invalid allowlists do nothing. Loading is
+read-only: the effective migration repeats after restart; the next explicit
+settings save persists it through the existing recoverable override replacement.
+An unreadable override is never overwritten. Keep the previous URL allowlist in
+subsequent native builds until affected installations have saved their settings.
+The web shim returns an empty allowlist, and CI checks an export containing
+synthetic current and previous build inputs for leaked native document URLs.
+
+The official repository was checked on 24 October 2026. Its latest published
+stable release is [v0.13.0](https://github.com/p1neappleXpress/OpenFlux/releases/tag/v0.13.0),
+commit 4f9c786cdd1d9fcd0c133e2e0fec0c5a12522610. Its mobile API uses the shared
+packet/Session stack, with negotiated framing and recovery; AirChat's preserved
+C bridge and classic fork cannot be replaced by that binary without adaptation
+and client/exit interoperability checks. A running local SOCKS listener does not
+prove a carrier handshake or an exit round trip. Compare the native build and
+effective saved document against the active exit before attributing an outage
+to the core version; never print document URLs or copy account sessions.

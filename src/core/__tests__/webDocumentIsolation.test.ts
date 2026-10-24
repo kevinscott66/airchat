@@ -1,16 +1,21 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { bundledOpenFluxDocument } from '../openFluxDocument.web';
+import { bundledOpenFluxDocument, previousBundledOpenFluxDocuments } from '../openFluxDocument.web';
 
 const { findDocumentUrls } = require('../../../scripts/check-web-config');
 
 it('web ignores native build configuration', () => {
   const previous = process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL;
+  const previousList = process.env.EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS;
   try {
     process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL = 'https://docs.yandex.ru/test-only';
+    process.env.EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS = JSON.stringify(['https://docs.yandex.ru/test-old']);
     expect(bundledOpenFluxDocument()).toBe('');
+    expect(previousBundledOpenFluxDocuments()).toEqual([]);
   } finally {
+    if (previousList === undefined) delete process.env.EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS;
+    else process.env.EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS = previousList;
     if (previous === undefined) delete process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL;
     else process.env.EXPO_PUBLIC_OPENFLUX_DOC_URL = previous;
   }

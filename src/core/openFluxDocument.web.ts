@@ -2,3 +2,7 @@
 export function bundledOpenFluxDocument(): string {
   return '';
 }
+
+export function previousBundledOpenFluxDocuments(): string[] {
+  return [];
+}
