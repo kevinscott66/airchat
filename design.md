@@ -1192,3 +1192,14 @@ they are not defensible for two contours of twenty-odd curves, and the failure
 mode is silent — a PNG that drifts from the vector looks fine until it is next
 to it. The environment still has no `rsvg-convert`, `inkscape`, `cairosvg` or
 `sharp`; that part of 20.4 is unchanged.
+
+## 24. Profile card density
+
+The user profile card keeps the photo, identity, biography and primary actions
+visible first. Secondary actions, ID/QR/share and conversation details (including
+the security fingerprint, notes and export) live under the accessible
+«Подробнее» disclosure. Changed or unchecked identity warnings remain visible
+above that disclosure. Content sections wrap into compact chips instead of
+a clipped horizontal strip. A fixed 44×44 close target remains reachable while
+the card body scrolls in short windows. These presentation changes share the
+same component across web, iOS and Android and do not change privacy settings.
