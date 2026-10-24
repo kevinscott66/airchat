@@ -10,6 +10,14 @@ Build the OpenFlux xcframework with scripts/build-openflux-ios.sh before pod ins
 
 Opening the document or starting SOCKS does not establish end-to-end availability. A fresh-device login and real message delivery over the tunnel remain release acceptance checks. No owner session is bundled in the app.
 
+`scripts/build-release.sh` rebuilds an existing embedded OpenFlux library from the
+configured local source before packaging Android or iOS. Its iOS archive also
+cleans build products so CocoaPods cannot reuse an older copied static archive.
+If no embedded library is present, the existing build without a tunnel remains
+available. Direct Xcode or Gradle builds require an explicit core rebuild first;
+after replacing the iOS xcframework, clean build products before relinking.
+Changing the app version or rebuilding JavaScript does not refresh the Go core.
+
 The separate system VPN prototype is not part of this app-scoped integration: its bridge is not wired to the native module and it needs its own Network Extension provisioning and device acceptance.
 
 For simulator runtime checks, build with `ARCHS=arm64 CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES` so Xcode generates simulator Keychain entitlements. An unsigned build can compile successfully but fail SecureStore access at startup. This is simulator signing, not a device distribution signature.

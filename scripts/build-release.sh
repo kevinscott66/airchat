@@ -70,6 +70,10 @@ build_android() {
     echo "Нет $props — релизный APK получил бы отладочную подпись. Остановлено." >&2
     exit 1
   fi
+  # Rebuilding the app alone can silently package an obsolete embedded Go core.
+  if [[ -f modules/airchat-openflux/android/src/main/jniLibs/arm64-v8a/libopenflux.so ]]; then
+    bash scripts/build-openflux-android.sh
+  fi
   echo "→ android: assembleRelease (ABI split)"
   bash scripts/android-gradle.sh :app:assembleRelease -Pairchat.abiSplits=true -Pexpo.useLegacyPackaging=true
   local out=android/app/build/outputs/apk/release
@@ -84,6 +88,9 @@ build_android() {
 
 build_ios() {
   command -v xcodebuild >/dev/null || { echo "Нужен Xcode (xcodebuild)." >&2; exit 1; }
+  if [[ -d modules/airchat-openflux/ios/OpenFlux.xcframework ]]; then
+    bash scripts/build-openflux-ios.sh
+  fi
   echo "→ ios: prebuild + xcodebuild archive"
   [[ -d ios ]] || npx expo prebuild --platform ios
   (cd ios && pod install)
@@ -93,7 +100,7 @@ build_ios() {
   mkdir -p build/ios
   xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Release \
     -destination 'generic/platform=iOS' -archivePath "build/ios/AirChat-$VER.xcarchive" \
-    -allowProvisioningUpdates archive
+    -allowProvisioningUpdates clean archive
   ARTIFACTS+=("build/ios/AirChat-$VER.xcarchive/Info.plist")
 }
 
