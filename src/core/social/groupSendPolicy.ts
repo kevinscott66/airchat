@@ -58,6 +58,7 @@ export type SendPolicyInput = {
 };
 
 export type SendDenyCode =
+  | 'anonymous_not_allowed'
   | 'not_member'
   | 'banned'
   | 'restricted'
@@ -76,6 +77,7 @@ export function sendDenyText(code: SendDenyCode): string {
 }
 
 const DENY: Record<SendDenyCode, string> = {
+  anonymous_not_allowed: 'Владелец не разрешил вам публикацию от имени группы',
   not_member: 'Вы не участник этой группы',
   banned: 'Вы заблокированы в этой группе',
   restricted: 'Вам запрещено отправлять сообщения в этой группе',

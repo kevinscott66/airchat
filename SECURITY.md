@@ -55,6 +55,10 @@ to be useful, not as a trusted party. The design addresses three vectors:
 
 - **Android / iOS:** identity keys and the database key live in the platform
   secure store (Keystore / Keychain) via `expo-secure-store`.
+  Sensitive database fields are encrypted by the application; SQLite metadata
+  is not full-database encryption. Decrypted attachments also exist in the
+  app's local cache for media playback and sharing. Database field encryption
+  does not protect those cached files; device and OS file protection still matter.
 - **Web:** there is no hardware-backed store. Secrets are encrypted with a
   non-extractable AES-GCM `CryptoKey` kept in IndexedDB. Script running in the
   page (XSS, a malicious extension) can *use* that key while the page is open,

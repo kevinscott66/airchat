@@ -28,6 +28,8 @@ export interface GroupMemberSheetModalProps {
    */
   onToggleMute: (member: GroupMemberRow) => void;
   onKick: (member: GroupMemberRow) => void;
+  canGrantAnonymous?: (member: GroupMemberRow) => boolean;
+  onToggleAnonymous?: (member: GroupMemberRow) => void;
   /**
    * Можно ли модерировать этого участника моей ролью (canModerate из
    * groupModerationPolicy). v4.32.255: «Исключить» показывалось всегда, в том
@@ -48,6 +50,8 @@ function GroupMemberSheetModalImpl({
   onToggleMute,
   onKick,
   canModerateMember,
+  canGrantAnonymous,
+  onToggleAnonymous,
 }: GroupMemberSheetModalProps) {
   const visible = !!member;
   const mounted = useDeferredMount(visible);
@@ -59,6 +63,12 @@ function GroupMemberSheetModalImpl({
    * проверка role !== 'owner', которую canModerate и так делает), — а третьего
    * действия не было вовсе.
    */
+  // Display hint only: the protocol independently verifies the owner signature.
+  let anonymousAllowed = false;
+  try {
+    const signed = JSON.parse(member?.anonymousGrant ?? 'null') as { payload?: string } | null;
+    anonymousAllowed = !!signed?.payload && JSON.parse(signed.payload).allowed === true;
+  } catch { /* Invalid proof cannot advertise permission. */ }
   const canModerateThis =
     !!member && amAdmin && member.peerPubB64 !== myPubB64 && canModerateMember(member);
 
@@ -85,7 +95,7 @@ function GroupMemberSheetModalImpl({
               ) : null}
               <Text style={{ color: colors.textMuted, fontSize: font.xs, textAlign: 'center', fontFamily: mono, marginBottom: 16 }}>{shortIdentity(member.peerPubB64, 12)}</Text>
               <View style={{ gap: 8, paddingHorizontal: 16, paddingBottom: 24 }}>
-                <AppPressable
+                {member.peerPubB64 !== myPubB64 ? <AppPressable
                   accessibilityRole="button"
                   style={[styles.sheetBtn, { backgroundColor: colors.primary }]}
                   onPress={() => {
@@ -100,7 +110,12 @@ function GroupMemberSheetModalImpl({
                 >
                   <Ionicons name="chatbubble-outline" size={18} color={contrastingInk(colors.primary)} />
                   <Text style={{ color: contrastingInk(colors.primary), fontSize: 14, fontWeight: '600', marginLeft: 6 }}>Написать</Text>
-                </AppPressable>
+                </AppPressable> : null}
+                {canGrantAnonymous?.(member) && onToggleAnonymous ? (
+                  <AppPressable accessibilityRole="button" style={[styles.actionRow, { backgroundColor: colors.surfaceHigh }]} onPress={() => onToggleAnonymous(member)}>
+                    <Text style={[styles.actionLabel, { color: colors.text }]}>{anonymousAllowed ? 'Запретить писать от имени группы' : 'Разрешить писать от имени группы'}</Text>
+                  </AppPressable>
+                ) : null}
                 {canModerateThis ? (
                   <>
                     <AppPressable

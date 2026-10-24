@@ -2243,9 +2243,8 @@ function ChatThreadView({
     // voice/photos) — IPFS is not required anymore.
     // v4.32.358: предел брался отсюда числом и не знал про IPFS-сборки, где он
     // выше; текст ошибки тоже был записан вручную.
-    const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
     const { uploadLimitBytes, oversizeAdvice, oversizeText, OVERSIZE_TITLE, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
-    const docMaxBytes = uploadLimitBytes({ ipfsEnabled: isIpfsEnabled(), ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
+    const docMaxBytes = uploadLimitBytes({ ipfsEnabled: false, ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
     if ((asset.size ?? 0) > docMaxBytes) {
       Alert.alert(OVERSIZE_TITLE.file, oversizeAdvice(docMaxBytes));
       return;

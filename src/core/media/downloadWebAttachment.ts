@@ -11,7 +11,7 @@ export function downloadWebAttachment(b64: string, name: string): void {
     anchor.href = url;
     // Strip path separators and control bytes from the untrusted filename.
     // eslint-disable-next-line no-control-regex
-    anchor.download = name.replace(/[\\/\u0000-\u001f\u007f]/g, '_').slice(0, 120) || 'attachment';
+    anchor.download = name.replace(/[\\/\u0000-\u001F\u007F-\u009F\u2028\u2029\u061C\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '_').slice(0, 120) || 'attachment';
     anchor.style.display = 'none';
     document.body.appendChild(anchor);
     anchor.click();

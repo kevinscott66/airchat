@@ -21,7 +21,6 @@ const KEYS: GroupFlagKey[] = [
   'adminOnlyPosting',
   'adminOnlyPinning',
   'requireApproval',
-  'anonymousPosting',
 ];
 
 const MODULE_SRC = fs.readFileSync(
@@ -165,18 +164,20 @@ describe('GroupsScreen — записи в базу больше не остаю
     expect(SCREEN.match(/groupFlagCopy\(/g) ?? []).toHaveLength(2);
     expect(SCREEN).toContain('const copy = groupFlagCopy(key, current);');
     const toggles = SCREEN.match(/toggleGroupFlag\('/g) ?? [];
-    // четыре ветки окна настроек плюс команда /readonly
-    expect(toggles.length).toBeGreaterThanOrEqual(5);
+    // Три общих настройки плюс /readonly; анонимность выдаёт владелец
+    // конкретным администраторам через отдельное действие участника.
+    expect(toggles.length).toBeGreaterThanOrEqual(4);
     // ПОВОД ДЛЯ ПРАВКИ ЖИВ: подписи флагов действительно переехали в модель,
     // и каждая её строка сходится с веткой обработчика на экране.
     const MODEL = fs.readFileSync(
       path.join(__dirname, '../../components/groupHubModel.ts'),
       'utf8'
     );
-    for (const id of ['admin_only_posting', 'admin_only_pinning', 'require_approval', 'anonymous_posting']) {
+    for (const id of ['admin_only_posting', 'admin_only_pinning', 'require_approval']) {
       expect(MODEL).toContain(`id: '${id}'`);
       expect(SCREEN).toContain(`case '${id}':`);
     }
+    expect(MODEL).not.toContain("id: 'anonymous_posting'");
   });
 
   it('операции со строкой списка не перерисовывают список в хвосте обещания', () => {

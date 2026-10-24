@@ -10,3 +10,9 @@ describe('channel attribution', () => {
     expect(channelIdentity({ type: 'group' })).toBeNull();
   });
 });
+
+it('anonymous identity is per message and does not leak into following personal posts', () => {
+ const group = { type: 'group' as const, name: 'Friends' };
+ expect(channelAuthor(group, 'Admin', {authorAsGroup: true})).toBe('Friends');
+ expect(channelAuthor(group, 'Admin', {authorAsGroup: false})).toBe('Admin');
+});

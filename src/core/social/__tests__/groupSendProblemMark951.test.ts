@@ -170,7 +170,7 @@ describe('карта отметок ведёт себя как карта «ко
 
 describe('воронка показа не только говорит, но и запоминает', () => {
   it('исход рассылки кладётся рядом с сообщением', () => {
-    expect(ANNOUNCE).toContain('if (problem) showError(groupSendProblemText(problem));');
+    expect(ANNOUNCE).toContain("if (problem && problem.kind !== 'awaiting_ack') showError(groupSendProblemText(problem));");
     expect(ANNOUNCE).toContain('if (problem) void recordGroupSendProblemFor(sent.pid, sent.msgId, problem);');
   });
 
@@ -217,7 +217,7 @@ describe('значок под своим сообщением говорит т�
   });
 
   it('три состояния и у каждого имя для озвучки', () => {
-    expect(ICON).toContain("accessibilityLabel={`Не отправлено: ${groupSendProblemShort(problem)}`}");
+    expect(ICON).toContain("accessibilityLabel={problem.kind === 'awaiting_ack' ? 'Ожидается подтверждение' : `Не отправлено: ${groupSendProblemShort(problem)}`}");
     expect(ICON).toContain('accessibilityLabel="Прочитано"');
     expect(ICON).toContain('accessibilityLabel="Отправлено"');
     expect(ICON).toContain('if (seenCount > 0) {');

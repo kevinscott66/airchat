@@ -1,3 +1,4 @@
+import { AttachmentBodyLimitError, fetchAttachmentResponse, readBoundedAttachmentBody } from './boundedAttachmentResponse';
 /**
  * mediaBlob — E2E-encrypted media transport over the ntfy relay's attachment
  * store, for mobile where IPFS is kill-switched and the ntfy text channel is
@@ -375,14 +376,16 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
-      const res = await fetch(url, {
+      const res = await fetchAttachmentResponse(url, controller.signal, {
         method: 'PUT',
-        headers: { 'Content-Type': 'text/plain', Filename: 'b', Cache: 'no' },
+        // ntfy resolves file URLs through the cached message metadata. Cache:no
+        // accepts the PUT but makes the returned attachment URL answer 404.
+        headers: { 'Content-Type': 'text/plain', Filename: 'b' },
         body,
-        signal: controller.signal,
       });
       if (res.ok) {
-        const json = (await res.json()) as { attachment?: { url?: unknown } };
+        const ack = await readBoundedAttachmentBody(res, 64 * 1024, controller);
+        const json = JSON.parse(Buffer.from(ack).toString('utf8')) as { attachment?: { url?: unknown } };
         const attUrl = json?.attachment?.url;
         // Адрес приходит из ответа релея и уезжает собеседнику, который откроет
         // его у себя. Релей, отдавший чужой хост, — либо чужой, либо испорченный;
@@ -393,6 +396,7 @@ export async function uploadEncryptedBlob(uri: string, mime?: string, targetDid?
         }
         log.warn('blob_upload_bad_attachment_url', { present: typeof attUrl === 'string' });
       } else {
+        controller.abort();
         log.warn('blob_upload_http_err', { status: res.status });
       }
     } catch (e) {
@@ -557,27 +561,23 @@ async function resolveBlobToLocalFileOnce(ref: BlobRef, ext = 'bin'): Promise<Bl
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30_000);
       try {
-        const res = await fetch(relayUrl, { signal: controller.signal });
+        const res = await fetchAttachmentResponse(relayUrl, controller.signal);
         if (!res.ok) {
+          controller.abort();
           log.warn('blob_download_http_err', { status: res.status });
           // 404/410 — вложение с релея ушло по сроку: просить прислать заново.
           // Прочие коды — сервер отвечает, но не тем: это повторимо.
           return noted(res.status === 404 || res.status === 410 ? 'gone' : 'offline');
         }
-        // v4.32.354: потолок стоял только после чтения тела. Проверяем
-        // content-length до res.text(), затем оставляем проверку строки.
-        const declared = parseInt(res.headers?.get?.('content-length') ?? '', 10);
-        if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_B64_CHARS) {
-          log.warn('blob_download_too_large', { declared });
-          return noted('corrupt');
-        }
-        const b64 = await res.text();
+        const encoded = await readBoundedAttachmentBody(res, MAX_DOWNLOAD_B64_CHARS, controller);
+        const b64 = Buffer.from(encoded).toString('utf8');
         if (b64.length === 0 || b64.length > MAX_DOWNLOAD_B64_CHARS) {
           log.warn('blob_download_bad_size', { chars: b64.length });
           return noted('corrupt');
         }
         return new Uint8Array(Buffer.from(b64, 'base64'));
       } catch (e) {
+        if (e instanceof AttachmentBodyLimitError) return noted('corrupt');
         log.warn('blob_download_relay_unreachable', { err: e instanceof Error ? e.message : String(e) });
         return noted('offline');
       } finally {

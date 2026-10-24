@@ -49,7 +49,7 @@ test('отправка голосового и GIF прокручивает ле
   // Объявлен до первого использования в зависимостях — иначе TDZ на рендере.
   expect(src.indexOf('const scrollToNewest = useCallback(')).toBeLessThan(src.indexOf('const sendVoice = useCallback('));
 
-  const group = between(code('screens/GroupsScreen.tsx'), 'announceGroupSend(fanoutGroupMessage(group.id, voiceText', 'catch (e)');
+  const group = between(code('screens/GroupsScreen.tsx'), 'announceGroupSend(fanoutGroupPost(group.id, voiceText', 'catch (e)');
   expect(group).toContain('scrollToOffset({ offset: 0');
 });
 

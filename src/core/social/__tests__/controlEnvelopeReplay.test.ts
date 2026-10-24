@@ -626,13 +626,15 @@ describe('проверка стоит в обработчике группы д�
       'adminOnlyPosting',
       'adminOnlyPinning',
       'requireApproval',
-      'anonymousPosting',
       'inviteToken',
       'slowModeSeconds',
       'disappearMs',
     ]) {
       expect(SRC).toContain(`(await fresh('${field}'))`);
     }
+    // Legacy metadata cannot re-enable global anonymity after owner grants
+    // and per-message attribution replaced the old group-wide flag.
+    expect(SRC).not.toContain('patch.anonymousPosting = env.anonymousPosting');
     // Порядок: спросили -> записали -> подтвердили. Проверяем по номерам строк,
     // иначе перестановка commit обратно наверх прошла бы незамеченной.
     const lines = SRC.split('\n');

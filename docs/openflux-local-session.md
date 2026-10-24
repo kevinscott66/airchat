@@ -17,3 +17,9 @@ For simulator runtime checks, build with `ARCHS=arm64 CODE_SIGN_IDENTITY=- CODE_
 The document address is build configuration, not an account session. Native clients necessarily contain the configured address. Web selects `src/core/openFluxDocument.web.ts` and receives no document address; the actual export is checked by `scripts/check-web-config.js`. CI exports with a synthetic address to catch accidental reintroduction. Local cookies and Keychain session data remain native.
 
 Controller start/stop mutations are serialized. Disabling invalidates pending authorization and retry work immediately; if a native start finishes late, it is stopped before a newer mutation runs. A retry cannot start over an unconfirmed stop. These are controller ordering guarantees; they do not replace physical-device login and delivery acceptance.
+
+iOS registers the same proxy configuration provider for React Native HTTP and
+`expo/fetch`, which owns a separate lazy URLSession. The Expo public extension
+is registered on the main thread during OpenFlux module preparation, before
+attachment requests begin. This keeps bounded, redirect-rejecting media requests
+on the existing app routing path. Actual tunnel delivery remains a device check.

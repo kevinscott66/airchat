@@ -41,7 +41,7 @@ function slice(from: string, to: string): string {
 
 describe('копия в корзину отвечает, легла ли она', () => {
   const body = () =>
-    slice('const saveGrpRecentlyDeleted = useCallback', '}, [pid, group.id]);');
+    slice('const saveGrpRecentlyDeleted = useCallback', '}, [pid, group]);');
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: помощник объявлен и возвращает признак', () => {
     expect(CODE).toContain(

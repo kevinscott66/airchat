@@ -235,7 +235,7 @@ describe('все три места выгрузки собирают тело о
 
   it('имя автора в группе по-прежнему идёт через outwardName', () => {
     // Пометка допустима в теле реплики, но не в поле имени — см. v4.32.593.
-    const body = slice(groupsSrc(), 'const who = channelIdentity(group)', 'exportBody(m)');
+    const body = slice(groupsSrc(), 'const who = channelIdentity(group, m)', 'exportBody(m)');
     expect(body).toMatch(
       /outwardName\(m\.senderName, m\.senderUnreadable, shortIdentity\(m\.senderPubB64\)\)/
     );

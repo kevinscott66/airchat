@@ -1,3 +1,4 @@
+jest.mock('expo/fetch', () => ({ fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }));
 /**
  * v4.32.874. Нажали на файл — не открылось, и об этом никто не сказал.
  *
@@ -105,7 +106,10 @@ function okResponse(body: string): Response {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    text: async () => body,
+    body: { getReader: () => {
+      let sent = false;
+      return { read: async () => sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(Buffer.from(body)) }), cancel: async () => {}, releaseLock: () => {} };
+    } },
   } as unknown as Response;
 }
 

@@ -84,7 +84,7 @@ export type GroupHubFacts = {
   adminOnlyPosting: boolean;
   adminOnlyPinning: boolean;
   requireApproval: boolean;
-  anonymousPosting: boolean;
+  anonymousPosting?: boolean;
 };
 
 /** «Канал» или «Группа» — в заголовках и подсказках. */
@@ -169,7 +169,6 @@ export function groupSettingsSections(f: GroupHubFacts): GroupSettingSection[] {
               { id: 'admin_only_pinning' as const, label: 'Закреплять могут только администраторы', toggle: f.adminOnlyPinning },
             ]),
         { id: 'require_approval', label: 'Вход по ссылке — с одобрением', toggle: f.requireApproval },
-        ...(f.type === 'channel' ? [] : [{ id: 'anonymous_posting' as const, label: 'Скрывать имена отправителей', toggle: f.anonymousPosting }]),
       ],
     });
 

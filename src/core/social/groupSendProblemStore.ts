@@ -54,7 +54,7 @@ function parseMark(raw: unknown): GroupSendProblemMark | null {
   const p = rec.problem;
   if (typeof p !== 'object' || p === null) return null;
   const kind = (p as { kind?: unknown }).kind;
-  if (kind !== 'denied' && kind !== 'undelivered' && kind !== 'partial') return null;
+  if (kind !== 'denied' && kind !== 'undelivered' && kind !== 'partial' && kind !== 'awaiting_ack') return null;
   return { at: rec.at, problem: p as GroupSendProblem };
 }
 
@@ -152,6 +152,10 @@ async function recordGroupSendProblemSerial(
   msgId: string,
   problem: GroupSendProblem,
 ): Promise<boolean> {
+  if (problem.kind === 'awaiting_ack') {
+    const { anonymousPendingCount } = await import('./groupAnonymousPending');
+    if ((await anonymousPendingCount(pid, msgId)) === 0) return true;
+  }
   const stored = await loadGroupSendProblemsFor(pid);
   if (stored === null) {
     log.warn('group_send_problem_not_recorded', { id: msgId.slice(0, 8) });

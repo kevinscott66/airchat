@@ -58,7 +58,7 @@ it('размер неизвестен — чтение ограничено пр
   mockFileSize = null;
   mockFileBytes = 300;
 
-  const res = await uploadMediaToCid('file:///doc.pdf', { ipfsMaxBytes: LIMIT });
+  const res = await uploadMediaToCid('file:///doc.pdf', { publicIpfs: true, ipfsMaxBytes: LIMIT });
 
   expect(res).toEqual({ ok: true, cid: 'bafyTEST', sizeBytes: null });
   expect(mockReads).toHaveLength(1);
@@ -69,7 +69,7 @@ it('проверка не пустая: с известным размером �
   mockFileSize = 300;
   mockFileBytes = 300;
 
-  const res = await uploadMediaToCid('file:///doc.pdf', { ipfsMaxBytes: LIMIT });
+  const res = await uploadMediaToCid('file:///doc.pdf', { publicIpfs: true, ipfsMaxBytes: LIMIT });
 
   expect(res).toEqual({ ok: true, cid: 'bafyTEST', sizeBytes: 300 });
   expect(mockReads).toHaveLength(1);
@@ -81,7 +81,7 @@ it('файл неизвестного размера сверх предела �
   mockFileSize = null;
   mockFileBytes = 2 * LIMIT;
 
-  const res = await uploadMediaToCid('file:///huge.bin', { ipfsMaxBytes: LIMIT });
+  const res = await uploadMediaToCid('file:///huge.bin', { publicIpfs: true, ipfsMaxBytes: LIMIT });
 
   expect(res).toEqual({ ok: false, reason: 'oversize', limitBytes: LIMIT });
   // Прочитано ровно на байт больше предела — им превышение и доказывается.
@@ -93,7 +93,7 @@ it('проверка не пустая: известный размер свер
   mockFileSize = 2 * LIMIT;
   mockFileBytes = 2 * LIMIT;
 
-  const res = await uploadMediaToCid('file:///huge.bin', { ipfsMaxBytes: LIMIT });
+  const res = await uploadMediaToCid('file:///huge.bin', { publicIpfs: true, ipfsMaxBytes: LIMIT });
 
   expect(res).toEqual({ ok: false, reason: 'oversize', limitBytes: LIMIT });
   expect(mockReads).toHaveLength(0);

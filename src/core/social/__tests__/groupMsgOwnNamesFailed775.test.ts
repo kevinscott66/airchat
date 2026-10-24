@@ -238,10 +238,10 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы на �
     expect(mockCalls[0].touch.senderPubB64).toBe(PEER);
   });
 
-  it('анонимная группа по-прежнему прячет имя из списка чатов', async () => {
+  it('legacy global flag does not anonymize a new personal post', async () => {
     mockGroupRow = { ...known(), anonymousPosting: true };
     await handleIncomingGroupEnvelope(message(), RCPT, PEER);
-    expect(mockCalls[0].touch.senderName).toBeNull();
+    expect(mockCalls[0].touch.senderName).not.toBeNull();
   });
 });
 

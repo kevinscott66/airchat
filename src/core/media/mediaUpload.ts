@@ -45,6 +45,8 @@ export type MediaUploadResult =
   | { ok: false; reason: 'oversize' | 'failed'; limitBytes: number };
 
 export type MediaUploadOptions = {
+  /** Explicitly public content only. A local Helia CID does not prove remote availability. */
+  publicIpfs?: boolean;
   mime?: string;
   /** did получателя — включает доставку вложения по локальной сети. */
   targetDid?: string;
@@ -67,7 +69,10 @@ export async function uploadMediaToCid(
   opts: MediaUploadOptions = {}
 ): Promise<MediaUploadResult> {
   try {
-    const ipfsEnabled = isIpfsEnabled();
+    // Private attachments must be encrypted and retrievable by the recipient.
+    // Browser Helia can return a CID held only in this tab; web support alone
+    // is not evidence of a remotely readable/pinned object.
+    const ipfsEnabled = opts.publicIpfs === true && isIpfsEnabled();
     const sizeBytes = opts.sizeBytes ?? (await fileSizeBytes(uri));
     const route = chooseUploadRoute({ sizeBytes, ipfsEnabled, ipfsMaxBytes: opts.ipfsMaxBytes });
     // Тот же отбор, что делает chooseUploadRoute внутри: «размер есть» и

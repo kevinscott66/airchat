@@ -390,7 +390,7 @@ async function flushDueOnce(): Promise<void> {
             log.info('scheduled_group_message_retry', {
               id: msg.id.slice(0, 8),
               groupId: msg.groupId.slice(0, 8),
-              reason: problem.reason,
+              reason: problem.kind === 'awaiting_ack' ? 'awaiting_ack' : problem.reason,
             });
           }
           continue;

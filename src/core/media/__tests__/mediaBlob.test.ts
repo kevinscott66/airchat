@@ -1,3 +1,4 @@
+jest.mock('expo/fetch', () => ({ fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }));
 /**
  * mediaBlob: чей адрес устройство открывает само и какие файлы стирает (v4.32.354).
  *
@@ -126,7 +127,10 @@ function okResponse(body: string, contentLength?: string): Response {
     ok: true,
     status: 200,
     headers: { get: (h: string) => (h.toLowerCase() === 'content-length' ? contentLength ?? null : null) },
-    text: async () => body,
+    body: { getReader: () => {
+      let sent = false;
+      return { read: async () => sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(Buffer.from(body)) }), cancel: async () => {}, releaseLock: () => {} };
+    } },
   } as unknown as Response;
 }
 
