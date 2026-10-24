@@ -1,8 +1,9 @@
 {
   "name": "airchat",
-  "version": "4.32.1090",
+  "version": "4.32.1091",
   "main": "index.ts",
   "scripts": {
+    "test:integration": "node --test e2e/integration/two-clients.test.js",
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "android:build": "expo run:android",
@@ -33,7 +34,8 @@
     "web": "expo start --web",
     "web:export": "expo export --platform web && node scripts/check-web-config.js dist",
     "web:budget": "node scripts/web-bundle-budget.js dist",
-    "postinstall": "node scripts/ensure-expo-image-picker-swift.js"
+    "postinstall": "node scripts/ensure-expo-image-picker-swift.js",
+    "check:dependency-security": "node scripts/check-dependency-security.js"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "^17.0.0",
@@ -129,7 +131,7 @@
   "devDependencies": {
     "@babel/core": "^7.29.0",
     "@babel/preset-env": "^7.29.2",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -144,12 +146,18 @@
     "ts-jest": "^29.4.6",
     "typedoc": "^0.28.0",
     "typescript": "~5.9.2",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "private": true,
   "overrides": {
     "xcode": {
       "uuid": "^11.1.1"
+    },
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.13.6"
+    },
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^4.1.1"
     }
   },
   "expo": {

@@ -163,7 +163,8 @@ const FONT_SIZE_BASELINE: Record<string, number> = {
   // v4.32.682: шапка группы уехала в GroupProfileHeader, где кегль берётся
   // только из `font` — четыре числа ушли вместе с ней.
   'ui/screens/GroupsScreen.tsx': 56,
-  'ui/screens/ChatScreen.tsx': 31,
+  'ui/screens/ChatScreen.tsx': 24,
+  'ui/screens/chat-components/ReactionDetailModal.tsx': 7,
   'ui/screens/ChatListScreen.tsx': 29,
   'ui/screens/ContactsScreen.tsx': 20,
   'ui/components/StoriesRow.tsx': 8,

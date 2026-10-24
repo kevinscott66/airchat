@@ -2813,7 +2813,7 @@ async function refreshPublicPostCopyFor(pair: KeyPairBytes, postId: string, prof
     const payload = await buildOwnPostEnvelope(pair, postId);
     if (!payload) return false;
     if (currentProfileId !== profileId || !feedStorageBelongsTo(pair)) return false;
-    const ok = await putPublicPostCopy(pair, payload);
+    const ok = await putPublicPostCopy(pair, payload, 'refresh');
     if (ok) await dropCopyIfPostGone(pair, postId, profileId);
     return ok;
   } catch (e) {

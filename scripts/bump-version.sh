@@ -47,6 +47,13 @@ if (lock.packages && lock.packages['']) lock.packages[''].version = ver;
 write('package-lock.json', lock);
 NODE
 
+# Existing generated iOS projects also need the release version before archive.
+IOS_PLIST="$ROOT/ios/airchat/Info.plist"
+if [[ -f "$IOS_PLIST" && -x /usr/libexec/PlistBuddy ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VER" "$IOS_PLIST"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_CODE" "$IOS_PLIST"
+fi
+
 GRADLE="$ROOT/android/app/build.gradle"
 if [[ -f "$GRADLE" ]]; then
   sed -i.bak -E "s/versionCode [0-9]+/versionCode $NEW_CODE/; s/versionName \"[^\"]*\"/versionName \"$NEW_VER\"/" "$GRADLE"

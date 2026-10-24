@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { assertDiskReserve } = require('./storage-budget');
 const { createHash, createHmac, randomBytes } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
@@ -97,7 +98,19 @@ class SyncDatabase {
     this.filename = filename;
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(filename);
+    const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_meta'").get();
+    if (hasMeta) {
+      const version = Number(this.db.prepare("SELECT value FROM sync_meta WHERE key='schema_version'").get()?.value || 0);
+      if (!Number.isSafeInteger(version) || version < 0 || version > 6) {
+        this.db.close(); throw new Error('unsupported_sync_schema');
+      }
+    }
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    const configuredStorage = Number(process.env.SYNC_MAX_DATABASE_BYTES);
+    const storageBytes = Number.isSafeInteger(configuredStorage) && configuredStorage > 0 ? configuredStorage : 8 * 1024 ** 3;
+    const pageSize = this.db.prepare('PRAGMA page_size').get().page_size;
+    this.db.exec(`PRAGMA max_page_count = ${Math.max(1, Math.floor(storageBytes / pageSize))}`);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sync_meta (
         key TEXT PRIMARY KEY NOT NULL,
@@ -109,6 +122,7 @@ class SyncDatabase {
         seen_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, nonce)
       );
+      CREATE INDEX IF NOT EXISTS idx_sync_nonces_seen ON sync_nonces(seen_at);
       CREATE TABLE IF NOT EXISTS sync_accounts (
         account_id TEXT PRIMARY KEY NOT NULL,
         owner_public_key_b64 TEXT NOT NULL,
@@ -362,6 +376,20 @@ class SyncDatabase {
       CREATE INDEX IF NOT EXISTS idx_public_posts_updated
         ON public_posts (updated_at);
     `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sync_heads_sequence ON sync_entity_heads(account_id, sequence);
+      CREATE TABLE IF NOT EXISTS public_post_owners (
+        post_id TEXT PRIMARY KEY, author_public_key TEXT NOT NULL,
+        revision INTEGER NOT NULL, active INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_public_post_owners_author ON public_post_owners(author_public_key);
+      INSERT OR IGNORE INTO public_post_owners
+        SELECT post_id, author_public_key, 1, 1 FROM public_posts;
+      CREATE TABLE IF NOT EXISTS public_avatar_deletions (
+        public_key TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL
+      );
+      INSERT OR IGNORE INTO public_avatar_deletions SELECT public_key, -1 FROM public_avatars;
+    `);
     this.ensureUsernamePepper();
     this.ensureBlindedUsernames();
     this.ensureUsernameDirectoryColumn();
@@ -371,7 +399,7 @@ class SyncDatabase {
     this.ensureProfileScopedCursors();
     this.ensureEntityHeadsProfileScope();
     this.db.prepare(
-      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '5')
+      `INSERT INTO sync_meta (key, value) VALUES ('schema_version', '6')
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ).run();
     const existing = this.db.prepare('SELECT value FROM sync_meta WHERE key = ?').get('server_epoch');
@@ -442,7 +470,7 @@ class SyncDatabase {
     const rows = this.db.prepare(
       'SELECT username, account_id AS accountId, profile_id AS profileId, claimed_at AS claimedAt FROM sync_usernames',
     ).all();
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       this.db.exec('DROP TABLE sync_usernames');
       this.db.exec(`
@@ -609,11 +637,16 @@ class SyncDatabase {
     `);
   }
 
+  beginWrite() {
+    assertDiskReserve(path.dirname(this.filename), 1024 * 1024);
+    this.db.exec('BEGIN IMMEDIATE');
+  }
+
   consumeNonce(accountId, nonce, now = Date.now()) {
     const cutoff = now - 20 * 60 * 1000;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
-      this.db.prepare('DELETE FROM sync_nonces WHERE seen_at < ?').run(cutoff);
+      this.db.prepare('DELETE FROM sync_nonces WHERE rowid IN (SELECT rowid FROM sync_nonces WHERE seen_at < ? ORDER BY seen_at LIMIT 500)').run(cutoff);
       const result = this.db.prepare(
         'INSERT OR IGNORE INTO sync_nonces (account_id, nonce, seen_at) VALUES (?, ?, ?)',
       ).run(accountId, nonce, now);
@@ -627,8 +660,11 @@ class SyncDatabase {
 
   ensureAccount(accountId, ownerPublicKeyB64) {
     const now = Date.now();
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
+      if (!this.hasAccount(accountId) && this.db.prepare('SELECT COUNT(*) AS n FROM sync_accounts').get().n >= 100000) {
+        this.db.exec('ROLLBACK'); return { ok: false, reason: 'server_account_quota' };
+      }
       // Serialize the first account claim and make a duplicate insert harmless.
       this.db.prepare(`
         INSERT INTO sync_accounts (account_id, owner_public_key_b64, created_at, last_seen_at)
@@ -671,7 +707,7 @@ class SyncDatabase {
     const key = this.usernameKey(username);
     const subjectKind = subject ? subject.kind : null;
     const subjectId = subject ? subject.id : null;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       const row = this.db.prepare(
         `SELECT account_id AS accountId, profile_id AS profileId, subject_id AS subjectId
@@ -764,8 +800,18 @@ class SyncDatabase {
    */
   putPublicAvatar(publicKeyB64, mime, bytes, ts, { maxTotalBytes, sig = null, nonce = null }) {
     const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
+      const deletion = this.db.prepare('SELECT deleted_at FROM public_avatar_deletions WHERE public_key = ?').get(publicKeyB64);
+      if (!deletion) {
+        if (this.db.prepare('SELECT COUNT(*) AS n FROM public_avatar_deletions').get().n >= 1000000) {
+          this.db.exec('ROLLBACK'); return { ok: false, reason: 'full' };
+        }
+        this.db.prepare('INSERT INTO public_avatar_deletions VALUES (?, -1)').run(publicKeyB64);
+      }
+      if (deletion && deletion.deleted_at >= ts) {
+        this.db.exec('ROLLBACK'); return { ok: false, reason: 'stale' };
+      }
       const prev = this.db.prepare(
         'SELECT size, updated_at AS updatedAt FROM public_avatars WHERE public_key = ?',
       ).get(publicKeyB64);
@@ -796,10 +842,16 @@ class SyncDatabase {
 
   /** Снять фото. Запись новее запроса не трогается — как и при записи. */
   deletePublicAvatar(publicKeyB64, ts) {
-    const result = this.db.prepare(
-      'DELETE FROM public_avatars WHERE public_key = ? AND updated_at <= ?',
-    ).run(publicKeyB64, ts);
-    return (result.changes || 0) > 0;
+    this.beginWrite();
+    try {
+      // Bound permanent deletion metadata; a full registry fails closed.
+      const known = this.db.prepare('SELECT 1 FROM public_avatar_deletions WHERE public_key = ?').get(publicKeyB64);
+      if (!known && this.db.prepare('SELECT COUNT(*) AS n FROM public_avatar_deletions').get().n >= 1000000) throw new Error('avatar_tombstone_quota');
+      this.db.prepare(`INSERT INTO public_avatar_deletions VALUES (?, ?)
+        ON CONFLICT(public_key) DO UPDATE SET deleted_at = MAX(deleted_at, excluded.deleted_at)`).run(publicKeyB64, ts);
+      const result = this.db.prepare('DELETE FROM public_avatars WHERE public_key = ? AND updated_at <= ?').run(publicKeyB64, ts);
+      this.db.exec('COMMIT'); return (result.changes || 0) > 0;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   /** Фото целиком — для раздачи. */
@@ -879,7 +931,52 @@ class SyncDatabase {
    * вычитается до сравнения — иначе правка текста у автора на пределе
    * отказывала бы, хотя суммарно ничего не прибавилось.
    */
-  putPublicPost(postId, authorDid, authorPublicKeyB64, payload, signature, options = {}) {
+  publicPostState(postId, authorPublicKeyB64) {
+    const row = this.db.prepare('SELECT author_public_key, revision, active FROM public_post_owners WHERE post_id = ?').get(postId);
+    if (row && row.author_public_key !== authorPublicKeyB64) return { ok: false, reason: 'public_post_owned' };
+    return { ok: true, revision: row?.revision || 0, active: !!row?.active };
+  }
+
+  reservePublicPostOwner(postId, key, maxOwners = 1000000, maxAuthorOwners = 10000) {
+    const state = this.publicPostState(postId, key);
+    if (!state.ok || state.revision > 0) return state;
+    const total = this.db.prepare('SELECT COUNT(*) AS n FROM public_post_owners').get().n;
+    const own = this.db.prepare('SELECT COUNT(*) AS n FROM public_post_owners WHERE author_public_key = ?').get(key).n;
+    if (total >= maxOwners || own >= maxAuthorOwners) return { ok: false, reason: 'public_post_owner_quota' };
+    this.db.prepare('INSERT INTO public_post_owners VALUES (?, ?, 0, 0)').run(postId, key);
+    return state;
+  }
+
+  putPublicPost(postId, authorDid, key, payload, signature, options = {}) {
+    this.beginWrite();
+    try {
+      const state = this.reservePublicPostOwner(postId, key, options.maxOwners, options.maxAuthorOwners);
+      let result = state;
+      if (state.ok && options.expectedRevision != null && state.revision !== options.expectedRevision) result = { ok: false, reason: 'public_post_revision_conflict' };
+      else if (state.ok && options.action === 'refresh' && !state.active) result = { ok: false, reason: 'public_post_inactive' };
+      else if (state.ok) result = this.writePublicPost(postId, authorDid, key, payload, signature, options);
+      if (!result.ok) { this.db.exec('ROLLBACK'); return result; }
+      const revision = state.revision + 1;
+      this.db.prepare('UPDATE public_post_owners SET revision = ?, active = 1 WHERE post_id = ?').run(revision, postId);
+      this.db.exec('COMMIT'); return { ...result, revision, active: true };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  revokePublicPost(postId, key, expectedRevision = null, options = {}) {
+    this.beginWrite();
+    try {
+      const state = this.reservePublicPostOwner(postId, key, options.maxOwners, options.maxAuthorOwners);
+      if (!state.ok || (expectedRevision != null && state.revision !== expectedRevision)) {
+        this.db.exec('ROLLBACK'); return state.ok ? { ok: false, reason: 'public_post_revision_conflict' } : state;
+      }
+      const removed = this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(postId).changes > 0;
+      const revision = state.revision + 1;
+      this.db.prepare('UPDATE public_post_owners SET revision = ?, active = 0 WHERE post_id = ?').run(revision, postId);
+      this.db.exec('COMMIT'); return { ok: true, removed, revision, active: false };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  writePublicPost(postId, authorDid, authorPublicKeyB64, payload, signature, options = {}) {
     const now = Number.isSafeInteger(options.now) ? options.now : Date.now();
     const maxBytes = Number.isSafeInteger(options.maxBytes) ? options.maxBytes : 64 * 1024 * 1024;
     const maxPosts = Number.isSafeInteger(options.maxPosts) ? options.maxPosts : 1000;
@@ -956,8 +1053,9 @@ class SyncDatabase {
     const batch = Number.isSafeInteger(options.batch) && options.batch > 0 ? options.batch : 500;
     let expired = 0;
     let evicted = 0;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
+      this.db.prepare(`UPDATE public_post_owners SET active = 0, revision = revision + 1 WHERE post_id IN (SELECT post_id FROM public_posts WHERE updated_at < ?)`).run(now - ttlMs);
       expired = this.db.prepare('DELETE FROM public_posts WHERE updated_at < ?')
         .run(now - ttlMs).changes || 0;
       let total = Number(
@@ -969,6 +1067,7 @@ class SyncDatabase {
         ).all(batch);
         if (oldest.length === 0) break;
         for (const row of oldest) {
+          this.db.prepare('UPDATE public_post_owners SET active = 0, revision = revision + 1 WHERE post_id = ?').run(row.postId);
           this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(row.postId);
           total -= Number(row.bytes) || 0;
           evicted += 1;
@@ -992,18 +1091,14 @@ class SyncDatabase {
    * записали при выкладке и им же проверили подпись.
    */
   deletePublicPostByKey(postId, authorPublicKeyB64) {
-    const row = this.db.prepare('SELECT author_public_key FROM public_posts WHERE post_id = ?').get(postId);
-    if (!row || row.author_public_key !== authorPublicKeyB64) return false;
-    this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(postId);
-    return true;
+    const state = this.publicPostState(postId, authorPublicKeyB64);
+    if (!state.ok || state.revision === 0) return false;
+    return !!this.revokePublicPost(postId, authorPublicKeyB64).removed;
   }
 
-  /** Снять копию. Возвращает false, если её нет либо просит не автор. */
   deletePublicPost(postId, authorDid) {
-    const row = this.db.prepare('SELECT author_did FROM public_posts WHERE post_id = ?').get(postId);
-    if (!row || row.author_did !== authorDid) return false;
-    this.db.prepare('DELETE FROM public_posts WHERE post_id = ?').run(postId);
-    return true;
+    const row = this.db.prepare('SELECT author_public_key FROM public_posts WHERE post_id = ? AND author_did = ?').get(postId, authorDid);
+    return row ? this.deletePublicPostByKey(postId, row.author_public_key) : false;
   }
 
   hasAccount(accountId) {
@@ -1027,7 +1122,7 @@ class SyncDatabase {
       ? policy.maxEnrollmentsPerWindow : DEFAULT_MAX_ENROLLMENTS_PER_WINDOW;
     const enrollmentWindowMs = Number.isSafeInteger(policy.enrollmentWindowMs) && policy.enrollmentWindowMs > 0
       ? policy.enrollmentWindowMs : DEFAULT_ENROLLMENT_WINDOW_MS;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       let row = this.db.prepare(`
         SELECT device_public_key_b64, revoked_at, last_seen_at
@@ -1154,19 +1249,19 @@ class SyncDatabase {
   }
 
   compactSyncMutationsInTransaction(accountId, now, idleTtlMs, maxRows) {
-    const devices = this.activeDeviceCursors(accountId, now, idleTtlMs);
-    if (devices.length === 0) return { deleted: 0, cursor: null, activeDevices: 0 };
-    const cursor = Math.min(...devices.map((device) => Number(device.cursor) || 0));
-    if (cursor <= 0) return { deleted: 0, cursor: String(cursor), activeDevices: devices.length };
+    // Mutations are full encrypted snapshots. Keep every current head (including
+    // tombstones); superseded snapshots are unnecessary even for a fresh device.
     const rows = this.db.prepare(`
-      SELECT sequence FROM sync_mutations
-      WHERE account_id = ? AND sequence <= ?
-      ORDER BY sequence ASC LIMIT ?
-    `).all(accountId, cursor, maxRows);
+      SELECT m.sequence FROM sync_mutations m
+      WHERE m.account_id = ? AND NOT EXISTS (
+        SELECT 1 FROM sync_entity_heads h WHERE h.account_id = m.account_id
+          AND h.sequence = m.sequence
+      ) ORDER BY m.sequence LIMIT ?
+    `).all(accountId, maxRows);
     const remove = this.db.prepare('DELETE FROM sync_mutations WHERE account_id = ? AND sequence = ?');
     let deleted = 0;
     for (const row of rows) deleted += Number(remove.run(accountId, row.sequence).changes || 0);
-    return { deleted, cursor: String(cursor), activeDevices: devices.length };
+    return { deleted, cursor: null, activeDevices: this.activeDeviceCursors(accountId, now, idleTtlMs).length };
   }
 
   compactSyncMutations(accountId, options = {}) {
@@ -1175,7 +1270,7 @@ class SyncDatabase {
       ? options.idleTtlMs : DEFAULT_DEVICE_IDLE_TTL_MS;
     const maxRows = Number.isSafeInteger(options.maxRows) && options.maxRows > 0
       ? options.maxRows : DEFAULT_SYNC_GC_MAX_ROWS;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       const result = this.compactSyncMutationsInTransaction(accountId, now, idleTtlMs, maxRows);
       this.db.exec('COMMIT');
@@ -1207,13 +1302,14 @@ class SyncDatabase {
       ? options.idleTtlMs : DEFAULT_DEVICE_IDLE_TTL_MS;
     const gcMaxRows = Number.isSafeInteger(options.gcMaxRows) && options.gcMaxRows > 0
       ? options.gcMaxRows : DEFAULT_SYNC_GC_MAX_ROWS;
-    this.db.exec('BEGIN IMMEDIATE');
+    assertDiskReserve(path.dirname(this.filename), normalizedMutations.reduce((n, m) => n + (m.ciphertextB64?.length || 0) + 1024, 0) * 2);
+    this.beginWrite();
     try {
-      // A device cursor is an implicit acknowledgement in the v1 protocol.
-      // Compact only through the minimum cursor of every currently active device.
+      // Retain each current full snapshot; old revisions do not pin quota to
+      // inactive or profile-scoped devices. The replacement below is atomic.
       this.compactSyncMutationsInTransaction(accountId, Date.now(), idleTtlMs, gcMaxRows);
       const usage = this.db.prepare(`
-        SELECT COALESCE(SUM(LENGTH(ciphertext_b64)), 0) AS bytes,
+        SELECT COALESCE(SUM(COALESCE(LENGTH(ciphertext_b64), 0) + 512 + LENGTH(mutation_id) + LENGTH(entity_kind) + LENGTH(entity_id) + LENGTH(device_id)), 0) AS bytes,
                COUNT(*) AS mutations
         FROM sync_mutations WHERE account_id = ?
       `).get(accountId);
@@ -1241,14 +1337,22 @@ class SyncDatabase {
           continue;
         }
         const head = this.db.prepare(`
-          SELECT revision FROM sync_entity_heads
+          SELECT revision, sequence FROM sync_entity_heads
           WHERE account_id = ? AND entity_kind = ? AND entity_id = ? AND owner_profile_id = ?
         `).get(accountId, mutation.entityKind, mutation.entityId, mutation.ownerProfileId);
         if (head && mutation.revision <= head.revision) {
           rejectedMutationIds.push(mutation.mutationId);
           continue;
         }
-        projectedBytes += mutation.ciphertextB64 ? Buffer.byteLength(mutation.ciphertextB64, 'utf8') : 0;
+        if (head) {
+          const previous = this.db.prepare(`SELECT COALESCE(LENGTH(ciphertext_b64),0) + 512 + LENGTH(mutation_id) + LENGTH(entity_kind) + LENGTH(entity_id) + LENGTH(device_id) AS bytes FROM sync_mutations WHERE account_id = ? AND sequence = ?`).get(accountId, head.sequence);
+          if (previous) {
+            projectedBytes -= Number(previous.bytes);
+            this.db.prepare('DELETE FROM sync_mutations WHERE account_id = ? AND sequence = ?').run(accountId, head.sequence);
+          }
+        }
+        projectedBytes += (mutation.ciphertextB64 ? Buffer.byteLength(mutation.ciphertextB64, 'utf8') : 0)
+          + 512 + mutation.mutationId.length + mutation.entityKind.length + mutation.entityId.length + deviceId.length;
         if (projectedBytes > maxAccountBytes) {
           const error = new Error('sync_account_quota');
           error.code = 'sync_account_quota';
@@ -1308,7 +1412,7 @@ class SyncDatabase {
       ? options.idleTtlMs : DEFAULT_DEVICE_IDLE_TTL_MS;
     const gcMaxRows = Number.isSafeInteger(options.gcMaxRows) && options.gcMaxRows > 0
       ? options.gcMaxRows : DEFAULT_SYNC_GC_MAX_ROWS;
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       const latest = Number(this.db.prepare(
         'SELECT COALESCE(last_mutation_sequence, 0) AS sequence FROM sync_accounts WHERE account_id = ?',
@@ -1334,7 +1438,7 @@ class SyncDatabase {
         ON CONFLICT (account_id, device_id, owner_profile_id) DO UPDATE SET
           cursor = MAX(sync_device_cursors.cursor, excluded.cursor),
           updated_at = excluded.updated_at
-      `).run(accountId, deviceId, scopedProfileId, Number(nextCursor), now);
+      `).run(accountId, deviceId, scopedProfileId, after, now);
       this.compactSyncMutationsInTransaction(accountId, now, idleTtlMs, gcMaxRows);
       this.db.exec('COMMIT');
       return {
@@ -1468,7 +1572,7 @@ class SyncDatabase {
   }
 
   markMediaDeleted(accountId, mediaId, now = Date.now()) {
-    this.db.exec('BEGIN IMMEDIATE');
+    this.beginWrite();
     try {
       const result = this.db.prepare(`
         UPDATE sync_media SET deleted_at = ?

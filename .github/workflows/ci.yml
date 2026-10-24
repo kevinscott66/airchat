@@ -60,6 +60,33 @@ jobs:
       - run: npm test
         working-directory: ${{ matrix.dir }}
 
+  two-client-integration:
+    name: Two-client protocol integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.2
+      - run: npm ci --no-audit --no-fund
+        working-directory: signaling-server
+      - run: npm ci --no-audit --no-fund
+        working-directory: server/cloud-vault
+      - run: npm run test:integration
+
+  backup-restore:
+    name: Backup restore drill
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.2
+      - run: node --test server/ops/airchat-backup.test.js
+
   web-build:
     name: Web smoke build + budget + E2E
     runs-on: ubuntu-latest

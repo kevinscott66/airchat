@@ -1,3 +1,4 @@
+jest.mock('../pushDevices', () => ({ pushDeviceId: async () => 'device-test', capturePushDeviceRevoker: async () => async () => true }));
 /**
  * Замок приложения и баннер, пришедший в свёрнутое приложение (v4.32.858).
  *

@@ -162,8 +162,9 @@ describe('уборка потерянных строк подключена к �
 
   it('синхронизация зовёт уборку после разбора, а не в середине', () => {
     expect(live).toContain('sweepOrphanAlbumItems');
-    const from = live.indexOf('afterProjection: async () => {');
-    const body = live.slice(from, live.indexOf('onServerReset', from));
+    const from = live.indexOf('if (albumsChanged && result.pulled?.hasMore === false)');
+    expect(from).toBeGreaterThan(0);
+    const body = live.slice(from, live.indexOf('const rejected =', from));
     // ПРОВЕРКА НЕ ПУСТАЯ: срез действительно захватил обработчик.
     expect(body.length).toBeGreaterThan(200);
     expect(body).toContain('sweepOrphanAlbumItems');
@@ -193,8 +194,9 @@ describe('уборка потерянных строк подключена к �
   });
 
   it('отказ уборки не роняет заход синхронизации', () => {
-    const from = live.indexOf('afterProjection: async () => {');
-    const body = live.slice(from, live.indexOf('onServerReset', from));
+    const from = live.indexOf('if (albumsChanged && result.pulled?.hasMore === false)');
+    expect(from).toBeGreaterThan(0);
+    const body = live.slice(from, live.indexOf('const rejected =', from));
     expect(body).toContain('live_sync_album_orphan_sweep_failed');
     expect(body).toContain('} catch (e) {');
   });

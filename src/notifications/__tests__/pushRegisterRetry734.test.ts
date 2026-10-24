@@ -1,3 +1,4 @@
+jest.mock('../pushDevices', () => ({ pushDeviceId: async () => 'device-test', capturePushDeviceRevoker: async () => async () => true }));
 /**
  * Запись адреса доставки не бросается на первом отказе сети (v4.32.734).
  *

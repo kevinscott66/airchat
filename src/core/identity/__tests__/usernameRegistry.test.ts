@@ -84,7 +84,7 @@ beforeEach(() => {
 test('занимает имя в реестре и только потом пишет его локально', async () => {
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
   expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, mockProfilePair, 'Рита');
-  expect(saveLocal).toHaveBeenCalledWith('kevin_s');
+  expect(saveLocal).toHaveBeenCalledWith('kevin_s', 1);
 });
 
 // v4.32.548: список оставленных приложению имён стоит и на сервере, поэтому
@@ -102,11 +102,12 @@ test('бумага на галочку уезжает вместе с заявк
 // v4.32.607: имя ведёт к ключу ПЕРЕПИСКИ профиля, а не к ключу аккаунта — у
 // дополнительных профилей они разные. Если менеджер профилей ещё не готов,
 // имя всё равно занимается, просто без записи в справочник.
-test('ключ профиля уезжает в справочник вместе с именем', async () => {
+test('смена доступной пары во время операции требует повтора без старого запроса', async () => {
   const getPair = profileManager.getActiveKeyPair as jest.MockedFunction<typeof profileManager.getActiveKeyPair>;
   getPair.mockImplementationOnce(() => { throw new Error('профили не подняты'); });
-  await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'global' });
-  expect(claim).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'kevin_s', 0, null, null, 'Рита');
+  await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: false, reason: 'local' });
+  expect(claim).not.toHaveBeenCalled();
+  expect(saveLocal).not.toHaveBeenCalled();
 });
 
 test('занятое чужим аккаунтом имя не пишется даже локально', async () => {
@@ -124,7 +125,7 @@ test('отказ реестра по правилам имени отдаётс�
 test('недоступный сервер не мешает переименоваться, но брони не даёт', async () => {
   claim.mockResolvedValue({ ok: false, reason: 'offline' });
   await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: true, scope: 'local' });
-  expect(saveLocal).toHaveBeenCalledWith('kevin_s');
+  expect(saveLocal).toHaveBeenCalledWith('kevin_s', 1);
 });
 
 test('без seed-фразы реестр не спрашивается', async () => {
@@ -239,4 +240,17 @@ describe('имя удалённого профиля отпускается да
     expect(Object.keys(localKv.__kv).sort()).toEqual([`${PENDING}3`, `${PENDING}4`]);
     release.mockResolvedValue({ ok: true });
   });
+});
+
+
+test('profile switch during registry response cannot write username into the new profile', async () => {
+  const active = profileManager.getActiveProfile as jest.Mock;
+  active.mockReturnValue({ id: 1 });
+  claim.mockImplementationOnce(async () => {
+    active.mockReturnValue({ id: 2 });
+    return { ok: true, username: 'kevin_s' };
+  });
+  await expect(saveOwnUsernameGlobally('kevin_s')).resolves.toEqual({ ok: false, reason: 'local' });
+  expect(saveLocal).not.toHaveBeenCalled();
+  active.mockReturnValue({ id: 0 });
 });

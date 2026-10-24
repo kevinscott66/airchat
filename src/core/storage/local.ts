@@ -1,3 +1,4 @@
+import { finishDatabaseBootstrap, createLocalIndexes } from './localBootstrap';
 import * as SQLite from 'expo-sqlite';
 
 import { openLeasedDatabase } from './dbLease';
@@ -258,8 +259,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (entity_kind, entity_id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_sync_entity_heads_profile
-      ON sync_entity_heads (owner_profile_id, entity_kind, entity_id);
+
     /* Текст и media_cids — ciphertext (XChaCha20-Poly1305), ключ в SecureStore. */
     CREATE TABLE IF NOT EXISTS chat_messages (
       /*
@@ -306,11 +306,10 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
      * IF NOT EXISTS не переопределяет существующий индекс, а тихо оставляет
      * старый; прежний убираем явно.
      */
-    CREATE INDEX IF NOT EXISTS idx_chat_contact_profile
-      ON chat_messages (contact_pub_b64, owner_profile_id, created_at DESC);
-    DROP INDEX IF EXISTS idx_chat_contact;
-    CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox (created_at ASC);
-    CREATE INDEX IF NOT EXISTS idx_conv_profile ON conversations (owner_profile_id, pinned DESC, last_message_at DESC);
+
+
+
+
     /* Группы и каналы. */
     CREATE TABLE IF NOT EXISTS groups (
       /*
@@ -377,10 +376,9 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_grp_msg_profile
-      ON group_messages (group_id, owner_profile_id, created_at DESC);
-    DROP INDEX IF EXISTS idx_grp_msg;
-    CREATE INDEX IF NOT EXISTS idx_grp_members ON group_members (group_id, owner_profile_id);
+
+
+
     -- Ключ составной по той же причине, что у chat_messages и group_messages:
     -- id чужой сторис строится из ключа автора и id конверта (localStoryId) и
     -- в двух профилях одного телефона совпадает. Ср. ensureStoriesProfileScopedKey.
@@ -395,8 +393,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_stories
-      ON stories (owner_profile_id, author_pub_b64, created_at DESC);
+
     /*
      * v4.32.576: альбомы историй. История живёт сутки и уходит вместе со
      * своим файлом — это обещание, а не недоделка. Альбом — обещание
@@ -433,8 +430,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       added_at INTEGER NOT NULL,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_story_album_items
-      ON story_album_items (album_id, owner_profile_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY NOT NULL,
       contact_pub_b64 TEXT NOT NULL,
@@ -447,7 +443,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       -- служил возраст строки, а возраст рос и когда приложение было закрыто.
       attempts INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages (send_at ASC);
+
 
     CREATE TABLE IF NOT EXISTS poll_votes (
       message_id TEXT NOT NULL,
@@ -466,7 +462,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_quick_replies ON quick_replies (owner_profile_id, created_at ASC);
+
     CREATE TABLE IF NOT EXISTS group_join_requests (
       id TEXT PRIMARY KEY NOT NULL,
       group_id TEXT NOT NULL,
@@ -477,7 +473,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_grp_join_req ON group_join_requests (group_id, status, created_at DESC);
+
   `);
 }
 
@@ -493,6 +489,7 @@ async function ensureChatMessagesOwnerProfileColumn(database: SQLite.SQLiteDatab
     );
   } catch (e) {
     log.warn('owner_profile_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -512,6 +509,7 @@ async function ensureReplyToColumns(database: SQLite.SQLiteDatabase): Promise<vo
     }
   } catch (e) {
     log.warn('reply_to_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -539,6 +537,7 @@ async function ensureMessageExtraColumns(database: SQLite.SQLiteDatabase): Promi
     }
   } catch (e) {
     log.warn('message_extra_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -556,6 +555,7 @@ async function ensureStoryAlbumMediaCidColumn(database: SQLite.SQLiteDatabase): 
     }
   } catch (e) {
     log.warn('story_album_media_cid_migration_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -578,6 +578,7 @@ async function ensureConversationPinnedMessageColumn(database: SQLite.SQLiteData
     }
   } catch (e) {
     log.warn('conversation_pinned_msg_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -597,6 +598,7 @@ async function ensureMutedUntilColumn(database: SQLite.SQLiteDatabase): Promise<
     }
   } catch (e) {
     log.warn('muted_until_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -613,6 +615,7 @@ async function ensureStarredColumns(database: SQLite.SQLiteDatabase): Promise<vo
     }
   } catch (e) {
     log.warn('starred_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -632,6 +635,7 @@ async function ensureMessageTransportColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('transport_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -647,6 +651,7 @@ async function ensureGroupSenderNameColumn(database: SQLite.SQLiteDatabase): Pro
     }
   } catch (e) {
     log.warn('group_sender_name_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -663,6 +668,7 @@ async function ensureGroupPinnedMessageColumns(database: SQLite.SQLiteDatabase):
     }
   } catch (e) {
     log.warn('group_pinned_message_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -675,6 +681,7 @@ async function ensureGroupMessageEditedAtColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('group_messages_edited_at_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -687,6 +694,7 @@ async function ensureGroupMentionCountColumn(database: SQLite.SQLiteDatabase): P
     }
   } catch (e) {
     log.warn('group_mention_count_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -699,6 +707,7 @@ async function ensureGroupDraftTextColumn(database: SQLite.SQLiteDatabase): Prom
     }
   } catch (e) {
     log.warn('group_draft_text_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -718,6 +727,7 @@ async function ensureGroupDisappearAfterMsColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_disappear_after_ms_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -730,6 +740,7 @@ async function ensureGroupAdminOnlyPostingColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_admin_only_posting_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -748,6 +759,7 @@ async function ensureGroupAdminOnlyPinningColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_admin_only_pinning_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -760,6 +772,7 @@ async function ensureGroupAnonymousPostingColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_anonymous_posting_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -772,6 +785,7 @@ async function ensureGroupMessageViewCountColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_message_view_count_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -815,8 +829,7 @@ async function ensureGroupsProfileScopedKey(database: SQLite.SQLiteDatabase): Pr
     // Ключевые колонки должны быть на месте: без них новая таблица получится
     // не той, что описана в схеме, а переливать в неё уже нечего.
     if (!names.includes('id') || !names.includes('owner_profile_id')) {
-      log.warn('groups_migrate_skipped_unexpected_schema');
-      return;
+      throw new Error('groups_migrate_unexpected_schema');
     }
 
     const txn = await beginImmediate(database);
@@ -842,6 +855,7 @@ ${decls},
     }
   } catch (e) {
     log.warn('groups_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -957,8 +971,7 @@ async function ensureTableCompositeKey(
     const { decls, names, skipped } = rebuildColumns(cols, '          ');
     if (skipped.length) log.warn('table_migrate_columns_skipped', { table, skipped: skipped.join(',') });
     if (!names.includes('id') || !names.includes('owner_profile_id')) {
-      log.warn('table_migrate_skipped_unexpected_schema', { table });
-      return;
+      throw new Error(`table_migrate_unexpected_schema:${table}`);
     }
 
     const txn = await beginImmediate(database);
@@ -985,6 +998,7 @@ ${decls},
     }
   } catch (e) {
     log.warn('table_migrate_failed', { table, err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1054,6 +1068,7 @@ async function ensureGroupMembersProfileScoped(database: SQLite.SQLiteDatabase):
     }
   } catch (e) {
     log.warn('group_members_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1116,6 +1131,7 @@ async function ensurePollVotesMultipleChoice(database: SQLite.SQLiteDatabase): P
     }
   } catch (e) {
     log.warn('poll_votes_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1135,6 +1151,7 @@ async function ensureGroupMessageSeenByColumn(database: SQLite.SQLiteDatabase): 
     }
   } catch (e) {
     log.warn('group_message_seen_by_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1147,6 +1164,7 @@ async function ensureConversationColorTagColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('conversation_color_tag_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1158,6 +1176,7 @@ async function ensureStoryMediaTypeColumn(database: SQLite.SQLiteDatabase): Prom
     }
   } catch (e) {
     log.warn('story_media_type_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1169,6 +1188,7 @@ async function ensureGroupRequireApprovalColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('group_require_approval_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1186,6 +1206,7 @@ async function ensureGroupInviteTokenColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('group_invite_token_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1202,6 +1223,7 @@ async function ensureGroupUsernameColumn(database: SQLite.SQLiteDatabase): Promi
     }
   } catch (e) {
     log.warn('group_username_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1222,6 +1244,7 @@ async function ensureScheduledGroupIdColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('scheduled_group_id_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1233,6 +1256,7 @@ async function ensureOutboxPriorityColumn(database: SQLite.SQLiteDatabase): Prom
     await database.execAsync('ALTER TABLE outbox ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
   } catch (e) {
     log.warn('outbox_priority_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1249,6 +1273,7 @@ async function ensureOutboxOwnerProfileColumn(database: SQLite.SQLiteDatabase): 
     log.warn('outbox_owner_profile_column_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
+    throw e;
   }
 }
 
@@ -1265,6 +1290,7 @@ async function ensureOutboxAttemptsColumn(database: SQLite.SQLiteDatabase): Prom
     log.warn('outbox_attempts_column_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
+    throw e;
   }
 }
 
@@ -1948,60 +1974,62 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
     // держатель и только по разу: просителю отдаётся уже готовая база.
     const attempt = openLeasedDatabase(LOCAL_DB_NAME, async () => {
       const database = await SQLite.openDatabaseAsync(LOCAL_DB_NAME);
-      await initSchema(database);
-      await ensureChatMessagesOwnerProfileColumn(database);
-      await ensureOutboxPriorityColumn(database);
-      await ensureOutboxOwnerProfileColumn(database);
-      await ensureOutboxAttemptsColumn(database);
-      await ensureReplyToColumns(database);
-      await ensureMessageExtraColumns(database);
-      await ensureConversationPinnedMessageColumn(database);
-      await ensureStoryAlbumMediaCidColumn(database);
-      await ensureGroupPinnedMessageColumns(database);
-      await ensureGroupSenderNameColumn(database);
-      await ensureGroupMessageEditedAtColumn(database);
-      await ensureGroupMentionCountColumn(database);
-      await ensureGroupDraftTextColumn(database);
-      await ensureGroupDisappearAfterMsColumn(database);
-      await ensureScheduledGroupIdColumn(database);
-      await ensureGroupAdminOnlyPostingColumn(database);
-      await ensureGroupRequireApprovalColumn(database);
-      await ensureGroupInviteTokenColumn(database);
-      await ensureGroupUsernameColumn(database);
-      await ensureGroupAnonymousPostingColumn(database);
-      await ensureGroupAdminOnlyPinningColumn(database);
-      await ensureGroupMessageViewCountColumn(database);
-      await ensureMutedUntilColumn(database);
-      await ensureStarredColumns(database);
-      await ensureMessageTransportColumn(database);
-      await migrateDekRandomToDeterministic(database);
-      await ensureLocalCryptoMigration(database);
-      await ensureStoryMediaTypeColumn(database);
-      await ensureConversationColorTagColumn(database);
-      await ensureGroupMessageSeenByColumn(database);
-      await ensurePollVotesMultipleChoice(database);
-      // До ensureGroupMemberNamesEncrypted: тот пишет в group_members, а здесь
-      // таблица пересобирается целиком — иначе правки достались бы копии.
-      // Порядок важен: состав берёт профиль у groups, значит groups к этому
-      // моменту уже должна быть в своём окончательном виде.
-      await ensureGroupsProfileScopedKey(database);
-      await ensureGroupMembersProfileScoped(database);
-      // До ensureMessageSocialColumnsEncrypted: тот правит строки по ключу, и
-      // ключ к этому моменту обязан быть уже составным — иначе он писал бы
-      // реакции одного профиля поверх строки другого.
-      await ensureChatMessagesProfileScopedKey(database);
-      await ensureGroupMessagesProfileScopedKey(database);
-      // После ensureStoryMediaTypeColumn: пересборка переливает те колонки,
-      // что есть в базе сейчас, — добавленная позже media_type до неё не
-      // дожила бы.
-      await ensureStoriesProfileScopedKey(database);
-      // После ensureLocalCryptoMigration: тот тоже берёт DEK, и порядок здесь
-      // тот же — сперва ключ определён, потом им что-то шифруется.
-      await ensureGroupMemberNamesEncrypted(database);
-      await ensureMessageSocialColumnsEncrypted(database);
-      await ensureScheduledSenderNameEncrypted(database);
-      await ensureGroupAvatarCidEncrypted(database);
-      return database;
+      return finishDatabaseBootstrap(database, async () => {
+        await initSchema(database);
+        await ensureChatMessagesOwnerProfileColumn(database);
+        await ensureOutboxPriorityColumn(database);
+        await ensureOutboxOwnerProfileColumn(database);
+        await ensureOutboxAttemptsColumn(database);
+        await ensureReplyToColumns(database);
+        await ensureMessageExtraColumns(database);
+        await ensureConversationPinnedMessageColumn(database);
+        await ensureStoryAlbumMediaCidColumn(database);
+        await ensureGroupPinnedMessageColumns(database);
+        await ensureGroupSenderNameColumn(database);
+        await ensureGroupMessageEditedAtColumn(database);
+        await ensureGroupMentionCountColumn(database);
+        await ensureGroupDraftTextColumn(database);
+        await ensureGroupDisappearAfterMsColumn(database);
+        await ensureScheduledGroupIdColumn(database);
+        await ensureGroupAdminOnlyPostingColumn(database);
+        await ensureGroupRequireApprovalColumn(database);
+        await ensureGroupInviteTokenColumn(database);
+        await ensureGroupUsernameColumn(database);
+        await ensureGroupAnonymousPostingColumn(database);
+        await ensureGroupAdminOnlyPinningColumn(database);
+        await ensureGroupMessageViewCountColumn(database);
+        await ensureMutedUntilColumn(database);
+        await ensureStarredColumns(database);
+        await ensureMessageTransportColumn(database);
+        await migrateDekRandomToDeterministic(database);
+        await ensureLocalCryptoMigration(database);
+        await ensureStoryMediaTypeColumn(database);
+        await ensureConversationColorTagColumn(database);
+        await ensureGroupMessageSeenByColumn(database);
+        await ensurePollVotesMultipleChoice(database);
+        // До ensureGroupMemberNamesEncrypted: тот пишет в group_members, а здесь
+        // таблица пересобирается целиком — иначе правки достались бы копии.
+        // Порядок важен: состав берёт профиль у groups, значит groups к этому
+        // моменту уже должна быть в своём окончательном виде.
+        await ensureGroupsProfileScopedKey(database);
+        await ensureGroupMembersProfileScoped(database);
+        // До ensureMessageSocialColumnsEncrypted: тот правит строки по ключу, и
+        // ключ к этому моменту обязан быть уже составным — иначе он писал бы
+        // реакции одного профиля поверх строки другого.
+        await ensureChatMessagesProfileScopedKey(database);
+        await ensureGroupMessagesProfileScopedKey(database);
+        // После ensureStoryMediaTypeColumn: пересборка переливает те колонки,
+        // что есть в базе сейчас, — добавленная позже media_type до неё не
+        // дожила бы.
+        await ensureStoriesProfileScopedKey(database);
+        // После ensureLocalCryptoMigration: тот тоже берёт DEK, и порядок здесь
+        // тот же — сперва ключ определён, потом им что-то шифруется.
+        await ensureGroupMemberNamesEncrypted(database);
+        await ensureMessageSocialColumnsEncrypted(database);
+        await ensureScheduledSenderNameEncrypted(database);
+        await ensureGroupAvatarCidEncrypted(database);
+        await createLocalIndexes(database);
+      });
     });
     dbPromise = attempt;
     // Отказ разбирается здесь же, иначе он остался бы необработанным.

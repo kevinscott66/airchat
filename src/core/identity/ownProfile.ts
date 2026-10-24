@@ -360,8 +360,8 @@ export async function isUsernameTakenByAnotherProfile(username: string, pid = ac
 }
 
 /** Единственная точка записи username: пустое имя и локальные дубликаты запрещены. */
-export async function setOwnUsername(username: string): Promise<boolean> {
+export async function setOwnUsername(username: string, pid = activeProfileId()): Promise<boolean> {
   const normalized = normalizeUsername(username);
-  if (!normalized || await isUsernameTakenByAnotherProfile(normalized)) return false;
-  return await ownFieldSet(OWN_USERNAME_KEY, normalized);
+  if (!normalized || await isUsernameTakenByAnotherProfile(normalized, pid)) return false;
+  return await ownFieldSetFor(pid, OWN_USERNAME_KEY, normalized);
 }

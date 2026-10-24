@@ -62,8 +62,9 @@ let nonceCounter = 0;
 /** Намерение записи: та же подпись, но под коротким «что делаем и когда». */
 function intent(who, postId, act, overrides = {}) {
   const payload = JSON.stringify(canonicalize({
-    v: 1,
-    act,
+    v: act === 'put' ? 2 : 1,
+    act: act === 'put' ? 'publish' : act,
+    ...(act === 'put' ? { expectedRevision: syncDb.publicPostState(postId, who.publicKeyB64).revision || 0 } : {}),
     postId,
     ts: Date.now(),
     nonce: `nonce${(nonceCounter += 1)}`.padEnd(16, 'x'),

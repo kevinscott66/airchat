@@ -209,7 +209,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('занятое имя — единственная преграда перед записью своего', () => {
     expect(codeOnly(read('identity', 'ownProfile.ts'))).toContain(
-      'if (!normalized || await isUsernameTakenByAnotherProfile(normalized)) return false;',
+      'if (!normalized || await isUsernameTakenByAnotherProfile(normalized, pid)) return false;',
     );
   });
 });

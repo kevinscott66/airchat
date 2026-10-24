@@ -112,15 +112,37 @@ async function refusalCode(response: Response): Promise<string | undefined> {
 async function buildPostIntent(
   pair: KeyPairBytes,
   postId: string,
-  act: 'put' | 'del',
+  act: 'publish' | 'refresh' | 'del' | 'state',
+  expectedRevision?: number,
 ): Promise<{ payload: string; signature: string }> {
   return signJson(pair, {
-    v: 1,
+    v: 2,
     act,
     postId,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
     ts: Date.now(),
     nonce: bytesToBase64Url(randomBytes(16)),
     publicKeyB64: publicKeyToB64(pair.publicKey),
+  });
+}
+
+type PublicPostState = { revision: number; active: boolean };
+
+/** Authenticated availability/revision, never evidence of user consent. */
+async function readPublicPostState(pair: KeyPairBytes, postId: string, base: string): Promise<PublicPostState | null> {
+  const intent = await buildPostIntent(pair, postId, 'state');
+  return fetchPublicPost(`${base}/v1/post/${encodeURIComponent(postId)}/state`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorPublicKeyB64: publicKeyToB64(pair.publicKey), intent }),
+  }, async response => {
+    if (!response.ok) {
+      log.warn('public_post_state_failed', { status: response.status, code: await refusalCode(response) });
+      return null;
+    }
+    const state = await response.json() as { revision?: unknown; active?: unknown };
+    if (!state || !Number.isSafeInteger(state.revision) || (state.revision as number) < 0 || typeof state.active !== 'boolean') return null;
+    return { revision: state.revision as number, active: state.active };
   });
 }
 
@@ -133,6 +155,7 @@ async function buildPostIntent(
 export async function putPublicPostCopy(
   pair: KeyPairBytes,
   payload: FeedEnvelopePayload,
+  mode: 'publish' | 'refresh' = 'publish',
 ): Promise<boolean> {
   const base = cloudBaseUrl();
   if (!base) return false;
@@ -148,7 +171,11 @@ export async function putPublicPostCopy(
       log.warn('public_post_too_large', { postId: payload.postId.slice(0, 24), bytes: payloadBytes });
       return false;
     }
-    const intent = await buildPostIntent(pair, payload.postId, 'put');
+    const state = await readPublicPostState(pair, payload.postId, base);
+    if (!state || (mode === 'refresh' && !state.active)) return false;
+    // Never retry a CAS conflict by fetching a newer revision: doing so could
+    // turn an edit queued before revocation into a new public disclosure.
+    const intent = await buildPostIntent(pair, payload.postId, mode, state.revision);
     const ok = await fetchPublicPost(
       `${base}/v1/post/${encodeURIComponent(payload.postId)}`,
       {
@@ -340,7 +367,9 @@ export async function deletePublicPostCopy(
   if (!base) return false;
   if (!isPublicPostId(postId)) return false;
   try {
-    const intent = await buildPostIntent(pair, postId, 'del');
+    const state = await readPublicPostState(pair, postId, base);
+    if (!state) return false;
+    const intent = await buildPostIntent(pair, postId, 'del', state.revision);
     return await fetchPublicPost(
       `${base}/v1/post/${encodeURIComponent(postId)}/delete`,
       {

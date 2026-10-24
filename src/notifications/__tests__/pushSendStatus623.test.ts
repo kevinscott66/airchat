@@ -24,7 +24,7 @@ it('ответ /send-push читается и отказ попадает в ж�
 });
 
 it('ПРОВЕРКА НЕ ПУСТАЯ: /register-token проверялся и раньше, образец на месте', () => {
-  expect(SRC).toContain('const res = await fetch(`${base}/register-token`');
+  expect(SRC).toMatch(/(?:const|let) res = await fetch\(`\$\{base\}\/register-token`/);
   expect(SRC).toContain("log.warn('push_register_failed', { status: res.status })");
 });
 

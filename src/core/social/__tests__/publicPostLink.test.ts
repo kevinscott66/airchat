@@ -174,6 +174,7 @@ describe('публикация по ссылке', () => {
     const payload = expiredPost(did);
     const bodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = jest.fn(async (_url: unknown, init: { body?: string }) => {
+      if (String(_url).endsWith('/state')) return new Response(JSON.stringify({ revision: 7, active: true }), { status: 200 });
       bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return new Response('{}', { status: 200 });
     }) as unknown as typeof fetch;
@@ -199,9 +200,10 @@ describe('публикация по ссылке', () => {
       return JSON.parse(String(intent!.payload)) as Record<string, unknown>;
     });
 
-    expect(intents.map((i) => i.act)).toEqual(['put', 'put', 'del']);
+    expect(intents.map((i) => i.act)).toEqual(['publish', 'publish', 'del']);
     for (const intent of intents) {
-      expect(intent.v).toBe(1);
+      expect(intent.v).toBe(2);
+      expect(intent.expectedRevision).toBe(7);
       expect(intent.postId).toBe(payload.postId);
       expect(intent.publicKeyB64).toBe(Buffer.from(pair.publicKey).toString('base64'));
       expect(Math.abs(Date.now() - Number(intent.ts))).toBeLessThan(60_000);
@@ -210,6 +212,39 @@ describe('публикация по ссылке', () => {
     // отверг всё последующее, а повтор перестал бы отличаться от новой записи.
     expect(new Set(intents.map((i) => i.nonce)).size).toBe(3);
   });
+
+  it('refresh cannot reactivate a revoked link and CAS conflicts are never retried', async () => {
+    const { pair, did } = identity();
+    const payload = expiredPost(did);
+    const calls: string[] = [];
+    let active = false;
+    globalThis.fetch = jest.fn(async (url: unknown, init: { body?: string }) => {
+      calls.push(String(url));
+      if (String(url).endsWith('/state')) {
+        return new Response(JSON.stringify({ revision: 9, active }), { status: 200 });
+      }
+      const body = JSON.parse(String(init.body));
+      const intent = JSON.parse(body.intent.payload);
+      expect(intent.act).toBe('refresh');
+      expect(intent.expectedRevision).toBe(9);
+      return new Response(JSON.stringify({ error: 'revision_conflict' }), { status: 409 });
+    }) as unknown as typeof fetch;
+    expect(await putPublicPostCopy(pair, payload, 'refresh')).toBe(false);
+    expect(calls).toHaveLength(1);
+    active = true;
+    expect(await putPublicPostCopy(pair, payload, 'refresh')).toBe(false);
+    expect(calls).toHaveLength(3);
+  });
+
+  it.each([{}, { revision: -1, active: true }, { revision: 1, active: 'true' }])(
+    'invalid state prevents publication: %p', async state => {
+      const { pair, did } = identity();
+      const fetchSpy = jest.fn(async () => new Response(JSON.stringify(state), { status: 200 }));
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+      expect(await putPublicPostCopy(pair, expiredPost(did))).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('id поста, который не уложить в путь URL, наружу не уходит', async () => {
     const { pair, did } = identity();
@@ -236,7 +271,9 @@ describe('причина отказа сервера', () => {
   beforeEach(() => { mockWarns.length = 0; });
 
   function refuse(status: number, error?: string): void {
-    globalThis.fetch = jest.fn(async () => new Response(
+    globalThis.fetch = jest.fn(async (url: unknown) => String(url).endsWith('/state')
+      ? new Response(JSON.stringify({ revision: 1, active: true }), { status: 200 })
+      : new Response(
       error === undefined ? null : JSON.stringify({ error }),
       { status, headers: error === undefined ? undefined : { 'content-type': 'application/json' } },
     )) as unknown as typeof fetch;
@@ -398,6 +435,6 @@ describe('id поста из одних точек', () => {
     // Сервер обязан ходить через общую проверку, а не через голый набор символов.
     expect(code(server)).not.toContain('POST_ID_RE.test(postId)) return res');
     expect(code(server)).toContain('function isValidPostId(postId) {');
-    expect((code(server).match(/!isValidPostId\(postId\)\)/g) ?? []).length).toBe(3);
+    expect((code(server).match(/!isValidPostId\(postId\)\)/g) ?? []).length).toBe(4);
   });
 });

@@ -107,6 +107,7 @@ beforeEach(() => {
   ownName.mockResolvedValue(`Рита ${nth}`);
   ownUsername.mockResolvedValue(`margarita${nth}`);
   getPair.mockImplementation(() => mockProfilePair);
+  (profileManager.getActiveProfile as jest.Mock).mockReturnValue({ id: 0 });
 });
 
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -194,13 +195,13 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: памятка по-прежнем
     expect(claim).toHaveBeenCalledTimes(1);
   });
 
-  it('ГРАНИЦА: отказ реестра по существу отправкой считается', async () => {
+  it('отказ реестра не кэшируется как подтверждённая публикация', async () => {
     claim.mockResolvedValue({ ok: false, reason: 'taken' });
     await republishOwnUsernameToDirectory();
     await republishOwnUsernameToDirectory();
 
-    // Не `offline`: сервер ответил, и ответ его не изменится от повтора.
-    expect(claim).toHaveBeenCalledTimes(1);
+    // После изменения реестра отказ может смениться успехом.
+    expect(claim).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -212,7 +213,7 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(body).toContain('return null;');
   });
 
-  it('отметка по-прежнему ставится до сетевого запроса', () => {
+  it('подтверждённая отметка ставится только после успешного запроса', () => {
     // Внутри самой функции: `claimSyncUsername` зовёт и `saveOwnUsernameGlobally`
     // выше по файлу, и без границы проверка мерила бы порядок не тех строк.
     const whole = codeOnly(read('core/identity/usernameRegistry.ts'));
@@ -222,7 +223,8 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     const set = body.indexOf('republished.set(pid, sent);');
     const net = body.indexOf('const claim = await claimSyncUsername(');
     expect(set).toBeGreaterThan(0);
-    expect(net).toBeGreaterThan(set);
+    expect(set).toBeGreaterThan(net);
+    expect(body).toContain('if (claim.ok && current()');
   });
 
   it('чинить старые записи больше нечем: другого повода сходить в сеть нет', () => {
@@ -231,12 +233,30 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
   });
 });
 
-describe('ЗАКРЕПКА', () => {
-  it('откат один на все выходы без отправки', () => {
-    const body = codeOnly(read('core/identity/usernameRegistry.ts'));
-    expect(body).toContain('const forget = (): void => {');
-    expect(body).toContain('if (!pair) { forget(); return; }');
-    expect(body).toContain('if (!mnemonic) { forget(); return; }');
-    expect(body).toContain("if (!claim.ok && claim.reason === 'offline') forget();");
+describe('identity captured across asynchronous reads', () => {
+  it('profile switch during name read cannot publish the old name under the new key', async () => {
+    ownName.mockImplementationOnce(async () => {
+      (profileManager.getActiveProfile as jest.Mock).mockReturnValue({ id: 2 });
+      getPair.mockReturnValue({ publicKey: new Uint8Array(32).fill(8), secretKey: new Uint8Array(64).fill(8) });
+      return 'old name';
+    });
+    await republishOwnUsernameToDirectory();
+    expect(claim).not.toHaveBeenCalled();
+    (profileManager.getActiveProfile as jest.Mock).mockReturnValue({ id: 0 });
+    getPair.mockReturnValue(mockProfilePair);
+    await republishOwnUsernameToDirectory();
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(claim.mock.calls[0][3]).toBe(0);
+    expect(claim.mock.calls[0][5]).toBe(mockProfilePair);
+  });
+
+  it('overlapping calls share the in-flight state without claiming success', async () => {
+    let resolve!: (value: string) => void;
+    ownName.mockReturnValueOnce(new Promise<string>(done => { resolve = done; }));
+    const first = republishOwnUsernameToDirectory();
+    await republishOwnUsernameToDirectory();
+    resolve('captured name');
+    await first;
+    expect(claim).toHaveBeenCalledTimes(1);
   });
 });

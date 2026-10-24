@@ -1,3 +1,4 @@
+import { readSyncStuck } from '../syncStuckState';
 /**
  * Занятая база — не испорченная строка (v4.32.786).
  *
@@ -128,16 +129,15 @@ describe('база занята — строку не выбрасывают', (
     expect(writeState).not.toHaveBeenCalled();
   });
 
-  it('база освободилась — приговор выносят первым же проходом', async () => {
+  it('локальная проба отвечает, но проекция другой базы всё ещё не подтверждается', async () => {
     arm('busy-then-free');
-    probe.mockResolvedValue(false);
-    const applyMutation = jest.fn().mockRejectedValue(new Error('database is locked'));
-    await runThrice(applyMutation);
-
-    // Счётчик остался на пределе: новых трёх попыток не нужно.
     probe.mockResolvedValue(true);
-    const result = await runOnce(applyMutation);
-    expect(result.status).toBe('synced');
+    const applyMutation = jest.fn().mockRejectedValue(new Error('SQLITE_BUSY feed.db'));
+    await runThrice(applyMutation);
+    expect(writeState).not.toHaveBeenCalled();
+    expect(readSyncStuck().poisoned).toBe(1);
+    applyMutation.mockResolvedValue(undefined);
+    expect((await runOnce(applyMutation)).status).toBe('synced');
     expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '2' }));
   });
 
@@ -152,15 +152,11 @@ describe('база занята — строку не выбрасывают', (
 });
 
 describe('ПРОВЕРКА НЕ ПУСТАЯ: испорченную строку по-прежнему пропускают', () => {
-  it('база отвечает — после предела попыток курсор идёт дальше', async () => {
+  it('ошибка ключа также остаётся доступной для повтора', async () => {
     arm('really-poison');
     const applyMutation = jest.fn().mockRejectedValue(new Error('не расшифровать'));
-    await expect(runOnce(applyMutation)).rejects.toThrow();
-    await expect(runOnce(applyMutation)).rejects.toThrow();
-
-    const result = await runOnce(applyMutation);
-    expect(result.status).toBe('synced');
-    expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '2' }));
+    await runThrice(applyMutation);
+    expect(writeState).not.toHaveBeenCalled();
   });
 
   it('первые попытки курсор не двигают и базу не тревожат', async () => {
@@ -190,15 +186,9 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(SRC).toContain('await options.applyMutation(mutation);');
   });
 
-  it('приговор строке уводит курсор за неё безвозвратно', () => {
-    expect(SRC).toContain('const POISON_MAX_ATTEMPTS = 3;');
-    expect(SRC).toContain("log.warn('sync_pull_row_poisoned', {");
-    expect(SRC).toContain('await saveSyncState(options.ownerProfileId, {');
-  });
-
-  it('проба спрашивает базу проверяемой записью, а та не бросает', () => {
-    expect(LOCAL).toContain('export async function kvSetChecked(key: string, value: string): Promise<boolean> {');
-    expect(SRC).toContain('return kvSetChecked(POISON_PROBE_KEY, String(Date.now()));');
-    expect(SRC).toContain('if (!(await databaseAnswers())) {');
+  it('нет эвристики, подтверждающей неприменённую строку', () => {
+    expect(SRC).not.toContain('POISON_MAX_ATTEMPTS');
+    expect(SRC).not.toContain('databaseAnswers');
+    expect(LOCAL).toContain('export async function kvSetChecked');
   });
 });

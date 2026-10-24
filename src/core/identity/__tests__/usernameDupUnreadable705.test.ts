@@ -189,13 +189,13 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
 
   it('запись имени по-прежнему идёт единственной точкой через эту проверку', () => {
     expect(ownSrc).toContain(
-      'if (!normalized || await isUsernameTakenByAnotherProfile(normalized)) return false;'
+      'if (!normalized || await isUsernameTakenByAnotherProfile(normalized, pid)) return false;'
     );
   });
 
   it('реестр имён по-прежнему спрашивает местную проверку первой', () => {
     expect(regSrc).toContain(
-      "if (await isUsernameTakenByAnotherProfile(username)) return { ok: false, reason: 'local' };"
+      "if (await isUsernameTakenByAnotherProfile(username, pid)) return { ok: false, reason: 'local' };"
     );
   });
 
@@ -203,4 +203,10 @@ describe('ПОВОД ДЛЯ ПРАВКИ ЖИВ', () => {
     expect(ownSrc.length).toBeGreaterThan(2000);
     expect(regSrc.length).toBeGreaterThan(2000);
   });
+});
+
+
+test('explicit username profile remains the write destination after active profile changes', async () => {
+  expect(await setOwnUsername('captured_owner', 2)).toBe(true);
+  expect(mockLocal.kvSetSecretScoped).toHaveBeenCalledWith(2, HANDLE_KEY, 'captured_owner');
 });

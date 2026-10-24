@@ -35,6 +35,7 @@ const { createWebPushClient, parseSubscription } = require('./webpush');
 const {
   MAX_TOKENS,
   TOKEN_TTL_MS,
+  LEGACY_DEVICE_ID,
   createMemoryTokenRegistry,
   createTokenStore,
 } = require('./tokenStore');
@@ -430,8 +431,10 @@ function createPushRoutes(options = {}) {
       return;
     }
     const body = await readJsonBody(request);
-    const claim = openEnvelope(body, ['peerId', 'platform', 'token', 'ts'], 'peerId', now());
-    if (!claim || !PLATFORMS.has(claim.platform) || !isRegistrationToken(claim.token, claim.platform)) {
+    const claim = openEnvelope(body, ['deviceId', 'peerId', 'platform', 'token', 'ts'], 'peerId', now())
+      ?? openEnvelope(body, ['peerId', 'platform', 'token', 'ts'], 'peerId', now());
+    const deviceId = claim?.deviceId ?? LEGACY_DEVICE_ID;
+    if (!claim || (claim.deviceId !== undefined && typeof claim.deviceId !== 'string') || !/^[A-Za-z0-9_-]{1,80}$/.test(deviceId) || !PLATFORMS.has(claim.platform) || !isRegistrationToken(claim.token, claim.platform)) {
       respond(response, 400, { error: 'bad_request' });
       return;
     }
@@ -441,8 +444,8 @@ function createPushRoutes(options = {}) {
     // значит хранилище переполнено, и уведомлений у человека не будет. Раньше
     // ответ реестра отбрасывался молча, и во втором случае устройство слышало
     // 204: считало, что уведомления у него есть (v4.32.617).
-    if (!registry.set(claim.peerId, claim.token, claim.platform, claim.ts)) {
-      if (!registry.get(claim.peerId)) {
+    if (!registry.set(claim.peerId, claim.token, claim.platform, claim.ts, deviceId)) {
+      if (!registry.get(claim.peerId, deviceId)) {
         log('push_token_rejected', { platform: claim.platform, tokens: registry.size });
         respond(response, 503, { error: 'not_stored' });
         return;
@@ -477,34 +480,60 @@ function createPushRoutes(options = {}) {
     }
     // Ответ одинаков и когда получатель найден, и когда нет: иначе по коду
     // ответа можно было бы перебором узнать, у кого из людей включён push.
-    const entry = registry.get(claim.targetPeerId);
-    if (!entry) {
-      respond(response, 204);
-      return;
+    const entries = registry.list(claim.targetPeerId);
+    // A legacy enrollment and its device-scoped replacement can coexist.
+    // Deliver once per provider token, retaining every snapshot for stale cleanup.
+    const deliveries = new Map();
+    for (const entry of entries) {
+      const key = `${entry.platform}:${entry.token}`;
+      if (!deliveries.has(key)) deliveries.set(key, []);
+      deliveries.get(key).push(entry);
     }
-    const sender = entry.platform === 'web' ? webPush : fcm;
-    if (!sender) {
-      log('push_not_configured', { platform: entry.platform });
-      respond(response, 204);
-      return;
-    }
-    try {
-      // Веб получает пустой push: cid и метка остаются здесь. Через чужой
-      // push-сервис не проходит ничего — баннер собирает страница, когда её
-      // откроют (см. webpush).
-      //
-      // v4.32.614: вместо DID отправителя уходит метка, см. senderTagFor.
-      const outcome = await sender.send(entry, {
-        cid: claim.cid,
-        senderTag: senderTagFor(claim.targetPeerId, claim.senderPeerId),
-        kind: claim.kind,
-      });
-      if (outcome === 'stale') registry.delete(claim.targetPeerId);
-      log('push_sent', { outcome, platform: entry.platform });
-    } catch (error) {
-      log('push_send_error', { err: error instanceof Error ? error.message : String(error) });
-    }
+    await Promise.all([...deliveries.values()].map(async (snapshots) => {
+      const entry = snapshots[0];
+      const sender = entry.platform === 'web' ? webPush : fcm;
+      if (!sender) {
+        log('push_not_configured', { platform: entry.platform });
+        return;
+      }
+      try {
+        const outcome = await sender.send(entry, {
+          cid: claim.cid,
+          senderTag: senderTagFor(claim.targetPeerId, claim.senderPeerId),
+          kind: claim.kind,
+        });
+        if (outcome === 'stale') {
+          for (const snapshot of snapshots) registry.deleteIfCurrent(claim.targetPeerId, snapshot);
+        }
+        log('push_sent', { outcome, platform: entry.platform });
+      } catch (error) {
+        log('push_send_error', { err: error instanceof Error ? error.message : String(error) });
+      }
+    }));
     respond(response, 204);
+  }
+
+  async function handleDevices(request, response, revoke) {
+    if (!allowRegister(addressOf(request))) return respond(response, 429, { error: 'rate_limited' });
+    const body = await readJsonBody(request);
+    const keys = revoke ? ['act', 'deviceId', 'peerId', 'ts'] : ['act', 'peerId', 'ts'];
+    const claim = openEnvelope(body, keys, 'peerId', now());
+    if (!claim || claim.act !== (revoke ? 'push_revoke' : 'push_devices') ||
+      (revoke && (typeof claim.deviceId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(claim.deviceId)))) {
+      return respond(response, 400, { error: 'bad_request' });
+    }
+    if (revoke) {
+      const revoked = registry.revoke(claim.peerId, claim.deviceId, claim.ts);
+      if (!revoked) {
+        return registry.get(claim.peerId, claim.deviceId)
+          ? respond(response, 409, { error: 'registration_newer' })
+          : respond(response, 503, { error: 'not_stored' });
+      }
+      return respond(response, 204);
+    }
+    return respond(response, 200, { devices: registry.list(claim.peerId).map((entry) => ({
+      deviceId: entry.deviceId, platform: entry.platform, updatedAt: entry.updatedAt,
+    })) });
   }
 
   return {
@@ -530,6 +559,10 @@ function createPushRoutes(options = {}) {
       if (request.method !== 'POST') return false;
       if (request.url === '/register-token') {
         void handleRegister(request, response);
+        return true;
+      }
+      if (request.url === '/push-devices' || request.url === '/unregister-token') {
+        void handleDevices(request, response, request.url === '/unregister-token');
         return true;
       }
       if (request.url === '/send-push') {

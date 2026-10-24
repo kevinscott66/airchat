@@ -140,6 +140,7 @@ import { fullDateTime } from '../../core/time/ruDateTime';
 import { isUserFacingMessage, rawErrorText, userErrorText } from '../components/userErrorText';
 import { COPIED_WITH_SWEEP, COPY_ACTION, COPY_FAILED } from '../clipboardText';
 import { log } from '../../core/logger';
+import { listPushDevices, revokeProfilePushDevices, type PushDevice } from '../../notifications/pushDevices';
 import { listSyncDevices, revokeSyncDevice, syncDeviceId, syncServerHost, type SyncDevice } from '../../core/sync/syncApi';
 
 
@@ -331,6 +332,7 @@ function SettingsScreenImpl({
   const [autoLockEnabled, setAutoLockEnabled] = useState(false);
   const [autoLockDelayMs, setAutoLockDelayMs] = useState(0);
   const [activeSessionsVisible, setActiveSessionsVisible] = useState(false);
+  const [pushDevices, setPushDevices] = useState<PushDevice[] | null>(null);
   const [syncDevices, setSyncDevices] = useState<SyncDevice[]>([]);
   const [syncDevicesBusy, setSyncDevicesBusy] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
@@ -755,10 +757,13 @@ function SettingsScreenImpl({
       const mnemonic = await getStoredMnemonic();
       if (!mnemonic) throw new Error('На устройстве нет секретных слов.');
       const pair = deriveKeyPairFromMnemonic(mnemonic);
-      const [devices, currentId] = await Promise.all([
+      const did = profileManager.getActiveProfile()?.did;
+      const [devices, currentId, notifications] = await Promise.all([
         listSyncDevices(mnemonic, pair),
         syncDeviceId(),
+        did ? listPushDevices(did) : Promise.resolve(null),
       ]);
+      setPushDevices(notifications);
       setSyncDevices(devices
         .filter((device) => !device.revokedAt)
         .sort((a, b) => {
@@ -803,10 +808,13 @@ function SettingsScreenImpl({
               try {
                 const mnemonic = await getStoredMnemonic();
                 if (!mnemonic) throw new Error('На устройстве нет секретных слов.');
+                const pushRevoked = await revokeProfilePushDevices(
+                  device.deviceId, mnemonic, profileManager.getAllProfiles(),
+                );
                 const result = await revokeSyncDevice(mnemonic, deriveKeyPairFromMnemonic(mnemonic), device.deviceId);
                 if (!result.ok) throw new Error('Сессия уже завершена или не найдена.');
                 await loadSyncDevices();
-                showSuccess('Сессия завершена');
+                showSuccess(pushRevoked ? 'Сессия завершена' : 'Сессия завершена. Сервер пока не поддерживает отзыв уведомлений.');
               } catch (error) {
                 log.warn('sync_device_revoke_failed', { err: rawErrorText(error) });
                 setSyncDevicesError(userErrorText(error, 'Не удалось завершить сессию.'));
@@ -1989,7 +1997,7 @@ function SettingsScreenImpl({
         <View style={styles.switchRow}>
           <View style={styles.rowBody}>
             <Text style={styles.label}>Звонки</Text>
-            <Text style={styles.desc}>Показывать входящий звонок при закрытом приложении</Text>
+            <Text style={styles.desc}>Уведомлять о входящих звонках. Доставка в закрытое приложение зависит от системных push-уведомлений</Text>
           </View>
           <AppSwitch accessibilityLabel="Звонки" value={notifyCalls} onValueChange={(v) => { setNotifyCalls(v); applyKvPref('notify_calls', String(v), () => setNotifyCalls(!v)); }} />
         </View>
@@ -1997,7 +2005,7 @@ function SettingsScreenImpl({
           <View style={styles.switchRow}>
             <View style={styles.rowBody}>
               <Text style={styles.label}>Связь в фоне</Text>
-              <Text style={styles.desc}>Без неё звонок в свёрнутое приложение не придёт. Расходует батарею</Text>
+              <Text style={styles.desc}>Пытается поддерживать связь, пока приложение свёрнуто. Не гарантирует входящий вызов и не запускает закрытое приложение. Расходует батарею</Text>
             </View>
             <AppSwitch
               accessibilityLabel="Связь в фоне"
@@ -2974,6 +2982,11 @@ function SettingsScreenImpl({
                           {isCurrent ? <StatusBadge tone="success" text="Это устройство" /> : null}
                         </View>
                         <Text style={styles.desc}>{sessionSystemLine(device)}</Text>
+                        <Text style={styles.desc}>{pushDevices === null
+                          ? 'Уведомления профиля: состояние неизвестно'
+                          : pushDevices.some((entry) => entry.deviceId === device.deviceId)
+                            ? 'Уведомления профиля включены'
+                            : 'Уведомления профиля не зарегистрированы'}</Text>
                         <Text style={[styles.desc, { marginTop: 2 }]}>
                           <Ionicons name="location-outline" size={12} color={colors.textMuted} /> {sessionLocation(device)}
                         </Text>

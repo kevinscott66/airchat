@@ -33,7 +33,7 @@ export type SyncStuck = {
   held: number;
   /** Своё: сервер отверг один и тот же набор, и проход перестал повторять. */
   rejected: number;
-  /** Чужое: приехавшая строка здесь не разбирается и пропущена насовсем. */
+  /** Incoming projection failed; its cursor remains available for retry. */
   poisoned: number;
 };
 

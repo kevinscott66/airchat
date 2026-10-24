@@ -69,7 +69,7 @@ describe('ответ на отправку', () => {
 
   it('ПРОВЕРКА НЕ ПУСТАЯ: состояние по-прежнему сохраняют после проверки сброса сервера', () => {
     const reset = ACCOUNT_CODE.indexOf('if (await detectServerReset(options, state.serverEpoch, pushed.serverEpoch)) {');
-    const save = ACCOUNT_CODE.indexOf('await saveSyncState(options.ownerProfileId, {\n      serverEpoch: pushed.serverEpoch,');
+    const save = ACCOUNT_CODE.search(/await saveSyncState\(options.ownerProfileId, \{\s+serverEpoch: pushed.serverEpoch,/) ;
     expect(reset).toBeGreaterThan(-1);
     expect(save).toBeGreaterThan(reset);
   });

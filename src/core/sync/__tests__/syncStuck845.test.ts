@@ -185,8 +185,8 @@ describe('форма исходников', () => {
 
   it('испорченная входящая строка доезжает до вызывающего числом', () => {
     expect(ONCE).toContain('  poisoned: number;');
-    expect(ONCE).toContain('poisoned += 1;');
-    expect(ONCE).toContain("log.warn('sync_pull_row_poisoned'");
+    expect(ONCE).toContain('const poisoned = 0;');
+    expect(ONCE).not.toContain("log.warn('sync_pull_row_poisoned'");
     // Необязательного поля со значением по умолчанию тут быть не должно:
     // это и есть молчаливый пропуск.
     expect(ONCE).not.toContain('poisoned?: number');
