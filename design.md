@@ -1199,7 +1199,9 @@ The user profile card keeps the photo, identity, biography and primary actions
 visible first. Secondary actions, ID/QR/share and conversation details (including
 the security fingerprint, notes and export) live under the accessible
 «Подробнее» disclosure. Changed or unchecked identity warnings remain visible
-above that disclosure. Content sections wrap into compact chips instead of
+above that disclosure. The cover behind the avatar uses the selected conversation
+wallpaper, or the current theme background when none is selected. Content
+sections wrap into compact chips instead of
 a clipped horizontal strip. A fixed 44×44 close target remains reachable while
 the card body scrolls in short windows. These presentation changes share the
 same component across web, iOS and Android and do not change privacy settings.

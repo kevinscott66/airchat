@@ -115,11 +115,7 @@ import type { MentionKeyPin } from '../../core/social/usernameDirectory';
 import { rawErrorText, userErrorText } from './userErrorText';
 import { COPY_ACTION, COPY_FAILED, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
-// v4.32.540: чужой профиль — обложка из набора обоев и постоянный
-// идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
 import { WallpaperBackground } from './WallpaperBackground';
-import { coverWallpaperFor } from '../wallpapers';
-import { publicIdFor } from '../../core/identity/publicId';
 import { PersonAvatar } from './PersonAvatar';
 import { VerifiedMark } from './VerifiedMark';
 import {
@@ -693,13 +689,9 @@ export function UserProfilePeek({
   const sections = useMemo(() => hubSections(facts), [facts]);
   const moreItems = useMemo(() => hubMore(facts), [facts]);
 
-  // v4.32.573: идентификатор аккаунта с карточки убран — показывать его
-  // собеседнику незачем (см. core/identity/accountRef). Вычисляться он не
-  // перестал: от него берётся обложка, и она должна остаться той же самой.
-  const peerPublicId = useMemo(() => publicIdFor('account', resolved?.did ?? ''), [resolved]);
-  // Обложка — от идентификатора, а не от имени: переименовал контакт у себя,
-  // а карточка осталась той же самой.
-  const cover = useMemo(() => coverWallpaperFor(peerPublicId), [peerPublicId]);
+  // Используем выбранный фон разговора; без выбора — фон текущей темы.
+  // Случайный светлый пресет делал обложку белой полосой даже в тёмной теме.
+  const cover = wallpaper ?? defaultWallpaper(scheme);
 
   const handleCopyId = useCallback(async () => {
     if (!resolved) return;
