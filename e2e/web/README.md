@@ -155,3 +155,62 @@ locator/hit-testing limitation, not evidence that promotion fails for a user.
 The default combined command currently exits nonzero and must not be enabled as
 a required CI check until its confirmation target is validated with a captured
 DOM/screenshot and the complete physical-click scenario passes.
+
+### Bounded confirmation diagnostic (before another acceptance attempt)
+
+The retained `/tmp/airchat-secure-final.log` contains the failed expression but
+no target DOM, hit-test stack, or confirmation screenshot. The harness failure
+handler records HTTP counts and then removes its temporary browser profiles.
+The source alone does not distinguish an obscured modal from a wrong target:
+`group-acceptance.js` chooses the nearest `[role=button]` or the text leaf,
+whereas `AppNotifyHost` confirmation actions do not provide a button role and
+`AppPressable` intentionally has no default role. Do not replace this with DOM
+`.click()`, force a click through an overlay, or count the earlier DOM activation
+as physical-click verification.
+
+The next diagnostic should be one isolated `--groups-only` run, instrumented
+before starting it, stopping at the promotion confirmation. Capture both the
+successful arrival and a failed hit-test **before fixture cleanup**:
+
+- Save a CDP `Page.captureScreenshot` image of the local fixture viewport.
+- For every exact visible “Подтвердить” leaf, record its bounding rectangle,
+  ancestor tag/role/tabindex chain, computed display/visibility/opacity and
+  pointer-events, plus `document.elementsFromPoint` at the selected centre.
+  Record viewport dimensions and whether the selected node is connected.
+- Limit the DOM excerpt to the confirmation subtree. Do not dump storage,
+  onboarding words, whole-page HTML, cookies, request headers, or remote URLs.
+- Stop without mutation if the selected target is obscured or ambiguous. Use
+  the capture to decide whether the target should be its nearest focusable
+  Pressable ancestor, or whether modal visibility/stacking needs a UI fix.
+
+Only after this identifies a concrete defect should a minimal helper change
+be tested with CDP mouse press/release in the targeted group scenario. A green
+result must include promotion, grant and revoke assertions and receiver author
+labels. The complete combined physical-click acceptance remains pending;
+no additional run or helper fix was performed during this read-only diagnosis.
+
+Set `AIRCHAT_E2E_CONFIRM_DIAGNOSTICS=/absolute/local/artifact-directory` to opt
+into confirmation capture. The helper checks the browser is on loopback, saves
+`confirmation-arrival.json/.png` before hit-testing, and
+`confirmation-failure.json/.png` on timeout before normal fixture cleanup.
+JSON contains geometry, tag/role/tabindex, visibility/pointer-events, ancestors
+and hit-stack only; no text, HTML, URLs, keys or browser storage. Screenshots
+contain the synthetic local fixture UI. Files use mode 0600 in a mode 0700
+created directory. The click algorithm is unchanged and capture is off by default.
+
+One bounded capture attempt on 24 October used source `5ce7439` plus this
+opt-in hook and the existing `/tmp/airchat-document-fixed-web` export:
+
+```sh
+AIRCHAT_E2E_CONFIRM_DIAGNOSTICS=/tmp/airchat-confirmation-diagnostic-20261024 \
+NTFY_BIN=/tmp/airchat-test-tools/ntfy-server \
+node e2e/web/two-clients.js /tmp/airchat-document-fixed-web --groups-only
+```
+
+It exited 1 after both fresh accounts and current-device/session checks passed.
+The physical hit-test for `tab_groups` timed out on entry to the group scenario,
+before promotion/confirmation, so no confirmation screenshot or JSON was
+produced. Output is `/tmp/airchat-confirmation-diagnostic-20261024.log`.
+No second run was attempted. This earlier failure does not identify the cause
+of the original confirmation failure; preceding navigation needs its own
+bounded hit-stack capture before another attempt can reach confirmation.

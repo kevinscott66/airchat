@@ -1,22 +1,46 @@
 'use strict';
 
 const { sleep } = require('./run');
+const fs = require('fs');
+const path = require('path');
 
 // All mutations go through the rendered UI; no grants, roles or message rows
 // are written directly into client/server storage by this acceptance test.
 module.exports = async function groupAcceptance(alice, bob) {
   const name = 'Isolated permission group';
   const leaf = text => `Array.from(document.querySelectorAll('*')).filter(x=>x.childElementCount===0&&x.textContent===${JSON.stringify(text)}&&x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})).at(-1)`;
-  async function hitClick(client, expression) {
+  async function captureConfirmation(client, stage) {
+    const directory = process.env.AIRCHAT_E2E_CONFIRM_DIAGNOSTICS;
+    if (!directory) return;
+    if (!(await client.evaluate("['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)"))) {
+      throw Error('Confirmation diagnostics require an isolated loopback fixture');
+    }
+    // Opt-in local fixture only. Never serialize text, HTML, URLs or storage.
+    const snapshot = await client.evaluate(`(()=>{
+      const describe=e=>{if(!e)return null;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,role:e.getAttribute('role'),tabindex:e.getAttribute('tabindex'),connected:e.isConnected,rect:{x:r.x,y:r.y,width:r.width,height:r.height},display:s.display,visibility:s.visibility,opacity:s.opacity,pointerEvents:s.pointerEvents}};
+      const candidates=Array.from(document.querySelectorAll('*')).filter(e=>e.childElementCount===0&&e.textContent==='Подтвердить'&&e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+      return {viewport:{width:innerWidth,height:innerHeight},candidates:candidates.map(leaf=>{const target=leaf.closest('[role=button]')||leaf;const r=target.getBoundingClientRect();const ancestors=[];for(let e=leaf;e&&ancestors.length<12;e=e.parentElement)ancestors.push(describe(e));return {leaf:describe(leaf),target:describe(target),ancestors,hitStack:document.elementsFromPoint(r.left+r.width/2,r.top+r.height/2).map(describe)}})};
+    })()`);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, `confirmation-${stage}.json`), JSON.stringify(snapshot, null, 2), { mode: 0o600 });
+    const screenshot = await client.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(directory, `confirmation-${stage}.png`), Buffer.from(screenshot.data, 'base64'), { mode: 0o600 });
+  }
+  async function hitClick(client, expression, confirmation = false) {
     const hit = `(()=>{const leaf=(${expression});if(!leaf)return null;const e=leaf.closest('[role=button]')||leaf;e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;const top=document.elementFromPoint(x,y);return top&&(top===e||e.contains(top))?{x,y}:null})()`;
-    await client.wait(hit);
+    if (confirmation) await captureConfirmation(client, 'arrival');
+    try { await client.wait(hit); }
+    catch (error) {
+      if (confirmation) await captureConfirmation(client, 'failure');
+      throw error;
+    }
     const point = await client.evaluate(hit);
     await client.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
     await client.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
   }
   async function textClick(client, text) {
     await client.wait(`!!(${leaf(text)})`);
-    await hitClick(client, leaf(text));
+    await hitClick(client, leaf(text), text === 'Подтвердить');
     await sleep(250);
   }
   async function labelClick(client, label) {
