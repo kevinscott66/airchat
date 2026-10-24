@@ -31,5 +31,11 @@ export function useChatBottomAnchor(
     // Keep that preservation only when the person is reading older messages.
     disabled: enabled && !awayFromBottom,
   }), [enabled, awayFromBottom]);
-  return { onContentSizeChange, maintainVisibleContentPosition };
+  return {
+    onContentSizeChange,
+    // Resizing a browser panel changes the viewport without necessarily changing
+    // message heights. Re-anchor that case too; history readers still stay put.
+    onLayout: onContentSizeChange,
+    maintainVisibleContentPosition,
+  };
 }

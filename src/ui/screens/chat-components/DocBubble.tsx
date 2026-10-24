@@ -1,11 +1,11 @@
 import React from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { AppPressable } from '../../components/AppPressable';
 import { isVideoDoc } from '../chat-utils/media';
 import { parseDocMeta } from '../../../core/social/docMeta';
-import { fileExt, parseNbCid, resolveBlobToLocalFileResult } from '../../../core/media/mediaBlob';
+import { fileExt, MAX_BLOB_BYTES, parseNbCid, resolveBlobToLocalFileResult } from '../../../core/media/mediaBlob';
 import { blobResolveText } from '../../../core/media/blobResolveText';
 import { showError } from '../../components/userFeedback';
 import { rawErrorText } from '../../components/userErrorText';
@@ -110,6 +110,17 @@ export function DocBubble({
       const res = await resolveBlobToLocalFileResult(blobRef, fileExt(meta.name));
       if (!res.ok) {
         showError(blobResolveText(res.reason, 'file'));
+        return;
+      }
+      if (Platform.OS === 'web') {
+        const { readWebAttachment } = await import('../../../core/media/readWebAttachment');
+        const { downloadWebAttachment } = await import('../../../core/media/downloadWebAttachment');
+        const attachment = await readWebAttachment(res.uri, MAX_BLOB_BYTES);
+        if (!attachment.ok) {
+          showError(blobResolveText('unknown', 'file'));
+          return;
+        }
+        downloadWebAttachment(attachment.b64, meta.name);
         return;
       }
       const sharing = await import('expo-sharing');

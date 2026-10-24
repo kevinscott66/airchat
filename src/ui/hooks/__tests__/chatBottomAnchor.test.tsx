@@ -30,8 +30,11 @@ it('follows committed incoming layout only at bottom and preserves readers/searc
     act(() => { jest.runAllTimers(); });
     expect(scroll).toHaveBeenLastCalledWith({ offset: 0, animated: false });
     scroll.mockClear();
+    act(() => { result.onLayout(); jest.runAllTimers(); });
+    expect(scroll).toHaveBeenLastCalledWith({ offset: 0, animated: false });
+    scroll.mockClear();
     awayRef.current = true;
-    act(() => { tree.update(<Test away />); result.onContentSizeChange(); jest.runAllTimers(); });
+    act(() => { tree.update(<Test away />); result.onContentSizeChange(); result.onLayout(); jest.runAllTimers(); });
     expect(result!.maintainVisibleContentPosition.disabled).toBe(false);
     expect(scroll).not.toHaveBeenCalled();
     awayRef.current = false;

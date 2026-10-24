@@ -14,3 +14,7 @@ formats receive `application/octet-stream` to avoid executing active content.
 Successful upload is not proof of recipient rendering: browser acceptance must
 also open the attachment at the receiving account. Large attachment limits and
 relay availability still apply.
+
+Web document actions download through a temporary object URL with an octet-stream
+MIME type and a sanitized filename; they do not pass data URLs to native sharing.
+The temporary URL is revoked after a delay so Safari can finish consuming it.

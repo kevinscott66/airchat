@@ -129,3 +129,10 @@ server before the v2 client; an older server rejects v2 rather than misinterpret
 it. No production deployment is implied by this source change.
 
 Local migration failure, retained failed projections and historical missing-row diagnostics are described in [client storage recovery](client-storage-recovery.md).
+
+## Browser session metadata
+
+Device metadata is descriptive, not an authentication factor. Unknown or
+privacy-reduced browser user agents may provide an empty OS version; enrollment
+accepts that value while retaining string/type/length and signature validation.
+Displayed OS versions reflect the browser user agent, not a hardware inventory.
