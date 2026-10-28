@@ -1,5 +1,5 @@
 /**
- * Четыре переключателя настроек группы: слова и патч в одном месте.
+ * Общие настройки группы: слова и патч в одном месте.
  *
  * v4.32.531. Дефект был не в самих словах, а в том, что каждый переключатель
  * нёс свою копию всего: пункт меню, надпись об успехе, системную строку в
@@ -21,8 +21,7 @@
 export type GroupFlagKey =
   | 'adminOnlyPosting'
   | 'adminOnlyPinning'
-  | 'requireApproval'
-  | 'anonymousPosting';
+  | 'requireApproval';
 
 export type GroupFlagCopy = {
   /** Подпись пункта меню: называет действие, а не текущее состояние. */
@@ -39,7 +38,6 @@ export type GroupFlagPatch = {
   adminOnlyPosting?: boolean;
   adminOnlyPinning?: boolean;
   requireApproval?: boolean;
-  anonymousPosting?: boolean;
 };
 
 /** Нажатие всегда переводит флаг в противоположное значение. */
@@ -62,8 +60,6 @@ export function groupFlagPatch(key: GroupFlagKey, next: boolean): GroupFlagPatch
       return { adminOnlyPinning: next };
     case 'requireApproval':
       return { requireApproval: next };
-    case 'anonymousPosting':
-      return { anonymousPosting: next };
   }
 }
 
@@ -102,13 +98,6 @@ export function groupFlagCopy(key: GroupFlagKey, current: boolean): GroupFlagCop
         success: next ? 'Новые участники требуют одобрения' : 'Вход по ссылке без одобрения',
         sys: next ? 'Вход по ссылке теперь требует одобрения' : 'Вход по ссылке без одобрения',
         failure: 'Не удалось изменить правило входа',
-      };
-    case 'anonymousPosting':
-      return {
-        menu: current ? 'Анонимные посты: выкл' : 'Анонимные посты: вкл',
-        success: next ? 'Имена отправителей скрыты' : 'Имена отправителей видны',
-        sys: next ? 'Имена отправителей скрыты' : 'Имена отправителей видны',
-        failure: 'Не удалось изменить анонимность',
       };
   }
 }

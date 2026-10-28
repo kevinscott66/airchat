@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const LOCAL = fs.readFileSync(path.join(__dirname, '..', 'local.ts'), 'utf8');
+const INDEXES = fs.readFileSync(path.join(__dirname, '..', 'localBootstrap.ts'), 'utf8');
 const MESSAGING = fs.readFileSync(
   path.join(__dirname, '..', '..', 'social', 'messaging.ts'),
   'utf8',
@@ -116,8 +117,8 @@ describe('индекс переписки знает про профиль', () 
   });
 
   it('старые индексы убираются явно: IF NOT EXISTS их бы не переопределил', () => {
-    expect(LOCAL).toContain('DROP INDEX IF EXISTS idx_chat_contact;');
-    expect(LOCAL).toContain('DROP INDEX IF EXISTS idx_grp_msg;');
+    expect(INDEXES).toContain('DROP INDEX IF EXISTS idx_chat_contact;');
+    expect(INDEXES).toContain('DROP INDEX IF EXISTS idx_grp_msg;');
     expect(LOCAL).not.toContain('ON chat_messages (contact_pub_b64, created_at DESC)');
     expect(LOCAL).not.toContain('ON group_messages (group_id, created_at DESC)');
   });

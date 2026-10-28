@@ -1,8 +1,10 @@
+import { NO_SYNC_STUCK } from './syncStuckReport';
+import { recordSyncStuck } from './syncStuckState';
 import { checkOnlineWrite } from './cachePolicy';
 import { pullSyncMutations, pushSyncMutations } from './syncApi';
 import type { KeyPairBytes } from '../crypto/keyManager';
 import { log } from '../logger';
-import { getSyncState, kvSetChecked, saveSyncState, validSyncCursor } from '../storage/local';
+import { getSyncState, saveSyncState, validSyncCursor } from '../storage/local';
 import type { SyncMutation, SyncPullResponse, SyncPushResponse } from './syncProtocol';
 
 export type SyncProjection = (mutation: SyncMutation) => Promise<void>;
@@ -26,75 +28,13 @@ export type AccountSyncResult = {
   status: 'synced' | 'offline' | 'reset';
   pushed: SyncPushResponse | null;
   pulled: SyncPullResponse | null;
-  /**
-   * Сколько приехавших строк признано испорченными и пропущено насовсем
-   * (v4.32.845).
-   *
-   * Курсор уходит за такую строку, и сервер её больше не отдаст — значит на
-   * этом устройстве её не будет уже никогда, а на том, откуда она приехала,
-   * она есть. Поле обязательное нарочно: необязательное со значением по
-   * умолчанию ноль — ровно тот молчаливый пропуск, ради которого это и
-   * заведено.
-   */
+  /** Reserved compatibility counter. Failed projections are retained for retry. */
   poisoned: number;
+  /** Pull recovered a rejected push; remaining mutations still need another pass. */
+  pushConflict?: boolean;
 };
 
 const locks = new Map<number, Promise<AccountSyncResult>>();
-
-/**
- * Сколько раз одна строка может уронить проход, прежде чем её пропустят
- * (v4.32.617).
- *
- * Курсор двигается только после того, как ВСЯ пачка спроецирована, — и это
- * правильно: иначе сбой посреди пачки терял бы данные. Но у правила была
- * обратная сторона. Проекция бросает исключение не только на временной беде
- * (база занята, места нет): она бросает и на неисправимом — конверт,
- * зашифрованный другим ключом, строка сообщения, которая не проходит
- * проверку, tombstone комментария без разделителя. Такую строку сервер отдаёт
- * снова и снова, проход падает на ней снова и снова, курсор не двигается
- * НИКОГДА — и вместе с ней встаёт весь аккаунт: ни сообщений, ни групп, ни
- * ленты. Наружу при этом уходит одна строка `live_sync_failed` в журнал,
- * пользователю не видно ничего.
- *
- * Поэтому: первые попытки ведут себя как раньше (курсор стоит, строка будет
- * повторена), а после третьей строка пропускается, курсор идёт дальше, и в
- * журнал уходит отдельное событие. Сущность при этом остаётся неприменённой,
- * но её «голова» не обновляется — следующая ревизия той же сущности приедет
- * и встанет на место как обычно.
- */
-const POISON_MAX_ATTEMPTS = 3;
-
-/** Потолок на счётчики: карта живёт в памяти и растёт от чужих данных. */
-const POISON_MAX_TRACKED = 256;
-
-/** Сколько раз подряд конкретная строка роняла проекцию. Живёт до перезапуска. */
-const poisonAttempts = new Map<string, number>();
-
-function poisonKey(ownerProfileId: number, mutationId: string): string {
-  return `${ownerProfileId}\u0000${mutationId}`;
-}
-
-/** Строка пробы: одна на всё приложение, перезаписывается поверх себя. */
-const POISON_PROBE_KEY = 'airchat_sync_poison_probe';
-
-/**
- * Отвечает ли база прямо сейчас (v4.32.786).
- *
- * Счётчик выше считает, сколько раз строка уронила проекцию, — но проекция
- * бросает одно и то же исключение и на неисправимом (конверт чужим ключом,
- * tombstone без разделителя), и на временном (база занята, места нет).
- * Различить их по самому исключению нельзя: оно приходит из чужого кода и
- * текст его никто не обещал.
- *
- * Зато можно спросить у базы. Проверяемая запись не бросает: она отвечает
- * `false` и на «database is locked», и на переполненный диск. Ответила `true`
- * — беда не в базе, значит виновата строка, и приговор ей честный. Ответила
- * `false` — падало не из-за строки, и выбрасывать её нельзя: приговор
- * откладывается до следующего прохода.
- */
-async function databaseAnswers(): Promise<boolean> {
-  return kvSetChecked(POISON_PROBE_KEY, String(Date.now()));
-}
 
 /**
  * Годится ли пришедшая строка к проекции (v4.32.523).
@@ -142,7 +82,7 @@ async function detectServerReset(
 
 async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> {
   /** Строки, которые этот заход выбросил как неисправимые. */
-  let poisoned = 0;
+  const poisoned = 0;
   if (options.shouldContinue && !options.shouldContinue()) {
     return { status: 'offline', pushed: null, pulled: null, poisoned };
   }
@@ -151,36 +91,49 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
 
   const state = await getSyncState(options.ownerProfileId);
   let pushed: SyncPushResponse | null = null;
+  let pushConflict = false;
   if (options.pendingMutations && options.pendingMutations.length > 0) {
     if (options.shouldContinue && !options.shouldContinue()) {
       return { status: 'offline', pushed: null, pulled: null, poisoned };
     }
-    pushed = await pushSyncMutations(options.mnemonic, options.pair, options.pendingMutations);
-    // v4.32.624: форма ответа на отправку проверяется ДО того, как по нему
-    // что-то решают. Ниже оба списка перебирают и меряют без оглядки на то,
-    // списки ли это: сервер, приславший вместо массива null, ронял проход
-    // английским TypeError из середины saveSyncEntityHeads — то есть уже
-    // после saveSyncState, с наполовину применённым ответом. Тем же правилом
-    // и по той же причине отвергается непонятный курсор в ветке приёма ниже.
-    if (!Array.isArray(pushed.acceptedMutationIds) || !Array.isArray(pushed.rejectedMutationIds)) {
-      log.warn('sync_push_shape_invalid', {
-        accepted: typeof pushed.acceptedMutationIds,
-        rejected: typeof pushed.rejectedMutationIds,
+    try {
+      pushed = await pushSyncMutations(options.mnemonic, options.pair, options.pendingMutations);
+    } catch (error) {
+      const failure = error as { status?: unknown; code?: unknown } | null;
+      if (failure?.status !== 409 || failure.code !== 'sync_mutation_conflict') throw error;
+      // An accepted push whose response was lost is re-encrypted with a new
+      // nonce on retry. Do not acknowledge those different bytes; recover the
+      // server's authenticated snapshot via the normal pull/projection path.
+      pushConflict = true;
+      log.info('sync_push_conflict_recover_pull', { ownerProfileId: options.ownerProfileId });
+    }
+    if (pushed) {
+      // v4.32.624: форма ответа на отправку проверяется ДО того, как по нему
+      // что-то решают. Ниже оба списка перебирают и меряют без оглядки на то,
+      // списки ли это: сервер, приславший вместо массива null, ронял проход
+      // английским TypeError из середины saveSyncEntityHeads — то есть уже
+      // после saveSyncState, с наполовину применённым ответом. Тем же правилом
+      // и по той же причине отвергается непонятный курсор в ветке приёма ниже.
+      if (!Array.isArray(pushed.acceptedMutationIds) || !Array.isArray(pushed.rejectedMutationIds)) {
+        log.warn('sync_push_shape_invalid', {
+          accepted: typeof pushed.acceptedMutationIds,
+          rejected: typeof pushed.rejectedMutationIds,
+        });
+        throw new Error('Сервер вернул некорректный ответ синхронизации.');
+      }
+      if (options.shouldContinue && !options.shouldContinue()) {
+        return { status: 'offline', pushed, pulled: null, poisoned };
+      }
+      if (await detectServerReset(options, state.serverEpoch, pushed.serverEpoch)) {
+        return { status: 'reset', pushed, pulled: null, poisoned };
+      }
+      await saveSyncState(options.ownerProfileId, {
+        serverEpoch: pushed.serverEpoch,
+        lastPushAt: Date.now(),
       });
-      throw new Error('Сервер вернул некорректный ответ синхронизации.');
-    }
-    if (options.shouldContinue && !options.shouldContinue()) {
-      return { status: 'offline', pushed, pulled: null, poisoned };
-    }
-    if (await detectServerReset(options, state.serverEpoch, pushed.serverEpoch)) {
-      return { status: 'reset', pushed, pulled: null, poisoned };
-    }
-    await saveSyncState(options.ownerProfileId, {
-      serverEpoch: pushed.serverEpoch,
-      lastPushAt: Date.now(),
-    });
-    if (options.onPushAccepted) {
-      await options.onPushAccepted(pushed, options.pendingMutations);
+      if (options.onPushAccepted) {
+        await options.onPushAccepted(pushed, options.pendingMutations);
+      }
     }
   }
 
@@ -226,44 +179,16 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
       });
       continue;
     }
-    const attemptKey = poisonKey(options.ownerProfileId, mutation.mutationId);
+    // A successful probe of local.db cannot prove that the feed database,
+    // media store or encryption key is available. Never acknowledge failed
+    // projections: retaining the cursor makes every failure retryable.
     try {
       await options.applyMutation(mutation);
-      poisonAttempts.delete(attemptKey);
-    } catch (e) {
-      const attempts = (poisonAttempts.get(attemptKey) ?? 0) + 1;
-      if (attempts < POISON_MAX_ATTEMPTS) {
-        // Счётчики — эвристика, а не состояние: при переполнении сбрасываем
-        // всю карту, и худшее следствие — несколько лишних попыток.
-        if (poisonAttempts.size >= POISON_MAX_TRACKED) poisonAttempts.clear();
-        poisonAttempts.set(attemptKey, attempts);
-        throw e;
+    } catch (error) {
+      if (!options.shouldContinue || options.shouldContinue()) {
+        recordSyncStuck({ ...NO_SYNC_STUCK, poisoned: 1 });
       }
-      // v4.32.786: до этой проверки занятая база три прохода подряд выглядела
-      // как испорченная строка — и совершенно исправную строку выбрасывали
-      // навсегда, а курсор уходил за неё. Проходы идут подряд при
-      // переподключении, так что три штуки укладываются в секунды.
-      //
-      // Счётчик при этом трогать не нужно: он остался на POISON_MAX_ATTEMPTS
-      // минус один, и как только база освободится, приговор вынесут первым же
-      // проходом, без новых трёх попыток.
-      if (!(await databaseAnswers())) {
-        log.warn('sync_pull_row_verdict_held', {
-          entityKind: mutation.entityKind,
-          revision: mutation.revision,
-          attempts,
-        });
-        throw e;
-      }
-      poisonAttempts.delete(attemptKey);
-      poisoned += 1;
-      log.warn('sync_pull_row_poisoned', {
-        entityKind: mutation.entityKind,
-        ownerProfileId: mutation.ownerProfileId,
-        revision: mutation.revision,
-        attempts,
-        err: e instanceof Error ? e.message : String(e),
-      });
+      throw error;
     }
   }
   if (options.shouldContinue && !options.shouldContinue()) {
@@ -278,7 +203,7 @@ async function runSync(options: AccountSyncOptions): Promise<AccountSyncResult> 
     serverEpoch: pulled.serverEpoch,
     lastPullAt: Date.now(),
   });
-  return { status: 'synced', pushed, pulled, poisoned };
+  return { status: 'synced', pushed, pulled, poisoned, ...(pushConflict ? { pushConflict: true } : {}) };
 }
 
 /** Serialize sync per profile so two reconnect events cannot race the cursor. */

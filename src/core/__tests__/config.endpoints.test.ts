@@ -351,3 +351,60 @@ describe('ссылка на документ OpenFlux из переменной 
     expect([cfg.openflux?.enabled, cfg.openflux?.docUrl]).toEqual([false, DOC]);
   });
 });
+
+
+describe('previous factory OpenFlux document migration', () => {
+  const currentKey = 'EXPO_PUBLIC_OPENFLUX_DOC_URL';
+  const previousKey = 'EXPO_PUBLIC_OPENFLUX_PREVIOUS_DOC_URLS';
+  const originalCurrent = process.env[currentKey];
+  const originalPrevious = process.env[previousKey];
+  const oldDoc = 'https://docs.yandex.ru/synthetic-old-factory';
+  const newDoc = 'https://docs.yandex.ru/synthetic-new-factory';
+  beforeEach(() => {
+    process.env[currentKey] = newDoc;
+    process.env[previousKey] = JSON.stringify([oldDoc]);
+  });
+  afterEach(() => {
+    for (const [key, value] of [[currentKey, originalCurrent], [previousKey, originalPrevious]]) {
+      if (value === undefined) delete process.env[key!];
+      else process.env[key!] = value;
+    }
+  });
+  it('migrates load, saves durably, preserves disabled/custom fields and is idempotent on restart', async () => {
+    const original = { openflux: { docUrl: oldDoc, enabled: false, autoStart: false, localSocksPort: 14999 }, whitelist: { enabled: true } };
+    fsMock.__files[OVERRIDE_URI] = JSON.stringify(original);
+    const mod = freshConfig();
+    const loaded = await mod.loadConfig();
+    expect(loaded.openflux).toMatchObject({ ...original.openflux, docUrl: newDoc });
+    expect(mod.getConfigSync()).toBe(loaded);
+    expect(JSON.parse(fsMock.__files[OVERRIDE_URI])).toEqual(original); // load does not write
+    await mod.saveConfigOverride({ lan: { enabled: false } });
+    const saved = JSON.parse(fsMock.__files[OVERRIDE_URI]);
+    expect(saved).toEqual({ ...original, openflux: { ...original.openflux, docUrl: newDoc }, lan: { enabled: false } });
+    expect((await freshConfig().loadConfig()).openflux).toMatchObject(saved.openflux);
+    await freshConfig().saveConfigOverride({});
+    expect(JSON.parse(fsMock.__files[OVERRIDE_URI])).toEqual(saved);
+  });
+  it.each([
+    ['custom', 'https://docs.yandex.ru/synthetic-custom', newDoc, JSON.stringify([oldDoc])],
+    ['no allowlist', oldDoc, newDoc, ''],
+    ['malformed allowlist', oldDoc, newDoc, '{'],
+    ['invalid allowlist', oldDoc, newDoc, '[1]'],
+    ['no new document', oldDoc, '', JSON.stringify([oldDoc])],
+    ['already current', newDoc, newDoc, JSON.stringify([oldDoc])],
+  ])('keeps %s unchanged on load/save', async (_label, docUrl, current, previous) => {
+    process.env[currentKey] = current;
+    process.env[previousKey] = previous;
+    fsMock.__files[OVERRIDE_URI] = JSON.stringify({ openflux: { docUrl, enabled: false } });
+    expect((await freshConfig().loadConfig()).openflux?.docUrl).toBe(docUrl);
+    const saved = await freshConfig().saveConfigOverride({});
+    expect(saved.openflux?.docUrl).toBe(docUrl);
+    expect(JSON.parse(fsMock.__files[OVERRIDE_URI]).openflux.docUrl).toBe(docUrl);
+  });
+  it('does not overwrite unreadable overrides', async () => {
+    fsMock.__files[OVERRIDE_URI] = '{broken';
+    await freshConfig().loadConfig();
+    await expect(freshConfig().saveConfigOverride({})).rejects.toThrow();
+    expect(fsMock.__files[OVERRIDE_URI]).toBe('{broken');
+  });
+});

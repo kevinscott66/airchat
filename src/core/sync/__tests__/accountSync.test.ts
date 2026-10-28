@@ -1,3 +1,5 @@
+import { Buffer } from 'buffer';
+import { encryptSymmetric, decryptSymmetric } from '../../crypto/encrypt';
 jest.mock('../cachePolicy', () => ({
   checkOnlineWrite: jest.fn(),
 }));
@@ -282,15 +284,14 @@ describe('строка, которую не удаётся спроециров�
     expect(writeState).not.toHaveBeenCalled();
   });
 
-  it('после предела попыток строка пропускается и курсор идёт дальше', async () => {
+  it('повторный отказ остаётся неполученной строкой и не двигает курсор', async () => {
     arm('poison-skip');
     const applyMutation = jest.fn().mockRejectedValue(new Error('не расшифровать'));
     await expect(runOnce(applyMutation)).rejects.toThrow();
     await expect(runOnce(applyMutation)).rejects.toThrow();
 
-    const result = await runOnce(applyMutation);
-    expect(result.status).toBe('synced');
-    expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '2' }));
+    await expect(runOnce(applyMutation)).rejects.toThrow();
+    expect(writeState).not.toHaveBeenCalled();
   });
 
   it('проверка не пустая: удачная проекция счётчик обнуляет', async () => {
@@ -358,4 +359,39 @@ describe('курсор от сервера проверяется до прим�
     expect(applyMutation).not.toHaveBeenCalled();
     expect(writeState).not.toHaveBeenCalled();
   });
+});
+
+
+test('lost push response and randomized retry recover through authenticated pull without acknowledging retry bytes', async () => {
+  const key = new Uint8Array(32).fill(17);
+  const plaintext = new TextEncoder().encode('full message snapshot');
+  const first = { ...mutation, ciphertextB64: Buffer.from(encryptSymmetric(key, plaintext)).toString('base64') };
+  const retry = { ...mutation, ciphertextB64: Buffer.from(encryptSymmetric(key, plaintext)).toString('base64') };
+  expect(retry.ciphertextB64).not.toBe(first.ciphertextB64);
+  let committed = false;
+  push.mockImplementation(async (_seed, _pair, batch) => {
+    if (!committed) { committed = true; throw new Error('response lost after commit'); }
+    expect(batch[0].mutationId).toBe(first.mutationId);
+    throw Object.assign(new Error('different ciphertext'), { status: 409, code: 'sync_mutation_conflict' });
+  });
+  pull.mockResolvedValue({ serverEpoch: 'epoch-1', nextCursor: '1', hasMore: false, mutations: [first] });
+  const accepted = jest.fn(async () => {});
+  const apply = jest.fn(async (row) => {
+    const decoded = decryptSymmetric(key, Buffer.from(row.ciphertextB64, 'base64'));
+    expect(decoded).toEqual(plaintext);
+  });
+  const options = { mnemonic: 'seed', pair, ownerProfileId: 1, applyMutation: apply, onPushAccepted: accepted };
+  await expect(syncAccountOnce({ ...options, pendingMutations: [first] })).rejects.toThrow('response lost');
+  expect(pull).not.toHaveBeenCalled();
+  expect(await syncAccountOnce({ ...options, pendingMutations: [retry] })).toMatchObject({ status: 'synced', pushConflict: true });
+  expect(apply).toHaveBeenCalledWith(first);
+  expect(accepted).not.toHaveBeenCalled();
+  expect(writeState).toHaveBeenCalledWith(1, expect.objectContaining({ cursor: '1' }));
+});
+
+test('unrelated HTTP conflict remains an error and cannot acknowledge a push', async () => {
+  push.mockRejectedValueOnce(Object.assign(new Error('device conflict'), { status: 409, code: 'device_key_mismatch' }));
+  await expect(syncAccountOnce({ mnemonic: 'seed', pair, ownerProfileId: 1, pendingMutations: [mutation], applyMutation: jest.fn() })).rejects.toThrow('device conflict');
+  expect(pull).not.toHaveBeenCalled();
+  expect(writeState).not.toHaveBeenCalled();
 });

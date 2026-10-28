@@ -70,7 +70,7 @@ function serve(root) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-async function launchChrome(chromePath) {
+async function launchChrome(chromePath, extraArgs = []) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-e2e-'));
   const proc = spawn(chromePath, [
     '--headless=new',
@@ -81,18 +81,29 @@ async function launchChrome(chromePath) {
     '--disable-gpu',
     '--no-sandbox',
     `--window-size=${WIDTH},${HEIGHT}`,
+    ...extraArgs,
     'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
-  const wsUrl = await new Promise((resolve, reject) => {
+  let wsUrl;
+  try {
+    wsUrl = await new Promise((resolve, reject) => {
     let buf = '';
-    const timer = setTimeout(() => reject(new Error('Chrome did not start')), 15000);
+    const timer = setTimeout(() => reject(new Error(`Chrome did not start within 60s: ${buf.slice(-2000)}`)), 60000);
     proc.stderr.on('data', (d) => {
-      buf += d;
+      buf = (buf + d).slice(-8000);
       const m = buf.match(/DevTools listening on (ws:\/\/\S+)/);
       if (m) { clearTimeout(timer); resolve(m[1]); }
     });
-    proc.on('exit', (code) => reject(new Error(`Chrome exited with ${code}`)));
-  });
+    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error(`Chrome exited with ${code}: ${buf.slice(-2000)}`)); });
+    proc.on('error', (error) => { clearTimeout(timer); reject(error); });
+    });
+  } catch (error) {
+    const exited = new Promise(resolve => proc.once('exit', resolve));
+    proc.kill('SIGKILL');
+    await Promise.race([exited, sleep(5000)]);
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    throw error;
+  }
   return {
     wsUrl,
     async close() {
@@ -257,7 +268,9 @@ async function main() {
   console.log('e2e:web: OK');
 }
 
-main().catch((err) => {
+module.exports = { findChrome, serve, launchChrome, connect, sleep };
+
+if (require.main === module) main().catch((err) => {
   console.error(`e2e:web: ${err.stack || err}`);
   process.exit(1);
 });

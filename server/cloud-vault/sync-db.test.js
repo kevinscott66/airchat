@@ -77,13 +77,11 @@ test('pull is cursor based and preserves tombstones', (t) => {
 
   const first = db.pull(account, 'tablet-1', null, 1);
   assert.equal(first.mutations.length, 1);
-  assert.equal(first.mutations[0].deleted, false);
-  assert.equal(first.hasMore, true);
+  assert.equal(first.mutations[0].deleted, true);
+  assert.equal(first.mutations[0].ciphertextB64, null);
+  assert.equal(first.hasMore, false);
   const second = db.pull(account, 'tablet-1', first.nextCursor, 1);
-  assert.equal(second.mutations.length, 1);
-  assert.equal(second.mutations[0].deleted, true);
-  assert.equal(second.mutations[0].ciphertextB64, null);
-  assert.equal(second.hasMore, false);
+  assert.equal(second.mutations.length, 0);
   const jumped = db.pull(account, 'tablet-1', '999999', 1);
   assert.equal(jumped.mutations.length, 0);
   assert.equal(jumped.nextCursor, second.nextCursor);
@@ -121,8 +119,8 @@ test('profile-scoped pulls keep cursors separate from the account cursor', (t) =
     ORDER BY owner_profile_id
   `).all(account, 'phone-1');
   assert.deepEqual(cursors.map((cursor) => ({ ...cursor })), [
-    { ownerProfileId: 0, cursor: 2 },
-    { ownerProfileId: 1, cursor: 1 },
+    { ownerProfileId: 0, cursor: 0 },
+    { ownerProfileId: 1, cursor: 0 },
   ]);
 });
 
@@ -349,7 +347,7 @@ test('serializes first account claims and limits active devices without blocking
   ]);
 });
 
-test('compacts mutations only through every active device cursor', (t) => {
+test('compaction retains every current snapshot after all devices pull', (t) => {
   const { db, dir } = makeDb();
   t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const account = 'i'.repeat(32);
@@ -366,13 +364,14 @@ test('compacts mutations only through every active device cursor', (t) => {
 
   const secondPull = db.pull(account, 'phone-2', null, 100);
   assert.equal(secondPull.mutations.length, 2);
-  assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM sync_mutations WHERE account_id = ?').get(account).count, 0);
+  assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM sync_mutations WHERE account_id = ?').get(account).count, 2);
   const compacted = db.compactSyncMutations(account);
   assert.equal(compacted.deleted, 0);
   assert.equal(compacted.activeDevices, 2);
   assert.equal(db.latestCursor(account), secondPull.nextCursor);
 
   // A stale pull cannot move the device cursor backwards after compaction.
+  db.pull(account, 'phone-2', secondPull.nextCursor, 100);
   db.pull(account, 'phone-2', '0', 100);
   assert.equal(db.db.prepare(
     'SELECT cursor FROM sync_device_cursors WHERE account_id = ? AND device_id = ?',
@@ -708,7 +707,7 @@ test('публичные копии убираются по сроку и по �
   const put = (postId, did, at, filler) => {
     assert.deepEqual(
       db.putPublicPost(postId, did, `key-${did}`, 'x'.repeat(filler), 'sig', { now: at }),
-      { ok: true, bytes: filler + 3 },
+      { ok: true, bytes: filler + 3, revision: 1, active: true },
     );
   };
 

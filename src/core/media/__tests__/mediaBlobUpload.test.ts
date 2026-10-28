@@ -1,3 +1,4 @@
+jest.mock('expo/fetch', () => ({ fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }));
 /**
  * Отправка вложения: три места, где неудача выглядела удачей (v4.32.617).
  *
@@ -89,6 +90,11 @@ const warn = log.warn as jest.Mock;
 const times = (m: jest.Mock, event: string): number =>
   m.mock.calls.filter((c) => c[0] === event).length;
 
+function ackResponse(text: string, length: string | null = null) {
+  const reader = { read: jest.fn().mockResolvedValueOnce({ done: false, value: new Uint8Array(Buffer.from(text)) }).mockResolvedValue({ done: true }), cancel: jest.fn(async () => {}), releaseLock: jest.fn() };
+  return { ok: true, status: 200, headers: { get: () => length }, body: { getReader: () => reader, cancel: jest.fn(async () => {}) }, reader };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockFileSize = null;
@@ -97,10 +103,7 @@ beforeEach(() => {
   mockCloudOk = true;
   mockCacheWriteOk = true;
   mockLanPushOk = true;
-  globalThis.fetch = jest.fn(async () => ({
-    ok: true,
-    json: async () => ({ attachment: { url: `${mockRelay}/file/aa.bin` } }),
-  })) as unknown as typeof fetch;
+  globalThis.fetch = jest.fn(async () => ackResponse(JSON.stringify({ attachment: { url: `${mockRelay}/file/aa.bin` } }))) as unknown as typeof fetch;
 });
 
 describe('чтение файла ограничено, когда размер неизвестен', () => {

@@ -29,7 +29,6 @@ import { runGalleryPick } from '../galleryPick';
 import { showPermissionDeniedAlert } from '../permissionAlert';
 // v4.32.27: AppModal = Modal + GestureHandlerRootView inside — чтобы RNGH
 // Pressable (AppPressable) внутри модалок получал касания на Android.
-import { AppModal as Modal } from '../components/AppModal';
 import { AttachSheet } from '../components/AttachSheet';
 import { resolveDmPinned, toggleDmPinAndSync, clearDmPinnedAndSync, dmPinRefusalText, type DmPinnedEntry } from '../../core/social/dmPinSync';
 import { announceDmPin } from '../dmPinAnnounce';
@@ -56,6 +55,7 @@ import {
   type MentionKeyPin,
   type MentionTarget,
 } from '../../core/social/usernameDirectory';
+import { useChatBottomAnchor } from '../hooks/useChatBottomAnchor';
 import { FlashList } from '@shopify/flash-list';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -113,7 +113,7 @@ import { shouldApplyRows } from '../../core/storage/readResult';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../ThemeContext';
 import { useTabBarInset } from '../TabBarInset';
-import { avatarShape, badgeDigit, badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, font, elevation, inkOn, mono, motion, nestedFill, radius, rippleOn, rowMark, scrim, spacing, TOUCH_TARGET_MIN } from '../theme';
+import { badgeDigit, badgeTint, bubbleInk, bubbleSurfaceOn, contrastingInk, font, elevation, inkOn, mono, motion, nestedFill, radius, rippleOn, rowMark, spacing, TOUCH_TARGET_MIN } from '../theme';
 import { isReducedMotion } from '../motionPrefs';
 import { GlassSurface } from '../components/GlassSurface';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -221,12 +221,12 @@ import { CollapsibleMessageBlock } from './chat-components/text/CollapsibleMessa
 import { MessageStatusIcon } from './chat-components/MessageStatusIcon';
 import { ReactionBar } from './chat-components/ReactionBar';
 import { DmPollBubble } from './chat-components/DmPollBubble';
+import { ReactionDetailModal } from './chat-components/ReactionDetailModal';
 import { ContactCardBubble } from './chat-components/ContactCardBubble';
 import { DocBubble } from './chat-components/DocBubble';
 import { LocationBubble } from './chat-components/LocationBubble';
 import { LiveLocationBubble } from './chat-components/LiveLocationBubble';
 import { MediaStrip } from './chat-components/MediaStrip';
-import { contactLabel, nameInitial } from '../../core/social/contactLabel';
 // ─── Forward Message Modal ────────────────────────────────────────────────────
 // Extracted to src/ui/components/modals/chat/ChatForwardModal.tsx (B.3.f).
 import { ForwardModal } from '../components/modals/chat/ChatForwardModal';
@@ -235,109 +235,6 @@ import { MessageInfoModal } from '../components/modals/chat/ChatMessageInfoModal
 
 
 
-
-// ─── Reaction detail modal (who reacted) ─────────────────────────────────────
-function ReactionDetailModal({
-  target,
-  contacts,
-  myDid,
-  onClose,
-}: {
-  target: { activeEmoji: string; map: Record<string, string[]> } | null;
-  contacts: Contact[];
-  myDid: string;
-  onClose: () => void;
-}): React.ReactElement {
-  const { colors } = useTheme();
-  // v4.32.409: активная вкладка эмодзи. Лист лежит на поверхности.
-  const tabTint = useMemo(() => badgeTint(colors, 'accent', colors.surface), [colors]);
-  const { parseDidKey: parseDid } = require('../../core/identity/did') as typeof import('../../core/identity/did');
-  const [activeTab, setActiveTab] = useState<string>('');
-
-  // Update active tab when target changes
-  useEffect(() => {
-    if (target) setActiveTab(target.activeEmoji);
-  }, [target]);
-
-  function didToName(did: string): string {
-    if (did === myDid) return 'Вы';
-    try {
-      const pk = parseDid(did);
-      if (!pk) return shortIdentity(did);
-      const b64 = Buffer.from(pk).toString('base64');
-      const c = contacts.find((x) => x.peerPublicKey === b64);
-      return contactLabel(c?.displayName, shortIdentity(did));
-    } catch {
-      return shortIdentity(did);
-    }
-  }
-
-  const entries = Object.entries(target?.map ?? {}).filter(([, d]) => d.length > 0);
-  const activeDids = (target?.map ?? {})[activeTab] ?? [];
-
-  return (
-    <Modal
-      visible={target !== null}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <AppPressable style={rdStyles.overlay} onPress={onClose}>
-        <AppPressable style={[rdStyles.sheet, { backgroundColor: colors.surface }]} onPress={(e) => e.stopPropagation()}>
-          {/* Emoji tabs */}
-          {entries.length > 1 ? (
-            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-              {entries.map(([emoji, dids]) => (
-                <AppPressable
-                  key={emoji}
-                  onPress={() => setActiveTab(emoji)}
-                  style={[
-                    rdStyles.tab,
-                    { borderColor: activeTab === emoji ? colors.accent : colors.border, backgroundColor: activeTab === emoji ? tabTint.fill : 'transparent' },
-                  ]}
-                >
-                  <Text style={{ fontSize: 18 }}>{emoji}</Text>
-                  <Text style={{ fontSize: 12, color: activeTab === emoji ? tabTint.ink : colors.textMuted, marginLeft: 4, fontWeight: '600' }}>{dids.length}</Text>
-                </AppPressable>
-              ))}
-            </View>
-          ) : (
-            <Text style={[rdStyles.heading, { color: colors.text }]}>
-              {activeTab || (target?.activeEmoji ?? '')} Реакция
-            </Text>
-          )}
-          {/* Users list */}
-          <View style={{ width: '100%', maxHeight: 200 }}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {activeDids.map((did) => (
-                <View key={did} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 }}>
-                  <View style={{ ...avatarShape(32), backgroundColor: colors.surfaceHigh, alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ fontSize: 14 }}>{nameInitial(didToName(did))}</Text>
-                  </View>
-                  <Text style={{ color: colors.text, fontSize: 15 }}>{didToName(did)}</Text>
-                </View>
-              ))}
-              {activeDids.length === 0 ? (
-                <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: 14, paddingVertical: 12 }}>Нет данных</Text>
-              ) : null}
-            </ScrollView>
-          </View>
-          <AppPressable style={[rdStyles.closeBtn, { borderColor: colors.border }]} onPress={onClose} accessibilityRole="button">
-            <Text style={{ color: colors.accent }}>Закрыть</Text>
-          </AppPressable>
-        </AppPressable>
-      </AppPressable>
-    </Modal>
-  );
-}
-const rdStyles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: scrim.modal, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  sheet: { borderRadius: radius.lg, paddingVertical: 20, paddingHorizontal: 24, width: 300, maxWidth: '90%', alignItems: 'center', gap: 10 },
-  heading: { fontSize: 28, marginBottom: 6 },
-  tab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.xl, borderWidth: 1.5 },
-  name: { fontSize: 15, textAlign: 'center' },
-  closeBtn: { marginTop: 8, paddingHorizontal: 24, paddingVertical: 8, borderRadius: radius.md, borderWidth: 1 },
-});
 
 // ─── Message bubble ──────────────────────────────────────────────────────────
 const MessageRow = React.memo(
@@ -1080,6 +977,7 @@ function ChatThreadView({
   const flashListRef = useRef<any>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const showScrollToBottomRef = useRef(false);
+  const bottomAnchor = useChatBottomAnchor(flashListRef, showScrollToBottom, showScrollToBottomRef, !searchVisible && !mediaFilterActive);
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const [contactInfoVisible, setContactInfoVisible] = useState(false);
   /**
@@ -2345,9 +2243,8 @@ function ChatThreadView({
     // voice/photos) — IPFS is not required anymore.
     // v4.32.358: предел брался отсюда числом и не знал про IPFS-сборки, где он
     // выше; текст ошибки тоже был записан вручную.
-    const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
     const { uploadLimitBytes, oversizeAdvice, oversizeText, OVERSIZE_TITLE, IPFS_DOC_MAX_BYTES } = await import('../../core/media/uploadRoute');
-    const docMaxBytes = uploadLimitBytes({ ipfsEnabled: isIpfsEnabled(), ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
+    const docMaxBytes = uploadLimitBytes({ ipfsEnabled: false, ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
     if ((asset.size ?? 0) > docMaxBytes) {
       Alert.alert(OVERSIZE_TITLE.file, oversizeAdvice(docMaxBytes));
       return;
@@ -3927,6 +3824,7 @@ function ChatThreadView({
         <MessagesShell style={{ flex: 1 }}>
         <FlashList
           ref={flashListRef}
+          {...bottomAnchor}
           style={{ flex: 1 }}
           data={displayMessages}
           inverted

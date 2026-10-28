@@ -568,7 +568,10 @@ function FeedPostItemImpl(props: FeedPostItemProps): React.ReactElement {
       onPress={() => { if (!isPending) onMarkRead(item); }}
       onLongPress={() => { if (!isPending) onLongPressPost(item); }}
       delayLongPress={400}
-      accessibilityRole="button"
+      // A web button flattens nested controls in Safari's accessibility tree.
+      // Keep the card container ungrouped so comments/share/bookmark are reachable.
+      accessible={Platform.OS !== 'web'}
+      accessibilityRole={Platform.OS === 'web' ? undefined : 'button'}
       accessibilityLabel={`${t('feed.a11yPostFrom', { name: label })}${
         feedPostIsUnreadable(item) ? `: ${UNREADABLE_POST_TEXT}` : item.text ? `: ${item.text.slice(0, 80)}` : ''
       }`}
@@ -1323,7 +1326,17 @@ function FeedScreenImpl({ pair, did, feedTick = 0, onOpenChatWithPeer, onOpenOwn
   const openFeedDocument = useCallback(
     async (postId: string, index: number, name: string, mime: string) => {
       try {
-        const { saveFeedDocumentToCache } = await import('../../core/social/feedService');
+        const { saveFeedDocumentToCache, readFeedDocumentBase64 } = await import('../../core/social/feedService');
+        if (Platform.OS === 'web') {
+          const b64 = await readFeedDocumentBase64(postId, index);
+          if (!b64) {
+            Alert.alert(t('feed.docTitle'), t('feed.docOpenFailed'));
+            return;
+          }
+          const { downloadWebAttachment } = await import('../../core/media/downloadWebAttachment');
+          downloadWebAttachment(b64, name);
+          return;
+        }
         const uri = await saveFeedDocumentToCache(postId, index, name);
         if (!uri) {
           Alert.alert(t('feed.docTitle'), t('feed.docOpenFailed'));

@@ -124,3 +124,83 @@ test('память и диск ведут себя одинаково', () => {
     store.close();
   }
 });
+
+test('stale delivery removes only the registration that was actually sent', () => {
+  for (const store of [createMemoryTokenRegistry(), createSqliteTokenRegistry()]) {
+    store.set('peer', 'old', 'android', 1);
+    const sent = store.get('peer');
+    store.set('peer', 'new', 'android', 2);
+    assert.equal(store.deleteIfCurrent('peer', sent), false);
+    assert.equal(store.get('peer').token, 'new');
+    // Timestamp also matters when the provider token stayed the same.
+    const beforeRenewal = store.get('peer');
+    store.set('peer', 'new', 'android', 3);
+    assert.equal(store.deleteIfCurrent('peer', beforeRenewal), false);
+    assert.equal(store.deleteIfCurrent('peer', store.get('peer')), true);
+    assert.equal(store.get('peer'), null);
+    store.close();
+  }
+});
+
+test('device slots are bounded and independent, including revocation replay protection', () => {
+  for (const store of [createMemoryTokenRegistry({ maxDevices: 2 }), createSqliteTokenRegistry({ maxDevices: 2 })]) {
+    assert.equal(store.set('peer', 'android', 'android', 1, 'phone'), true);
+    assert.equal(store.set('peer', 'browser', 'web', 1, 'browser'), true);
+    assert.equal(store.set('peer', 'extra', 'ios', 1, 'extra'), false);
+    assert.equal(store.set('peer', 'rotated', 'android', 2, 'phone'), true);
+    assert.equal(store.list('peer').length, 2);
+    assert.equal(store.revoke('peer', 'phone', 3), true);
+    assert.equal(store.get('peer', 'phone'), null);
+    assert.equal(store.set('peer', 'replayed', 'android', 2, 'phone'), false);
+    assert.equal(store.get('peer', 'browser').token, 'browser');
+    store.close();
+  }
+});
+
+test('legacy SQLite schema migrates once and preserves its registration', () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const file = tempDb('legacy.db');
+  const db = new DatabaseSync(file);
+  db.exec(`CREATE TABLE push_tokens(peer_id TEXT PRIMARY KEY, token TEXT NOT NULL,
+    platform TEXT NOT NULL, updated_at INTEGER NOT NULL, ts INTEGER NOT NULL);
+    CREATE INDEX push_tokens_updated_at ON push_tokens(updated_at);`);
+  db.prepare('INSERT INTO push_tokens VALUES (?, ?, ?, ?, ?)').run('peer', 'old', 'ios', Date.now(), 1);
+  db.close();
+  const store = createSqliteTokenRegistry({ path: file });
+  assert.equal(store.get('peer').token, 'old');
+  assert.equal(store.set('peer', 'new', 'android', 2, 'phone'), true);
+  assert.equal(store.list('peer').length, 2);
+  store.delete('peer');
+  store.close();
+  const reopened = createSqliteTokenRegistry({ path: file });
+  assert.equal(reopened.get('peer'), null);
+  assert.equal(reopened.get('peer', 'phone').token, 'new');
+  reopened.close();
+});
+
+for (const [name, create] of [['memory', createMemoryTokenRegistry], ['SQLite', createSqliteTokenRegistry]]) {
+  test(`${name}: absent-device revoke blocks delayed enrollment and newer revoke refreshes marker`, () => {
+    let clock = 1000;
+    const store = create({ now: () => clock, ttlMs: 1, maxDevices: 1 });
+    assert.equal(store.revoke('peer', 'phone', 20), true);
+    assert.equal(store.set('peer', 'delayed', 'android', 19, 'phone'), false);
+    clock += 100;
+    assert.equal(store.revoke('peer', 'phone', 30), true);
+    assert.equal(store.set('peer', 'delayed', 'android', 25, 'phone'), false);
+    clock += 600000;
+    // Inclusive freshness boundary: token TTL and quota sweeps cannot drop the marker early.
+    assert.equal(store.set('peer', 'other', 'ios', 40, 'other'), false);
+    assert.equal(store.set('peer', 'delayed', 'android', 25, 'phone'), false);
+    assert.deepEqual(store.list('peer'), []);
+    clock += 1;
+    assert.equal(store.set('peer', 'fresh', 'ios', 50, 'other'), true);
+    store.close();
+  });
+  test(`${name}: absent revoke fails explicitly when bounded storage is full`, () => {
+    const store = create({ maxTokens: 1 });
+    store.set('existing', 'token', 'ios', 1, 'phone');
+    assert.equal(store.revoke('peer', 'absent', 20), false);
+    assert.equal(store.get('existing', 'phone').token, 'token');
+    store.close();
+  });
+}

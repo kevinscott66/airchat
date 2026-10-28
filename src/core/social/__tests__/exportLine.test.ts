@@ -217,7 +217,7 @@ describe('все три места выгрузки собирают тело о
 
   it('экран чата и группа пишут строку через exportBody', () => {
     expect(chatSrc()).toContain('return `[${d}] ${who}: ${exportBody(m)}`;');
-    expect(groupsSrc()).toContain('return `[${d}] ${who}: ${exportBody(m)}`;');
+    expect(groupsSrc()).toContain("return `[${d}] ${who}: ${group.type === 'channel' && isGroupSysMessage(m.text) ? 'Событие канала' : exportBody(m)}`;");
   });
 
   it('карточка контакта пишет строку через exportBody', () => {
@@ -235,7 +235,7 @@ describe('все три места выгрузки собирают тело о
 
   it('имя автора в группе по-прежнему идёт через outwardName', () => {
     // Пометка допустима в теле реплики, но не в поле имени — см. v4.32.593.
-    const body = slice(groupsSrc(), 'const who = anonymousPosting', 'exportBody(m)');
+    const body = slice(groupsSrc(), 'const who = channelIdentity(group, m)', 'exportBody(m)');
     expect(body).toMatch(
       /outwardName\(m\.senderName, m\.senderUnreadable, shortIdentity\(m\.senderPubB64\)\)/
     );

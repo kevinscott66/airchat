@@ -126,9 +126,8 @@ describe('схема и миграция на месте', () => {
   it('индекс сторис в схеме начинается с профиля', () => {
     // Именно в схеме, а не где-нибудь в файле: тот же текст есть и в обёртке
     // пересборки, и проверка по всему local.ts прошла бы мимо подмены схемы.
-    const table = createTable('stories');
-    const after = SRC.slice(SRC.indexOf(table) + table.length, SRC.indexOf(table) + table.length + 200);
-    expect(after).toContain('CREATE INDEX IF NOT EXISTS idx_stories\n      ON stories (owner_profile_id, author_pub_b64, created_at DESC);');
+    const bootstrap = readFileSync(join(__dirname, '..', 'localBootstrap.ts'), 'utf8');
+    expect(bootstrap).toMatch(/CREATE INDEX IF NOT EXISTS idx_stories\s+ON stories \(owner_profile_id, author_pub_b64, created_at DESC\);/);
   });
 
   it('обёртка пересборки просит ту же таблицу и тот же индекс', () => {

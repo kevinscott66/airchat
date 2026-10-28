@@ -1,3 +1,4 @@
+jest.mock('../pushDevices', () => ({ pushDeviceId: async () => 'device-test', capturePushDeviceRevoker: async () => async () => true }));
 /**
  * Повтор записи адреса доставки перебивал токен, который ещё ехал (v4.32.981).
  *

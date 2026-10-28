@@ -204,7 +204,7 @@ export async function groupSendVerdict(
  */
 export type GroupFanoutResult =
   /** Разослано (или отправка ушла в очередь службы) — `sent` из `members`. */
-  | { ok: true; members: number; sent: number; failed: number }
+  | { ok: true; members: number; sent: number; failed: number; awaitingAck?: number }
   /** Службы обмена нет — ничего не отправлено, повторить позже. */
   | { ok: false; reason: 'no_service' }
   /**
@@ -228,7 +228,8 @@ export async function fanoutGroupMessage(
    * позиционными аргументами: их нельзя перепутать местами и незачем указывать
    * там, где ответа нет (медиа, опрос, пересылка).
    */
-  reply?: { id: string | null; preview: string | null }
+  reply?: { id: string | null; preview: string | null },
+  authorAsGroup: boolean = false
 ): Promise<GroupFanoutResult> {
   const svc = getMessagingService();
   if (!svc) {
@@ -262,7 +263,7 @@ export async function fanoutGroupMessage(
     return { ok: false, reason: 'denied', code: verdict.code };
   }
 
-  const envelope = encodeGroupMsgEnvelope({
+  const message: GroupMsgEnvelope = {
     groupId,
     msgId,
     senderName,
@@ -274,13 +275,27 @@ export async function fanoutGroupMessage(
     // пустую рамку, превью без id — строку, которую некуда нажать.
     replyToId: reply?.id ?? undefined,
     replyToPreview: reply?.id ? (reply.preview ?? undefined) : undefined,
-  });
+  };
+  let envelope = encodeGroupMsgEnvelope(message);
+  if (authorAsGroup) {
+    const { ownAnonymousPermission, anonymousControlText } = await import('./groupAnonymousControl');
+    if ((await svc.groupRecipient()).myPub !== senderPubB64) return { ok: false, reason: 'denied', code: 'anonymous_not_allowed' };
+    const permission = await ownAnonymousPermission(groupId);
+    if (!permission.allowed) return { ok: false, reason: 'denied', code: 'anonymous_not_allowed' };
+    message.senderName = '';
+    envelope = anonymousControlText(groupId, { kind: 'post', revision: permission.revision, message });
+  }
 
   // v4.32.172: не отправляем сообщения забаненным участникам — их role=='banned',
   // они не должны ни видеть, ни получать трафик из группы (иначе бан ничего не делает).
   const targets = members.filter((m) => m.peerPubB64 !== senderPubB64 && m.role !== 'banned');
   // Отказ по каждому адресату считается здесь же, где ловится: считать его
   // потом, по логам, вызывающему негде.
+  const recipientPid = authorAsGroup ? (await svc.groupRecipient()).pid : 0;
+  if (authorAsGroup) {
+    const { beginAnonymousPending } = await import('./groupAnonymousPending');
+    await beginAnonymousPending(recipientPid, groupId, msgId, targets.map(m => m.peerPubB64));
+  }
   let sent = 0;
   let failed = 0;
   const sends = targets.map(async (m) => {
@@ -316,7 +331,10 @@ export async function fanoutGroupMessage(
     sent,
     failed,
   });
-  return { ok: true, members: targets.length, sent, failed };
+  const awaitingAck = authorAsGroup
+    ? (await (await import('./groupAnonymousPending')).anonymousPendingCount(recipientPid, msgId)) ?? targets.length
+    : undefined;
+  return { ok: true, members: targets.length, sent, failed, ...(awaitingAck !== undefined ? { awaitingAck } : {}) };
 }
 
 // ─── Read Receipts ────────────────────────────────────────────────────────────
@@ -360,6 +378,9 @@ export async function sendGroupReadReceipt(
   senderPubB64: string,
   myPubB64: string
 ): Promise<GroupReadReceiptOutcome> {
+  // Locally generated control events have no remote author. There is no receipt
+  // to retry, and trying to create a DM session for an empty key raises a false alert.
+  if (!senderPubB64.trim()) return 'off';
   const svc = getMessagingService();
   if (!svc) return 'refused';
   if (senderPubB64 === myPubB64) return 'off'; // don't send to self
@@ -522,7 +543,8 @@ export function setGroupMessageNotifyCallback(cb: GroupNotifyCb | null): () => v
 export async function handleIncomingGroupEnvelope(
   text: string,
   rcpt: GroupRecipient,
-  senderPubB64: string
+  senderPubB64: string,
+  authorAsGroup: boolean = false
 ): Promise<EnvelopeIntake> {
   const env = decodeGroupMsgEnvelope(text);
   if (!env) return 'consumed';
@@ -668,6 +690,7 @@ export async function handleIncomingGroupEnvelope(
   const row: GroupMessageRow = {
     id: env.msgId,
     groupId: env.groupId,
+    ...(authorAsGroup ? { authorAsGroup: true } : {}),
     senderPubB64: env.senderPubB64,
     // v4.32.371: пустое имя ложится в базу как отсутствие имени. Экран
     // подставляет вместо него начало ключа (`senderName ?? '...'`), а пустая
@@ -741,7 +764,7 @@ export async function handleIncomingGroupEnvelope(
     // список чатов показывал «Вася: текст» и push выносил то же имя на экран
     // блокировки. В самой строке имя сохраняется (иначе выключение настройки
     // уже ничего не вернёт) — скрывается только там, где оно показывается.
-    const shownSenderName = group.anonymousPosting ? null : (env.senderName || null);
+    const shownSenderName = group.type === 'channel' || authorAsGroup ? group.name : (env.senderName || null);
     const stored = await insertGroupMessageWithTouch(row, {
       groupId: env.groupId,
       ownerProfileId: pid,
@@ -782,7 +805,7 @@ export async function handleIncomingGroupEnvelope(
       // просмотра. Подпись теперь общая для всего проекта (messagePreview.ts).
       const preview = previewLabelForText(env.text).slice(0, 80);
       for (const cb of groupMsgNotifyCallbacks) {
-        try { cb(group.name, shownSenderName ?? (group.anonymousPosting ? 'Участник' : '?'), preview, env.groupId, kind, isMention, env.msgId); } catch { /* best effort */ }
+        try { cb(group.name, shownSenderName ?? '?', preview, env.groupId, kind, isMention, env.msgId); } catch { /* best effort */ }
       }
     }
   } catch (e) {
@@ -1559,6 +1582,10 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
   if (!text.startsWith(GROUP_CTL_PREFIX)) return 'consumed';
   const env = decodeGroupCtlEnvelope(text);
   if (!env || !senderPubB64) return 'consumed';
+  if (env.op === 'anonymous_v1') {
+    const { handleAnonymousControl } = await import('./groupAnonymousControl');
+    return handleAnonymousControl(env.groupId, env.body, rcpt, senderPubB64);
+  }
 
   const pid = rcpt.pid;
   // v4.32.511: по идентификатору, а не выбором из списка активных групп. От
@@ -2355,19 +2382,14 @@ export async function handleIncomingGroupControl(text: string, rcpt: GroupRecipi
       patch.adminOnlyPinning = env.adminOnlyPinning;
       events.push({ field: 'adminOnlyPinning', text: env.adminOnlyPinning ? 'Закреплять сообщения могут только администраторы' : 'Закреплять сообщения могут все участники' });
     }
-    // v4.32.256: обе настройки раньше не рассылались вовсе. requireApproval
-    // читается при выдаче пригласительной ссылки, поэтому без синхронизации
-    // второй администратор выдавал ссылку с выключенным одобрением;
-    // anonymousPosting скрывает имена отправителей в списке сообщений, и без
-    // синхронизации «анонимными» посты были ровно у включившего.
+    // requireApproval читается при выдаче пригласительной ссылки, поэтому
+    // второй администратор должен получить обновлённое требование одобрения.
     if (env.requireApproval != null && env.requireApproval !== group.requireApproval && (await fresh('requireApproval'))) {
       patch.requireApproval = env.requireApproval;
       events.push({ field: 'requireApproval', text: env.requireApproval ? 'Вход по ссылке теперь требует одобрения' : 'Вход по ссылке без одобрения' });
     }
-    if (env.anonymousPosting != null && env.anonymousPosting !== group.anonymousPosting && (await fresh('anonymousPosting'))) {
-      patch.anonymousPosting = env.anonymousPosting;
-      events.push({ field: 'anonymousPosting', text: env.anonymousPosting ? 'Имена отправителей скрыты' : 'Имена отправителей видны' });
-    }
+    // Legacy global anonymity metadata is intentionally ignored. Only an owner
+    // grant and a persisted per-message author mode may change attribution.
     /**
      * v4.32.303: новый токен пригласительной ссылки от другого администратора.
      *

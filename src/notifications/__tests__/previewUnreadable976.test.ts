@@ -1,3 +1,4 @@
+jest.mock('../pushDevices', () => ({ pushDeviceId: async () => 'device-test', capturePushDeviceRevoker: async () => async () => true }));
 /**
  * Нечитаемая настройка «Показывать содержимое» и баннер (v4.32.976).
  *

@@ -12,6 +12,7 @@ const { createHash } = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { createBodyParser } = require('./body-parser');
+const { assertFileStorageBudget } = require('./storage-budget');
 const { ed25519 } = require('@noble/curves/ed25519.js');
 const { SyncDatabase, validateMutation } = require('./sync-db');
 const {
@@ -554,7 +555,7 @@ function validateSyncRequest(payload, accountId, op) {
       !info || typeof info !== 'object' || Array.isArray(info) ||
       typeof info.platform !== 'string' || !DEVICE_PLATFORM_RE.test(info.platform) ||
       typeof info.model !== 'string' || info.model.length < 1 || info.model.length > 96 ||
-      typeof info.osVersion !== 'string' || info.osVersion.length < 1 || info.osVersion.length > 32 ||
+      typeof info.osVersion !== 'string' || info.osVersion.length > 32 ||
       typeof info.appVersion !== 'string' || info.appVersion.length < 1 || info.appVersion.length > 32
     ) return null;
     deviceInfo = {
@@ -881,11 +882,13 @@ app.put('/v1/cloud-vault/:accountId', async (req, res) => {
       }
       let temporary = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
       try {
-        fs.writeFileSync(temporary, JSON.stringify({
+        const storedJson = JSON.stringify({
           v: 1,
           ownerPublicKeyB64: payload.accountPublicKeyB64,
           envelope,
-        }), { mode: 0o600, flag: 'wx' });
+        });
+        assertFileStorageBudget(DATA_DIR, Buffer.byteLength(storedJson));
+        fs.writeFileSync(temporary, storedJson, { mode: 0o600, flag: 'wx' });
         fs.renameSync(temporary, file);
         temporary = null;
         return res.json({ ok: true, savedAt: envelope.savedAt });
@@ -895,8 +898,8 @@ app.put('/v1/cloud-vault/:accountId', async (req, res) => {
         }
       }
     });
-  } catch {
-    return res.status(500).json({ error: 'vault_write_failed' });
+  } catch (error) {
+    return res.status(error?.status === 507 ? 507 : 500).json({ error: error?.status === 507 ? error.message : 'vault_write_failed' });
   }
 });
 
@@ -987,6 +990,7 @@ app.post('/v1/sync/:accountId/media/put', async (req, res) => {
       if (usage.bytes - previousBytes + bytes.length > MEDIA_MAX_ACCOUNT_BYTES) {
         return res.status(413).json({ error: 'media_account_quota' });
       }
+      assertFileStorageBudget(DATA_DIR, bytes.length);
       let temporary = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
       try {
         fs.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
@@ -1006,8 +1010,8 @@ app.post('/v1/sync/:accountId/media/put', async (req, res) => {
         }
       }
     });
-  } catch {
-    return res.status(500).json({ error: 'media_write_failed' });
+  } catch (error) {
+    return res.status(error?.status === 507 ? 507 : 500).json({ error: error?.status === 507 ? error.message : 'media_write_failed' });
   }
 });
 
@@ -1299,7 +1303,8 @@ function verifyPostIntent(body, expectedPostId, expectedAct, authorPublicKeyB64)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const canonical = safeStableStringify(parsed);
   if (canonical === null || canonical !== payload) return null;
-  if (parsed.v !== 1 || parsed.act !== expectedAct) return null;
+  if (![1, 2].includes(parsed.v) || !(Array.isArray(expectedAct) ? expectedAct : [expectedAct]).includes(parsed.act)) return null;
+  if (parsed.v === 2 && parsed.act !== 'state' && (!Number.isSafeInteger(parsed.expectedRevision) || parsed.expectedRevision < 0 || parsed.expectedRevision >= Number.MAX_SAFE_INTEGER)) return null;
   if (typeof parsed.postId !== 'string' || parsed.postId !== expectedPostId) return null;
   if (typeof parsed.publicKeyB64 !== 'string' || parsed.publicKeyB64 !== authorPublicKeyB64) return null;
   if (typeof parsed.ts !== 'number' || !Number.isSafeInteger(parsed.ts)) return null;
@@ -1320,8 +1325,9 @@ app.post('/v1/post/:postId', (req, res) => {
   // Репост — такая же запись ленты со своим id, и ссылку на него копируют так же.
   const envelope = verifyPostEnvelope(req.body, postId, ['feed_post', 'feed_repost']);
   if (!envelope) return res.status(400).json({ error: 'invalid_post_envelope' });
-  const intent = verifyPostIntent(req.body, postId, 'put', envelope.authorPublicKeyB64);
+  const intent = verifyPostIntent(req.body, postId, ['put', 'publish', 'refresh'], envelope.authorPublicKeyB64);
   if (!intent) return res.status(400).json({ error: 'invalid_post_intent' });
+  if (intent.v !== 2 || !['publish', 'refresh'].includes(intent.act)) return res.status(426).json({ error: 'public_post_upgrade_required' });
   try {
     if (!syncDb.consumeNonce(postNonceScope(envelope.parsed.authorDid), intent.nonce)) {
       return res.status(409).json({ error: 'replayed_post_intent' });
@@ -1333,17 +1339,32 @@ app.post('/v1/post/:postId', (req, res) => {
       envelope.payload,
       envelope.signature,
       {
+        action: intent.act,
+        expectedRevision: intent.expectedRevision,
         maxBytes: PUBLIC_POST_MAX_AUTHOR_BYTES,
         maxPosts: PUBLIC_POST_MAX_AUTHOR_POSTS,
       },
     );
     if (!result.ok) {
-      return res.status(result.reason === 'public_post_owned' ? 403 : 413).json({ error: result.reason });
+      return res.status(result.reason === 'public_post_owned' ? 403 : result.reason === 'public_post_revision_conflict' || result.reason === 'public_post_inactive' ? 409 : 413).json({ error: result.reason });
     }
-    return res.json({ ok: true, postId, bytes: result.bytes });
+    return res.json({ ok: true, postId, bytes: result.bytes, revision: result.revision, active: true });
   } catch {
     return res.status(500).json({ error: 'public_post_write_failed' });
   }
+});
+
+app.post('/v1/post/:postId/state', (req, res) => {
+  noStore(res);
+  const postId = req.params.postId;
+  if (!isValidPostId(postId)) return res.status(400).json({ error: 'invalid_post_id' });
+  const key = req.body?.authorPublicKeyB64;
+  const intent = verifyPostIntent(req.body, postId, 'state', key);
+  if (!intent || intent.v !== 2) return res.status(400).json({ error: 'invalid_post_intent' });
+  if (!syncDb.consumeNonce(postNonceScope(`key:${key}`), intent.nonce)) return res.status(409).json({ error: 'replayed_post_intent' });
+  const state = syncDb.publicPostState(postId, key);
+  if (!state.ok) return res.status(403).json({ error: state.reason });
+  return res.json(state);
 });
 
 app.get('/v1/post/:postId', (req, res) => {
@@ -1359,6 +1380,7 @@ app.get('/v1/post/:postId', (req, res) => {
       signature: row.signature,
       authorPublicKeyB64: row.authorPublicKeyB64,
       updatedAt: row.updatedAt,
+      revision: syncDb.publicPostState(postId, row.authorPublicKeyB64).revision,
     });
   } catch {
     return res.status(500).json({ error: 'public_post_read_failed' });
@@ -1408,11 +1430,12 @@ app.post('/v1/post/:postId/delete', (req, res) => {
     if (!syncDb.consumeNonce(scope, intent.nonce)) {
       return res.status(409).json({ error: 'replayed_post_intent' });
     }
-    const removed = envelope
-      ? syncDb.deletePublicPost(postId, envelope.parsed.authorDid)
-      : syncDb.deletePublicPostByKey(postId, authorKey);
-    // Нечего удалять и удаляет не автор — снаружи одно и то же: иначе по коду
-    // ответа можно было бы перебором узнавать, чей это пост.
+    if (intent.v === 2) {
+      const result = syncDb.revokePublicPost(postId, authorKey, intent.expectedRevision);
+      if (!result.ok) return res.status(result.reason === 'public_post_owned' ? 403 : result.reason === 'public_post_owner_quota' ? 413 : 409).json({ error: result.reason });
+      return res.json(result);
+    }
+    const removed = syncDb.deletePublicPostByKey(postId, authorKey);
     return res.json({ ok: true, removed });
   } catch {
     return res.status(500).json({ error: 'public_post_delete_failed' });
@@ -1773,11 +1796,9 @@ app.post('/v1/seed-binding/delete', async (req, res) => {
  * хранилища наружу этого выдавать нечего. И то же самое касается разбора тела:
  * express.json бросает при переполнении потолка и при испорченном JSON.
  *
- * Поэтому: одно место, где любой отказ превращается в короткий JSON, и два
- * подписчика процесса, которые пишут в журнал и оставляют службу жить —
- * каждый маршрут и без того держит свою работу с базой в try/catch, и
- * пережить один испорченный запрос честнее, чем оборвать всем остальным
- * синхронизацию и переписку.
+ * Expected request/parser errors produce bounded JSON responses here.
+ * Unexpected uncaught failures exit nonzero; systemd restarts with SQLite recovery.
+ * Imported app instances do not install process-global exception handlers.
  */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
@@ -1794,19 +1815,17 @@ app.use((err, req, res, _next) => {
   return res.status(status).json({ error });
 });
 
-process.on('unhandledRejection', (reason) => {
-  // eslint-disable-next-line no-console
-  console.error('cloud-vault unhandled rejection', reason instanceof Error ? reason.message : reason);
-});
-process.on('uncaughtException', (error) => {
-  // eslint-disable-next-line no-console
-  console.error('cloud-vault uncaught exception', error?.message, error?.stack);
-});
 
 const port = Number(process.env.PORT) || 3010;
 const host = process.env.HOST || '0.0.0.0';
 let server = null;
 if (require.main === module) {
+  const fatal = (error) => {
+    console.error('cloud-vault fatal', error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  };
+  process.on('unhandledRejection', fatal);
+  process.on('uncaughtException', fatal);
   server = http.createServer(app);
   server.listen(port, host, () => {
     // eslint-disable-next-line no-console

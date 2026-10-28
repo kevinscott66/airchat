@@ -650,6 +650,7 @@ async function runLiveSync(
   // v4.32.845: испорченные строки считаются за весь заход — каждый проход
   // выбрасывает свои, и человеку важна сумма, а не последнее слагаемое.
   let poisonedTotal = 0;
+  let albumsChanged = false;
   for (let pass = 0; pass < MAX_SYNC_PASSES; pass += 1) {
     if (!shouldContinue()) return;
     const collected = await collectPending(mnemonic, ownerProfileId);
@@ -657,7 +658,6 @@ async function runLiveSync(
       (await getSyncEntityHeads(ownerProfileId)).map((head) => [entityKey(head.entityKind, head.entityId), head]),
     );
     let messagesChanged = false;
-    let albumsChanged = false;
     const result = await syncAccountOnce({
       mnemonic,
       pair,
@@ -719,24 +719,7 @@ async function runLiveSync(
             });
           }
         }
-        // v4.32.684: строка альбома и сам альбом — разные сущности с разными
-        // счётчиками ревизий, и порядок между ними ничем не закреплён. Строка,
-        // приехавшая к альбому, которого здесь нет, не видна ни в одном списке,
-        // но вечно уезжает обратно в облако и держит копию снимка на диске.
-        // Уборка идёт ПОСЛЕ разбора всего захода: внутри него обогнать свой
-        // альбом — обычное дело. Это уборка, а не часть переноса, поэтому её
-        // отказ не имеет права уронить проход.
-        if (albumsChanged) {
-          try {
-            const { sweepOrphanAlbumItems } = await import('../social/storyAlbums');
-            await sweepOrphanAlbumItems(ownerProfileId);
-          } catch (e) {
-            log.warn('live_sync_album_orphan_sweep_failed', {
-              ownerProfileId,
-              err: e instanceof Error ? e.message : String(e),
-            });
-          }
-        }
+
       },
       onServerReset: async () => {
         // v4.32.615: сбрасываются отпечатки, а НЕ строки целиком. Номера
@@ -761,7 +744,25 @@ async function runLiveSync(
     // соберёт отправку целиком. Обычные условия выхода тут не применимы —
     // отправлять пока было нечего именно потому, что головы врали.
     if (result.status === 'reset') continue;
-    const rejected = result.pushed?.rejectedMutationIds ?? [];
+    // Compacted snapshots may place an item before its latest parent album.
+    // A page boundary (even after the orphan grace expires) proves nothing
+    // about parent absence. Sweep only after the complete pull catches up.
+    if (albumsChanged && result.pulled?.hasMore === false) {
+      try {
+        const { sweepOrphanAlbumItems } = await import('../social/storyAlbums');
+        await sweepOrphanAlbumItems(ownerProfileId);
+        albumsChanged = false;
+      } catch (e) {
+        log.warn('live_sync_album_orphan_sweep_failed', {
+          ownerProfileId,
+          err: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    const rejected = result.pushConflict
+      ? collected.mutations.map((mutation) => mutation.mutationId)
+      : result.pushed?.rejectedMutationIds ?? [];
     const accepted = result.pushed?.acceptedMutationIds.length ?? 0;
     const hasRejected = rejected.length > 0;
     const hasMorePush = collected.mutations.length >= MAX_PUSH_MUTATIONS;

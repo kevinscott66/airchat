@@ -53,14 +53,14 @@ export function GroupMessageStatusIcon({
     return (
       <AppPressable
         accessibilityRole="button"
-        accessibilityLabel={`Не отправлено: ${groupSendProblemShort(problem)}`}
+        accessibilityLabel={problem.kind === 'awaiting_ack' ? 'Ожидается подтверждение' : `Не отправлено: ${groupSendProblemShort(problem)}`}
         onPress={onProblemPress}
         hitSlop={8}
       >
         <Ionicons
-          name="alert-circle-outline"
+          name={problem.kind === 'awaiting_ack' ? 'time-outline' : 'alert-circle-outline'}
           size={13}
-          color={onDarkFill ? ink.error : colors.error}
+          color={problem.kind === 'awaiting_ack' ? muted : onDarkFill ? ink.error : colors.error}
           style={{ marginLeft: 2 }}
         />
       </AppPressable>

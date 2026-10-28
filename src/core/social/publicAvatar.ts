@@ -17,6 +17,7 @@
  * именно этому человеку (см. avatarRegistry).
  */
 import { Buffer } from 'buffer';
+import { Platform } from 'react-native';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 import { cloudBaseUrl } from '../backup/cloudVault';
@@ -257,13 +258,16 @@ async function verifiedAvatarFile(
   epoch: number,
 ): Promise<string | null> {
   const dir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
-  if (!dir) return null;
+  const web = Platform.OS === 'web';
+  if (!web && !dir) return null;
   // Версия в имени: сменил человек фото — сменилось и имя файла, и старое
   // никого не показывает, даже если сервер сейчас недоступен.
   const path = `${dir}pubavatar-${urlKey}-${version}.img`;
   try {
-    const info = await FileSystem.getInfoAsync(path);
-    if (info.exists) return path;
+    if (!web) {
+      const info = await FileSystem.getInfoAsync(path);
+      if (info.exists) return path;
+    }
   } catch { /* файла нет или не прочесть — сходим на сервер */ }
   if (epoch !== generation) return null;
   const publicKey = publicKeyFromB64(pubB64);
@@ -305,6 +309,19 @@ async function verifiedAvatarFile(
   // ловит не злой умысел, а расхождение справки с выдачей.
   if (Buffer.from(sha256(bytes)).toString('hex').slice(0, 32) !== version) {
     return reject('version');
+  }
+  if (web) {
+    // Browser FileSystem directories are null. Render only the verified bytes,
+    // never a mutable server URL, and never permit HTML/SVG data URI content.
+    const mime = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      ? 'image/jpeg'
+      : bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+        ? 'image/png'
+        : bytes.length > 12 && bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP'
+          ? 'image/webp' : null;
+    if (!mime) return reject('content_type');
+    if (epoch !== generation) return null;
+    return `data:${mime};base64,${bytes.toString('base64')}`;
   }
   try {
     await FileSystem.writeAsStringAsync(path, imageB64, { encoding: FileSystem.EncodingType.Base64 });

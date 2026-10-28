@@ -23,6 +23,7 @@ import { deliverOpenIntent, parseCallOpenIntent, parseChatOpenIntent, parseOpenI
 import { dismissCallBanner } from './callBanner';
 import { CALL_PUSH_KIND } from './callPush';
 import { NOTIFY_DEDUP_MAX, createNotifyDedup } from './notifyDedup';
+import { pushDeviceId, capturePushDeviceRevoker } from './pushDevices';
 import { peerIdFromDid, signPushPayload } from './pushEnvelope';
 import { SELF_PEER_MIRROR_KEY, mergeSelfPeerMirror } from './pushSenderTag';
 import { didForSenderTag } from './senderTagLookup';
@@ -232,6 +233,7 @@ export class PushNotificationService {
   // а не только по push. См. showDmBanner.
   private unsubDmNotify: (() => void) | null = null;
   private currentPeerId: string | null = null;
+  private revokeRegistration: (() => Promise<boolean>) | null = null;
   /**
    * Незаконченная запись адреса доставки (v4.32.734). См. pushRegisterRetry.
    * Держим сам «токен», а не только флаг: к сроку повтора он может смениться
@@ -542,6 +544,12 @@ export class PushNotificationService {
     // v4.32.734: сначала повторы записи адреса — иначе таймер доживёт до
     // срока уже после смены личности и запишет чужой токен на новый peerId.
     this.clearRegisterRetry();
+    const revoke = this.revokeRegistration;
+    this.revokeRegistration = null;
+    if (revoke) {
+      try { await revoke(); }
+      catch { log.warn('push_unregister_failed'); }
+    }
     try { this.unsubOnMessage?.(); } catch { /* best effort */ }
     try { this.unsubTokenRefresh?.(); } catch { /* best effort */ }
     try { this.unsubForeground?.(); } catch { /* best effort */ }
@@ -851,26 +859,40 @@ export class PushNotificationService {
     try {
       // v4.32.537: подписанный конверт. Без подписи чужой мог бы записать на
       // наш peerId свой токен и тем самым увести уведомления себе.
-      const envelope = await signPushPayload({
+      const deviceId = await pushDeviceId();
+      const revoke = await capturePushDeviceRevoker(peerId, deviceId);
+      const payload = {
         peerId: signedPeerId,
         platform: Platform.OS,
         token,
         ts: Date.now(),
-      });
+      };
+      const envelope = await signPushPayload({ ...payload, deviceId });
       if (!envelope) {
         log.warn('push_register_unsigned');
         return 'unsupported';
       }
-      const res = await fetch(`${base}/register-token`, {
+      let res = await fetch(`${base}/register-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(envelope),
         signal: ctrl.signal,
       });
+      // Server-first rollout: an old server rejects the extra device field.
+      // Only that protocol rejection permits the legacy single-device fallback.
+      if (res.status === 400) {
+        const legacy = await signPushPayload(payload);
+        if (!legacy) return 'unsupported';
+        res = await fetch(`${base}/register-token`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(legacy), signal: ctrl.signal,
+        });
+      }
       if (!res.ok) {
         log.warn('push_register_failed', { status: res.status });
         return 'unreachable';
       }
+      if (this.currentPeerId === peerId) this.revokeRegistration = revoke;
       return 'registered';
     } catch (e) {
       log.warn('push_register_error', { err: e instanceof Error ? e.message : String(e) });
@@ -1140,10 +1162,10 @@ export async function notifyFeedEvent(opts: {
 /**
  * «Вам звонили», пока телефона не было в сети (v4.32.558).
  *
- * Звонок живёт в сокете, и у выключенного или свёрнутого iPhone его нет. Push
- * там тоже нет — APNs принадлежит чужой команде разработчика, чьим
- * сертификатом подписана сборка. Поэтому сервер придерживает несостоявшийся
- * звонок и отдаёт его при следующем входе, а показать его человеку — здесь.
+ * Пока приложение остановлено или сеть недоступна, предложение звонка может
+ * не дойти. Сервер сохраняет пропущенный вызов до следующего подключения.
+ * Это дополнение к push, а не доказательство отсутствия APNs-ключа: наличие
+ * entitlement в исходниках не подтверждает provisioning конкретной сборки.
  *
  * Имени звонившего в баннере нет: сюда приходит только открытый ключ, а имя
  * знает журнал звонков на устройстве. Показ содержимого («notify_preview»)

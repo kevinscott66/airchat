@@ -1,30 +1,19 @@
 /**
- * backgroundKeepalive — тихий звук, чтобы свёрнутое приложение слышало звонок
- * (v4.32.559).
+ * Best-effort iOS background audio keepalive for the signaling socket.
  *
- * На iOS пуша у нас нет вовсе: FCM едет по APNs, а ключи APNs принадлежат
- * командам, чьими сертификатами подписаны сборки. Значит, свёрнутое приложение
- * узнаёт о входящем звонке ровно столько времени, сколько живёт его сокет, —
- * а сокет живёт столько, сколько система даёт фону: секунды.
+ * A suspended or terminated process cannot rely on its socket for incoming
+ * calls. This loop tries to keep an already-running process active while it
+ * is backgrounded; interruptions and iOS resource policy can still stop it.
+ * It cannot relaunch a terminated app and is not PushKit/CallKit support.
  *
- * Единственное, что iOS оставляет работать в фоне без сделки с Apple, — это
- * воспроизведение звука. У приложения с `UIBackgroundModes: audio`, у которого
- * играет дорожка, сессия не засыпает, и сокет остаётся живым вместе с ней.
- * Дорожка — пять секунд на −90 дБ: неслышимо, но это не цифровая тишина,
- * которую система вправе счесть за «звука нет».
+ * The audio background mode and a quiet track are implementation details,
+ * not evidence that APNs credentials are missing or delivery is configured.
+ * APNs/FCM provisioning belongs to the signed build and server deployment;
+ * source code alone cannot verify it. Foreground WebRTC calls do not require
+ * APNs credentials. See docs/call-capabilities.md for the acceptance matrix.
  *
- * Честная цена — батарея, поэтому:
- *  • только iOS: на Android есть FCM и фоновая задача, там это лишний расход;
- *  • есть выключатель `bg_keepalive` (по умолчанию включён — без него на
- *    iPhone звонок в свёрнутое приложение не приходит никак);
- *  • режим `mixWithOthers`: чужая музыка и подкасты не глохнут;
- *  • во время разговора молчим — аудиосессией владеет сам звонок, и лезть в
- *    неё вторым игроком значит рисковать разговором ради его же поддержания.
- *
- * Это подпорка, а не замена пуша. Настоящее решение — свой APNs-ключ платного
- * аккаунта разработчика; до него живём так. Смежное — [server-side журнал
- * непринятых звонков](../transport/webrtc/signaling.ts): он ловит тех, кого
- * не спас ни сокет, ни это.
+ * The existing setting defaults to enabled. It consumes battery,
+ * mixes with other audio, and pauses during a call so the call owns audio.
  */
 
 import { AppState, Platform, type AppStateStatus } from 'react-native';

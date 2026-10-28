@@ -126,7 +126,7 @@ describe('запросов к чужому составу не осталось'
 
   it('восстановление из копии пишет состав в тот профиль, куда восстанавливают', () => {
     expect(LOCAL).toContain(
-      'INSERT OR IGNORE INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id)'
+      'INSERT OR IGNORE INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id, anonymous_grant, anonymous_revision)'
     );
   });
 });

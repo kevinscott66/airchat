@@ -20,6 +20,7 @@
  * проходит целиком или отбрасывается: группа с половиной восстановленных
  * настроек — это, например, группа с потерянным «только админы пишут».
  */
+import { ANONYMOUS_GROUP_SENDER } from './groupAnonymousStorage';
 import { COUNT_MAX, count, flag, isPubKeyB64, optionalText, optionalTime, requiredText } from './backupFields';
 
 /**
@@ -81,6 +82,10 @@ export type GroupBackupRow = {
 
 /** Строка `group_messages`; text/media_cids/sender_name/цитата — шифротекст. */
 export type GroupMessageBackupRow = {
+  author_as_group?: number;
+  author_format?: 'anonymous:v1';
+  authenticated_sender_pub_b64?: string;
+  authenticated_sender_name?: string | null;
   id: string;
   group_id: string;
   sender_pub_b64: string;
@@ -99,6 +104,8 @@ export type GroupMessageBackupRow = {
 
 /** Строка `group_members`: состав группы и роли. */
 export type GroupMemberBackupRow = {
+  anonymous_grant?: string | null;
+  anonymous_revision?: number;
   group_id: string;
   peer_pub_b64: string;
   role: string;
@@ -279,7 +286,9 @@ export function sanitizeGroupMessageRows(
     const groupId = requiredText(r.group_id, ID_MAX);
     if (id === undefined || groupId === undefined || seen.has(id)) { dropped++; continue; }
     if (!knownGroupIds.has(groupId)) { dropped++; continue; }
-    if (!isPubKeyB64(r.sender_pub_b64)) { dropped++; continue; }
+    const decoded = decodeAnonymousGroupMessage(r);
+    if (!decoded || !isPubKeyB64(decoded.sender_pub_b64)) { dropped++; continue; }
+    const authorAsGroup = decoded.author_as_group;
     // Пустой текст у сообщения бывает — это вложение без подписи.
     if (typeof r.text !== 'string' || r.text.length > TEXT_MAX) { dropped++; continue; }
 
@@ -292,7 +301,7 @@ export function sanitizeGroupMessageRows(
     const views = count(r.view_count ?? 0, COUNT_MAX);
     if (views == null) { dropped++; continue; }
 
-    const senderName = optionalText(r.sender_name, NAME_MAX);
+    const senderName = optionalText(decoded.sender_name, NAME_MAX);
     const mediaCids = optionalText(r.media_cids, MEDIA_CIDS_MAX);
     const replyToId = optionalText(r.reply_to_id, ID_MAX);
     const replyPreview = optionalText(r.reply_to_preview, PREVIEW_MAX);
@@ -307,7 +316,8 @@ export function sanitizeGroupMessageRows(
     rows.push({
       id,
       group_id: groupId,
-      sender_pub_b64: r.sender_pub_b64,
+      sender_pub_b64: decoded.sender_pub_b64,
+      author_as_group: authorAsGroup,
       sender_name: senderName,
       text: r.text,
       media_cids: mediaCids,
@@ -349,6 +359,9 @@ export function sanitizeGroupMemberRows(
     if (seen.has(key)) { dropped++; continue; }
     const displayName = optionalText(r.display_name, DISPLAY_NAME_MAX);
     const joinedAt = optionalTime(r.joined_at);
+    const grant = optionalText(r.anonymous_grant, 4096);
+    const revision = r.anonymous_revision ?? 0;
+    if (grant === undefined || !Number.isSafeInteger(revision) || (revision as number) < 0) { dropped++; continue; }
     if (displayName === undefined || joinedAt === undefined) { dropped++; continue; }
     seen.add(key);
     rows.push({
@@ -357,8 +370,39 @@ export function sanitizeGroupMemberRows(
       role: r.role,
       display_name: displayName,
       joined_at: joinedAt ?? 0,
+      anonymous_grant: r.role === 'owner' || r.role === 'admin' ? grant : null,
+      anonymous_revision: revision as number,
     });
   }
   if (input.length > GROUP_MEMBER_MAX_ROWS) dropped += input.length - GROUP_MEMBER_MAX_ROWS;
   return { rows, dropped };
+}
+
+/** Preserve safe display on old clients without blocking their entire sync cursor. */
+export function encodeAnonymousGroupMessage(row: GroupMessageBackupRow, groupName: string, channel = false): GroupMessageBackupRow {
+  if (!row.author_as_group && !channel) return row;
+  return {
+    ...row, author_format: 'anonymous:v1', author_as_group: 1,
+    authenticated_sender_pub_b64: row.sender_pub_b64,
+    authenticated_sender_name: row.sender_name,
+    sender_pub_b64: ANONYMOUS_GROUP_SENDER,
+    sender_name: groupName,
+  };
+}
+
+/** A legacy re-export loses authentication metadata; never infer it from the display name. */
+export function decodeAnonymousGroupMessage(row: Record<string, unknown>): (Record<string, unknown> & {
+  sender_pub_b64: string; sender_name: unknown; author_as_group: number;
+}) | null {
+  const author = flag(row.author_as_group ?? 0);
+  if (author === null) return null;
+  if (row.author_format !== undefined) {
+    if (row.author_format !== 'anonymous:v1' || author !== 1 ||
+        row.sender_pub_b64 !== ANONYMOUS_GROUP_SENDER || !isPubKeyB64(row.authenticated_sender_pub_b64)) return null;
+    return { ...row, sender_pub_b64: row.authenticated_sender_pub_b64,
+      sender_name: row.authenticated_sender_name ?? null, author_as_group: 1 };
+  }
+  if (!isPubKeyB64(row.sender_pub_b64)) return null;
+  return { ...row, sender_pub_b64: row.sender_pub_b64, sender_name: row.sender_name,
+    author_as_group: row.sender_pub_b64 === ANONYMOUS_GROUP_SENDER ? 1 : author };
 }

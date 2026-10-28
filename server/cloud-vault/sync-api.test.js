@@ -95,6 +95,16 @@ test('signed sync API pushes, pulls and revokes devices', async (t) => {
     body: JSON.stringify(await signedPayload('enroll')),
   });
   assert.equal(legacyEnrollment.status, 200);
+  // Unknown/privacy-reduced browser UAs intentionally report an empty OS version.
+  const webInfo = { platform: 'web', model: 'Web browser', osVersion: '', appVersion: '4.32.1091' };
+  for (const [osVersion, expected] of [['', 200], [42, 401], ['x'.repeat(33), 401]]) {
+    const response = await fetch(`${base}/v1/sync/${accountId}/devices/enroll`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(await signedPayload('enroll', { deviceInfo: { ...webInfo, osVersion } })),
+    });
+    assert.equal(response.status, expected, `OS metadata type/length: ${typeof osVersion}`);
+  }
+
   const pushEnvelope = await signedPayload('push', { mutations: [mutation()] });
   const push = await fetch(`${base}/v1/sync/${accountId}/push`, {
     method: 'POST',

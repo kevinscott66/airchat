@@ -38,6 +38,7 @@ export const GROUP_CTL_PREFIX = '\x0egctl:';
 export type GroupCtlMember = { pub: string; name?: string | null };
 
 export type GroupCtlOp =
+  | { op: 'anonymous_v1'; body: string }
   /**
    * Самопредставление: «я вступил(а) по ссылке-приглашению». Единственная
    * операция, которую шлёт не администратор, поэтому target обязан совпадать с
@@ -172,7 +173,7 @@ export type GroupCtlEnvelope = GroupCtlOp & {
   actorName?: string;
 };
 
-const CTL_OPS = new Set(['join', 'leave', 'joinres', 'invite', 'ban', 'unban', 'kick', 'add', 'role', 'meta', 'edit', 'del', 'pin']);
+const CTL_OPS = new Set(['anonymous_v1', 'join', 'leave', 'joinres', 'invite', 'ban', 'unban', 'kick', 'add', 'role', 'meta', 'edit', 'del', 'pin']);
 
 /** Сколько участников максимум переносит одно приглашение. */
 const MAX_INVITE_MEMBERS = 200;
@@ -202,6 +203,9 @@ export function decodeGroupCtlEnvelope(text: string): GroupCtlEnvelope | null {
     const name = sanitizeName(env.actorName);
     if (name == null) return null;
     env.actorName = name;
+  }
+  if (env.op === 'anonymous_v1') {
+    return typeof env.body === 'string' && env.body.length <= 48 * 1024 ? env : null;
   }
   if (env.op === 'meta') {
     if (env.name != null) {

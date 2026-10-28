@@ -22,14 +22,19 @@
 
 const TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 const MAX_TOKENS = 200000;
+const MAX_DEVICES_PER_PEER = 8;
+const LEGACY_DEVICE_ID = 'legacy';
+const REVOCATION_TTL_MS = 10 * 60 * 1000;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS push_tokens (
-    peer_id TEXT PRIMARY KEY,
+    peer_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
     token TEXT NOT NULL,
     platform TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
-    ts INTEGER NOT NULL
+    ts INTEGER NOT NULL,
+    PRIMARY KEY (peer_id, device_id)
   );
   CREATE INDEX IF NOT EXISTS push_tokens_updated_at ON push_tokens (updated_at);
 `;
@@ -41,47 +46,70 @@ const SCHEMA = `
 function createMemoryTokenRegistry(options = {}) {
   const ttlMs = options.ttlMs ?? TOKEN_TTL_MS;
   const maxTokens = options.maxTokens ?? MAX_TOKENS;
+  const maxDevices = options.maxDevices ?? MAX_DEVICES_PER_PEER;
   const now = options.now ?? (() => Date.now());
-  const entries = new Map();
-
+  const peers = new Map();
+  let count = 0;
+  function remove(peerId, deviceId) {
+    const devices = peers.get(peerId);
+    if (!devices?.delete(deviceId)) return false;
+    count -= 1;
+    if (!devices.size) peers.delete(peerId);
+    return true;
+  }
   function sweep() {
     const cutoff = now() - ttlMs;
-    for (const [peerId, entry] of entries) {
-      if (entry.updatedAt < cutoff) entries.delete(peerId);
+    for (const [peerId, devices] of peers) {
+      for (const [deviceId, entry] of devices) {
+        if (entry.updatedAt < (entry.platform === 'revoked' ? now() - REVOCATION_TTL_MS : cutoff)) remove(peerId, deviceId);
+      }
     }
   }
-
-  return {
+  function current(peerId, deviceId) {
+    const entry = peers.get(peerId)?.get(deviceId);
+    if (entry && entry.updatedAt < now() - (entry.platform === 'revoked' ? REVOCATION_TTL_MS : ttlMs)) {
+      remove(peerId, deviceId);
+      return null;
+    }
+    return entry ?? null;
+  }
+  const store = {
     persistent: false,
-    set(peerId, token, platform, ts = 0) {
-      const previous = entries.get(peerId);
-      // Перехваченный старый запрос не должен откатывать токен на предыдущий:
-      // окно повтора в пять минут само по себе от этого не защищает.
+    set(peerId, token, platform, ts = 0, deviceId = LEGACY_DEVICE_ID) {
+      const previous = current(peerId, deviceId);
       if (previous && ts <= previous.ts) return false;
-      if (!previous && entries.size >= maxTokens) {
-        sweep();
-        if (entries.size >= maxTokens) return false;
-      }
-      entries.set(peerId, { token, platform, updatedAt: now(), ts });
+      if (!previous && (count >= maxTokens || (peers.get(peerId)?.size ?? 0) >= maxDevices)) sweep();
+      if (!previous && (count >= maxTokens || (peers.get(peerId)?.size ?? 0) >= maxDevices)) return false;
+      let devices = peers.get(peerId);
+      if (!devices) peers.set(peerId, devices = new Map());
+      devices.set(deviceId, { deviceId, token, platform, updatedAt: now(), ts });
+      if (!previous) count += 1;
       return true;
     },
-    get(peerId) {
-      const entry = entries.get(peerId);
-      if (!entry) return null;
-      if (entry.updatedAt < now() - ttlMs) {
-        entries.delete(peerId);
-        return null;
-      }
-      return entry;
+    get(peerId, deviceId = LEGACY_DEVICE_ID) {
+      const entry = current(peerId, deviceId);
+      return entry?.token ? entry : null;
     },
-    delete(peerId) {
-      return entries.delete(peerId);
+    list(peerId) {
+      return [...(peers.get(peerId)?.keys() ?? [])].map((id) => store.get(peerId, id)).filter(Boolean);
     },
-    get size() {
-      return entries.size;
+    delete(peerId, deviceId = LEGACY_DEVICE_ID) { return remove(peerId, deviceId); },
+    deleteIfCurrent(peerId, expected) {
+      const deviceId = expected.deviceId ?? LEGACY_DEVICE_ID;
+      const entry = current(peerId, deviceId);
+      if (!entry || entry.token !== expected.token || entry.ts !== expected.ts) return false;
+      return remove(peerId, deviceId);
     },
+    revoke(peerId, deviceId, ts) {
+      // Keep a timestamp tombstone so a captured enrollment cannot restore it.
+      const entry = current(peerId, deviceId);
+      if (entry && ts <= entry.ts) return entry.platform === 'revoked';
+      return store.set(peerId, '', 'revoked', ts, deviceId);
+    },
+    get size() { return count; },
     close() {},
   };
+  return store;
 }
 
 /**
@@ -102,53 +130,80 @@ function createSqliteTokenRegistry(options = {}) {
   } catch {
     /* :memory: и тома без поддержки WAL работают и без него */
   }
-  database.exec(SCHEMA);
+  const columns = database.prepare("PRAGMA table_info(push_tokens)").all();
+  if (columns.length && !columns.some((column) => column.name === 'device_id')) {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      database.exec('ALTER TABLE push_tokens RENAME TO push_tokens_legacy');
+      database.exec('DROP INDEX IF EXISTS push_tokens_updated_at');
+      database.exec(SCHEMA);
+      database.exec(`INSERT INTO push_tokens (peer_id, device_id, token, platform, updated_at, ts)
+        SELECT peer_id, 'legacy', token, platform, updated_at, ts FROM push_tokens_legacy`);
+      database.exec('DROP TABLE push_tokens_legacy');
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+  } else database.exec(SCHEMA);
 
-  const selectOne = database.prepare('SELECT token, platform, updated_at, ts FROM push_tokens WHERE peer_id = ?');
+  const maxDevices = options.maxDevices ?? MAX_DEVICES_PER_PEER;
+  const selectOne = database.prepare('SELECT * FROM push_tokens WHERE peer_id = ? AND device_id = ?');
+  const selectPeer = database.prepare('SELECT * FROM push_tokens WHERE peer_id = ?');
   const upsert = database.prepare(
-    `INSERT INTO push_tokens (peer_id, token, platform, updated_at, ts) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (peer_id) DO UPDATE SET token = excluded.token, platform = excluded.platform,
-         updated_at = excluded.updated_at, ts = excluded.ts`
+    `INSERT INTO push_tokens (peer_id, device_id, token, platform, updated_at, ts) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (peer_id, device_id) DO UPDATE SET token = excluded.token, platform = excluded.platform,
+         updated_at = excluded.updated_at, ts = excluded.ts WHERE excluded.ts > push_tokens.ts`
   );
-  const removeOne = database.prepare('DELETE FROM push_tokens WHERE peer_id = ?');
-  const removeStale = database.prepare('DELETE FROM push_tokens WHERE updated_at < ?');
+  const removeOne = database.prepare('DELETE FROM push_tokens WHERE peer_id = ? AND device_id = ?');
+  const removeCurrent = database.prepare('DELETE FROM push_tokens WHERE peer_id = ? AND device_id = ? AND token = ? AND ts = ?');
+  const removeStale = database.prepare("DELETE FROM push_tokens WHERE (platform != 'revoked' AND updated_at < ?) OR (platform = 'revoked' AND updated_at < ?)");
   const countAll = database.prepare('SELECT COUNT(*) AS n FROM push_tokens');
-
-  const shape = (row) =>
-    row ? { token: row.token, platform: row.platform, updatedAt: Number(row.updated_at), ts: Number(row.ts) } : null;
+  const shape = (row) => row ? {
+    deviceId: row.device_id, token: row.token, platform: row.platform,
+    updatedAt: Number(row.updated_at), ts: Number(row.ts),
+  } : null;
   const count = () => Number(countAll.get().n);
-
-  return {
+  const store = {
     persistent: true,
-    set(peerId, token, platform, ts = 0) {
-      const previous = shape(selectOne.get(peerId));
-      if (previous && ts <= previous.ts) return false;
-      if (!previous && count() >= maxTokens) {
-        removeStale.run(now() - ttlMs);
-        if (count() >= maxTokens) return false;
+    set(peerId, token, platform, ts = 0, deviceId = LEGACY_DEVICE_ID) {
+      let previous = shape(selectOne.get(peerId, deviceId));
+      if (previous && previous.updatedAt < now() - (previous.platform === 'revoked' ? REVOCATION_TTL_MS : ttlMs)) {
+        removeOne.run(peerId, deviceId);
+        previous = null;
       }
-      upsert.run(peerId, token, platform, now(), ts);
-      return true;
+      if (previous && ts <= previous.ts) return false;
+      if (!previous && (count() >= maxTokens || selectPeer.all(peerId).length >= maxDevices)) {
+        removeStale.run(now() - ttlMs, now() - REVOCATION_TTL_MS);
+        if (count() >= maxTokens || selectPeer.all(peerId).length >= maxDevices) return false;
+      }
+      return upsert.run(peerId, deviceId, token, platform, now(), ts).changes > 0;
     },
-    get(peerId) {
-      const entry = shape(selectOne.get(peerId));
+    get(peerId, deviceId = LEGACY_DEVICE_ID) {
+      const entry = shape(selectOne.get(peerId, deviceId));
       if (!entry) return null;
-      if (entry.updatedAt < now() - ttlMs) {
-        removeOne.run(peerId);
+      if (entry.updatedAt < now() - (entry.platform === 'revoked' ? REVOCATION_TTL_MS : ttlMs)) {
+        removeOne.run(peerId, deviceId);
         return null;
       }
-      return entry;
+      return entry.token ? entry : null;
     },
-    delete(peerId) {
-      return removeOne.run(peerId).changes > 0;
+    list(peerId) {
+      return selectPeer.all(peerId).map((row) => store.get(peerId, row.device_id)).filter(Boolean);
     },
-    get size() {
-      return count();
+    delete(peerId, deviceId = LEGACY_DEVICE_ID) { return removeOne.run(peerId, deviceId).changes > 0; },
+    deleteIfCurrent(peerId, expected) {
+      return removeCurrent.run(peerId, expected.deviceId ?? LEGACY_DEVICE_ID, expected.token, expected.ts).changes > 0;
     },
-    close() {
-      database.close();
+    revoke(peerId, deviceId, ts) {
+      const entry = shape(selectOne.get(peerId, deviceId));
+      if (entry && ts <= entry.ts) return entry.platform === 'revoked';
+      return store.set(peerId, '', 'revoked', ts, deviceId);
     },
+    get size() { return count(); },
+    close() { database.close(); },
   };
+  return store;
 }
 
 /**
@@ -178,6 +233,8 @@ function createTokenStore(options = {}) {
 module.exports = {
   TOKEN_TTL_MS,
   MAX_TOKENS,
+  MAX_DEVICES_PER_PEER,
+  LEGACY_DEVICE_ID,
   createMemoryTokenRegistry,
   createSqliteTokenRegistry,
   createTokenStore,

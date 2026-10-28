@@ -1,3 +1,5 @@
+import { ANONYMOUS_GROUP_SENDER, ensureGroupAnonymousColumns } from './groupAnonymousStorage';
+import { finishDatabaseBootstrap, createLocalIndexes } from './localBootstrap';
 import * as SQLite from 'expo-sqlite';
 
 import { openLeasedDatabase } from './dbLease';
@@ -94,6 +96,8 @@ import { isGroupSysMessage } from '../social/groupSysLine';
 import { rebuildColumns, type ColumnInfo } from './tableRebuild';
 import { classifyStorageError, type StoragePressureKind } from './storagePressure';
 import {
+  encodeAnonymousGroupMessage,
+  decodeAnonymousGroupMessage,
   sanitizeGroupMemberRows,
   sanitizeGroupMessageRows,
   sanitizeGroupRows,
@@ -258,8 +262,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (entity_kind, entity_id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_sync_entity_heads_profile
-      ON sync_entity_heads (owner_profile_id, entity_kind, entity_id);
+
     /* Текст и media_cids — ciphertext (XChaCha20-Poly1305), ключ в SecureStore. */
     CREATE TABLE IF NOT EXISTS chat_messages (
       /*
@@ -306,11 +309,10 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
      * IF NOT EXISTS не переопределяет существующий индекс, а тихо оставляет
      * старый; прежний убираем явно.
      */
-    CREATE INDEX IF NOT EXISTS idx_chat_contact_profile
-      ON chat_messages (contact_pub_b64, owner_profile_id, created_at DESC);
-    DROP INDEX IF EXISTS idx_chat_contact;
-    CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox (created_at ASC);
-    CREATE INDEX IF NOT EXISTS idx_conv_profile ON conversations (owner_profile_id, pinned DESC, last_message_at DESC);
+
+
+
+
     /* Группы и каналы. */
     CREATE TABLE IF NOT EXISTS groups (
       /*
@@ -377,10 +379,9 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_grp_msg_profile
-      ON group_messages (group_id, owner_profile_id, created_at DESC);
-    DROP INDEX IF EXISTS idx_grp_msg;
-    CREATE INDEX IF NOT EXISTS idx_grp_members ON group_members (group_id, owner_profile_id);
+
+
+
     -- Ключ составной по той же причине, что у chat_messages и group_messages:
     -- id чужой сторис строится из ключа автора и id конверта (localStoryId) и
     -- в двух профилях одного телефона совпадает. Ср. ensureStoriesProfileScopedKey.
@@ -395,8 +396,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_stories
-      ON stories (owner_profile_id, author_pub_b64, created_at DESC);
+
     /*
      * v4.32.576: альбомы историй. История живёт сутки и уходит вместе со
      * своим файлом — это обещание, а не недоделка. Альбом — обещание
@@ -433,8 +433,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       added_at INTEGER NOT NULL,
       PRIMARY KEY (id, owner_profile_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_story_album_items
-      ON story_album_items (album_id, owner_profile_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY NOT NULL,
       contact_pub_b64 TEXT NOT NULL,
@@ -447,7 +446,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       -- служил возраст строки, а возраст рос и когда приложение было закрыто.
       attempts INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages (send_at ASC);
+
 
     CREATE TABLE IF NOT EXISTS poll_votes (
       message_id TEXT NOT NULL,
@@ -466,7 +465,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_quick_replies ON quick_replies (owner_profile_id, created_at ASC);
+
     CREATE TABLE IF NOT EXISTS group_join_requests (
       id TEXT PRIMARY KEY NOT NULL,
       group_id TEXT NOT NULL,
@@ -477,7 +476,7 @@ async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
       owner_profile_id INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_grp_join_req ON group_join_requests (group_id, status, created_at DESC);
+
   `);
 }
 
@@ -493,6 +492,7 @@ async function ensureChatMessagesOwnerProfileColumn(database: SQLite.SQLiteDatab
     );
   } catch (e) {
     log.warn('owner_profile_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -512,6 +512,7 @@ async function ensureReplyToColumns(database: SQLite.SQLiteDatabase): Promise<vo
     }
   } catch (e) {
     log.warn('reply_to_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -539,6 +540,7 @@ async function ensureMessageExtraColumns(database: SQLite.SQLiteDatabase): Promi
     }
   } catch (e) {
     log.warn('message_extra_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -556,6 +558,7 @@ async function ensureStoryAlbumMediaCidColumn(database: SQLite.SQLiteDatabase): 
     }
   } catch (e) {
     log.warn('story_album_media_cid_migration_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -578,6 +581,7 @@ async function ensureConversationPinnedMessageColumn(database: SQLite.SQLiteData
     }
   } catch (e) {
     log.warn('conversation_pinned_msg_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -597,6 +601,7 @@ async function ensureMutedUntilColumn(database: SQLite.SQLiteDatabase): Promise<
     }
   } catch (e) {
     log.warn('muted_until_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -613,6 +618,7 @@ async function ensureStarredColumns(database: SQLite.SQLiteDatabase): Promise<vo
     }
   } catch (e) {
     log.warn('starred_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -632,6 +638,7 @@ async function ensureMessageTransportColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('transport_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -647,6 +654,7 @@ async function ensureGroupSenderNameColumn(database: SQLite.SQLiteDatabase): Pro
     }
   } catch (e) {
     log.warn('group_sender_name_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -663,6 +671,7 @@ async function ensureGroupPinnedMessageColumns(database: SQLite.SQLiteDatabase):
     }
   } catch (e) {
     log.warn('group_pinned_message_columns_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -675,6 +684,7 @@ async function ensureGroupMessageEditedAtColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('group_messages_edited_at_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -687,6 +697,7 @@ async function ensureGroupMentionCountColumn(database: SQLite.SQLiteDatabase): P
     }
   } catch (e) {
     log.warn('group_mention_count_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -699,6 +710,7 @@ async function ensureGroupDraftTextColumn(database: SQLite.SQLiteDatabase): Prom
     }
   } catch (e) {
     log.warn('group_draft_text_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -718,6 +730,7 @@ async function ensureGroupDisappearAfterMsColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_disappear_after_ms_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -730,6 +743,7 @@ async function ensureGroupAdminOnlyPostingColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_admin_only_posting_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -748,6 +762,7 @@ async function ensureGroupAdminOnlyPinningColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_admin_only_pinning_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -760,6 +775,7 @@ async function ensureGroupAnonymousPostingColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_anonymous_posting_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -772,6 +788,7 @@ async function ensureGroupMessageViewCountColumn(database: SQLite.SQLiteDatabase
     }
   } catch (e) {
     log.warn('group_message_view_count_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -815,8 +832,7 @@ async function ensureGroupsProfileScopedKey(database: SQLite.SQLiteDatabase): Pr
     // Ключевые колонки должны быть на месте: без них новая таблица получится
     // не той, что описана в схеме, а переливать в неё уже нечего.
     if (!names.includes('id') || !names.includes('owner_profile_id')) {
-      log.warn('groups_migrate_skipped_unexpected_schema');
-      return;
+      throw new Error('groups_migrate_unexpected_schema');
     }
 
     const txn = await beginImmediate(database);
@@ -842,6 +858,7 @@ ${decls},
     }
   } catch (e) {
     log.warn('groups_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -957,8 +974,7 @@ async function ensureTableCompositeKey(
     const { decls, names, skipped } = rebuildColumns(cols, '          ');
     if (skipped.length) log.warn('table_migrate_columns_skipped', { table, skipped: skipped.join(',') });
     if (!names.includes('id') || !names.includes('owner_profile_id')) {
-      log.warn('table_migrate_skipped_unexpected_schema', { table });
-      return;
+      throw new Error(`table_migrate_unexpected_schema:${table}`);
     }
 
     const txn = await beginImmediate(database);
@@ -985,6 +1001,7 @@ ${decls},
     }
   } catch (e) {
     log.warn('table_migrate_failed', { table, err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1054,6 +1071,7 @@ async function ensureGroupMembersProfileScoped(database: SQLite.SQLiteDatabase):
     }
   } catch (e) {
     log.warn('group_members_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1116,6 +1134,7 @@ async function ensurePollVotesMultipleChoice(database: SQLite.SQLiteDatabase): P
     }
   } catch (e) {
     log.warn('poll_votes_migrate_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1135,6 +1154,7 @@ async function ensureGroupMessageSeenByColumn(database: SQLite.SQLiteDatabase): 
     }
   } catch (e) {
     log.warn('group_message_seen_by_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1147,6 +1167,7 @@ async function ensureConversationColorTagColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('conversation_color_tag_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1158,6 +1179,7 @@ async function ensureStoryMediaTypeColumn(database: SQLite.SQLiteDatabase): Prom
     }
   } catch (e) {
     log.warn('story_media_type_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1169,6 +1191,7 @@ async function ensureGroupRequireApprovalColumn(database: SQLite.SQLiteDatabase)
     }
   } catch (e) {
     log.warn('group_require_approval_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1186,6 +1209,7 @@ async function ensureGroupInviteTokenColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('group_invite_token_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1202,6 +1226,7 @@ async function ensureGroupUsernameColumn(database: SQLite.SQLiteDatabase): Promi
     }
   } catch (e) {
     log.warn('group_username_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1222,6 +1247,7 @@ async function ensureScheduledGroupIdColumn(database: SQLite.SQLiteDatabase): Pr
     }
   } catch (e) {
     log.warn('scheduled_group_id_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1233,6 +1259,7 @@ async function ensureOutboxPriorityColumn(database: SQLite.SQLiteDatabase): Prom
     await database.execAsync('ALTER TABLE outbox ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
   } catch (e) {
     log.warn('outbox_priority_column_failed', { err: e instanceof Error ? e.message : String(e) });
+    throw e;
   }
 }
 
@@ -1249,6 +1276,7 @@ async function ensureOutboxOwnerProfileColumn(database: SQLite.SQLiteDatabase): 
     log.warn('outbox_owner_profile_column_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
+    throw e;
   }
 }
 
@@ -1265,6 +1293,7 @@ async function ensureOutboxAttemptsColumn(database: SQLite.SQLiteDatabase): Prom
     log.warn('outbox_attempts_column_failed', {
       err: e instanceof Error ? e.message : String(e),
     });
+    throw e;
   }
 }
 
@@ -1948,60 +1977,63 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
     // держатель и только по разу: просителю отдаётся уже готовая база.
     const attempt = openLeasedDatabase(LOCAL_DB_NAME, async () => {
       const database = await SQLite.openDatabaseAsync(LOCAL_DB_NAME);
-      await initSchema(database);
-      await ensureChatMessagesOwnerProfileColumn(database);
-      await ensureOutboxPriorityColumn(database);
-      await ensureOutboxOwnerProfileColumn(database);
-      await ensureOutboxAttemptsColumn(database);
-      await ensureReplyToColumns(database);
-      await ensureMessageExtraColumns(database);
-      await ensureConversationPinnedMessageColumn(database);
-      await ensureStoryAlbumMediaCidColumn(database);
-      await ensureGroupPinnedMessageColumns(database);
-      await ensureGroupSenderNameColumn(database);
-      await ensureGroupMessageEditedAtColumn(database);
-      await ensureGroupMentionCountColumn(database);
-      await ensureGroupDraftTextColumn(database);
-      await ensureGroupDisappearAfterMsColumn(database);
-      await ensureScheduledGroupIdColumn(database);
-      await ensureGroupAdminOnlyPostingColumn(database);
-      await ensureGroupRequireApprovalColumn(database);
-      await ensureGroupInviteTokenColumn(database);
-      await ensureGroupUsernameColumn(database);
-      await ensureGroupAnonymousPostingColumn(database);
-      await ensureGroupAdminOnlyPinningColumn(database);
-      await ensureGroupMessageViewCountColumn(database);
-      await ensureMutedUntilColumn(database);
-      await ensureStarredColumns(database);
-      await ensureMessageTransportColumn(database);
-      await migrateDekRandomToDeterministic(database);
-      await ensureLocalCryptoMigration(database);
-      await ensureStoryMediaTypeColumn(database);
-      await ensureConversationColorTagColumn(database);
-      await ensureGroupMessageSeenByColumn(database);
-      await ensurePollVotesMultipleChoice(database);
-      // До ensureGroupMemberNamesEncrypted: тот пишет в group_members, а здесь
-      // таблица пересобирается целиком — иначе правки достались бы копии.
-      // Порядок важен: состав берёт профиль у groups, значит groups к этому
-      // моменту уже должна быть в своём окончательном виде.
-      await ensureGroupsProfileScopedKey(database);
-      await ensureGroupMembersProfileScoped(database);
-      // До ensureMessageSocialColumnsEncrypted: тот правит строки по ключу, и
-      // ключ к этому моменту обязан быть уже составным — иначе он писал бы
-      // реакции одного профиля поверх строки другого.
-      await ensureChatMessagesProfileScopedKey(database);
-      await ensureGroupMessagesProfileScopedKey(database);
-      // После ensureStoryMediaTypeColumn: пересборка переливает те колонки,
-      // что есть в базе сейчас, — добавленная позже media_type до неё не
-      // дожила бы.
-      await ensureStoriesProfileScopedKey(database);
-      // После ensureLocalCryptoMigration: тот тоже берёт DEK, и порядок здесь
-      // тот же — сперва ключ определён, потом им что-то шифруется.
-      await ensureGroupMemberNamesEncrypted(database);
-      await ensureMessageSocialColumnsEncrypted(database);
-      await ensureScheduledSenderNameEncrypted(database);
-      await ensureGroupAvatarCidEncrypted(database);
-      return database;
+      return finishDatabaseBootstrap(database, async () => {
+        await initSchema(database);
+        await ensureChatMessagesOwnerProfileColumn(database);
+        await ensureOutboxPriorityColumn(database);
+        await ensureOutboxOwnerProfileColumn(database);
+        await ensureOutboxAttemptsColumn(database);
+        await ensureReplyToColumns(database);
+        await ensureMessageExtraColumns(database);
+        await ensureConversationPinnedMessageColumn(database);
+        await ensureStoryAlbumMediaCidColumn(database);
+        await ensureGroupPinnedMessageColumns(database);
+        await ensureGroupSenderNameColumn(database);
+        await ensureGroupMessageEditedAtColumn(database);
+        await ensureGroupMentionCountColumn(database);
+        await ensureGroupDraftTextColumn(database);
+        await ensureGroupDisappearAfterMsColumn(database);
+        await ensureScheduledGroupIdColumn(database);
+        await ensureGroupAdminOnlyPostingColumn(database);
+        await ensureGroupRequireApprovalColumn(database);
+        await ensureGroupInviteTokenColumn(database);
+        await ensureGroupUsernameColumn(database);
+        await ensureGroupAnonymousPostingColumn(database);
+        await ensureGroupAdminOnlyPinningColumn(database);
+        await ensureGroupMessageViewCountColumn(database);
+        await ensureMutedUntilColumn(database);
+        await ensureStarredColumns(database);
+        await ensureMessageTransportColumn(database);
+        await migrateDekRandomToDeterministic(database);
+        await ensureLocalCryptoMigration(database);
+        await ensureStoryMediaTypeColumn(database);
+        await ensureConversationColorTagColumn(database);
+        await ensureGroupMessageSeenByColumn(database);
+        await ensurePollVotesMultipleChoice(database);
+        // До ensureGroupMemberNamesEncrypted: тот пишет в group_members, а здесь
+        // таблица пересобирается целиком — иначе правки достались бы копии.
+        // Порядок важен: состав берёт профиль у groups, значит groups к этому
+        // моменту уже должна быть в своём окончательном виде.
+        await ensureGroupsProfileScopedKey(database);
+        await ensureGroupMembersProfileScoped(database);
+        // До ensureMessageSocialColumnsEncrypted: тот правит строки по ключу, и
+        // ключ к этому моменту обязан быть уже составным — иначе он писал бы
+        // реакции одного профиля поверх строки другого.
+        await ensureChatMessagesProfileScopedKey(database);
+        await ensureGroupMessagesProfileScopedKey(database);
+        await ensureGroupAnonymousColumns(database);
+        // После ensureStoryMediaTypeColumn: пересборка переливает те колонки,
+        // что есть в базе сейчас, — добавленная позже media_type до неё не
+        // дожила бы.
+        await ensureStoriesProfileScopedKey(database);
+        // После ensureLocalCryptoMigration: тот тоже берёт DEK, и порядок здесь
+        // тот же — сперва ключ определён, потом им что-то шифруется.
+        await ensureGroupMemberNamesEncrypted(database);
+        await ensureMessageSocialColumnsEncrypted(database);
+        await ensureScheduledSenderNameEncrypted(database);
+        await ensureGroupAvatarCidEncrypted(database);
+        await createLocalIndexes(database);
+      });
     });
     dbPromise = attempt;
     // Отказ разбирается здесь же, иначе он остался бы необработанным.
@@ -4000,7 +4032,7 @@ export async function exportGroupBackupRows(ownerProfileId: number): Promise<{
   if (!groups.length) return empty;
   const messages = await d.getAllAsync<GroupMessageBackupRow>(
     `SELECT id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id,
-            reply_to_preview, reactions, created_at, edited_at, starred, view_count, seen_by
+            reply_to_preview, reactions, created_at, edited_at, starred, view_count, seen_by, author_as_group
        FROM group_messages WHERE owner_profile_id = ? ORDER BY created_at ASC`,
     [ownerProfileId]
   );
@@ -4008,11 +4040,19 @@ export async function exportGroupBackupRows(ownerProfileId: number): Promise<{
   // приходилось собирать через JOIN с groups — и осиротевший состав (группа
   // удалена, строки участников остались) в копию не попадал вовсе.
   const members = await d.getAllAsync<GroupMemberBackupRow>(
-    `SELECT group_id, peer_pub_b64, role, display_name, joined_at
+    `SELECT group_id, peer_pub_b64, role, display_name, joined_at, anonymous_grant, anonymous_revision
        FROM group_members WHERE owner_profile_id = ?`,
     [ownerProfileId]
   );
-  return { groups, messages, members };
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  return {
+    groups,
+    messages: messages.map((m) => {
+      const group = groupById.get(m.group_id);
+      return encodeAnonymousGroupMessage(m, group?.name ?? 'Группа', group?.type === 'channel');
+    }),
+    members,
+  };
 }
 
 /**
@@ -4034,6 +4074,15 @@ export async function importGroupBackupRows(
   if (!groups.rows.length) return none;
   const ids = new Set(groups.rows.map((g) => g.id));
   const messages = sanitizeGroupMessageRows(input.messages, ids);
+  // Old file backups retain the group-wide flag, but have no per-message bit.
+  // Freeze that historical presentation while making future posts personal.
+  const legacyAnonymousGroups = new Set(groups.rows.filter((g) => g.type === 'group' && g.anonymous_posting === 1).map((g) => g.id));
+  for (const message of messages.rows) {
+    if (legacyAnonymousGroups.has(message.group_id)) message.author_as_group = 1;
+  }
+  for (const group of groups.rows) {
+    if (group.type === 'group') group.anonymous_posting = 0;
+  }
   const members = sanitizeGroupMemberRows(input.members, ids);
   // Молчаливая потеря здесь — это «часть переписки не вернулась, и об этом
   // никто не узнал»; хотя бы в журнале след.
@@ -4070,20 +4119,20 @@ export async function importGroupBackupRows(
           `INSERT OR IGNORE INTO group_messages
              (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id,
               reply_to_preview, reactions, created_at, owner_profile_id, edited_at, starred,
-              view_count, seen_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              view_count, seen_by, author_as_group)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             m.id, m.group_id, m.sender_pub_b64, m.sender_name, m.text, m.media_cids,
             m.reply_to_id, m.reply_to_preview, encryptAtRestIfPlain(m.reactions, dek), m.created_at, ownerProfileId,
-            m.edited_at, m.starred, m.view_count, encryptAtRestIfPlain(m.seen_by, dek),
+            m.edited_at, m.starred, m.view_count, encryptAtRestIfPlain(m.seen_by, dek), m.author_as_group ?? 0,
           ]
         );
       }
       for (const p of members.rows) {
         await d.runAsync(
-          `INSERT OR IGNORE INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [p.group_id, p.peer_pub_b64, p.role, p.display_name, p.joined_at, ownerProfileId]
+          `INSERT OR IGNORE INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id, anonymous_grant, anonymous_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [p.group_id, p.peer_pub_b64, p.role, p.display_name, p.joined_at, ownerProfileId, p.anonymous_grant ?? null, p.anonymous_revision ?? 0]
         );
       }
       await txn.commit();
@@ -4144,6 +4193,8 @@ export async function applySyncGroup(
   // после этого значило бы «устройство считает, что группа у него есть».
   if (rows.length !== 1) throw new Error('Группа синхронизации не прошла проверку.');
   const g = rows[0];
+  // The retired group-wide toggle cannot grant anonymous posting on upgraded clients.
+  if (g.type === 'group') g.anonymous_posting = 0;
   const d = await db();
   const dek = await getOrCreateDataEncryptionKey();
   await d.runAsync(
@@ -4212,18 +4263,21 @@ export async function applySyncGroupMessage(
   ownerProfileId: number,
 ): Promise<void> {
   if (!validSyncProfileId(ownerProfileId)) throw new Error('Invalid sync profile id');
+  const decoded = decodeAnonymousGroupMessage(row);
+  if (!decoded) throw new Error('Invalid anonymous message projection');
+  row = { ...row, ...decoded } as GroupMessageBackupRow;
   const d = await db();
   const dek = await getOrCreateDataEncryptionKey();
   await d.runAsync(
     `INSERT INTO group_messages
        (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id,
         reply_to_preview, reactions, created_at, owner_profile_id, edited_at, starred,
-        view_count, seen_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        view_count, seen_by, author_as_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id, owner_profile_id) DO UPDATE SET
        group_id = excluded.group_id,
-       sender_pub_b64 = excluded.sender_pub_b64,
-       sender_name = excluded.sender_name,
+       sender_pub_b64 = CASE WHEN excluded.sender_pub_b64 = '${ANONYMOUS_GROUP_SENDER}' THEN group_messages.sender_pub_b64 ELSE excluded.sender_pub_b64 END,
+       sender_name = CASE WHEN excluded.sender_pub_b64 = '${ANONYMOUS_GROUP_SENDER}' THEN group_messages.sender_name ELSE excluded.sender_name END,
        text = excluded.text,
        media_cids = excluded.media_cids,
        reply_to_id = excluded.reply_to_id,
@@ -4233,7 +4287,8 @@ export async function applySyncGroupMessage(
        edited_at = excluded.edited_at,
        starred = excluded.starred,
        view_count = excluded.view_count,
-       seen_by = excluded.seen_by`,
+       seen_by = excluded.seen_by,
+       author_as_group = MAX(group_messages.author_as_group, excluded.author_as_group)`,
     [
       row.id,
       row.group_id,
@@ -4250,6 +4305,7 @@ export async function applySyncGroupMessage(
       row.starred,
       row.view_count,
       encryptAtRestIfPlain(row.seen_by, dek),
+      row.author_as_group ?? 0,
     ],
   );
   emitChatWrites();
@@ -4262,13 +4318,18 @@ export async function applySyncGroupMember(
   if (!validSyncProfileId(ownerProfileId)) throw new Error('Invalid sync profile id');
   const d = await db();
   await d.runAsync(
-    `INSERT INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id, anonymous_grant, anonymous_revision)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (group_id, peer_pub_b64, owner_profile_id) DO UPDATE SET
        role = excluded.role,
        display_name = excluded.display_name,
-       joined_at = excluded.joined_at`,
-    [row.group_id, row.peer_pub_b64, row.role, row.display_name, row.joined_at, ownerProfileId],
+       joined_at = excluded.joined_at,
+       anonymous_grant = CASE
+         WHEN excluded.role NOT IN ('owner', 'admin') THEN NULL
+         WHEN excluded.anonymous_revision > group_members.anonymous_revision THEN excluded.anonymous_grant
+         ELSE group_members.anonymous_grant END,
+       anonymous_revision = MAX(group_members.anonymous_revision, excluded.anonymous_revision)`,
+    [row.group_id, row.peer_pub_b64, row.role, row.display_name, row.joined_at, ownerProfileId, (row.role === 'owner' || row.role === 'admin') ? row.anonymous_grant ?? null : null, row.anonymous_revision ?? 0],
   );
   emitChatWrites();
 }
@@ -6686,6 +6747,8 @@ export type GroupRow = {
 };
 
 export type GroupMemberRow = {
+  anonymousGrant?: string | null;
+  anonymousRevision?: number;
   groupId: string;
   peerPubB64: string;
   role: MemberRole;
@@ -6705,6 +6768,7 @@ export type GroupMemberRow = {
 };
 
 export type GroupMessageRow = {
+  authorAsGroup?: boolean;
   id: string;
   groupId: string;
   senderPubB64: string;
@@ -7497,11 +7561,16 @@ async function upsertMemberRow(
   member: GroupMemberRow
 ): Promise<void> {
   await d.runAsync(
-    `INSERT INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO group_members (group_id, peer_pub_b64, role, display_name, joined_at, owner_profile_id, anonymous_grant, anonymous_revision)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(group_id, peer_pub_b64, owner_profile_id) DO UPDATE SET
        role = excluded.role,
-       display_name = excluded.display_name`,
+       display_name = excluded.display_name,
+       anonymous_grant = CASE
+         WHEN excluded.role NOT IN ('owner', 'admin') THEN NULL
+         WHEN excluded.anonymous_revision > group_members.anonymous_revision THEN excluded.anonymous_grant
+         ELSE group_members.anonymous_grant END,
+       anonymous_revision = MAX(group_members.anonymous_revision, excluded.anonymous_revision)`,
     [
       member.groupId,
       member.peerPubB64,
@@ -7512,6 +7581,8 @@ async function upsertMemberRow(
       // об этом по отдельности не нужно: запись в таблицу одна.
       clampJoinedAt(member.joinedAt),
       member.ownerProfileId,
+      (member.role === 'owner' || member.role === 'admin') ? member.anonymousGrant ?? null : null,
+      member.anonymousRevision ?? 0,
     ]
   );
 }
@@ -7643,7 +7714,7 @@ async function readGroupMembers(
     const d = await db();
     const rows = await d.getAllAsync<{
       group_id: string; peer_pub_b64: string; role: string;
-      display_name: string | null; joined_at: number;
+      display_name: string | null; joined_at: number; anonymous_grant?: string | null; anonymous_revision?: number;
     }>(
       // v4.32.468: порядок по старшинству, а не по алфавиту названий ролей
       // (см. MEMBER_ROLE_ORDER — там же разобрано, как это выглядело).
@@ -7674,6 +7745,8 @@ async function readGroupMembers(
         role: r.role as MemberRole,
         ...readMemberName(r.display_name, dek),
         joinedAt: clampJoinedAt(r.joined_at, now),
+        anonymousGrant: r.anonymous_grant ?? null,
+        anonymousRevision: r.anonymous_revision ?? 0,
         ownerProfileId,
       }))
       .sort(
@@ -7730,8 +7803,8 @@ export async function updateGroupMemberRole(
 ): Promise<void> {
   const d = await db();
   await d.runAsync(
-    'UPDATE group_members SET role = ? WHERE group_id = ? AND peer_pub_b64 = ? AND owner_profile_id = ?',
-    [role, groupId, peerPubB64, ownerProfileId]
+    `UPDATE group_members SET role = ?, anonymous_grant = CASE WHEN ? IN ('owner', 'admin') THEN anonymous_grant ELSE NULL END WHERE group_id = ? AND peer_pub_b64 = ? AND owner_profile_id = ?`,
+    [role, role, groupId, peerPubB64, ownerProfileId]
   );
 }
 
@@ -7750,8 +7823,8 @@ export async function updateGroupMemberRole(
  * ДО записи, и счётчик трогается только на новом сообщении.
  */
 const INSERT_GROUP_MESSAGE_SQL = `INSERT OR IGNORE INTO group_messages
-         (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id, reply_to_preview, reactions, created_at, owner_profile_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+         (id, group_id, sender_pub_b64, sender_name, text, media_cids, reply_to_id, reply_to_preview, reactions, created_at, owner_profile_id, author_as_group)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 /** Значения строки сообщения, уже зашифрованные. Готовятся до BEGIN. */
 function encodeGroupMessageValues(msg: GroupMessageRow, dek: Uint8Array): SQLite.SQLiteBindValue[] {
@@ -7771,7 +7844,7 @@ function encodeGroupMessageValues(msg: GroupMessageRow, dek: Uint8Array): SQLite
     // v4.32.282: цитата — кусок чужого сообщения; шифруется как и всё остальное.
     encryptAtRestNullable(msg.replyToPreview ?? null, dek),
     encryptAtRestNullable(msg.reactions ?? null, dek),
-    msg.createdAt, msg.ownerProfileId,
+    msg.createdAt, msg.ownerProfileId, msg.authorAsGroup ? 1 : 0,
   ];
 }
 
@@ -7915,7 +7988,7 @@ export async function listGroupMessages(
     const d = await db();
     const dek = await getOrCreateDataEncryptionKey();
     const rows = await d.getAllAsync<{
-      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null;
+      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null; author_as_group?: number;
       text: string; media_cids: string | null; reply_to_id: string | null;
       reply_to_preview: string | null; reactions: string | null;
       created_at: number; owner_profile_id: number; edited_at: number | null; starred: number;
@@ -7938,7 +8011,7 @@ export async function listGroupMessages(
       return {
       id: r.id,
       groupId: r.group_id,
-      senderPubB64: r.sender_pub_b64,
+      senderPubB64: r.sender_pub_b64, authorAsGroup: !!r.author_as_group,
       senderName: sender.name,
       senderUnreadable: sender.unreadable,
       text: cell.state === 'plain' ? cell.text : '',
@@ -8385,7 +8458,7 @@ export async function searchGroupMessages(
       log.warn('search_group_messages_wide_scan', { candidateLimit, groupId });
     }
     const rows = await d.getAllAsync<{
-      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null;
+      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null; author_as_group?: number;
       text: string; media_cids: string | null; reply_to_id: string | null;
       reply_to_preview: string | null; reactions: string | null;
       created_at: number; owner_profile_id: number; edited_at: number | null;
@@ -8415,7 +8488,7 @@ export async function searchGroupMessages(
       out.push({
         id: r.id,
         groupId: r.group_id,
-        senderPubB64: r.sender_pub_b64,
+        senderPubB64: r.sender_pub_b64, authorAsGroup: !!r.author_as_group,
         senderName: sender.name,
         senderUnreadable: sender.unreadable,
         text: plain,
@@ -8465,7 +8538,7 @@ export async function searchAllGroupMessages(
       log.warn('search_all_group_messages_wide_scan', { candidateLimit });
     }
     const rows = await d.getAllAsync<{
-      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null;
+      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null; author_as_group?: number;
       text: string; media_cids: string | null; reply_to_id: string | null;
       reply_to_preview: string | null; reactions: string | null;
       created_at: number; owner_profile_id: number; edited_at: number | null;
@@ -8502,7 +8575,7 @@ export async function searchAllGroupMessages(
         message: {
           id: r.id,
           groupId: r.group_id,
-          senderPubB64: r.sender_pub_b64,
+          senderPubB64: r.sender_pub_b64, authorAsGroup: !!r.author_as_group,
           senderName: sender.name,
           senderUnreadable: sender.unreadable,
           text: plain,
@@ -8615,7 +8688,7 @@ export async function clearChatHistory(
 export async function getGroupMessageTarget(
   messageId: string,
   ownerProfileId: number
-): Promise<{ groupId: string; senderPubB64: string; text: string | null } | null> {
+): Promise<{ groupId: string; senderPubB64: string; text: string | null; authorAsGroup?: boolean } | null> {
   return lookupValue(await getGroupMessageTargetRead(messageId, ownerProfileId));
 }
 
@@ -8633,11 +8706,11 @@ export async function getGroupMessageTarget(
 export async function getGroupMessageTargetRead(
   messageId: string,
   ownerProfileId: number
-): Promise<LookupResult<{ groupId: string; senderPubB64: string; text: string | null }>> {
+): Promise<LookupResult<{ groupId: string; senderPubB64: string; text: string | null; authorAsGroup?: boolean }>> {
   try {
     const d = await db();
-    const row = await d.getFirstAsync<{ group_id: string; sender_pub_b64: string; text: string }>(
-      'SELECT group_id, sender_pub_b64, text FROM group_messages WHERE id = ? AND owner_profile_id = ? LIMIT 1',
+    const row = await d.getFirstAsync<{ group_id: string; sender_pub_b64: string; text: string; author_as_group?: number }>(
+      'SELECT group_id, sender_pub_b64, text, author_as_group FROM group_messages WHERE id = ? AND owner_profile_id = ? LIMIT 1',
       [messageId, ownerProfileId]
     );
     if (!row) return missingResult();
@@ -8645,6 +8718,7 @@ export async function getGroupMessageTargetRead(
     return foundResult({
       groupId: row.group_id,
       senderPubB64: row.sender_pub_b64,
+      authorAsGroup: !!row.author_as_group,
       text: cellTextOrNull(readAtRestCell(row.text, dek)),
     });
   } catch (e) {
@@ -10062,7 +10136,7 @@ export async function listStarredMessagesRead(
       [ownerProfileId]
     );
     const grpRows = await d.getAllAsync<{
-      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null;
+      id: string; group_id: string; sender_pub_b64: string; sender_name: string | null; author_as_group?: number;
       text: string; media_cids: string | null; reply_to_id: string | null;
       reply_to_preview: string | null; reactions: string | null;
       created_at: number; owner_profile_id: number; edited_at: number | null;
@@ -10112,7 +10186,7 @@ export async function listStarredMessagesRead(
       result.push({
         kind: 'group',
         message: {
-          id: r.id, groupId: r.group_id, senderPubB64: r.sender_pub_b64,
+          id: r.id, groupId: r.group_id, senderPubB64: r.sender_pub_b64, authorAsGroup: !!r.author_as_group,
           senderName: sender.name,
           senderUnreadable: sender.unreadable,
           text: cellTextOrNull(cell) ?? '',
@@ -10505,4 +10579,37 @@ export async function updateGroupJoinRequestStatus(
   // нечего.
   if ((res.changes ?? 0) > 0) emitChatWrites();
   return res.changes ?? 0;
+}
+
+/** Caller verifies owner signature; storage enforces durable monotonic application. */
+export async function updateGroupAnonymousGrant(
+  groupId: string, ownerProfileId: number, target: string,
+  proof: string | null, revision: number,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(revision) || revision <= 0 || (proof !== null && proof.length > 4096)) return false;
+  const d = await db();
+  const result = await d.runAsync(
+    `UPDATE group_members SET anonymous_grant = ?, anonymous_revision = ?
+     WHERE group_id = ? AND owner_profile_id = ? AND peer_pub_b64 = ?
+       AND role IN ('owner', 'admin') AND anonymous_revision < ?`,
+    [proof, revision, groupId, ownerProfileId, target, revision],
+  );
+  if ((result.changes ?? 0) > 0) emitChatWrites();
+  return (result.changes ?? 0) > 0;
+}
+
+/** Only a fresh, authenticated owner snapshot may revoke at the same revision. */
+export async function clearGroupAnonymousGrant(
+  groupId: string, ownerProfileId: number, target: string, revision: number,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(revision) || revision < 0) return false;
+  const d = await db();
+  const result = await d.runAsync(
+    `UPDATE group_members SET anonymous_grant = NULL, anonymous_revision = ?
+     WHERE group_id = ? AND owner_profile_id = ? AND peer_pub_b64 = ?
+       AND anonymous_revision <= ?`,
+    [revision, groupId, ownerProfileId, target, revision],
+  );
+  if ((result.changes ?? 0) > 0) emitChatWrites();
+  return (result.changes ?? 0) > 0;
 }

@@ -100,9 +100,9 @@ describe('окно настроек группы и канала', () => {
     expect(ids).not.toContain('slow_mode');
     expect(ids).not.toContain('admin_only_posting');
     expect(ids).not.toContain('admin_only_pinning');
-    // Одобрение входа и скрытие имён в канале остаются осмысленными.
+    // Публикации канала всегда подписаны каналом; переключатель не нужен.
     expect(ids).toContain('require_approval');
-    expect(ids).toContain('anonymous_posting');
+    expect(ids).not.toContain('anonymous_posting');
     // А в группе медленный режим есть, и его значение — текущее.
     expect(find(facts({ amAdmin: true, slowModeSeconds: 30 }), 'slow_mode')?.value).toBe('30 сек');
   });
@@ -115,7 +115,6 @@ describe('окно настроек группы и канала', () => {
       ['admin_only_posting', 'adminOnlyPosting'],
       ['admin_only_pinning', 'adminOnlyPinning'],
       ['require_approval', 'requireApproval'],
-      ['anonymous_posting', 'anonymousPosting'],
     ];
     for (const [id, key] of pairs) {
       for (const on of [false, true]) {
@@ -171,4 +170,8 @@ describe('окно настроек группы и канала', () => {
     // Ровно два импорта — оба за словами о текущем значении.
     expect(src.match(/^import .*$/gm) ?? []).toHaveLength(2);
   });
+});
+
+it('legacy global anonymous flag cannot hide future group authors', () => {
+  expect(find(facts({ amAdmin: true, anonymousPosting: true }), 'anonymous_posting')).toBeUndefined();
 });

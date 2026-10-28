@@ -20,6 +20,8 @@
  * chooseUploadRoute, и байты читаются только тем путём, который их использует.
  */
 
+import { Platform } from 'react-native';
+import { readWebAttachment } from './readWebAttachment';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
 import { addToIpfs } from '../transport/ipfs/node';
@@ -43,6 +45,8 @@ export type MediaUploadResult =
   | { ok: false; reason: 'oversize' | 'failed'; limitBytes: number };
 
 export type MediaUploadOptions = {
+  /** Explicitly public content only. A local Helia CID does not prove remote availability. */
+  publicIpfs?: boolean;
   mime?: string;
   /** did получателя — включает доставку вложения по локальной сети. */
   targetDid?: string;
@@ -65,7 +69,10 @@ export async function uploadMediaToCid(
   opts: MediaUploadOptions = {}
 ): Promise<MediaUploadResult> {
   try {
-    const ipfsEnabled = isIpfsEnabled();
+    // Private attachments must be encrypted and retrievable by the recipient.
+    // Browser Helia can return a CID held only in this tab; web support alone
+    // is not evidence of a remotely readable/pinned object.
+    const ipfsEnabled = opts.publicIpfs === true && isIpfsEnabled();
     const sizeBytes = opts.sizeBytes ?? (await fileSizeBytes(uri));
     const route = chooseUploadRoute({ sizeBytes, ipfsEnabled, ipfsMaxBytes: opts.ipfsMaxBytes });
     // Тот же отбор, что делает chooseUploadRoute внутри: «размер есть» и
@@ -86,7 +93,9 @@ export async function uploadMediaToCid(
       // поток), читался целиком: base64-строка плюс два двоичных буфера, всё
       // тот же ~3.4× от файла, ради которого и заводился этот модуль.
       // position и length действуют только вместе и только для base64.
-      const b64 = known === null
+      const webRead = Platform.OS === 'web' ? await readWebAttachment(uri, route.limitBytes) : null;
+      if (webRead && !webRead.ok) return { ok: false, reason: webRead.reason, limitBytes: route.limitBytes };
+      const b64 = webRead?.ok ? webRead.b64 : known === null
         ? await FileSystem.readAsStringAsync(uri, {
             encoding: FileSystem.EncodingType.Base64,
             position: 0,
@@ -105,7 +114,7 @@ export async function uploadMediaToCid(
         return { ok: false, reason: 'oversize', limitBytes: route.limitBytes };
       }
       const cid = await addToIpfs(plain);
-      if (cid) return { ok: true, cid, sizeBytes };
+      if (cid) return { ok: true, cid, sizeBytes: webRead?.ok ? webRead.size : sizeBytes };
       // IPFS включён, но узел не отдал CID. Запасной путь есть, только он
       // строже по размеру — файл, разрешённый как «до 50 МБ в IPFS», во
       // вложение не влезет, и честнее сказать это, чем молча не отправить.

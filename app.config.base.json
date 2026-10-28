@@ -3,10 +3,11 @@
     "name": "airchat",
     "slug": "airchat",
     "owner": "dobropalm",
-    "version": "4.32.1090",
+    "version": "4.32.1091",
     "scheme": "airchat",
     "plugins": [
       "./plugins/withFirebaseModularHeaders",
+      "@react-native-firebase/app",
       "expo-apple-authentication"
     ],
     "orientation": "portrait",
@@ -20,7 +21,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "tech.dobropalm.airchat",
-      "buildNumber": "1090",
+      "buildNumber": "1091",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "AirChat использует камеру для съёмки фото и видео в чатах.",
@@ -54,7 +55,7 @@
         "android.permission.USE_FULL_SCREEN_INTENT"
       ],
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1090,
+      "versionCode": 1091,
       "adaptiveIcon": {
         "backgroundColor": "#0B0B12",
         "foregroundImage": "./assets/android-icon-foreground.png",

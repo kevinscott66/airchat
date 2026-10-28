@@ -64,7 +64,7 @@ describe('окно настроек группы подключено к экр�
       'mute', 'auto_translate', 'wallpaper', 'font_size',
       'media', 'starred', 'recently_deleted',
       'slow_mode', 'disappear', 'invite_link', 'stats',
-      'admin_only_posting', 'admin_only_pinning', 'require_approval', 'anonymous_posting',
+      'admin_only_posting', 'admin_only_pinning', 'require_approval',
       'export', 'clear_history',
     ];
     const at = CODE.indexOf('const handleGroupSetting = (');

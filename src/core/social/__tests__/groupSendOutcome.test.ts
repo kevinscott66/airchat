@@ -101,11 +101,11 @@ describe('v4.32.450 — ни один вызов не выбрасывает и�
       const all = fs.readFileSync(f, 'utf8').split('\n');
       const loose: string[] = [];
       all.forEach((l, i) => {
-        if (!l.includes('fanoutGroupMessage(') || l.trim().startsWith('*')) return;
-        if (l.includes('import') || l.includes('const { fanoutGroupMessage')) return;
+        if (!(l.includes('fanoutGroupMessage(') || l.includes('fanoutGroupPost(')) || l.trim().startsWith('*')) return;
+        if (l.includes('import') || l.includes('const { fanoutGroupMessage') || l.includes('return fanoutGroupMessage(args[')) return;
         total += 1;
         const covered =
-          l.includes('announceGroupSend(fanoutGroupMessage(') ||
+          l.includes('announceGroupSend(fanoutGroupMessage(') || l.includes('announceGroupSend(fanoutGroupPost(') ||
           l.includes('await fanoutGroupMessage(') ||
           // Перенос: announceGroupSend( на строке выше — вызов с цитатой длинный.
           (all[i - 1] ?? '').trim().endsWith('announceGroupSend(');
@@ -120,7 +120,7 @@ describe('v4.32.450 — ни один вызов не выбрасывает и�
     const b = bodyOf(announceSrc, 'export function announceGroupSend(');
     expect(b).not.toBe('');
     expect(b).toContain('const problem = groupSendProblem(res);');
-    expect(b).toContain('if (problem) showError(groupSendProblemText(problem));');
+    expect(b).toContain("if (problem && problem.kind !== 'awaiting_ack') showError(groupSendProblemText(problem));");
     // Своей проверки исхода у воронки нет — она спрашивает правило.
     expect(b).not.toContain('sent === 0');
     expect(b).not.toContain("reason === 'denied'");

@@ -4,71 +4,9 @@
 // места (ChatScreen header, GroupChatScreen sender, FeedScreen post author,
 // FeedScreen comment author, StoriesRow author) сломаются молча (пропы optional).
 //
-// v4.32.50: «При нажатии на имя ты должен переходить в профиль пользователя».
-// Лёгкая модалка-peek с аватаром/именем/DID + действия: «Открыть чат»,
-// «Копировать ID», «Добавить в контакты» (если не добавлен), «Переименовать»
-// (если добавлен). Открытие из любой точки UI — тап по имени.
-//
-// v4.32.363: пропы не тронуты — правки только внутри. Решения «как зовут»,
-// «в контактах ли» и «под каким именем добавлять» уехали в profilePeekModel:
-// без React их видно проверкам.
-//
-// v4.32.427: пропы снова не тронуты. Внутри — проверка открытого ключа до
-// обращения к кривой: раньше отказ приходил из noble, и его английский текст
-// показывался человеку как объяснение, почему не добавился контакт.
-//
-// v4.32.567: пропы не тронуты и здесь. Карточка перестала быть заглушкой:
-// фотография вместо буквы (общий реестр лиц, PersonAvatar), юзернейм с
-// официальной галочкой и «О себе». Свой профиль до этой версии открывался
-// как «Без имени (Вы)» с кружком «?»: себя карточка искала в адресной книге,
-// а там человека нет — своё имя, снимок и «О себе» лежат в карточке профиля
-// (identity/ownProfile), и теперь она их оттуда и читает.
-//
-// v4.32.568: карточка стала полным профилем. К имени и «Написать сообщение»
-// добавились быстрые действия (звонок, видео, звук, поиск по переписке),
-// разделы содержимого (публикации и сторис, медиа, избранное, файлы, музыка,
-// голосовые, ссылки, у себя — архив публикаций) и настройки переписки (обои,
-// поделиться контактом, автоудаление, запрет на копирование, удалить
-// переписку, заблокировать, пожаловаться). Единственное изменение пропов —
-// третий НЕОБЯЗАТЕЛЬНЫЙ аргумент у onOpenChat: чем открывать переписку,
-// разговором или поиском по ней. Старые вызывающие места его не передают и
-// работают как раньше.
-//
-// v4.32.572: пропы не тронуты и в этот раз. Карточка перестала быть колонкой
-// из трёх списков. Наверху пять кнопок в ряд, и пятая — «Ещё»: за ней уехало
-// всё, чем пользуются раз в месяц (настройки переписки, добавить, переименовать,
-// удалить контакт, поиск по переписке). Разделы — «Публикации», «Медиа»,
-// «Избранное» и остальные — стали полосой плашек, которую листают вбок прямо в
-// профиле, вместо восьми строк со стрелочками. Сама карточка и лист «Ещё» —
-// стекло (GlassSurface): под карточкой лежит экран, с которого её открыли, и
-// он должен просвечивать, а не исчезать под глухой панелью.
-//
-// Плашки внутри карточки — заливка и волосяная рамка, а НЕ вложенные
-// GlassSurface: каждый blur-контейнер стоит кадров, а десяток размытий друг на
-// друге ещё и разъедает читаемость (см. предупреждение в GlassSurface.tsx).
-//
-// Своё «Изменить» открывает ProfileEditModal — тот же отдельный раздел, что и
-// со вкладки «Профиль». Второго редактора рядом нет: разошлись бы в первый же
-// день.
-//
-// v4.32.574: профилей у собеседника было два. Этот — и шторка из шапки
-// диалога, со своим лицом, своим именем и своей вёрсткой. Остался этот:
-// шапка диалога открывает теперь его же. Всё, что было только в шторке —
-// ключ безопасности, «первое сообщение», заметка, «уведомить когда онлайн»,
-// выгрузка переписки, общие группы — переехало в блок modals/profile/
-// ProfileChatBlock и рисуется у чужой карточки под полосой плашек. Пропы
-// прибавили три НЕОБЯЗАТЕЛЬНЫХ: inChat (карточку открыли из самой переписки —
-// тогда первая кнопка ряда не «Сообщение» в ту же переписку, а поиск по ней),
-// onRenamed и onMuteChanged — экрану под карточкой надо узнать, что имя или
-// звук переписки поменяли здесь. Старые вызывающие места их не передают и
-// работают как раньше.
-//
-// Про два пункта сказано честно и здесь, и на экране: «Пожаловаться» никуда
-// не отправляется — модерации в сети без сервера нет, жалоба остаётся местной
-// записью и блокировкой (core/social/contactReport); «Запрет копирования и
-// пересылки» закрывает копирование, пересылку и выгрузку внутри приложения, а
-// со снимка экрана убирает переписку только на своём устройстве
-// (core/social/copyGuard, modules/airchat-screen-guard).
+// Профиль: обложка и личность, одно главное действие, затем три семейства
+// содержимого. ID, безопасность и настройки раскрываются отдельно. Модель
+// прав и обработчики общие с перепиской; оформление не меняет их семантику.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -84,7 +22,7 @@ import { GlassSurface } from './GlassSurface';
 import { SheetShell } from './SheetShell';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import { useColors } from '../ThemeContext';
-import { font, glass, mono, radius, scrim, spacing, withAlpha } from '../theme';
+import { font, glass, mono, primaryInk, radius, scrim, spacing, withAlpha } from '../theme';
 import { reportErased, showSuccess, showError } from './userFeedback';
 import {
   addContact,
@@ -115,11 +53,7 @@ import type { MentionKeyPin } from '../../core/social/usernameDirectory';
 import { rawErrorText, userErrorText } from './userErrorText';
 import { COPY_ACTION, COPY_FAILED, COPY_LINK_ACTION, COPIED_LINK } from '../clipboardText';
 import { buildContactLink } from '../../core/net/appLink';
-// v4.32.540: чужой профиль — обложка из набора обоев и постоянный
-// идентификатор аккаунта; см. wallpapers.coverWallpaperFor и identity/publicId.
 import { WallpaperBackground } from './WallpaperBackground';
-import { coverWallpaperFor } from '../wallpapers';
-import { publicIdFor } from '../../core/identity/publicId';
 import { PersonAvatar } from './PersonAvatar';
 import { VerifiedMark } from './VerifiedMark';
 import {
@@ -194,17 +128,12 @@ const QUICK_ICON: Record<QuickActionId, React.ComponentProps<typeof Ionicons>['n
   more: 'ellipsis-horizontal',
 };
 
-const SECTION_ICON: Record<SectionId, React.ComponentProps<typeof Ionicons>['name']> = {
-  wall: 'albums-outline',
-  stories: 'aperture-outline',
-  media: 'images-outline',
-  starred: 'star-outline',
-  files: 'document-outline',
-  music: 'musical-notes-outline',
-  voice: 'mic-outline',
-  links: 'link-outline',
-  archive: 'archive-outline',
-};
+/** Разделы остаются прежними; навигация показывает только одну семью за раз. */
+const CONTENT_GROUPS: { id: string; label: string; sections: SectionId[] }[] = [
+  { id: 'posts', label: 'Публикации', sections: ['wall', 'stories', 'archive'] },
+  { id: 'attachments', label: 'Вложения', sections: ['media', 'files', 'music', 'voice', 'links'] },
+  { id: 'saved', label: 'Избранное', sections: ['starred'] },
+];
 
 const SETTING_ICON: Record<SettingId, React.ComponentProps<typeof Ionicons>['name']> = {
   wallpaper: 'color-palette-outline',
@@ -428,6 +357,7 @@ export function UserProfilePeek({
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   // Своё изменили в редакторе — карточку надо перечитать: имя и «О себе» она
@@ -461,15 +391,17 @@ export function UserProfilePeek({
     // Раскрытый раздел — часть самой карточки, а не окно поверх неё: «Назад»
     // сворачивает его так же, как повторный тап по плашке.
     if (openSection !== null) { setOpenSection(null); return true; }
+    if (detailsOpen) { setDetailsOpen(false); return true; }
     onClose();
     return true;
-  }, [moreOpen, wallpaperOpen, qrOpen, editOpen, mediaTab, postsMode, renaming, openSection, onClose]);
+  }, [moreOpen, wallpaperOpen, qrOpen, editOpen, mediaTab, postsMode, renaming, openSection, detailsOpen, onClose]);
   useBackHandler(visible, back);
 
   useEffect(() => {
     // Сброс делаем на любую смену пира, а не только на закрытие: иначе, пока
     // грузится адресная книга нового, на карточке висит имя предыдущего.
     setContact(null);
+    setDetailsOpen(false);
     setBookUnknown(false);
     setOpenSection(null);
     setRenaming(false);
@@ -682,16 +614,22 @@ export function UserProfilePeek({
   }), [isSelf, identity.inContacts, bookUnknown, contact, blocked, blockUnknown, muted, copyGuard, copyGuardByPeer, copyGuardUnknown, disappearMs, convUnknown, reported, reportUnknown, onOpenChat, inChat]);
 
   const quickActions = useMemo(() => hubQuickActions(facts), [facts]);
+  const secondaryActions = quickActions.filter((action) => ['search', 'mute', 'video'].includes(action.id));
+  const primaryActions = quickActions.filter((action) => !['search', 'mute', 'video'].includes(action.id));
+  if (!isSelf && onOpenChat && !primaryActions.some((action) => action.id === 'message')) {
+    primaryActions.unshift({ id: 'message', label: 'Сообщение' });
+  }
   const sections = useMemo(() => hubSections(facts), [facts]);
   const moreItems = useMemo(() => hubMore(facts), [facts]);
+  const contentGroups = CONTENT_GROUPS.map((group) => ({
+    ...group,
+    items: group.sections.flatMap((id) => sections.filter((section) => section.id === id)),
+  })).filter((group) => group.items.length > 0);
+  const activeGroup = contentGroups.find((group) => group.items.some((item) => item.id === openSection));
 
-  // v4.32.573: идентификатор аккаунта с карточки убран — показывать его
-  // собеседнику незачем (см. core/identity/accountRef). Вычисляться он не
-  // перестал: от него берётся обложка, и она должна остаться той же самой.
-  const peerPublicId = useMemo(() => publicIdFor('account', resolved?.did ?? ''), [resolved]);
-  // Обложка — от идентификатора, а не от имени: переименовал контакт у себя,
-  // а карточка осталась той же самой.
-  const cover = useMemo(() => coverWallpaperFor(peerPublicId), [peerPublicId]);
+  // Используем выбранный фон разговора; без выбора — фон текущей темы.
+  // Случайный светлый пресет делал обложку белой полосой даже в тёмной теме.
+  const cover = wallpaper ?? defaultWallpaper(scheme);
 
   const handleCopyId = useCallback(async () => {
     if (!resolved) return;
@@ -939,18 +877,6 @@ export function UserProfilePeek({
         return;
     }
   }, [resolved, displayName, onOpenChat, onClose, startCall, toggleMute, keyPin, openChatAfterKeyChange, openChatAfterKeyUnchecked]);
-
-  // ─── Разделы ────────────────────────────────────────────────────────────
-  /**
-   * v4.32.577: раздел разворачивается прямо в карточке, а не открывает окно
-   * поверх неё. Прежнее поведение сбивало с толку ровно тем, что делало:
-   * человек нажимал раздел профиля и оказывался на другом экране, а профиль
-   * оставался где-то под ним. Второе нажатие по тому же разделу сворачивает
-   * его — иначе полосу нельзя было бы закрыть, не выбрав что-то ещё.
-   */
-  const onSection = useCallback((id: SectionId) => {
-    setOpenSection((prev) => (prev === id ? null : id));
-  }, []);
 
   /** Какой вкладкой галереи открыть «Показать всё» у раскрытого раздела. */
   const openTab = openSection ? SECTION_TAB[openSection] ?? null : null;
@@ -1209,6 +1135,14 @@ export function UserProfilePeek({
             держит заливка `prominent`, а не размытие: при выключенной
             прозрачности системы GlassSurface сам заменит её сплошной. */}
         <GlassSurface variant="prominent" style={styles.card}>
+          <AppPressable
+            style={[styles.closeButton, { backgroundColor: colors.surface }]}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть профиль"
+          >
+            <Ionicons name="close" size={20} color={colors.text} />
+          </AppPressable>
           <ScrollView
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -1232,7 +1166,7 @@ export function UserProfilePeek({
                   pub={resolved.pubB64}
                   did={resolved.did}
                   name={identity.named ? identity.title : null}
-                  size={56}
+                  size={80}
                   style={[styles.avatarRing, { borderColor: colors.surface }]}
                 />
                 {renaming ? (
@@ -1370,126 +1304,75 @@ export function UserProfilePeek({
                 )}
               </View>
 
-              {/* Быстрые действия: пять плашек в ряд, последняя — «Ещё».
-                  Ряд, а не список: это то, ради чего карточку чаще всего и
-                  открывают. Заливка и волосяная рамка вместо вложенного
-                  стекла — размытие внутри размытия стоит кадров и мутит
-                  надписи. */}
+              {/* Только сообщение / редактирование — акцент. Звонок и меню не спорят с ним. */}
               <View style={styles.quickRow}>
-                {quickActions.map((a) => (
-                  <AppPressable
-                    key={a.id}
-                    style={[
-                      styles.quickBtn,
-                      {
-                        backgroundColor: withAlpha(colors.text, 0.06),
-                        borderColor: withAlpha(colors.text, glass.rim),
-                      },
-                      a.disabled ? styles.quickDisabled : null,
-                    ]}
-                    disabled={a.disabled}
-                    accessibilityRole="button"
-                    accessibilityLabel={a.label}
-                    onPress={() => onQuickAction(a.id)}
-                  >
-                    <Ionicons
-                      name={a.id === 'mute' && muted ? 'notifications-outline' : QUICK_ICON[a.id]}
-                      size={20}
-                      color={a.disabled ? colors.textSecondary : colors.accent}
-                    />
-                    <Text
-                      style={[
-                        styles.quickLabel,
-                        { color: a.disabled ? colors.textSecondary : colors.text },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {a.label}
-                    </Text>
-                  </AppPressable>
-                ))}
-              </View>
-
-              {/* v4.32.568: сама коробка и есть кнопка «копировать» — тап по ней
-                  кладёт в буфер полный DID, а не обрезанный показанный. Справа
-                  «Поделиться»: два прежних пункта списка отсюда убраны, они
-                  повторяли то, что и так под рукой. */}
-              <View style={[styles.didBox, { borderColor: colors.border }]}>
-                <AppPressable
-                  style={styles.didMain}
-                  onPress={() => void handleCopyId()}
-                  accessibilityRole="button"
-                  accessibilityLabel={COPY_LINK_ACTION}
-                >
-                  {/* v4.32.914: подпись была «DID» — единственное место, где
-                      человеку показывали слово протокола. Кнопка «поделиться»
-                      в двух сантиметрах правее уже озвучивалась как
-                      «Поделиться ID». */}
-                  <Text style={[styles.didLabel, { color: colors.textSecondary }]}>ID</Text>
-                  <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1}>
-                    {shortDid(resolved.did, 10)}
-                  </Text>
-                </AppPressable>
-                {/* v4.32.573: код — для случая «второй телефон рядом»,
-                    когда пересылать некуда и остаётся диктовать строку. */}
-                <AppPressable
-                  style={styles.didShare}
-                  onPress={() => setQrOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Показать QR-код"
-                  testID="profile_qr_open"
-                >
-                  <Ionicons name="qr-code-outline" size={20} color={colors.accent} />
-                </AppPressable>
-                <AppPressable
-                  style={styles.didShare}
-                  onPress={() => void handleShareId()}
-                  accessibilityRole="button"
-                  accessibilityLabel="Поделиться ID"
-                >
-                  <Ionicons name="share-outline" size={20} color={colors.accent} />
-                </AppPressable>
-              </View>
-
-              {/* v4.32.577: разделы — полоса плашек, которую листают вбок
-                  прямо в профиле, и выбранный раздел разворачивается тут же,
-                  под ней. Порядок плашек задаёт модель, а не разметка; у
-                  владельца аккаунта последней идёт «Архив публикаций». */}
-              <Text style={[styles.groupLabel, { color: colors.textSecondary }]}>Содержимое</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.strip}
-                style={styles.stripBox}
-              >
-                {sections.map((sct) => {
-                  const on = openSection === sct.id;
+                {primaryActions.map((action) => {
+                  const prominent = action.id === 'message' || action.id === 'edit';
+                  const foreground = prominent ? primaryInk(colors).text : colors.text;
                   return (
                     <AppPressable
-                      key={sct.id}
+                      key={action.id}
                       style={[
-                        styles.plaque,
-                        {
-                          // Раскрытый раздел выделен заливкой: полоса и
-                          // список под ней должны читаться как одно место, а
-                          // не как два соседних.
-                          backgroundColor: withAlpha(on ? colors.accent : colors.text, on ? 0.18 : 0.06),
-                          borderColor: on ? colors.accent : withAlpha(colors.text, glass.rim),
-                        },
+                        styles.quickBtn,
+                        prominent ? styles.primaryButton : styles.utilityButton,
+                        { backgroundColor: prominent ? colors.primary : withAlpha(colors.text, 0.06) },
+                        action.disabled ? styles.quickDisabled : null,
                       ]}
+                      disabled={action.disabled}
                       accessibilityRole="button"
-                      accessibilityLabel={sct.label}
-                      accessibilityState={{ selected: on }}
-                      onPress={() => onSection(sct.id)}
+                      accessibilityLabel={action.label}
+                      accessibilityState={{ disabled: !!action.disabled }}
+                      onPress={() => onQuickAction(action.id)}
                     >
-                      <Ionicons name={SECTION_ICON[sct.id]} size={22} color={colors.accent} />
-                      <Text style={[styles.plaqueLabel, { color: colors.text }]} numberOfLines={2}>
-                        {sct.label}
+                      <Ionicons name={QUICK_ICON[action.id]} size={21} color={action.disabled ? colors.textSecondary : foreground} />
+                      {prominent ? (
+                        <Text style={[styles.quickLabel, { color: foreground }]}>{action.label}</Text>
+                      ) : null}
+                    </AppPressable>
+                  );
+                })}
+              </View>
+
+              <View style={[styles.contentNav, { borderBottomColor: colors.border }]}>
+                {contentGroups.map((group) => {
+                  const selected = activeGroup?.id === group.id;
+                  return (
+                    <AppPressable
+                      key={group.id}
+                      style={[styles.contentTab, { borderBottomColor: selected ? colors.accent : 'transparent' }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={group.label}
+                      accessibilityState={{ selected, expanded: selected }}
+                      onPress={() => setOpenSection(selected ? null : group.items[0].id)}
+                    >
+                      <Text style={[styles.contentTabLabel, { color: selected ? colors.accent : colors.textSecondary }]}>
+                        {group.label}
                       </Text>
                     </AppPressable>
                   );
                 })}
-              </ScrollView>
+              </View>
+              {activeGroup && activeGroup.items.length > 1 ? (
+                <View style={styles.sectionFilters}>
+                  {activeGroup.items.map((section) => {
+                    const selected = openSection === section.id;
+                    return (
+                      <AppPressable
+                        key={section.id}
+                        style={[styles.sectionFilter, { backgroundColor: selected ? withAlpha(colors.accent, 0.12) : 'transparent' }]}
+                        accessibilityRole="button"
+                        accessibilityLabel={section.label}
+                        accessibilityState={{ selected }}
+                        onPress={() => setOpenSection(section.id)}
+                      >
+                        <Text style={[styles.sectionFilterLabel, { color: selected ? colors.accent : colors.textSecondary }]}>
+                          {section.label}
+                        </Text>
+                      </AppPressable>
+                    );
+                  })}
+                </View>
+              ) : null}
 
               {/* Само содержимое раздела. Ровно здесь, в карточке: раньше
                   плашка открывала окно поверх профиля, и человек, нажавший
@@ -1533,18 +1416,97 @@ export function UserProfilePeek({
                 </View>
               ) : null}
 
-              {/* Всё, что относится к переписке именно с этим человеком:
-                  счёт, ключ безопасности, заметка, выгрузка. Раньше это был
-                  отдельный второй профиль из шапки диалога — теперь часть
-                  этого же. У себя блока нет: сверять ключ не с кем. */}
-              {!isSelf ? (
-                <ProfileChatBlock
-                  peerB64={resolved.pubB64}
-                  myPubB64={myPubB64}
-                  displayName={displayName}
-                  activeProfileId={activeProfileId}
-                  onOpenMedia={() => setMediaTab('media')}
-                />
+              <AppPressable
+                style={[styles.detailsToggle, {
+                  borderTopColor: colors.border,
+                  borderTopWidth: activeGroup ? StyleSheet.hairlineWidth : 0,
+                  marginTop: activeGroup ? spacing.md : 0,
+                }]}
+                accessibilityRole="button"
+                accessibilityLabel="Подробнее о профиле"
+                accessibilityState={{ expanded: detailsOpen }}
+                onPress={() => setDetailsOpen((open) => !open)}
+              >
+                <View style={styles.detailsHeading}>
+                  <Ionicons name="person-circle-outline" size={23} color={colors.textSecondary} />
+                  <View style={styles.detailsCopy}>
+                    <Text style={[styles.detailsLabel, { color: colors.text }]}>{isSelf ? 'О профиле' : 'Контакт и переписка'}</Text>
+                    <Text style={[styles.detailsCaption, { color: colors.textSecondary }]}>{isSelf ? 'ID и сведения об аккаунте' : 'ID, уведомления, безопасность'}</Text>
+                  </View>
+                </View>
+                <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+              </AppPressable>
+              {detailsOpen ? (
+                <View>
+                  {secondaryActions.map((action) => (
+                    <AppPressable
+                      key={action.id}
+                      style={[styles.actionRow, { borderTopColor: colors.border }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={action.label}
+                      disabled={action.disabled}
+                      accessibilityState={{ disabled: !!action.disabled }}
+                      onPress={() => onQuickAction(action.id)}
+                    >
+                      <Ionicons name={action.id === 'mute' && muted ? 'notifications-outline' : QUICK_ICON[action.id]} size={20} color={colors.textSecondary} />
+                      <Text style={[styles.actionText, { color: action.disabled ? colors.textSecondary : colors.text }]}>{action.label}</Text>
+                    </AppPressable>
+                  ))}
+                  {/* v4.32.568: сама коробка и есть кнопка «копировать» — тап по ней
+                      кладёт в буфер полный DID, а не обрезанный показанный. Справа
+                      «Поделиться»: два прежних пункта списка отсюда убраны, они
+                      повторяли то, что и так под рукой. */}
+                  <View style={[styles.didBox, { borderColor: colors.border }]}>
+                    <AppPressable
+                      style={styles.didMain}
+                      onPress={() => void handleCopyId()}
+                      accessibilityRole="button"
+                      accessibilityLabel={COPY_LINK_ACTION}
+                    >
+                      {/* v4.32.914: подпись была «DID» — единственное место, где
+                          человеку показывали слово протокола. Кнопка «поделиться»
+                          в двух сантиметрах правее уже озвучивалась как
+                          «Поделиться ID». */}
+                      <Text style={[styles.didLabel, { color: colors.textSecondary }]}>ID</Text>
+                      <Text style={[styles.didValue, { color: colors.text }]} numberOfLines={1}>
+                        {shortDid(resolved.did, 10)}
+                      </Text>
+                    </AppPressable>
+                    {/* v4.32.573: код — для случая «второй телефон рядом»,
+                        когда пересылать некуда и остаётся диктовать строку. */}
+                    <AppPressable
+                      style={styles.didShare}
+                      onPress={() => setQrOpen(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Показать QR-код"
+                      testID="profile_qr_open"
+                    >
+                      <Ionicons name="qr-code-outline" size={20} color={colors.accent} />
+                    </AppPressable>
+                    <AppPressable
+                      style={styles.didShare}
+                      onPress={() => void handleShareId()}
+                      accessibilityRole="button"
+                      accessibilityLabel="Поделиться ID"
+                    >
+                      <Ionicons name="share-outline" size={20} color={colors.accent} />
+                    </AppPressable>
+                  </View>
+
+                  {/* Всё, что относится к переписке именно с этим человеком:
+                      счёт, ключ безопасности, заметка, выгрузка. Раньше это был
+                      отдельный второй профиль из шапки диалога — теперь часть
+                      этого же. У себя блока нет: сверять ключ не с кем. */}
+                  {!isSelf ? (
+                    <ProfileChatBlock
+                      peerB64={resolved.pubB64}
+                      myPubB64={myPubB64}
+                      displayName={displayName}
+                      activeProfileId={activeProfileId}
+                      onOpenMedia={() => setMediaTab('media')}
+                    />
+                  ) : null}
+                </View>
               ) : null}
               </View>
           </ScrollView>
@@ -1639,7 +1601,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     // v4.32.540: отступ уехал внутрь, в `body`: обложка идёт от края до края,
     // а с общим padding она висела бы белой рамкой внутри карточки.
-    maxWidth: 420,
+    maxWidth: 440,
     width: '100%',
     // v4.32.568: содержимого стало на экран — карточка перестала быть коротким
     // окном и прокручивается, упираясь в потолок высоты, а не в край экрана.
@@ -1648,16 +1610,16 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   cover: {
-    height: 96,
+    height: 112,
   },
   body: {
-    padding: spacing.md,
+    padding: spacing.lg,
   },
   header: {
     alignItems: 'center',
     // Кружок наезжает на обложку ровно наполовину: так видно и обложку, и то,
     // что аватар принадлежит карточке, а не полосе.
-    marginTop: -46,
+    marginTop: -64,
     marginBottom: spacing.md,
   },
   headerBody: {
@@ -1693,7 +1655,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   name: {
-    fontSize: font.lg,
+    fontSize: font.xxl,
+    lineHeight: 30,
     fontWeight: '700',
     textAlign: 'center',
   },
@@ -1710,55 +1673,48 @@ const styles = StyleSheet.create({
   },
   quickRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.md,
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+    marginBottom: spacing.lg,
   },
   quickBtn: {
-    flex: 1,
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  quickDisabled: {
-    opacity: 0.45,
-  },
-  quickLabel: {
-    fontSize: font.xs,
-    textAlign: 'center',
-  },
-  stripBox: {
-    // Полоса выходит за отступ карточки: обрезанная плашка у правого края —
-    // это и есть подсказка, что полосу листают.
-    marginHorizontal: -spacing.md,
-  },
-  strip: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  plaque: {
-    width: 92,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xs,
+    minHeight: 48,
+    gap: spacing.sm,
     borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
   },
-  plaqueLabel: {
-    fontSize: font.xs,
-    textAlign: 'center',
+  primaryButton: { flex: 1, minWidth: 0, paddingHorizontal: spacing.md },
+  utilityButton: { width: 48, flexShrink: 0 },
+  quickDisabled: { opacity: 0.45 },
+  quickLabel: { fontSize: font.md, fontWeight: '600', flexShrink: 1, textAlign: 'center' },
+  closeButton: {
+    position: 'absolute', top: spacing.sm, right: spacing.sm, zIndex: 2,
+    width: 44, height: 44, borderRadius: radius.full,
+    alignItems: 'center', justifyContent: 'center',
   },
-  pane: {
-    marginTop: spacing.xs,
-    paddingTop: spacing.xs,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  detailsToggle: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: spacing.sm, marginTop: spacing.md, paddingTop: spacing.md,
+    paddingBottom: spacing.xs, borderTopWidth: StyleSheet.hairlineWidth,
+    minHeight: 64,
   },
+  detailsHeading: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  detailsCopy: { flex: 1 },
+  detailsLabel: { fontSize: font.sm, fontWeight: '600' },
+  detailsCaption: { fontSize: font.xs, marginTop: 3, lineHeight: 17 },
+  contentNav: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth },
+  contentTab: {
+    flex: 1, minWidth: 0, minHeight: 48, justifyContent: 'center',
+    alignItems: 'center', paddingHorizontal: 2, paddingVertical: spacing.sm,
+    borderBottomWidth: 2,
+  },
+  contentTabLabel: { fontSize: font.sm, fontWeight: '600', textAlign: 'center' },
+  sectionFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, paddingTop: spacing.sm },
+  sectionFilter: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radius.sm },
+  sectionFilterLabel: { fontSize: font.xs, fontWeight: '500' },
+  pane: { paddingTop: spacing.sm },
   sheetTitle: {
     fontSize: font.md,
     fontWeight: '700',
@@ -1788,12 +1744,6 @@ const styles = StyleSheet.create({
   didValue: {
     fontSize: font.md,
     fontFamily: mono,
-  },
-  groupLabel: {
-    fontSize: font.xs,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginTop: spacing.md,
   },
   actions: {
     marginTop: spacing.xs,

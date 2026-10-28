@@ -64,11 +64,11 @@ describe('несохранённое сообщение больше не рас
       const at = s.indexOf('await insertGroupMessageOrThrow(row);', from);
       if (at < 0) break;
       const tail = s.slice(at, at + 900);
-      // `announceGroupSend(fanoutGroupMessage(` — единственный способ, которым
+      // `announceGroupSend(fanoutGroupPost(` — единственный способ, которым
       // групповое сообщение уходит участникам с этих экранов.
       const ann = tail.indexOf('announceGroupSend(');
       expect(ann).toBeGreaterThan(0);
-      expect(tail.indexOf('fanoutGroupMessage(', ann)).toBeGreaterThan(ann);
+      expect(tail.indexOf('fanoutGroupPost(', ann)).toBeGreaterThan(ann);
       seen.push(at);
       from = at + 1;
     }
@@ -93,7 +93,7 @@ describe('несохранённое сообщение больше не рас
     expect(said).toBeGreaterThan(0);
     expect(tail.indexOf('return;', said)).toBeGreaterThan(said);
     // И выход стоит до рассылки и до строки переписки.
-    expect(h.indexOf('announceGroupSend(fanoutGroupMessage(')).toBeGreaterThan(guard);
+    expect(h.indexOf('announceGroupSend(fanoutGroupPost(')).toBeGreaterThan(guard);
     expect(h.indexOf('await touchGroupConversation(')).toBeGreaterThan(guard);
   });
 
@@ -142,7 +142,7 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: отправка осталась 
     for (const preview of ['🎬 Видео', '📷 Фото', '📍 Геолокация', '🎞 GIF', '🎤 Голосовое сообщение', '📊 Опрос']) {
       expect([preview, s.includes(preview)]).toEqual([preview, true]);
     }
-    expect(count(s, 'announceGroupSend(fanoutGroupMessage(')).toBeGreaterThanOrEqual(9);
+    expect(count(s, 'announceGroupSend(fanoutGroupPost(')).toBeGreaterThanOrEqual(9);
   });
 
   it('человеческие запасные тексты у отправок целы', () => {

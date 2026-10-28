@@ -54,7 +54,7 @@ describe('итог групповой рассылки различает отк
     // не отвечает база; сливать его с 'no_service' значит врать в журнале.
     expect(messaging).toContain("{ ok: false; reason: 'members_unreadable' }");
     expect(messaging).toContain("{ ok: false; reason: 'denied'; code: SendDenyCode }");
-    expect(messaging).toContain('{ ok: true; members: number; sent: number; failed: number }');
+    expect(messaging).toContain('{ ok: true; members: number; sent: number; failed: number; awaitingAck?: number }');
   });
 
   it('рассылка больше не отвечает флагом', () => {
@@ -91,7 +91,7 @@ describe('итог групповой рассылки различает отк
     const catchLine = code.findIndex((l, i) => i > send && l.trim().startsWith('} catch (e) {'));
     expect(catchLine).toBeGreaterThan(send + 3);
     expect(code[catchLine + 1].trim()).toBe('failed += 1;'); // исключение
-    expect(code.some((l) => l.includes('return { ok: true, members: targets.length, sent, failed };'))).toBe(true);
+    expect(code.some((l) => l.includes('return { ok: true, members: targets.length, sent, failed, ...(awaitingAck !== undefined ? { awaitingAck } : {}) };'))).toBe(true);
   });
 
   it('расписание снимается только по отзыву прав', () => {

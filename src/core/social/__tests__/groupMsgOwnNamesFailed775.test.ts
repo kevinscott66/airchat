@@ -21,7 +21,7 @@
  * отказ откладывает кадр.
  */
 type FakeGroup = {
-  id: string; ownerProfileId: number; name: string; type: 'group';
+  id: string; ownerProfileId: number; name: string; type: 'group' | 'channel';
   archived: boolean; isAdmin: boolean; adminOnlyPosting: boolean;
   anonymousPosting?: boolean;
 };
@@ -228,10 +228,20 @@ describe('ПРОВЕРКА НЕ ПУСТАЯ: прежние исходы на �
     expect(mockLog.debug).toHaveBeenCalledWith('group_msg_duplicate_skip', expect.any(Object));
   });
 
-  it('анонимная группа по-прежнему прячет имя из списка чатов', async () => {
+  it('channel preview uses channel identity without changing authenticated sender', async () => {
+    mockGroupRow = { ...known(), type: 'channel', name: 'Новости' };
+    mockMembers[1].role = 'admin';
+    try {
+      await handleIncomingGroupEnvelope(message(), RCPT, PEER);
+    } finally { mockMembers[1].role = 'member'; }
+    expect(mockCalls[0].touch.senderName).toBe('Новости');
+    expect(mockCalls[0].touch.senderPubB64).toBe(PEER);
+  });
+
+  it('legacy global flag does not anonymize a new personal post', async () => {
     mockGroupRow = { ...known(), anonymousPosting: true };
     await handleIncomingGroupEnvelope(message(), RCPT, PEER);
-    expect(mockCalls[0].touch.senderName).toBeNull();
+    expect(mockCalls[0].touch.senderName).not.toBeNull();
   });
 });
 

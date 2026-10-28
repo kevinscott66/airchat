@@ -32,6 +32,7 @@
  */
 import { deriveKeyPairFromMnemonic, getStoredMnemonic } from '../backup/seedPhrase';
 import type { KeyPairBytes } from '../crypto/keyManager';
+import { publicKeyToB64 } from '../crypto/pubKeyFormat';
 import { log } from '../logger';
 import { kvDelete, kvSetChecked, kvTryListKeysByPrefix } from '../storage/local';
 import { claimSyncUsername, releaseSyncUsername } from '../sync/syncApi';
@@ -66,7 +67,15 @@ function ownerProfileId(): number {
  * проверяет их повторно сам.
  */
 export async function saveOwnUsernameGlobally(username: string): Promise<UsernameSaveResult> {
-  if (await isUsernameTakenByAnotherProfile(username)) return { ok: false, reason: 'local' };
+  const pid = ownerProfileId();
+  const pair = activeProfilePair();
+  const identity = pair ? publicKeyToB64(pair.publicKey) : null;
+  const current = (): boolean => {
+    const active = activeProfilePair();
+    return ownerProfileId() === pid
+      && (active ? publicKeyToB64(active.publicKey) : null) === identity;
+  };
+  if (await isUsernameTakenByAnotherProfile(username, pid)) return { ok: false, reason: 'local' };
   let scope: 'global' | 'local' = 'local';
   const mnemonic = await getStoredMnemonic();
   if (mnemonic) {
@@ -74,19 +83,23 @@ export async function saveOwnUsernameGlobally(username: string): Promise<Usernam
     // оставленных приложению имён стоит и на сервере — иначе его снимала бы
     // пересборка клиента, — поэтому разрешение занять `@founder` надо
     // предъявить и там. Бумаги нет почти у всех, и тогда ничего не меняется.
+    const grant = await ownBadgeGrantFor(pid);
+    const displayName = await getOwnDisplayNameFor(pid);
+    if (!current()) return { ok: false, reason: 'local' };
     const claim = await claimSyncUsername(
       mnemonic,
       deriveKeyPairFromMnemonic(mnemonic),
       username,
-      ownerProfileId(),
-      await ownBadgeGrantFor(ownerProfileId()),
-      activeProfilePair(),
-      await getOwnDisplayNameFor(ownerProfileId()),
+      pid,
+      grant,
+      pair,
+      displayName,
     );
     if (!claim.ok && claim.reason !== 'offline') return { ok: false, reason: claim.reason };
     if (claim.ok) scope = 'global';
   }
-  if (!(await setOwnUsername(username))) return { ok: false, reason: 'local' };
+  if (!current()) return { ok: false, reason: 'local' };
+  if (!(await setOwnUsername(username, pid || 1))) return { ok: false, reason: 'local' };
   return { ok: true, scope };
 }
 
@@ -121,63 +134,51 @@ function activeProfilePair(): KeyPairBytes | null {
  */
 const republished = new Map<number, string>();
 
+const republishing = new Map<number, symbol>();
+
 export async function republishOwnUsernameToDirectory(): Promise<void> {
-  // v4.32.742: заодно добираются имена, которые не вышло отпустить при
-  // удалении профиля. Своего повода сходить в сеть у них нет, а этот вызов
-  // делается при каждом открытии экрана профиля и после переименования.
-  // Ожидается, а не запускается фоном: обе стороны здесь и так фоновые (оба
-  // вызывающих зовут эту функцию через `void`), а порядок сетевых запросов
-  // предсказуем только у последовательного кода.
-  await retryPendingUsernameReleases();
+  // Capture identity before the first asynchronous read. A later active pair
+  // must never be paired with this profile's username or registry slot.
   const pid = ownerProfileId();
-  let sent: string | null = null;
-  /**
-   * Забыть отметку «это уже отправлено» — если отправить так и не вышло.
-   *
-   * v4.32.980: отметка ставится до сетевого запроса нарочно, чтобы два
-   * одновременных захода не сходили в реестр дважды. Но выходов, на которых
-   * запроса не будет вовсе, оказалось больше, чем откатов: ключа переписки
-   * может не быть (менеджер профилей ещё не поднялся — ровно тот случай, ради
-   * которого `activeProfilePair` и возвращает `null`), seed-фразы может не
-   * быть тоже. Экран профиля, открытый в эту секунду, ставил отметку и уходил
-   * ни с чем — а следующие заходы видели «уже отправлено» и молчали до самого
-   * перезапуска. Запись в справочнике так и оставалась дореформенной: без
-   * ключа (до v4.32.607) — по @имени никуда не перейти, без имени
-   * (до v4.32.722) — незнакомец видит «Без имени». Починить это и должен был
-   * ближайший заход на экран профиля.
-   */
-  const forget = (): void => {
-    if (sent !== null && republished.get(pid) === sent) republished.delete(pid);
+  const pair = activeProfilePair();
+  if (!pair || republishing.has(pid)) return;
+  const identity = publicKeyToB64(pair.publicKey);
+  const current = (): boolean => {
+    const active = activeProfilePair();
+    return ownerProfileId() === pid && active !== null
+      && publicKeyToB64(active.publicKey) === identity;
   };
+  const operation = Symbol();
+  republishing.set(pid, operation);
   try {
+    await retryPendingUsernameReleases();
     const username = await getOwnUsernameFor(pid);
     if (!username) return;
     const displayName = await getOwnDisplayNameFor(pid);
-    sent = `${username}\n${displayName ?? ''}`;
+    const sent = `${identity}\n${username}\n${displayName ?? ''}`;
     if (republished.get(pid) === sent) return;
-    republished.set(pid, sent);
-    const pair = activeProfilePair();
-    if (!pair) { forget(); return; }
     const mnemonic = await getStoredMnemonic();
-    if (!mnemonic) { forget(); return; }
+    if (!mnemonic) return;
+    const grant = await ownBadgeGrantFor(pid);
+    if (!current() || republishing.get(pid) !== operation) return;
     const claim = await claimSyncUsername(
       mnemonic,
       deriveKeyPairFromMnemonic(mnemonic),
       username,
       pid,
-      await ownBadgeGrantFor(pid),
+      grant,
       pair,
       displayName,
     );
-    // Недоступный сервер не бросает, а отвечает `offline` — и тоже значит
-    // «повторить в следующий раз», а не «отправлено».
-    if (!claim.ok && claim.reason === 'offline') forget();
+    if (claim.ok && current() && republishing.get(pid) === operation) {
+      republished.set(pid, sent);
+    }
   } catch (error) {
-    // Не вышло — пусть следующий вызов попробует снова.
-    forget();
     log.info('username_directory_republish_skipped', {
       err: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    if (republishing.get(pid) === operation) republishing.delete(pid);
   }
 }
 
@@ -251,6 +252,7 @@ export async function releaseOwnUsernameGlobally(profileId = ownerProfileId()): 
   // то есть заявку в реестр не отправлял вовсе. Имя на сервере при этом было
   // отпущено: `@имя` не вело никуда, а приложение считало его опубликованным.
   republished.delete(profileId);
+  republishing.delete(profileId);
   // v4.32.785: гасящая `kvSet` отвечала `void`, и отказ базы здесь пропадал
   // вместе с единственной заметкой о недоотпущенном имени. Профиль при этом
   // удалялся, повторять было некому и нечего — имя оставалось занятым

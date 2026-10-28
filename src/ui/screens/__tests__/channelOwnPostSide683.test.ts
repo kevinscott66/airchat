@@ -39,7 +39,7 @@ describe('сторона пузыря в канале', () => {
   });
 
   test('сторона считается отдельным признаком, а не «моё»', () => {
-    expect(SCREEN).toContain("const outgoing = isMe && group.type !== 'channel';");
+    expect(SCREEN).toContain("const outgoing = isMe && !anonymousAuthor;");
   });
 
   test('выравнивание строки и якорь пузыря берут outgoing', () => {
@@ -59,7 +59,8 @@ describe('сторона пузыря в канале', () => {
 
   test('шапка автора показывается и на своей записи канала', () => {
     const body = bubbleBody();
-    expect(body).toContain('{!outgoing && !anonymousPosting');
+    expect(body).toContain("{anonymousAuthor && !isConsecutive");
+    expect(body).toContain("{!anonymousAuthor && !outgoing");
     expect(body).not.toContain('{!isMe && !anonymousPosting');
   });
 

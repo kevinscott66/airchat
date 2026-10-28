@@ -1,3 +1,4 @@
+jest.mock('../pushDevices', () => ({ pushDeviceId: async () => 'device-test', capturePushDeviceRevoker: async () => async () => true }));
 /**
  * Запись адреса доставки на сигналинге отвечает, состоялась ли она.
  *
@@ -128,5 +129,27 @@ describe('переключатель в браузере не обещает л�
   it('писать адрес некуда — тоже не «включено»', async () => {
     mockConfig.webrtc = {};
     await expect(pushNotificationService.enableWebPush()).resolves.toBe('failed');
+  });
+});
+
+describe('device enrollment rollout', () => {
+  it('sends the stable installation id inside the signed registration', async () => {
+    await pushNotificationService.registerTokenWithSignaling(PEER, 'tok');
+    const [, init] = (globalThis.fetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(init.body)).toMatchObject({ deviceId: 'device-test', token: 'tok' });
+  });
+  it('falls back only when an old server rejects the device field', async () => {
+    globalThis.fetch = jest.fn().mockResolvedValueOnce({ ok: false, status: 400 })
+      .mockResolvedValueOnce({ ok: true, status: 204 });
+    await expect(pushNotificationService.registerTokenWithSignaling(PEER, 'tok')).resolves.toBe('registered');
+    const calls = (globalThis.fetch as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0][1].body).deviceId).toBe('device-test');
+    expect(JSON.parse(calls[1][1].body)).not.toHaveProperty('deviceId');
+  });
+  it('does not bypass the device limit with a legacy fallback', async () => {
+    respond('error');
+    await expect(pushNotificationService.registerTokenWithSignaling(PEER, 'tok')).resolves.toBe('unreachable');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 });

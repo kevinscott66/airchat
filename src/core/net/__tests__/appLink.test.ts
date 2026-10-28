@@ -125,6 +125,8 @@ describe('appLink', () => {
       ['не строка', 123],
       ['пустая строка', ''],
       ['другая схема', 'tg://post/1'],
+      ['отдельный музыкальный плеер', 'viora://player'],
+      ['старый путь музыкального плеера', 'airchat://player'],
       ['https без нашего префикса', 'https://air.dobropalm.tech/post/f_1'],
       ['https без пути', 'https://air.dobropalm.tech'],
       ['неизвестная форма', 'airchat://wallet/1'],

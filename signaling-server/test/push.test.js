@@ -700,3 +700,66 @@ test('счётчик отправок не растёт без предела (v
   assert.equal(roomy('a'), false);
 });
 
+
+test('late stale delivery does not remove a rotated token', async () => {
+  const me = makeIdentity();
+  const sender = makeIdentity();
+  let release;
+  let started;
+  const sending = new Promise((resolve) => { started = resolve; });
+  const delivery = new Promise((resolve) => { release = resolve; });
+  await withRoutes({ fcm: { send: async () => { started(); return delivery; } } }, async ({ post, routes }) => {
+    routes.registry.set(me.peerId, ANDROID_TOKEN, 'android', 1);
+    const response = post('/send-push', sender.sign({
+      cid: 'bafytest', kind: 'dm', senderDid: 'did:key:z6Mktest',
+      senderPeerId: sender.peerId, targetPeerId: me.peerId, ts: Date.now(),
+    }));
+    await sending;
+    routes.registry.set(me.peerId, IOS_TOKEN, 'ios', 2);
+    release('stale');
+    assert.equal((await response).status, 204);
+    assert.equal(routes.registry.get(me.peerId).token, IOS_TOKEN);
+  });
+});
+
+test('signed device enrollment fans out, listing hides tokens, and revocation affects one device', async () => {
+  const me = makeIdentity();
+  const sender = makeIdentity();
+  const now = Date.now();
+  await withRoutes({}, async ({ post, routes, sent }) => {
+    for (const [deviceId, token, platform] of [['phone', ANDROID_TOKEN, 'android'], ['tablet', IOS_TOKEN, 'ios']]) {
+      assert.equal((await post('/register-token', me.sign({ peerId: me.peerId, deviceId, token, platform, ts: now }))).status, 204);
+    }
+    const envelope = () => sender.sign({ cid: 'bafytest', kind: 'dm', senderDid: 'did:key:z6Mktest',
+      senderPeerId: sender.peerId, targetPeerId: me.peerId, ts: Date.now() });
+    assert.equal((await post('/send-push', envelope())).status, 204);
+    assert.deepEqual(sent.map((value) => value.entry.token).sort(), [ANDROID_TOKEN, IOS_TOKEN].sort());
+    const listing = await post('/push-devices', me.sign({ act: 'push_devices', peerId: me.peerId, ts: Date.now() }));
+    const body = await listing.json();
+    assert.equal(body.devices.length, 2);
+    assert.ok(body.devices.every((device) => !('token' in device)));
+    const forged = sender.sign({ act: 'push_revoke', peerId: me.peerId, deviceId: 'phone', ts: now + 1 });
+    assert.equal((await post('/unregister-token', forged)).status, 400);
+    assert.equal((await post('/unregister-token', me.sign({ act: 'push_revoke', peerId: me.peerId, deviceId: 'phone', ts: now + 1 }))).status, 204);
+    assert.equal(routes.registry.get(me.peerId, 'phone'), null);
+    sent.length = 0;
+    await post('/send-push', envelope());
+    assert.deepEqual(sent.map((value) => value.entry.token), [IOS_TOKEN]);
+  });
+});
+
+test('revoke before delayed enrollment persists a marker, and storage failure is not success', async () => {
+  const me = makeIdentity();
+  const ts = Date.now();
+  await withRoutes({}, async ({ post, routes }) => {
+    const revoke = (time) => post('/unregister-token', me.sign({ act: 'push_revoke', peerId: me.peerId, deviceId: 'phone', ts: time }));
+    assert.equal((await revoke(ts)).status, 204);
+    assert.equal((await revoke(ts + 2)).status, 204);
+    const delayed = await post('/register-token', me.sign({ peerId: me.peerId, deviceId: 'phone', token: ANDROID_TOKEN, platform: 'android', ts: ts + 1 }));
+    assert.equal(delayed.status, 503);
+    assert.equal(routes.registry.get(me.peerId, 'phone'), null);
+  });
+  await withRoutes({ registryOptions: { maxTokens: 0 } }, async ({ post }) => {
+    assert.equal((await post('/unregister-token', me.sign({ act: 'push_revoke', peerId: me.peerId, deviceId: 'phone', ts }))).status, 503);
+  });
+});

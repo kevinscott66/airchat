@@ -25,7 +25,6 @@ import { filterTemplates, mayPickTemplate, templateReadable } from '../../core/s
 import { UNREADABLE_CONTACTS_TEXT, UNREADABLE_QUICK_REPLIES_TEXT, UNREADABLE_TEMPLATE_TEXT } from '../../core/storage/unreadableText';
 import { listContactsRead, type Contact } from '../../core/social/contacts';
 import { showPermissionDeniedAlert } from '../permissionAlert';
-import { MAX_BLOB_BYTES } from '../../core/media/blobRef';
 import { IPFS_DOC_MAX_BYTES, formatLimit, uploadLimitBytes } from '../../core/media/uploadRoute';
 import { formatClockDuration } from '../time/durationLabel';
 import { nameInitials } from '../../core/social/contactLabel';
@@ -591,20 +590,7 @@ function FileTab({
   // Теперь подпись считается тем же вызовом, что и сама проверка в ChatScreen,
   // — расходиться нечему. Начальное значение — потолок вложения: на телефоне
   // оно и есть верное, и обещать больше до ответа импорта незачем.
-  const [docLimitBytes, setDocLimitBytes] = useState(MAX_BLOB_BYTES);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const { isIpfsEnabled } = await import('../../core/transport/ipfs/heliaNode');
-      if (!alive) return;
-      setDocLimitBytes(
-        uploadLimitBytes({ ipfsEnabled: isIpfsEnabled(), ipfsMaxBytes: IPFS_DOC_MAX_BYTES })
-      );
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const docLimitBytes = uploadLimitBytes({ ipfsEnabled: false, ipfsMaxBytes: IPFS_DOC_MAX_BYTES });
   const styles = useThemedStyles((c) => ({
     wrap: { flex: 1, padding: spacing.md },
     card: {

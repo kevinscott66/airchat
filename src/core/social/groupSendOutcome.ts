@@ -27,6 +27,7 @@ import { sendDenyText, type SendDenyCode } from './groupSendPolicy';
  * по 'undelivered' — наоборот, только повтор и поможет.
  */
 export type GroupSendProblem =
+  | { kind: 'awaiting_ack'; count: number }
   | { kind: 'denied'; code: SendDenyCode }
   | { kind: 'undelivered'; reason: 'no_service' | 'all_failed' | 'members_unreadable' }
   /**
@@ -54,6 +55,7 @@ export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | nul
   // человека, выглядела на экране ровно как дошедшая до всех. Повтора у
   // группового сообщения нет: остальные восемнадцать его не увидят никогда.
   if (res.sent < res.members) return { kind: 'partial', sent: res.sent, members: res.members };
+  if (res.awaitingAck && res.awaitingAck > 0) return { kind: 'awaiting_ack', count: res.awaitingAck };
   return null;
 }
 
@@ -63,6 +65,7 @@ export function groupSendProblem(res: GroupFanoutResult): GroupSendProblem | nul
  * строка при этом уже видна в переписке.
  */
 export function groupSendProblemText(problem: GroupSendProblem): string {
+  if (problem.kind === 'awaiting_ack') return 'Анонимное сообщение отправлено в очередь. Ожидается подтверждение обновлённых клиентов; получатели могут быть не в сети.';
   if (problem.kind === 'denied') return `${sendDenyText(problem.code)}. Сообщение осталось только у вас.`;
   if (problem.kind === 'partial') {
     // Ни одного согласуемого с числом слова: «приняли 1 из 19» верно при любом
@@ -83,6 +86,7 @@ export function groupSendProblemText(problem: GroupSendProblem): string {
  * Там уже сказано, что не отправлено, и целая фраза в списке не читается.
  */
 export function groupSendProblemShort(problem: GroupSendProblem): string {
+  if (problem.kind === 'awaiting_ack') return 'ожидается подтверждение';
   if (problem.kind === 'denied') return sendDenyText(problem.code).toLowerCase();
   if (problem.kind === 'partial') return `приняли ${problem.sent} из ${problem.members}`;
   return problem.reason === 'members_unreadable' ? 'состав не прочитан' : 'нет связи';

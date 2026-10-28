@@ -18,13 +18,13 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/** Блок вызывается React Native один раз — когда он создаёт свою NSURLSession. */
+/** React Native и Expo fetch вызывают блок при создании своих NSURLSession. */
 typedef NSURLSessionConfiguration *_Nonnull (^AirChatOpenFluxSessionConfigProvider)(void);
 
 /**
- * Ставит провайдер конфигурации для всех HTTP-запросов приложения.
- * Вызывать один раз и как можно раньше: сессию React Native создаёт лениво, на
- * первом же запросе, и после этого провайдер уже никто не спросит.
+ * Ставит общий провайдер конфигурации для React Native и Expo fetch.
+ * Вызывать один раз и как можно раньше: обе сессии создаются лениво, на первом
+ * запросе. Публичный setter Expo регистрируется синхронно на главном потоке.
  *
  * __BEGIN_DECLS обязателен. Реализация лежит в .mm — иначе не подключить
  * RCTHTTPRequestHandler.h, он тянет C++ из React Native. Компилятор

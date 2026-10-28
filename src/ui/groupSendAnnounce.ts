@@ -30,7 +30,7 @@ export type GroupSentMessage = { msgId: string; pid: number };
 export function announceGroupSend(sending: Promise<GroupFanoutResult>, sent: GroupSentMessage): void {
   void sending.then((res) => {
     const problem = groupSendProblem(res);
-    if (problem) showError(groupSendProblemText(problem));
+    if (problem && problem.kind !== 'awaiting_ack') showError(groupSendProblemText(problem));
     if (problem) void recordGroupSendProblemFor(sent.pid, sent.msgId, problem);
   }).catch((e: unknown) => {
     // v4.32.622: до этой ветки сорвавшаяся рассылка (сеть, ключи, база) молчала
