@@ -22,7 +22,7 @@ import { GlassSurface } from './GlassSurface';
 import { SheetShell } from './SheetShell';
 import { useBackHandler } from '../../core/hooks/useBackHandler';
 import { useColors } from '../ThemeContext';
-import { font, glass, mono, radius, scrim, spacing, withAlpha } from '../theme';
+import { font, glass, mono, primaryInk, radius, scrim, spacing, withAlpha } from '../theme';
 import { reportErased, showSuccess, showError } from './userFeedback';
 import {
   addContact,
@@ -1308,7 +1308,7 @@ export function UserProfilePeek({
               <View style={styles.quickRow}>
                 {primaryActions.map((action) => {
                   const prominent = action.id === 'message' || action.id === 'edit';
-                  const foreground = prominent ? '#FFFFFF' : colors.text;
+                  const foreground = prominent ? primaryInk(colors).text : colors.text;
                   return (
                     <AppPressable
                       key={action.id}
@@ -1655,7 +1655,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   name: {
-    fontSize: 24,
+    fontSize: font.xxl,
     lineHeight: 30,
     fontWeight: '700',
     textAlign: 'center',

@@ -53,7 +53,15 @@ describe('разделы профиля', () => {
 
   it('нажатие на раздел разворачивает его в карточке, а не открывает окно', () => {
     const src = PEEK();
-    expect(src).toContain('setOpenSection((prev) => (prev === id ? null : id));');
+    // Семейства и их дочерние разделы меняют локальную панель. Проверяем
+    // границу навигации, а не конкретную старую форму toggle-выражения.
+    const start = src.indexOf('<View style={[styles.contentNav');
+    const end = src.indexOf('{/* Само содержимое раздела.', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const navigation = src.slice(start, end);
+    expect(navigation).toContain('setOpenSection');
+    expect(navigation).not.toMatch(/\b(?:onClose|onOpenChat|setMediaTab|setPostsMode)\b/);
     // Прежнее поведение: раздел уводил из карточки и закрывал её.
     expect(src).not.toContain("onOpenChat?.(resolved.pubB64, displayName, 'starred');\n      onClose();");
   });
