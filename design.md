@@ -1201,7 +1201,10 @@ the security fingerprint, notes and export) live under the accessible
 «Подробнее» disclosure. Changed or unchecked identity warnings remain visible
 above that disclosure. The cover behind the avatar uses the selected conversation
 wallpaper, or the current theme background when none is selected. Content
-sections wrap into compact chips instead of
-a clipped horizontal strip. A fixed 44×44 close target remains reachable while
+sections are grouped into three text tabs: «Публикации», «Вложения» and
+«Избранное». Only the active family's child sections are shown. The header uses
+an 80px portrait overlapping the conversation cover; message/edit is the single
+filled primary action, with call and More as compact labelled icon controls.
+Quiet typography, spacing and dividers replace a grid of equally weighted pills. A fixed 44×44 close target remains reachable while
 the card body scrolls in short windows. These presentation changes share the
 same component across web, iOS and Android and do not change privacy settings.
